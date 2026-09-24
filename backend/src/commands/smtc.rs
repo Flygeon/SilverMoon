@@ -67,7 +67,7 @@ mod imp {
     use std::sync::{Mutex, OnceLock};
 
     use silvermoon_ipc::EventEmitter;
-    use smtc_tokio::{WindowsMediaEvent, WindowsMediaHostApi};
+    use smtc_tokio::{WindowsMediaEvent, WindowsMediaManager};
 
     use super::SmtcCommand;
 
@@ -75,7 +75,7 @@ mod imp {
     /// 真实时长要到音频 loadedmetadata 后才知道；与 set_media 时不一致时，
     /// 用它重发一次元数据以更新时间轴（封面无需重新提取）。
     struct Inner {
-        manager: WindowsMediaHostApi,
+        manager: WindowsMediaManager,
         last_title: String,
         last_artist: Option<String>,
         last_album: String,
@@ -97,7 +97,7 @@ mod imp {
     }
 
     pub fn setup(app: &silvermoon_ipc::Host) {
-        let manager = match WindowsMediaHostApi::new() {
+        let manager = match WindowsMediaManager::new() {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("[SMTC] 初始化失败，系统媒体控件不可用: {e}");

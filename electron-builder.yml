@@ -13,14 +13,17 @@ files:
   - package.json
   - "!**/*.map"
 
-# 注意：`extraResources` 的「平台级与顶层」到底是合并还是覆盖，electron-builder
-# 不同版本行为不一致。为了两种情况都对，这里**每个平台条目里都把图标再写一遍**，
-# 顶层只留一份图标给未特别声明的场景。
+# extraResources **只在各平台条目里声明，顶层一律不写**。
 #
+# 两条原因都是实测踩出来的：
+#  1. electron-builder 对「平台级 extraResources 与顶层」到底是合并还是覆盖，
+#     不同版本行为不一致，写在两边语义不确定；
+#  2. 更要命的是：同一个 `from → to` 若同时出现在顶层与平台级，electron-builder
+#     会把它当成两条 matcher，**并发**地向同一个目标 copyfile —— Windows 上必踩
+#     `EBUSY: resource busy or locked`（Linux 恰好容忍），表现为 NSIS 打包整步失败。
+#
+# 因此每个平台在自己的清单里写全（图标 + 后端可执行文件），任何版本下语义唯一。
 # 另外**不能**把 Windows 的 .exe 写在顶层：Linux 构建会去找一个不存在的文件。
-extraResources:
-  - from: backend/icons/icon.png
-    to: icon.png
 
 asar: true
 
@@ -33,7 +36,7 @@ win:
   extraResources:
     - from: backend/icons/icon.png
       to: icon.png
-    # 侧车以独立可执行文件随包分发（Electron 主进程 spawn 拉起，不能塞进 asar）。
+    # 后端以独立可执行文件随包分发（Electron 主进程 spawn 拉起，不能塞进 asar）。
     # 构建前请先执行 npm run build:backend:release。
     - from: backend/target/release/silvermoon.exe
       to: bin/silvermoon-server.exe
