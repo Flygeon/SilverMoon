@@ -54,6 +54,13 @@ window.addEventListener("error", (e) => {
 // 未捕获的 Promise 异常
 window.addEventListener("unhandledrejection", (e) => {
   const reason = e.reason;
+  // AbortError 永远是「主动取消」（路由切换 / 重复点击 / 组件卸载时浏览器或
+  // hls.js 中断在途请求），属良性，不应刷屏误导用户以为崩了；直接吞掉，
+  // 但仍写日志文件备查。其它异常才如实上报。
+  if (reason instanceof Error && reason.name === "AbortError") {
+    e.preventDefault();
+    return;
+  }
   // Error.cause 需要 ES2022 lib，这里用宽松类型访问，避免改动全局 tsconfig
   const cause = (reason as { cause?: unknown } | null)?.cause;
   void reportError("unhandledrejection", {

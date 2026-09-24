@@ -89,6 +89,10 @@ export const useAnimeStore = defineStore("anime", () => {
   const sourceSearchKeyword = ref("");
   /** 关键字缺失等导致聚合搜索没发起时，给 SourceSheet 展示的原因 */
   const sourceSearchError = ref("");
+  // 聚合搜索代际令牌：连点「开始观看」会并发跑多次 searchSources，
+  // 用令牌确保只有最新一代的检索结果回写 sourceSearch，旧一代的 done() 一律丢弃，
+  // 否则多个 querySingleSource 互相覆盖 → 结果错乱 / 列表空白 → 表现为点击无反应。
+  let searchToken = 0;
   /**
    * 当前正在看的番剧标题（Bangumi 侧，中文名优先）。
    *
@@ -285,8 +289,9 @@ export const useAnimeStore = defineStore("anime", () => {
   async function querySingleSource(
     pluginName: string,
     keyword: string,
-    spec: { replace?: boolean } = {},
+    spec: { replace?: boolean; token?: number } = {},
   ): Promise<void> {
+    const token = spec.token ?? searchToken;
     const entry = rules.value.find((r) => r.name === pluginName && r.enabled);
     if (!entry) return;
     // 注意：replace 只控制「请求前是否把卡片重置为 pending」，不参与结果回写。
@@ -294,6 +299,7 @@ export const useAnimeStore = defineStore("anime", () => {
     // `spec.replace === false ? prev.items : ...`，导致 searchSources 走
     // replace:false 分支时把刚解析出来的 items 整个丢掉，UI 永远 0 条）。
     const done = (patch: Partial<AnimeSourceSearchResult>) => {
+      if (token !== searchToken) return; // 代际过期，丢弃陈旧结果
       const idx = sourceSearch.value.findIndex((s) => s.pluginName === pluginName);
       if (idx < 0) {
         void animeLog(
@@ -375,6 +381,10 @@ export const useAnimeStore = defineStore("anime", () => {
       sourceSearchError.value = "没有已启用的播放源，请先在规则管理中启用";
       return;
     }
+    // 合并在途的同关键字搜索：连点「开始观看」时，已有同关键字检索在跑就直接跳过，
+    // 避免重复打满网络、多代结果互相覆盖。
+    if (kw === sourceSearchKeyword.value && sourceSearching.value) return;
+    const token = ++searchToken;
     sourceSearchKeyword.value = kw;
     sourceSearching.value = true;
     sourceSearch.value = enabled.map((r) => ({
@@ -384,8 +394,9 @@ export const useAnimeStore = defineStore("anime", () => {
       items: [],
     }));
     await Promise.all(
-      enabled.map((r) => querySingleSource(r.name, kw, { replace: false }).catch(() => {})),
+      enabled.map((r) => querySingleSource(r.name, kw, { replace: false, token }).catch(() => {})),
     );
+    if (token !== searchToken) return; // 已被更新的检索取代，交给新一代收尾
     sourceSearching.value = false;
     void animeLog(
       `聚合搜索结束 kw="${kw}" 结果=` +
@@ -397,12 +408,14 @@ export const useAnimeStore = defineStore("anime", () => {
   async function requeryAllSources(keyword: string) {
     const kw = keyword.trim();
     if (!kw) return;
+    const token = ++searchToken;
     sourceSearchError.value = "";
     sourceSearchKeyword.value = kw;
     sourceSearching.value = true;
     await Promise.all(
-      sourceSearch.value.map((s) => querySingleSource(s.pluginName, kw).catch(() => {})),
+      sourceSearch.value.map((s) => querySingleSource(s.pluginName, kw, { token }).catch(() => {})),
     );
+    if (token !== searchToken) return;
     sourceSearching.value = false;
   }
 
@@ -410,7 +423,8 @@ export const useAnimeStore = defineStore("anime", () => {
   async function requerySingleSource(pluginName: string, keyword: string) {
     const kw = keyword.trim();
     if (!kw) return;
-    await querySingleSource(pluginName, kw, { replace: true });
+    // 用当前代际令牌，不另起一代，避免把其它源在途的结果作废
+    await querySingleSource(pluginName, kw, { replace: true, token: searchToken });
   }
 
   // ---- 选集 ----
