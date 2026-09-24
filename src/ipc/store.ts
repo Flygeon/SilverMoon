@@ -9,6 +9,25 @@
  */
 import { callBridge } from "./bridge";
 
+/**
+ * 把任意值转成结构化克隆 / JSON 安全的纯对象。
+ *
+ * 渲染进程里的设置值大多是 Vue 响应式 Proxy（`ref().value` 的数组 / 对象）。
+ * Tauri 时代 `invoke` 走 serde/JSON 序列化，Proxy 无碍；Electron 的
+ * `ipcRenderer.invoke` 走结构化克隆，会直接抛 `DataCloneError: An object could
+ * not be cloned`。这里在 IPC 边界统一降级成 JSON 快照——store 落盘本来就是
+ * JSON（`electron/store.ts` 的 `persist` 用 `JSON.stringify`），所以语义等价、无损。
+ */
+function toCloneable(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  try {
+    return JSON.parse(JSON.stringify(value)) as unknown;
+  } catch {
+    // 极端情况下（数据本身含循环引用 / 函数）退回原值，交由上层 catch 兜底告警
+    return value;
+  }
+}
+
 /** JSON 存储句柄。构造参数即落盘文件名。 */
 export class JsonStore {
   /** 落盘文件名 */
@@ -26,7 +45,7 @@ export class JsonStore {
 
   /** 写入一个键（不落盘，需再 `save()`） */
   async set(key: string, value: unknown): Promise<void> {
-    await callBridge("store", { op: "set", file: this.path, key, value });
+    await callBridge("store", { op: "set", file: this.path, key, value: toCloneable(value) });
   }
 
   /** 删除一个键 */
