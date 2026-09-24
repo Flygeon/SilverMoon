@@ -163,7 +163,17 @@ async function bootstrap(): Promise<void> {
     }, 1200);
   }
 
-  createMainWindow();
+  const mainWindow = createMainWindow();
+
+  // 主窗口一旦消失就直接退出。
+  //
+  // 不能只依赖 `window-all-closed`：番剧取流窗、扩展共享窗这类**隐藏窗口**同样
+  // 计入 Electron 的窗口表，只要它们还在，主窗口关闭后该事件就不会触发，
+  // 应用会变成「有托盘图标但没有界面」的僵尸进程。
+  // （正常路径上 `useDesktopChrome` 会拦截关闭并走 `exit_app`，这里是兜底。）
+  mainWindow.on("closed", () => {
+    if (!quitting) void shutdown(0);
+  });
 
   // 外部链接一律交给系统浏览器，绝不在应用内导航
   app.on("web-contents-created", (_event, contents) => {
