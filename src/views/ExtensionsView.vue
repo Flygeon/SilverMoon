@@ -87,7 +87,7 @@ onActivated(load);
 
 <template>
   <div class="view">
-    <PageHeader title="扩展" description="为银月安装独立分发的功能扩展包" />
+    <PageHeader title="扩展" description="为 SilverMoon 安装独立分发的功能扩展包" />
     <div class="toolbar">
       <button :disabled="busy !== ''" @click="install('zip')">安装 zip 包</button>
       <button :disabled="busy !== ''" @click="install('folder')">从文件夹安装</button>

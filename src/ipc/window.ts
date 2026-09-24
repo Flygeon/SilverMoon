@@ -67,7 +67,7 @@ function adoptOptions(): WindowOptions {
 
 function call<T>(op: string, payload: Record<string, unknown>): Promise<T> {
   const bridge = window.__SILVERMOON__;
-  if (!bridge) return Promise.reject(new Error("银月桥不可用"));
+  if (!bridge) return Promise.reject(new Error("SilverMoon 桥不可用"));
   return bridge.call("window", { op, ...payload }).then((reply) => {
     if (!reply.ok) return Promise.reject(reply.error ?? `window.${op} 失败`);
     return reply.data as T;
@@ -87,7 +87,7 @@ export class AppWindow {
 
   constructor(label: string, options: WindowOptions = {}) {
     if (!hasBridge()) {
-      throw new Error("银月桥不可用：请在银月桌面应用中运行");
+      throw new Error("SilverMoon 桥不可用：请在桌面应用中运行");
     }
     this.label = label;
     const adopt = options[ADOPT_FLAG] === true;
@@ -224,7 +224,7 @@ export class AppWindow {
 /** 取当前窗口。非 Electron 环境抛错（调用方用 try/catch 兜底）。 */
 export function getCurrentWindow(): AppWindow {
   if (!hasBridge()) {
-    throw new Error("银月桥不可用：请在银月桌面应用中运行");
+    throw new Error("SilverMoon 桥不可用：请在桌面应用中运行");
   }
   return new AppWindow(window.__SILVERMOON__!.label, adoptOptions());
 }

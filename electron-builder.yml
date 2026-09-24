@@ -1,6 +1,6 @@
 appId: cn.cool.silvermoon
 productName: SilverMoon
-copyright: Copyright © SilverMoon (银月) contributors
+copyright: Copyright © SilverMoon contributors
 
 directories:
   output: release
@@ -47,7 +47,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: 银月
+  shortcutName: SilverMoon
   artifactName: ${productName}-${version}-setup.${ext}
 
 mac:

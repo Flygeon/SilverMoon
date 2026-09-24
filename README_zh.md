@@ -1,4 +1,4 @@
-# 银月 · 光影媒体库
+# SilverMoon · 光影媒体库
 
 <div align="center">
 
@@ -10,9 +10,11 @@
 
 </div>
 
-银月（SilverMoon）基于 **Electron + Vue 3 + TypeScript + Material Design 3**，后端仍是原来的 **Rust** 原生进程：一套 Web 前端 + Rust 后端，数据全部留在本地，无云同步、不强制账号。
+SilverMoon（中文名**银月**）基于 **Electron + Vue 3 + TypeScript + Material Design 3**，后端仍是原来的 **Rust** 原生进程：一套 Web 前端 + Rust 后端，数据全部留在本地，无云同步、不强制账号。
 
-> **本项目是 [LumiLuna](https://github.com/Flygeon/LumiLuna-Next) 从 Tauri 2 迁移到 Electron 的重构版**，中文名定为「银月」。迁移策略是「换壳不换芯」：Vue 前端与 Rust 后端的业务代码基本原样保留，只替换了宿主层。详见 [架构](#-架构)。
+> 中文名「银月」只用于项目与文档的描述；**软件界面内一律显示英文名 SilverMoon**（窗口标题、启动屏、安装快捷方式等）。
+
+> **本项目是 [LumiLuna](https://github.com/Flygeon/LumiLuna-Next) 从 Tauri 2 迁移到 Electron 的重构版。** 迁移策略是「换壳不换芯」：Vue 前端与 Rust 后端的业务代码基本原样保留，只替换了宿主层。详见 [架构](#-架构)。
 
 音乐播放器采用 **类 Apple Music 样式** —— 流体动态背景、封面驱动取色、逐字卡拉 OK 歌词；整个应用严格遵循 **Material Design 3** 设计系统。
 

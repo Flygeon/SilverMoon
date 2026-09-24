@@ -1,7 +1,7 @@
 /**
  * DanDanPlay 开放 API 客户端。
  *
- * 设计目标：给银月在线番剧播放器做弹幕数据源。参照
+ * 设计目标：给 SilverMoon 在线番剧播放器做弹幕数据源。参照
  * `在线播放参考/lib/request/clients/danmaku_client.dart` 与
  * `lib/request/apis/danmaku_api.dart` 实现。
  *

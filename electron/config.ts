@@ -22,10 +22,8 @@ export interface WindowConfig {
 }
 
 export interface AppConfig {
-  /** 打包与数据目录用的技术标识（ASCII），**不随中文名变化**。 */
+  /** 面向用户展示的应用名，同时也是打包与数据目录的技术标识。 */
   productName: string;
-  /** 面向用户展示的中文名。 */
-  displayName: string;
   identifier: string;
   version: string;
   window: WindowConfig;
@@ -34,15 +32,6 @@ export interface AppConfig {
 }
 
 export const config = configJson as unknown as AppConfig;
-
-/**
- * 展示名（中文名「银月」）。
- *
- * 所有**给人看**的地方（窗口标题、对话框标题、应用名查询）都用它；
- * `productName` 只用于 electron-builder 的产物命名与系统层面的应用标识，
- * 两者分开是为了让中文名可以随时调整而不影响安装目录与用户数据。
- */
-export const displayName = config.displayName || config.productName;
 
 /**
  * 是否处于开发模式。

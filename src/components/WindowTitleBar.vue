@@ -65,7 +65,7 @@ onBeforeUnmount(() => {
     <!-- 品牌 + 可拖拽区 -->
     <div class="tb-drag" @pointerdown="startDrag">
       <span class="material-symbols-outlined tb-brand-icon">blur_on</span>
-      <span class="tb-brand-name">银月</span>
+      <span class="tb-brand-name">SilverMoon</span>
     </div>
 
     <!-- 右侧操作区 -->

@@ -14,7 +14,7 @@ import { BrowserWindow, screen, type WebContents } from "electron";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { config, displayName, ensureDir, iconPath, isDev, rendererUrl } from "./config";
+import { config, ensureDir, iconPath, isDev, rendererUrl } from "./config";
 import { log } from "./log";
 
 /** 渲染进程可监听的事件帧。 */
@@ -206,7 +206,7 @@ export function createChildWindow(label: string, options: CreateOptions): Browse
     show: options.visible ?? true,
     maximizable: options.maximizable ?? true,
     minimizable: options.minimizable ?? true,
-    title: options.title ?? displayName,
+    title: options.title ?? config.productName,
     icon: iconPath(),
     webPreferences: {
       preload: preloadPath,
@@ -271,7 +271,7 @@ export function createRustWindow(payload: {
     minimizable: payload.minimizable ?? true,
     alwaysOnTop: payload.alwaysOnTop ?? false,
     show: payload.visible ?? true,
-    title: payload.title ?? displayName,
+    title: payload.title ?? config.productName,
     icon: iconPath(),
     autoHideMenuBar: true,
     webPreferences: {

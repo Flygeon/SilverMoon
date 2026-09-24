@@ -1,12 +1,11 @@
 {
-  "$comment": "SilverMoon 应用元信息（中文名「银月」）。由 silvermoon-ipc 的 generate_context! 在编译期读取，Electron 主进程运行时同样读取此文件，两侧保持单一真源。",
+  "$comment": "SilverMoon 应用元信息。由 silvermoon-ipc 的 generate_context! 在编译期读取，Electron 主进程运行时同样读取此文件，两侧保持单一真源。",
   "productName": "SilverMoon",
-  "displayName": "银月",
-  "$displayName": "面向用户展示的中文名。仅用于窗口标题、启动屏、对话框等 UI 文案；productName 与 identifier 是打包与数据目录的技术标识，不随中文名变化。",
+  "$productName": "软件的显示名（窗口标题、托盘提示、安装快捷方式都用它）。中文名「银月」只用于仓库与文档的描述，不在软件界面里出现。",
   "identifier": "cn.cool.silvermoon",
   "version": "1.2.1",
   "window": {
-    "title": "银月 · 光影媒体库",
+    "title": "SilverMoon · 光影媒体库",
     "width": 1280,
     "height": 800,
     "minWidth": 900,

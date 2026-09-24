@@ -12,7 +12,7 @@ import { BrowserWindow, app, dialog, ipcMain, shell, screen } from "electron";
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { config, displayName, iconPath } from "./config";
+import { config, iconPath } from "./config";
 import {
   dispatchEvent,
   getWindow,
@@ -112,7 +112,7 @@ const handlers: Record<string, Handler> = {
         win.focus();
         return null;
       case "setTitle":
-        win.setTitle(String(payload.title ?? displayName));
+        win.setTitle(String(payload.title ?? config.productName));
         return null;
       case "setAlwaysOnTop":
         win.setAlwaysOnTop(payload.value === true);
@@ -218,7 +218,7 @@ const handlers: Record<string, Handler> = {
       const buttons = op === "message" ? ["确定"] : ["确定", "取消"];
       const result = await dialog.showMessageBox(parent!, {
         type: type as "info" | "warning" | "error" | "question",
-        title: options.title ?? displayName,
+        title: options.title ?? config.productName,
         message: String(payload.message ?? ""),
         buttons,
         noLink: true,
@@ -352,7 +352,7 @@ const handlers: Record<string, Handler> = {
       case "hostVersion":
         return process.versions.electron ?? "unknown";
       case "name":
-        return displayName;
+        return config.productName;
       case "iconPath":
         return iconPath() ?? null;
       case "exit":
@@ -392,20 +392,23 @@ const handlers: Record<string, Handler> = {
     const body = payload.body ? String(payload.body) : undefined;
 
     const response = await fetch(url, { method, headers, body, redirect: "follow" });
-    const buffer = Buffer.from(await response.arrayBuffer());
-    const contentType = response.headers.get("content-type") ?? "";
-    // 文本类直接给字符串，省掉一次 base64 编解码
-    const isText = /^(text\/|application\/(json|xml|javascript|x-www-form-urlencoded))/i.test(
-      contentType,
-    );
 
+    // 响应体**统一**以字节过桥，不再区分文本 / 二进制。
+    //
+    // 曾为了省一次编解码，对 `text/*` / `application/json` 等直接交字符串，但渲染端
+    // 拿到字符串后会 `new Uint8Array(字符串)` —— 原始值被当成长度 0，静默得到**空数组**，
+    // 于是所有走该通道的 JSON 接口都报 `Unexpected end of JSON input`
+    // （QQ / 酷狗的逐字歌词就是这样全挂的）。别再改回两套形态：形态越少，出错面越小。
+    //
+    // 另注：undici 的 fetch 已按 `content-encoding` 解压过（即便调用方自己传了
+    // `Accept-Encoding`），这里的字节即明文；`content-encoding` / `content-length`
+    // 与之不再匹配，由渲染端剥掉，见 `src/ipc/http.ts`。
     return {
       status: response.status,
       statusText: response.statusText,
       url: response.url,
       headers: [...response.headers.entries()],
-      body: isText ? buffer.toString("utf8") : buffer.toString("base64"),
-      bodyIsBase64: !isText,
+      body: new Uint8Array(await response.arrayBuffer()),
     };
   },
 };

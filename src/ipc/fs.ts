@@ -4,14 +4,7 @@
  * 全部经主进程的 Node `fs` 执行，不受渲染进程沙箱限制。
  * `readFile` 返回 `Uint8Array`，`writeFile` 接受 `Uint8Array`。
  */
-import { callBridge } from "./bridge";
-
-function toUint8(value: unknown): Uint8Array {
-  if (value instanceof Uint8Array) return value;
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-  if (Array.isArray(value)) return new Uint8Array(value as number[]);
-  return new Uint8Array(0);
-}
+import { callBridge, toBytes } from "./bridge";
 
 function fromBase64(base64: string): Uint8Array {
   const binary = atob(base64);
@@ -37,7 +30,7 @@ function toBase64(bytes: Uint8Array): string {
  */
 export async function readFile(path: string): Promise<Uint8Array> {
   try {
-    return toUint8(await callBridge<unknown>("fs", { op: "readFile", path }));
+    return toBytes(await callBridge<unknown>("fs", { op: "readFile", path }));
   } catch (error) {
     if (!(error instanceof Error) && typeof error !== "string") throw error;
     const base64 = await callBridge<string>("fs", { op: "readFileBase64", path });

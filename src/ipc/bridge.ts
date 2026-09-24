@@ -54,7 +54,7 @@ export function platform(): string {
 function bridge(): SilverMoonBridge {
   const b = window.__SILVERMOON__;
   if (!b) {
-    throw new Error("银月桥不可用：请通过银月桌面应用启动，而不是直接用浏览器打开");
+    throw new Error("SilverMoon 桥不可用：请通过桌面应用启动，而不是直接用浏览器打开");
   }
   return b;
 }
@@ -81,4 +81,43 @@ export async function callBridge<T>(channel: string, payload?: unknown): Promise
 /** 跨窗口派发事件。 */
 export async function emitToWindow(label: string, event: string, payload: unknown): Promise<void> {
   await bridge().emitTo(label, event, payload);
+}
+
+/**
+ * 收窄成以 `ArrayBuffer` 为底层的紧凑视图。
+ *
+ * `fetch` / `Response` 的 `BodyInit` 自 TS 5.7 起只接受 `Uint8Array<ArrayBuffer>`，
+ * 而 `ArrayBuffer.isView` 只保证 `ArrayBufferLike`（可能是 SharedArrayBuffer）。
+ * 过桥拿到的 TypedArray 一定是紧凑的 `ArrayBuffer` 视图，所以先直接复用；
+ * 只有非常规的切片视图才复制一份，免得给「读大文件」白加一次内存拷贝。
+ */
+function asBytesView(view: Uint8Array): Uint8Array<ArrayBuffer> {
+  if (
+    view.buffer instanceof ArrayBuffer &&
+    view.byteOffset === 0 &&
+    view.byteLength === view.buffer.byteLength
+  ) {
+    return view as Uint8Array<ArrayBuffer>;
+  }
+  return new Uint8Array(view);
+}
+
+/**
+ * 把过桥拿到的二进制值统一成 `Uint8Array`。
+ *
+ * ⚠️ **不要**写 `new Uint8Array(value)` 当兜底：`value` 若是**原始字符串**，
+ * 构造器会把它当成长度（`ToIndex("...")` → 0），静默返回**空数组**。
+ * 宿主早期对文本响应传字符串、这里却按字节数组处理，导致所有走该通道的
+ * JSON 接口都拿到空 body（`Unexpected end of JSON input`）——逐字歌词就是这样全挂的。
+ * 因此这里把每种形态都显式列出来，字符串按 UTF-8 编码而不是丢成空。
+ */
+export function toBytes(value: unknown): Uint8Array<ArrayBuffer> {
+  if (value instanceof Uint8Array) return asBytesView(value);
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) {
+    return asBytesView(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+  }
+  if (Array.isArray(value)) return Uint8Array.from(value as number[]);
+  if (typeof value === "string") return new TextEncoder().encode(value);
+  return new Uint8Array(0);
 }

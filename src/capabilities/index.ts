@@ -867,7 +867,7 @@ export const capabilities = {
     if (!isDesktop) return null;
     const result = await dialogOpen({
       multiple: false,
-      filters: [{ name: "银月皮肤", extensions: ["json", "zip"] }],
+      filters: [{ name: "SilverMoon 皮肤", extensions: ["json", "zip"] }],
     });
     if (typeof result === "string") return result;
     if (result && typeof result === "object" && "path" in result) {

@@ -18,15 +18,7 @@
 import { app, dialog, shell } from "electron";
 import path from "node:path";
 
-import {
-  cacheDir,
-  dataDir,
-  displayName,
-  ensureDir,
-  isDev,
-  logDir,
-  migrateLegacyData,
-} from "./config";
+import { config, cacheDir, dataDir, ensureDir, isDev, logDir, migrateLegacyData } from "./config";
 import { initLog, log } from "./log";
 import { initStore, flushAllStores } from "./store";
 import { handleAppProtocol, handleAssetProtocol, registerSchemes } from "./protocols";
@@ -133,7 +125,7 @@ async function bootstrap(): Promise<void> {
     log.error(`后端进程异常退出（code=${code}）`);
     void dialog.showMessageBox({
       type: "error",
-      title: displayName,
+      title: config.productName,
       message: "后端进程已退出",
       detail:
         "媒体库后端（后端进程）意外停止，界面上的操作会陆续失败。\n" +
@@ -156,7 +148,7 @@ async function bootstrap(): Promise<void> {
     setTimeout(() => {
       void dialog.showMessageBox({
         type: "warning",
-        title: displayName,
+        title: config.productName,
         message: "后端未启动",
         detail:
           "没有找到媒体库后端（后端进程）可执行文件，界面上的数据操作都会失败。\n\n" +
@@ -216,7 +208,7 @@ app
     log.error("启动失败：", error);
     void dialog.showMessageBoxSync({
       type: "error",
-      title: displayName,
+      title: config.productName,
       message: "启动失败",
       detail: String((error as Error)?.stack ?? error),
     });

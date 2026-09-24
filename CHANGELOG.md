@@ -24,12 +24,19 @@
 - 远程页（Pixiv 登录、文库8 登录、番剧取流）的宿主全局由 `window.__TAURI__` 改为 `window.__SILVERMOON_HOST__`
 
 ### 品牌
-- 项目英文名 **SilverMoon**，中文名定为 **银月**：窗口标题、启动屏、标题栏、安装快捷方式、皮肤过滤器名、扩展页文案、对话框标题统一使用中文名
-- `productName` 与 `identifier` 保持 ASCII 不变（打包产物名、数据目录、`localStorage` / IndexedDB 键名均不受中文名影响）
+- 软件显示名统一为 **SilverMoon**（窗口标题、启动屏、标题栏、安装快捷方式、皮肤过滤器名、扩展页文案、对话框标题）
+- 项目另有中文名 **银月**，但**只用于 README / CHANGELOG 等文档描述，不出现在软件界面里**
+- `productName` 与 `identifier` 保持 ASCII 不变（打包产物名、数据目录、`localStorage` / IndexedDB 键名）
+- 修掉一处迁移遗漏：**英文语言包的应用名仍是旧名 `LumiLuna`**（`shared/i18n.ts` 的 `en.app.name`），切到英文界面时会显示错
+
+### 修复
+- **宿主网络层把所有文本响应变成了空 body** —— 这是迁移引入的真 bug，表现为 **QQ / 酷狗逐字歌词失效**（`Failed to execute 'json' on 'Response': Unexpected end of JSON input`）。
+  主进程为省一次编解码，对 `text/*` / `application/json` 直接交字符串；渲染端却用 `new Uint8Array(body)` 收字节——**原始字符串会被构造器当成长度**（`ToIndex("…")` → 0），静默得到空数组。
+  现改为响应体**一律以字节过桥**（形态唯一，出错面更小），并剥掉因解压而已失效的 `content-encoding` / `content-length`；顺带补上 `AbortSignal` 支持（QQ / 酷狗的 8s 超时此前被静默忽略）。新增 `src/ipc/__tests__/http.test.ts` 把两个方向都钉住
 
 ### 工程
 - 新增 `.gitattributes`（`* text=auto eol=lf`），修掉原项目「CRLF 工作区导致本地 prettier/eslint 全量假阳性」的老问题
-- CI 提速：构建作业不再串行等待 lint；补齐 npm / Rust / electron-builder 三级缓存；release profile 由 `lto = true + codegen-units = 1` 放宽为 `thin` + `4`；新增 concurrency 自动取消过期运行
+- CI 提速：构建作业不再串行等待 lint；补齐 npm / Rust / electron-builder 三级缓存；release profile 由 `lto = true + codegen-units = 1` 放宽为 `thin` + `4`；新增 concurrency 自动取消过期运行；actions 升到 v5、Node 20 → 22
 - 依赖新增 `electron` / `electron-builder` / `esbuild`；移除 `@tauri-apps/cli` 与 6 个 `@tauri-apps/*`
 
 

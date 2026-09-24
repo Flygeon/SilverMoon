@@ -693,7 +693,7 @@ export const messages = {
     },
   },
   en: {
-    app: { name: "LumiLuna", tagline: "Local Media Library" },
+    app: { name: "SilverMoon", tagline: "Local Media Library" },
     nav: {
       images: "Images",
       videos: "Videos",
