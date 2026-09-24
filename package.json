@@ -27,7 +27,7 @@
     "format:check": "prettier --check \"src/**/*.{ts,vue,css,json}\" \"shared/**/*.{ts,json}\" \"electron/**/*.ts\" \"scripts/**/*.mjs\""
   },
   "dependencies": {
-    "@m3e/web": "^2.7.12",
+    "@m3e/web": "^2.8.2",
     "@material/material-color-utilities": "^0.3.0",
     "@material/web": "^2.2.0",
     "artplayer": "^5.4.0",
