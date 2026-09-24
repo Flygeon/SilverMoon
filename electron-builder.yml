@@ -13,11 +13,12 @@ files:
   - package.json
   - "!**/*.map"
 
-# Rust 侧车以独立可执行文件随包分发（Electron 主进程用 spawn 拉起，
-# 不能塞进 asar）。构建前请先执行 npm run build:backend:release。
+# 注意：`extraResources` 的「平台级与顶层」到底是合并还是覆盖，electron-builder
+# 不同版本行为不一致。为了两种情况都对，这里**每个平台条目里都把图标再写一遍**，
+# 顶层只留一份图标给未特别声明的场景。
+#
+# 另外**不能**把 Windows 的 .exe 写在顶层：Linux 构建会去找一个不存在的文件。
 extraResources:
-  - from: src-tauri/target/release/silvermoon.exe
-    to: bin/silvermoon-server.exe
   - from: src-tauri/icons/icon.png
     to: icon.png
 
@@ -29,6 +30,13 @@ win:
     - target: nsis
       arch:
         - x64
+  extraResources:
+    - from: src-tauri/icons/icon.png
+      to: icon.png
+    # 侧车以独立可执行文件随包分发（Electron 主进程 spawn 拉起，不能塞进 asar）。
+    # 构建前请先执行 npm run build:backend:release。
+    - from: src-tauri/target/release/silvermoon.exe
+      to: bin/silvermoon-server.exe
 
 nsis:
   oneClick: false
@@ -44,8 +52,9 @@ mac:
   category: public.app-category.entertainment
   target:
     - dmg
-  # 侧车在非 Windows 平台没有 .exe 后缀，这里单独列一条
   extraResources:
+    - from: src-tauri/icons/icon.png
+      to: icon.png
     - from: src-tauri/target/release/silvermoon
       to: bin/silvermoon-server
 
@@ -55,5 +64,7 @@ linux:
   target:
     - AppImage
   extraResources:
+    - from: src-tauri/icons/icon.png
+      to: icon.png
     - from: src-tauri/target/release/silvermoon
       to: bin/silvermoon-server
