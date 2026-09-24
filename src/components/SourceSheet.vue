@@ -142,7 +142,20 @@ const sheetRef = ref<HTMLElement | null>(null);
 /** 挂载即打开（父组件用 v-if 控制挂载，挂载时机即「打开」时机） */
 onMounted(async () => {
   await nextTick();
-  (sheetRef.value as M3eBottomSheet | null)?.show();
+  // 等待 m3e-bottom-sheet 自定义元素完成升级：避免 ESM 分片异步 define 导致
+  // sheetRef.value 仍是未知元素、没有 show() 方法而被 ?. 静默跳过（表现为「无反应」）。
+  if (!customElements.get("m3e-bottom-sheet")) {
+    try {
+      await customElements.whenDefined("m3e-bottom-sheet");
+    } catch {
+      /* 极少见：define 未完成，下方 rAF 会因元素未升级而不弹，但不再卡死流程 */
+    }
+  }
+  // 延后一帧再 show，确保元素已稳定入文档；若此刻仍因 Vue↔Lit 时序暂离，
+  // show() 内部的 showPopover 会由 src/m3e.ts 的 shim 用 rAF 重试，最终弹出。
+  requestAnimationFrame(() => {
+    (sheetRef.value as M3eBottomSheet | null)?.show();
+  });
 });
 
 /** 主动关闭：交给组件播放收起动画，收起后由 closed 事件通知父组件卸载 */

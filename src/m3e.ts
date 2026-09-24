@@ -30,19 +30,47 @@ import "@m3e/web/switch";
 
 // ---- 上游 bug 兜底（@m3e/web 2.8.x 仍未修复）----
 // m3e-bottom-sheet 的 updated() 在「打开过程中元素被暂离 DOM」时会无条件调用原生
-// showPopover()；而原生要求宿主元素已连接文档，否则抛 InvalidStateError，导致在线动漫
-// 点「开始观看」整页无反馈（上游 Web Awesome 有完全同类的 issue）。
+// showPopover()；原生要求宿主元素已连接文档，否则抛 InvalidStateError；而一旦把
+// showPopover 静默吞掉，弹层就永久不弹出，表现为「点开始观看毫无反应、也不报错」。
+// 根因环境：AnimeOnlineView 被 KeepAlive 包裹、又处在 SegmentedTabs 的 <Transition :key>
+// 内，KeepAlive 切 tab 移出/移回文档 + 过渡动 DOM + Vue↔Lit 微观时序交错，使 bottom-sheet
+// 在打开瞬间暂离文档（上游 Web Awesome 有完全同类的 issue）。
 // 修复策略：
-//   ① 全局把原生 showPopover 在断连时改为静默 no-op，消除抛错；
-//   ② 元素重连（reconnectedCallback）后若仍处于 open 态，用原始 showPopover 补开，恢复功能。
+//   ① 全局把原生 showPopover 在断连时改为「rAF 重试直到连接」，不丢弃弹出意图（关键）；
+//   ② 元素重连（reconnectedCallback）后若仍处于 open 态，再用原始 showPopover 补开（双保险）。
 // updated() 里 showPopover 之前的副作用（inert / scrollLock / __openSheet）仍会正常执行。
 if (typeof HTMLElement !== "undefined" && typeof HTMLElement.prototype.showPopover === "function") {
   const origShowPopover = HTMLElement.prototype.showPopover;
-  HTMLElement.prototype.showPopover = function (this: HTMLElement, ...args: unknown[]) {
-    if (!this.isConnected) return;
-    return origShowPopover.apply(this, args as []) as unknown;
+
+  // 断连时**不要**简单地静默 no-op、把「想弹出」的意图丢掉——那样弹层会被永久吞掉，
+  // 表现为「点开始观看毫无反应、也不报错」。改为排队用 requestAnimationFrame 重试，
+  // 直到元素真正连接文档或超时（约 1s）。无论 detach 来自哪一层（KeepAlive 把子树
+  // 移出/移回文档、SegmentedTabs 过渡、Vue↔Lit 微观时序交错），弹层最终都会弹出。
+  const retryShowUntilConnected = (el: HTMLElement) => {
+    let tries = 0;
+    const tick = () => {
+      if (el.isConnected) {
+        try {
+          origShowPopover.call(el);
+        } catch {
+          /* 已 popover-open 再 show 是 no-op，忽略 */
+        }
+        return;
+      }
+      if (++tries < 60) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  };
+
+  HTMLElement.prototype.showPopover = function (this: HTMLElement, ..._args: unknown[]) {
+    if (this.isConnected) {
+      return origShowPopover.call(this);
+    }
+    retryShowUntilConnected(this);
+    return undefined;
   } as typeof HTMLElement.prototype.showPopover;
 
+  // 双保险：元素重连（reconnectedCallback）后若仍处于 open 态，用原始 showPopover 补开。
   const BottomSheet = customElements.get("m3e-bottom-sheet") as
     (typeof HTMLElement & { prototype: Record<string, unknown> }) | undefined;
   if (BottomSheet && !BottomSheet.prototype.__smSheetPatched) {
