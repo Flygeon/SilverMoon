@@ -62,26 +62,42 @@ export class Sidecar extends EventEmitter {
     return this.ready;
   }
 
-  /** 可执行文件路径。带 `SILVERMOON_SERVER_BIN` 环境变量可覆盖。 */
+  /**
+   * 解析侧车可执行文件路径。带 `SILVERMOON_SERVER_BIN` 环境变量可覆盖。
+   *
+   * 注意：这里必须用 `isDev`（其真源是 `app.isPackaged`），**不要用环境变量判断**——
+   * 之前误用了一个从未被设置的 `SILVERMOON_PACKAGED`，导致打包后的应用恒走开发分支，
+   * 去 `src-tauri/target/` 找可执行文件而必然失败（界面报「后端未启动」）。
+   */
   static resolveBinary(): string | null {
     const override = process.env.SILVERMOON_SERVER_BIN;
     if (override && existsSync(override)) return override;
 
-    const exe =
-      process.platform === "win32" ? `${config.sidecar.binary}.exe` : config.sidecar.binary;
-    const devExe =
-      process.platform === "win32" ? `${config.sidecar.devBinary}.exe` : config.sidecar.devBinary;
+    const win = process.platform === "win32";
+    const exeName = win ? `${config.sidecar.binary}.exe` : config.sidecar.binary;
+    const devName = win ? `${config.sidecar.devBinary}.exe` : config.sidecar.devBinary;
 
-    const candidates = process.env.SILVERMOON_PACKAGED
-      ? [path.join(process.resourcesPath, "bin", exe)]
+    const candidates = isDev
+      ? [
+          // 开发期：cargo build 的产物（debug 优先，其次 release）
+          path.join(projectRoot, "src-tauri", "target", "debug", devName),
+          path.join(projectRoot, "src-tauri", "target", "release", devName),
+          path.join(projectRoot, "src-tauri", "target", "debug", exeName),
+          path.join(projectRoot, "src-tauri", "target", "release", exeName),
+        ]
       : [
-          path.join(projectRoot, "src-tauri", "target", "debug", devExe),
-          path.join(projectRoot, "src-tauri", "target", "release", devExe),
-          path.join(projectRoot, "src-tauri", "target", "debug", exe),
-          path.join(projectRoot, "src-tauri", "target", "release", exe),
+          // 打包后：electron-builder 的 extraResources 落在 resources/ 下
+          path.join(process.resourcesPath, "bin", exeName),
+          path.join(process.resourcesPath, exeName),
         ];
 
-    return candidates.find((p) => existsSync(p)) ?? null;
+    const hit = candidates.find((p) => existsSync(p));
+    if (!hit) {
+      log.error(
+        `未找到侧车可执行文件（isDev=${isDev}）。已尝试以下路径：\n  ${candidates.join("\n  ")}`,
+      );
+    }
+    return hit ?? null;
   }
 
   /** 启动侧车。返回是否成功拉起。 */

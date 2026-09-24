@@ -143,6 +143,7 @@ async function bootstrap(): Promise<void> {
 
   if (!started) {
     log.warn("后端未就绪，将以降级模式启动界面");
+    const exe = process.platform === "win32" ? ".exe" : "";
     // 不阻塞启动：让用户能看到界面与明确的错误提示，而不是一个白屏
     setTimeout(() => {
       void dialog.showMessageBox({
@@ -152,12 +153,11 @@ async function bootstrap(): Promise<void> {
         detail:
           "没有找到媒体库后端（Rust 侧车）可执行文件，界面上的数据操作都会失败。\n\n" +
           (isDev
-            ? `开发模式请先构建后端：\n  cd src-tauri && cargo build\n` +
-              `产物路径：src-tauri/target/debug/silvermoon${
-                process.platform === "win32" ? ".exe" : ""
-              }\n\n` +
-              `或用 SILVERMOON_SERVER_BIN 环境变量指定可执行文件。`
-            : "安装包似乎不完整，请重新安装。"),
+            ? `开发模式请先构建后端：\n  npm run build:backend\n` +
+              `产物应在：src-tauri/target/debug/silvermoon${exe}\n\n`
+            : `安装包的 resources/bin 下应包含 silvermoon-server${exe}，当前缺失，安装包可能不完整。\n\n`) +
+          `也可以用 SILVERMOON_SERVER_BIN 环境变量直接指定可执行文件。\n` +
+          `已尝试的完整路径见日志：${path.join(logDir(appDataRoot), "main.log")}`,
         buttons: ["知道了"],
       });
     }, 1200);
