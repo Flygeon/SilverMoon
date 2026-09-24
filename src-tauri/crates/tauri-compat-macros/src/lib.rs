@@ -320,10 +320,12 @@ pub fn generate_context(_input: TokenStream) -> TokenStream {
     quote! {
         {
             const _SILVERMOON_CONFIG_TRACKED: &str = include_str!(#abs);
+            // 注意：`quote!` 对 `String` 生成的是**字符串字面量**（`&str`），
+            // 因此这里必须显式 `String::from(..)`，否则会撞 E0308。
             ::tauri::__private::Context::new(::tauri::__private::ContextConfig {
-                identifier: #identifier,
-                product_name: #product_name,
-                window_title: #window_title,
+                identifier: ::std::string::String::from(#identifier),
+                product_name: ::std::string::String::from(#product_name),
+                window_title: ::std::string::String::from(#window_title),
                 window_width: #width,
                 window_height: #height,
                 window_min_width: #min_width,
