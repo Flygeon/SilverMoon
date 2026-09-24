@@ -7,7 +7,7 @@
  *    `contextIsolation: false`）——番剧取流要挂钩 `HTMLMediaElement.prototype` /
  *    `fetch` / `XMLHttpRequest`，文库8 登录要读远程页的 `document.cookie`，
  *    在隔离世界里挂钩是无效的。
- * 2. **要提供最小可用的 `window.__TAURI__.core.invoke`** —— 文库8 的注入脚本
+ * 2. **要提供最小可用的 `window.__SILVERMOON_HOST__.invoke`** —— 文库8 的注入脚本
  *    直接调用它上报日志（`wenku8_login_log`）。注意这个页面是**远程内容**，
  *    因此这里只放行 `invoke`，不暴露 `ipcRenderer`、`require` 等任何特权接口。
  *
@@ -25,9 +25,9 @@ function readArg(prefix: string): string | null {
 const label = readArg("--silvermoon-label=") ?? "main";
 const scriptFile = readArg("--silvermoon-init-script=");
 
-// 只暴露 invoke 一个能力，且只走已登记的命令通道。
-// 远程页面无法借此访问文件系统或 Electron API。
-const minimalTauri = {
+// 只暴露 invoke 一个能力，且只走已登记的命令通道（远程页用它上报登录日志）。
+// 远程页面无法借此访问文件系统或任何 Electron API。
+const minimalHost = {
   core: {
     invoke: (cmd: string, args?: unknown) => ipcRenderer.invoke("sm:invoke", { cmd, args }),
   },
@@ -39,8 +39,8 @@ const minimalTauri = {
   window: { label },
 };
 
-Object.defineProperty(window, "__TAURI__", {
-  value: minimalTauri,
+Object.defineProperty(window, "__SILVERMOON_HOST__", {
+  value: minimalHost,
   writable: false,
   configurable: false,
 });

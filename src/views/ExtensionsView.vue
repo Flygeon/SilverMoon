@@ -5,7 +5,7 @@
  * 注意：文案不进 shared/i18n.ts（项目 WIP 文件，禁止改动）。
  */
 import { onActivated, ref } from "vue";
-import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
+import { open as dialogOpen } from "@/ipc/dialog";
 import PageHeader from "@/components/PageHeader.vue";
 import { capabilities } from "@/capabilities";
 import type { ExtInfo, ExtSource } from "@shared/types";
@@ -87,7 +87,7 @@ onActivated(load);
 
 <template>
   <div class="view">
-    <PageHeader title="扩展" description="为 SilverMoon 安装独立分发的功能扩展包" />
+    <PageHeader title="扩展" description="为银月安装独立分发的功能扩展包" />
     <div class="toolbar">
       <button :disabled="busy !== ''" @click="install('zip')">安装 zip 包</button>
       <button :disabled="busy !== ''" @click="install('folder')">从文件夹安装</button>

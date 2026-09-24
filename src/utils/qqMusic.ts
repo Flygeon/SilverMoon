@@ -3,7 +3,7 @@
  * （原作者 沉默の金，SPDX-License-Identifier: GPL-3.0-only）。
  *
  * 仅用于「更精确的逐字歌词」：搜索同名歌曲 → 拉取 QRC 逐字歌词。
- * 请求走 tauri-plugin-http（Rust 侧 reqwest，绕开 CORS）；浏览器预览退化为
+ * 请求走宿主网络栈（主进程 reqwest，绕开 CORS）；浏览器预览退化为
  * window.fetch（会因 CORS 失败而优雅降级，不影响播放）。
  */
 import { qrcDecrypt, qrcToRawLines, rawLinesToLyricLines, mergeQqLyrics } from "./qrc";
@@ -14,7 +14,7 @@ const API_URL = "https://u.y.qq.com/cgi-bin/musicu.fcg";
 /** 单次请求超时（毫秒） */
 const REQUEST_TIMEOUT_MS = 8000;
 
-const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const isDesktop = typeof window !== "undefined" && !!window.__SILVERMOON__;
 
 /** QQ 搜索到的歌曲信息（对应 qm.py format_songinfos 的字段） */
 export interface QqSongInfo {
@@ -57,7 +57,7 @@ async function rawPost(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const res = await tauriSafeFetch(API_URL, {
+    const res = await desktopSafeFetch(API_URL, {
       method: "POST",
       headers: {
         cookie: "tmeLoginType=-1;",
@@ -85,10 +85,10 @@ async function rawPost(
   }
 }
 
-/** Tauri 内走插件 fetch（Rust 网络栈）；浏览器预览退回原生 fetch */
-async function tauriSafeFetch(url: string, init: RequestInit): Promise<Response> {
-  if (isTauri) {
-    const { fetch } = await import("@tauri-apps/plugin-http");
+/** 桌面端走宿主网络栈；浏览器预览退回原生 fetch */
+async function desktopSafeFetch(url: string, init: RequestInit): Promise<Response> {
+  if (isDesktop) {
+    const { fetch } = await import("@/ipc/http");
     return fetch(url, init);
   }
   return fetch(url, init);

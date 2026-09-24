@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
-import { LazyStore } from "@tauri-apps/plugin-store";
+import { JsonStore } from "@/ipc/store";
 import { capabilities } from "@/capabilities";
 import { applySeedColor, clearSeedTokens } from "@/utils/dynamicTheme";
 import { applySkin } from "@/utils/skinLoader";
@@ -42,7 +42,7 @@ export type Wenku8Node = "cc" | "net";
 /** 小说页面字符集 */
 export type NovelCharset = "gbk" | "big5";
 
-const store = new LazyStore("settings.json");
+const store = new JsonStore("settings.json");
 
 const DEFAULTS = {
   theme: "system" as ThemeMode,

@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { computed, ref, shallowRef } from "vue";
-import type { UnlistenFn } from "@tauri-apps/api/event";
-import { capabilities, isTauri } from "@/capabilities";
+import type { UnlistenFn } from "@/ipc/events";
+import { capabilities, isDesktop } from "@/capabilities";
 import { useSettingsStore } from "@/stores/settings";
 import type { ListQuery, MediaEntry, ScanProgress } from "@shared/types";
 
@@ -134,12 +134,12 @@ export const useLibraryStore = defineStore("library", () => {
 
   /** 用 pdf.js 渲染 PDF 首页作为封面，并回存到后端磁盘缓存 */
   async function generatePdfCover(entry: MediaEntry): Promise<string | null> {
-    if (!isTauri) return null;
+    if (!isDesktop) return null;
     try {
       const cached = await capabilities.thumbnailCachePath(entry.id, 320);
       if (cached) return cached;
 
-      const { readFile } = await import("@tauri-apps/plugin-fs");
+      const { readFile } = await import("@/ipc/fs");
       const { renderPdfCover, toArrayBuffer } = await import("@/utils/pdf");
       const bytes = await readFile(entry.path);
       const jpeg = await renderPdfCover(toArrayBuffer(bytes), 320);

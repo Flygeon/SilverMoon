@@ -13,7 +13,7 @@
  *
  * ## 为什么需要 `asset://`
  *
- * 这是 Tauri 的 `convertFileSrc` / `assetProtocol` 的等价物：把磁盘上的
+ * 渲染进程用 `toAssetUrl()` 生成 `asset://` URL，由这里映射到磁盘上的
  * 本地媒体文件暴露成 `<img>` / `<video>` / `<iframe>` / CSS `url()` 可直接
  * 消费的 URL。必须支持 Range 请求，否则音视频拖不动进度条。
  */
@@ -127,7 +127,7 @@ export function handleAppProtocol(): void {
   });
 }
 
-/** 注册 `asset://` —— 服务任意本地文件（等价 Tauri 的 `assetProtocol` 全放行）。 */
+/** 注册 `asset://` —— 服务任意本地文件（媒体库需要播放任意扫描到的路径）。 */
 export function handleAssetProtocol(): void {
   protocol.handle(ASSET_SCHEME, async (request) => {
     try {

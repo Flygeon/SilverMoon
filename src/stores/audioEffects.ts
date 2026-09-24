@@ -8,12 +8,12 @@
  */
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
-import { LazyStore } from "@tauri-apps/plugin-store";
+import { JsonStore } from "@/ipc/store";
 import { audioEffectEngine, DEFAULT_EQ_BANDS } from "@/utils/audioEffects";
 import { decodeEqCode, decodeGain, encodeEqCode, encodeGain } from "@/utils/shareCode";
 import type { AudioEffectConfig, AudioEffectPreset } from "@shared/types";
 
-const store = new LazyStore("audio-effects.json");
+const store = new JsonStore("audio-effects.json");
 const PRESET_SHARE_PREFIX = "LLFX3:";
 const LEGACY_PRESET_SHARE_PREFIX = "LLFX1:";
 /** 「字符码」分享格式版本（<预设名称>@<字符码>）。 */

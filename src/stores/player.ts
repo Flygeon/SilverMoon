@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed, watch } from "vue";
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { capabilities, isTauri } from "@/capabilities";
+import { toAssetUrl } from "@/ipc/invoke";
+import { capabilities, isDesktop } from "@/capabilities";
 import { useSettingsStore } from "@/stores/settings";
 import { useNeteaseStore } from "@/stores/netease";
 import { useAudioEffectsStore } from "@/stores/audioEffects";
@@ -31,9 +31,9 @@ import type {
   WebDavEntry,
 } from "@shared/types";
 
-/** 浏览器预览下没有 Tauri 协议，直接返回原路径避免抛错 */
+/** 浏览器预览下没有 asset 协议，直接返回原路径避免抛错 */
 function toMediaSrc(path: string): string {
-  return isTauri ? convertFileSrc(path) : path;
+  return isDesktop ? toAssetUrl(path) : path;
 }
 
 // 双语 LRC 解析器已移至 utils/lyricTimeline.ts，此处转发保持对外 API
@@ -305,7 +305,7 @@ export const usePlayerStore = defineStore("player", () => {
 
   /** 推送播放状态给 Windows 系统媒体控件；默认节流 500ms，关键节点用 force 立即同步 */
   function syncSmtc(force = false) {
-    if (!isTauri || !song.value) return;
+    if (!isDesktop || !song.value) return;
     const now = Date.now();
     if (!force && now - lastSmtcSync < 500) return;
     lastSmtcSync = now;
@@ -320,7 +320,7 @@ export const usePlayerStore = defineStore("player", () => {
   /** 推送歌词状态给桌面歌词窗口；默认节流 200ms，切歌等关键节点用 force 立即同步 */
   let lastDesktopLyricsSync = 0;
   function syncDesktopLyrics(force = false) {
-    if (!isTauri) return;
+    if (!isDesktop) return;
     const settings = useSettingsStore();
     if (!settings.desktopLyricsEnabled || !song.value) return;
     const now = Date.now();

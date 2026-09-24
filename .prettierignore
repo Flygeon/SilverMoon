@@ -2,7 +2,7 @@ node_modules
 dist
 dist-electron
 release
-src-tauri
+backend
 *.min.*
 package-lock.json
 public

@@ -30,7 +30,7 @@
 - 安装/卸载/启用在运行时经 `ext_install`/`ext_uninstall`/`ext_enable`/`ext_disable` 完成，无需重启主程序即可启用（重启后由发现流程兜底）。
 
 ### 1.2 通用桥接命令（编译期固定，路由到扩展）
-新增 `src-tauri/src/commands/extension.rs`，全部 `pub async fn` + `spawn_blocking`（遵守主线程不阻塞约定）：
+新增 `backend/src/commands/extension.rs`，全部 `pub async fn` + `spawn_blocking`（遵守主线程不阻塞约定）：
 - `ext_list() -> Vec<ExtInfo>`：已安装扩展清单（含 enabled / engine_ready / 状态）
 - `ext_install(source: ExtSource)`：`ExtSource = { kind:"folder"|"url"|"zip", path/url }` → 校验 manifest → 解压/复制 → `extensions/<id>/`
 - `ext_uninstall(id)`：停引擎（如有）→ 删目录
@@ -74,7 +74,7 @@
 
 ### 1.4 权限与 capability（关键设计）
 - **不依赖动态生成 capability**：Tauri v2 的 capability 是静态 JSON，不支持运行时新增标签。
-- 解法：所有扩展 UI 复用**一个预授权窗口 label `extension`**（在 `src-tauri/capabilities/extension.json` 中声明 `windows:["extension"]`，授予 `core:default` + `opener:*` + `fs:allow-read-file`(scope 限 `extensions/**`) + `ext:*`(主机 ext 命令) + `event:listen`）。扩展窗口经 `?ext=<id>` 区分。
+- 解法：所有扩展 UI 复用**一个预授权窗口 label `extension`**（在 `backend/capabilities/extension.json` 中声明 `windows:["extension"]`，授予 `core:default` + `opener:*` + `fs:allow-read-file`(scope 限 `extensions/**`) + `ext:*`(主机 ext 命令) + `event:listen`）。扩展窗口经 `?ext=<id>` 区分。
 - 高权限操作（打开文件、跳秒）由**主机代执行**：扩展经 `ext_invoke` 请求，主机用已授权的 `opener` 插件 / `std::process::Command` 完成——扩展本身不持有关键权限，缩小信任面。
 - `global-shortcut` 由主机统一注册（读 manifest `contributes.hotkeys`），扩展只声明组合键。
 
@@ -115,9 +115,9 @@ miaohui-extension/
 - `core/security.py` 等文件顶部补 MIT 头。
 
 ### Phase 1 — 扩展框架（host，核心）
-- `src-tauri/src/commands/extension.rs`：`ext_list`/`ext_install`(folder|url|zip，校验 manifest + 可选 checksum)/`ext_uninstall`/`ext_set_enabled`/`ext_invoke` + 端口持有(OnceLock) + 引擎拉起(`std::process::Command`+`CREATE_NO_WINDOW`+读 stdout `READY <port>`)。
+- `backend/src/commands/extension.rs`：`ext_list`/`ext_install`(folder|url|zip，校验 manifest + 可选 checksum)/`ext_uninstall`/`ext_set_enabled`/`ext_invoke` + 端口持有(OnceLock) + 引擎拉起(`std::process::Command`+`CREATE_NO_WINDOW`+读 stdout `READY <port>`)。
 - `lib.rs`：加 `pub mod commands::extension;`，`generate_handler!` 注册，`.setup` 跑扩展发现流程（扫描 `extensions/`、拉起已启用引擎、emit 就绪）。
-- `src-tauri/capabilities/extension.json`：`windows:["extension"]` 授予 core/opener/fs(ext 范围)/ext/event。
+- `backend/capabilities/extension.json`：`windows:["extension"]` 授予 core/opener/fs(ext 范围)/ext/event。
 - 单一 `extension` 窗口的创建/路由(`?ext=&route=`)逻辑；`tray.rs` 预留「扩展」菜单挂载点；`global-shortcut` 注册入口（读 manifest contributes）。
 
 ### Phase 2 — MiaoHui 改造为扩展包（guest）

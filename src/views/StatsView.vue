@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { usePlayerStore } from "@/stores/player";
 import { useSettingsStore } from "@/stores/settings";
-import { capabilities, isTauri } from "@/capabilities";
+import { capabilities, isDesktop } from "@/capabilities";
 import { formatListenDuration, formatDuration } from "@/utils/format";
 import { translate } from "@shared/i18n";
 import type { ListenSourceStat, ListenStats, TopTrackStat } from "@shared/types";
@@ -215,7 +215,7 @@ const filteredTracks = computed(() => {
 
 // ── 数据加载 ──────────────────────────────────────────────────
 async function loadData() {
-  if (!isTauri) {
+  if (!isDesktop) {
     loading.value = false;
     return;
   }
@@ -344,7 +344,7 @@ function piePath(cx: number, cy: number, r: number, startAngle: number, endAngle
   <div class="view">
     <header class="page-head">
       <h2>{{ t("nav.stats") }}</h2>
-      <div v-if="isTauri" class="period-tabs">
+      <div v-if="isDesktop" class="period-tabs">
         <button
           v-for="p in PERIODS"
           :key="p.id"
@@ -358,7 +358,7 @@ function piePath(cx: number, cy: number, r: number, startAngle: number, endAngle
     </header>
 
     <!-- 自定义日期 -->
-    <div v-if="isTauri && isCustom" class="custom-date-row">
+    <div v-if="isDesktop && isCustom" class="custom-date-row">
       <input
         type="date"
         :value="fromDate"
@@ -384,8 +384,8 @@ function piePath(cx: number, cy: number, r: number, startAngle: number, endAngle
       />
     </div>
 
-    <!-- 非 Tauri 空态 -->
-    <div v-if="!isTauri" class="empty-state">
+    <!-- 浏览器预览空态 -->
+    <div v-if="!isDesktop" class="empty-state">
       <span class="material-symbols-outlined empty-icon">bar_chart</span>
       <p>{{ t("stats.desktopOnly") }}</p>
     </div>

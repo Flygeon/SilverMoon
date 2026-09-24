@@ -3,18 +3,18 @@
  *
  * 三处都会在这里建窗：
  * 1. 主窗口（`label = "main"`）；
- * 2. 渲染进程通过 `WebviewWindow` shim 建的子窗口（桌面歌词等）；
- * 3. Rust 侧车通过 `webview.create` 宿主操作建的窗口（番剧隐藏取流窗、扩展共享窗、
+ * 2. 渲染进程经 `createWindow()` 建的子窗口（桌面歌词等）；
+ * 3. 后端进程通过 `webview.create` 宿主操作建的窗口（番剧隐藏取流窗、扩展共享窗、
  *    Pixiv 登录窗、文库8 登录窗）。
  *
- * 关闭语义与 Tauri 对齐：一旦渲染进程注册过 `onCloseRequested`，该窗口的关闭就
+ * 关闭语义：一旦渲染进程注册过 `onCloseRequested`，该窗口的关闭就
  * 变成「先问渲染进程」——`preventDefault()` 即保留窗口，否则稍后真正关闭。
  */
 import { BrowserWindow, screen, type WebContents } from "electron";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { config, ensureDir, iconPath, isDev, rendererUrl } from "./config";
+import { config, displayName, ensureDir, iconPath, isDev, rendererUrl } from "./config";
 import { log } from "./log";
 
 /** 渲染进程可监听的事件帧。 */
@@ -153,7 +153,7 @@ export function createMainWindow(): BrowserWindow {
     minWidth: config.window.minWidth,
     minHeight: config.window.minHeight,
     title: config.window.title,
-    // Tauri 配置是 decorations:false —— 标题栏由前端自绘（WindowTitleBar.vue）
+    // 按配置去掉系统标题栏 —— 标题栏由前端自绘（WindowTitleBar.vue）
     frame: config.window.decorations,
     center: config.window.center,
     resizable: config.window.resizable,
@@ -206,7 +206,7 @@ export function createChildWindow(label: string, options: CreateOptions): Browse
     show: options.visible ?? true,
     maximizable: options.maximizable ?? true,
     minimizable: options.minimizable ?? true,
-    title: options.title ?? config.productName,
+    title: options.title ?? displayName,
     icon: iconPath(),
     webPreferences: {
       preload: preloadPath,
@@ -224,7 +224,7 @@ export function createChildWindow(label: string, options: CreateOptions): Browse
   return win;
 }
 
-/** Rust 侧车请求创建的窗口（可能带初始化脚本，需要专用 preload）。 */
+/** 后端进程请求创建的窗口（可能带初始化脚本，需要专用 preload）。 */
 export function createRustWindow(payload: {
   label: string;
   url: { kind: "external" | "app"; url?: string; path?: string };
@@ -271,7 +271,7 @@ export function createRustWindow(payload: {
     minimizable: payload.minimizable ?? true,
     alwaysOnTop: payload.alwaysOnTop ?? false,
     show: payload.visible ?? true,
-    title: payload.title ?? config.productName,
+    title: payload.title ?? displayName,
     icon: iconPath(),
     autoHideMenuBar: true,
     webPreferences: {
@@ -324,7 +324,7 @@ function register(label: string, win: BrowserWindow): void {
       closePending.delete(label);
     }
     // 桌面歌词窗 / 文库8 登录窗都依赖 "destroyed" 事件
-    dispatchEvent({ event: "tauri://destroyed", target: label, payload: null });
+    dispatchEvent({ event: "window:destroyed", target: label, payload: null });
   });
 
   win.on("close", (event) => {
@@ -352,13 +352,13 @@ function register(label: string, win: BrowserWindow): void {
       if (target) target.destroy();
     }, CLOSE_DECISION_MS);
     closePending.set(label, { denied: false, timer });
-    dispatchEvent({ event: "tauri://close-requested", target: label, payload: null });
+    dispatchEvent({ event: "window:close-requested", target: label, payload: null });
   });
 
-  const emitBounds = (eventName: "tauri://move" | "tauri://resize") => {
+  const emitBounds = (eventName: "window:move" | "window:resize") => {
     if (win.isDestroyed()) return;
     const scale = screen.getDisplayMatching(win.getBounds()).scaleFactor || 1;
-    if (eventName === "tauri://move") {
+    if (eventName === "window:move") {
       const [x, y] = win.getPosition();
       dispatchEvent({
         event: eventName,
@@ -374,8 +374,8 @@ function register(label: string, win: BrowserWindow): void {
       });
     }
   };
-  win.on("move", () => emitBounds("tauri://move"));
-  win.on("resize", () => emitBounds("tauri://resize"));
+  win.on("move", () => emitBounds("window:move"));
+  win.on("resize", () => emitBounds("window:resize"));
 
   win.webContents.on("did-start-navigation", (_e, url, _inPlace, isMainFrame) => {
     if (isMainFrame) lastCommitted.set(label, url);
@@ -385,9 +385,9 @@ function register(label: string, win: BrowserWindow): void {
 /**
  * 导航拦截。
  *
- * Tauri 的 `on_navigation` 是同步拒绝；Electron 主进程无法同步地问 Rust，
+ * 直觉上导航拦截应该能同步拒绝，但 Electron 主进程无法同步地询问后端进程，
  * 于是改成「先放行、异步问 Rust」：Rust 判定不放行时回退到上一个已提交地址。
- * 现有唯一调用点（Pixiv 登录）要拦的是回调 URL，效果一致。
+ * 现有唯一调用点（Pixiv 登录回调）效果一致。
  */
 function attachNavigationWatcher(label: string, win: BrowserWindow): void {
   const reconsider = (url: string) => {

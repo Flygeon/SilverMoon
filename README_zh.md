@@ -1,4 +1,4 @@
-# SilverMoon · 光影媒体库
+# 银月 · 光影媒体库
 
 <div align="center">
 
@@ -10,9 +10,9 @@
 
 </div>
 
-SilverMoon 基于 **Electron + Vue 3 + TypeScript + Material Design 3**，后端仍是原来的 **Rust** 原生进程：一套 Web 前端 + Rust 后端，数据全部留在本地，无云同步、不强制账号。
+银月（SilverMoon）基于 **Electron + Vue 3 + TypeScript + Material Design 3**，后端仍是原来的 **Rust** 原生进程：一套 Web 前端 + Rust 后端，数据全部留在本地，无云同步、不强制账号。
 
-> **本项目是 [LumiLuna](https://github.com/Flygeon/LumiLuna-Next) 从 Tauri 2 迁移到 Electron 的重构版。** 迁移策略是「换壳不换芯」：Vue 前端与 Rust 后端的业务代码基本原样保留，只替换了宿主层。详见 [架构](#-架构)。
+> **本项目是 [LumiLuna](https://github.com/Flygeon/LumiLuna-Next) 从 Tauri 2 迁移到 Electron 的重构版**，中文名定为「银月」。迁移策略是「换壳不换芯」：Vue 前端与 Rust 后端的业务代码基本原样保留，只替换了宿主层。详见 [架构](#-架构)。
 
 音乐播放器采用 **类 Apple Music 样式** —— 流体动态背景、封面驱动取色、逐字卡拉 OK 歌词；整个应用严格遵循 **Material Design 3** 设计系统。
 
@@ -64,43 +64,42 @@ SilverMoon 基于 **Electron + Vue 3 + TypeScript + Material Design 3**，后端
 ┌─────────────────────────── Electron 主进程（Node） ───────────────────────────┐
 │ 窗口管理 / 托盘 / 全局热键 / 文件对话框 / 系统默认程序                          │
 │ app:// 协议（承载前端产物）   asset:// 协议（本地文件代理，支持 Range）          │
-│ 宿主 HTTP 服务（127.0.0.1:随机端口）←── Rust 侧车反向调用                       │
+│ 宿主 HTTP 服务（127.0.0.1:随机端口）←── 后端进程反向调用                        │
 └───────┬───────────────────────────────────────────────────────────┬───────────┘
         │ IPC（preload contextBridge）                               │ HTTP /cmd + SSE /events
 ┌───────▼───────────────────────────────┐               ┌───────────▼───────────┐
-│ 渲染进程（Vue 3 / 原前端）             │               │ Rust 侧车（原后端）    │
-│ src/shims/ 顶替 @tauri-apps/*          │               │ src-tauri/ 业务码不动  │
+│ 渲染进程（Vue 3）                     │               │ 后端进程（Rust）       │
+│ src/ipc/ 原生能力层                   │               │ backend/ 业务代码     │
 └───────────────────────────────────────┘               └───────────────────────┘
 ```
 
-**「最小化重构」是怎么做到的**：不在业务代码里改调用方式，而是在**依赖层**做替换。
+**「换壳不换芯」是怎么做到的**：不改业务代码的**调用方式**，只替换**宿主层**。
 
 | 层 | 做法 | 业务代码改动量 |
 |---|---|---|
-| 前端 | `vite.config.ts` 的 alias + `tsconfig.json` 的 `paths` 把 `@tauri-apps/*` 指向 `src/shims/` 下的等价实现 | **0 行** |
-| Rust | `Cargo.toml` 里 `tauri` 依赖换成同名兼容 crate `src-tauri/crates/tauri-compat`，`#[tauri::command]`/`AppHandle`/`State`/`Emitter` 等 API 面逐个复刻 | 只有 `lib.rs` 去掉 6 行插件注册、`commands/extension.rs` 换 2 行 import |
-| 数据 | 沿用 Tauri 的目录约定 `<appData>/<identifier>`，首次启动自动从旧项目 `cn.cool.lumiluna` 整目录复制一次（只读旧目录） | —— |
+| 前端 | 新增 `src/ipc/`（invoke / events / window / dragdrop / paths / store / dialog / fs / opener / http），业务文件把导入指向它 | 约 30 个文件改导入与少量调用点，**业务逻辑零改动** |
+| 后端 | 新增 `backend/crates/silvermoon-ipc`：命令宏 + 路由表 + 本地 HTTP 服务 + 宿主反向 RPC | 19 个业务模块只改 `use` 前缀与类型名，**业务逻辑零改动** |
+| 数据 | 目录仍是 `<appData>/<identifier>`，首次启动自动从旧项目 `cn.cool.lumiluna` 整目录复制一次（只读旧目录） | —— |
 
-前端源码经逐文件比对，**136 个源文件中仅 14 个有差异，且全部是品牌串与构建配置**。
-
-### 兼容层实现的 Tauri API 面（实测调用量）
+### IPC 层覆盖面（实测调用量）
 
 | 项 | 数量 |
 |---|---|
-| `#[tauri::command]` 命令 | 154 |
-| `tauri::AppHandle` 引用 | 190+ |
+| `#[command]` 命令 | 154 |
+| `Host`（应用句柄）引用 | 190+ |
 | `State<'_, T>` 注入 | 29 |
-| `async_runtime::spawn_blocking` | 42 |
-| `WebviewWindowBuilder` / `WebviewWindow` | 4 |
+| `rt::spawn_blocking` | 42 |
+| `WindowBuilder` / `Window` | 4 |
 | `emit` / `emit_to` | 8 |
 | tray / menu 构造点 | 1 |
 
-### 与原 Tauri 的行为差异
+### 设计取舍与行为约定
 
-1. **不再有插件机制**。`tauri-plugin-*` 的能力改由 Electron 主进程承担；其中 Rust 侧真正用到的 `opener` 与 `global-shortcut` 已在兼容层内重做，其余（dialog / fs / store / http）本就只在前端使用。
-2. **`on_navigation` 的拦截时机**。Tauri 是同步拒绝；Electron 主进程无法同步跨进程询问 Rust，因此改为「先放行、Rust 判定不放行时执行 `stop()` 并回退到上一个已提交地址」。现有唯一调用点（Pixiv 登录回调拦截）行为一致。
-3. **托盘可见性**。Electron 托盘没有「隐藏但保留」的 API，`set_visible` 退化为无操作（业务侧只调用过 `set_visible(true)`）。
-4. **打包后 `panic` 不再 abort**。侧车是长期驻留进程，保留 unwind 语义可让单个命令的 panic 只影响当次调用。
+1. **命令走 HTTP 而非管道**：便于宿主并发处理，也便于 `curl` 直接调试。服务只绑 `127.0.0.1`，两侧共用 `X-SilverMoon-Token` 鉴权。
+2. **`on_navigation` 改为「先放行、判定为否时回退」**：Electron 主进程无法同步地跨进程询问后端。现有唯一调用点（Pixiv 登录回调）行为一致。
+3. **托盘可见性**：Electron 托盘没有「隐藏但保留」的 API，`set_visible` 退化为无操作（业务侧只调用过 `set_visible(true)`）。
+4. **打包后 `panic` 不 abort**：后端是长期驻留进程，保留 unwind 语义可让单个命令的 panic 只影响当次调用。
+5. **状态引用延长到 `'static`**：业务码里 `State<'_, T>` 会被捕获进装箱的 `async` 块；安全性论证见 `crates/silvermoon-ipc/src/app.rs` 的文档注释。
 
 ## 🔗 参考项目
 
@@ -120,21 +119,21 @@ SilverMoon 基于 **Electron + Vue 3 + TypeScript + Material Design 3**，后端
 
 - [Node.js](https://nodejs.org/) 20+
 - [Rust](https://www.rust-lang.org/) 1.82+
-- Windows 构建 Rust 侧车需要 MSVC Build Tools（`link.exe`）
+- Windows 构建后端进程需要 MSVC Build Tools（`link.exe`）
 
 ### 本地开发
 
 ```bash
 npm install
 
-# 先构建 Rust 侧车（产物：src-tauri/target/debug/silvermoon[.exe]）
+# 先构建后端进程（产物：backend/target/debug/silvermoon[.exe]）
 npm run build:backend
 
 # 一条命令同时拉起 Vite dev server + Electron 主进程 watch + Electron
 npm run dev
 ```
 
-未构建侧车也能启动界面，但所有数据操作会返回「后端未启动」并弹出说明 —— 便于先调前端。
+未构建后端也能启动界面，但所有数据操作会返回「后端未启动」并弹出说明 —— 便于先调前端。
 
 ### 仅前端预览（浏览器 + mock 数据）
 
@@ -147,7 +146,7 @@ npm run dev:renderer     # Vite dev server (localhost:1420)
 ### 打包构建
 
 ```bash
-npm run build:backend:release    # 构建 release 版 Rust 侧车
+npm run build:backend:release    # 构建 release 版后端进程
 npm run build                    # 类型检查 + 前端产物 + Electron 主进程产物
 npm run dist                     # electron-builder 打包（Windows NSIS / Linux AppImage）
 ```
@@ -178,21 +177,31 @@ npm run dist                     # electron-builder 打包（Windows NSIS / Linu
 
 ```
 electron/          # Electron 主进程（迁移后新增）
-  main.ts          #   启动编排：协议 → 宿主服务 → 侧车 → 主窗口
-  sidecar.ts       #   拉起/守护 Rust 侧车，HTTP 命令 + SSE 事件
-  host-server.ts   #   Rust → Electron 的反向调用入口（建窗 / eval / 托盘 / 热键 / 打开文件）
+  main.ts          #   启动编排：协议 → 宿主服务 → 后端进程 → 主窗口
+  sidecar.ts       #   拉起/守护后端进程，HTTP 命令 + SSE 事件
+  host-server.ts   #   后端 → Electron 的反向调用入口（建窗 / eval / 托盘 / 热键 / 打开文件）
   windows.ts       #   窗口注册表、创建、关闭拦截、事件派发
   protocols.ts     #   app://（前端产物）与 asset://（本地文件代理，支持 Range）
   ipc.ts           #   渲染进程 → 主进程的能力分发（白名单通道）
-  store.ts         #   plugin-store 的落盘实现
+  store.ts         #   JsonStore 的落盘实现
   tray.ts          #   系统托盘
-  preload.ts       #   contextBridge 桥 + 拖放路径解析 + __TAURI_INTERNALS__ 注入
-  webview-preload.ts # 远程页窗口专用（初始化脚本 + 最小 __TAURI__.core.invoke）
-src/shims/         # @tauri-apps/* 的替身（迁移后新增）
+  preload.ts       #   contextBridge 桥 + 拖放路径解析
+  webview-preload.ts # 远程页窗口专用（初始化脚本 + 最小 __SILVERMOON_HOST__.invoke）
+src/ipc/           # 渲染进程的原生能力层
   bridge.ts        #   与主进程通信的底层封装
-  api/             #   core / event / window / webview / webviewWindow / dpi / path / app
-  plugin-*.ts      #   store / dialog / fs / opener / http
-src/               # Web 前端（迁移前原样保留）
+  invoke.ts        #   后端命令调用 + 本地文件 URL（toAssetUrl）
+  events.ts        #   listen / once / emit / emitTo
+  window.ts        #   窗口句柄、创建、查询（AppWindow / getCurrentWindow / createWindow）
+  dragdrop.ts      #   文件拖放（路径解析在 preload 完成）
+  dpi.ts           #   逻辑坐标与物理像素
+  paths.ts         #   应用目录与路径拼接
+  app.ts           #   版本等应用元信息
+  store.ts         #   JSON 键值存储（JsonStore）
+  dialog.ts        #   文件对话框与消息框
+  fs.ts            #   文件读写
+  opener.ts        #   交给系统打开 / 定位
+  http.ts          #   带 CORS 豁免的 fetch
+src/               # Web 前端（业务逻辑原样保留）
   capabilities/    # 统一原生能力接口（invoke 封装 + 浏览器 mock）
   stores/          # Pinia 状态（library / player / settings / pixiv / anime / skins / audioEffects …）
   components/      # FluidBackground / LyricsView / BookReader / NovelReader / AnimePlayer / PixivCard …
@@ -200,12 +209,12 @@ src/               # Web 前端（迁移前原样保留）
   workers/         # 逐字分析 Web Worker
   utils/           # 歌词时间轴 / 动漫规则与取流 / 网易云 / 皮肤 / WebDAV / 音效 …
   tokens/          # M3 设计令牌（theme.css、fonts.css）
-src-tauri/         # Rust 后端（原样保留）
+backend/         # Rust 后端（业务逻辑原样保留）
   src/commands/    # 扫描 / 元数据 / 缩略图 / 书籍 / SMTC / 皮肤 / 扩展 / FFmpeg
   src/*.rs         # pixiv / novel / anime / netease / webdav / tray / media
-  crates/          # 迁移后新增的兼容层
-    tauri-compat/        # 同名 tauri 替身：API 面 + HTTP/SSE 服务 + 反向 RPC
-    tauri-compat-macros/ # #[command] / generate_handler! / generate_context!
+  crates/          # IPC 层
+    silvermoon-ipc/        # 命令注册 + 托管状态 + 事件 + 窗口/托盘 + HTTP/SSE 服务
+    silvermoon-ipc-macros/ # #[command] / generate_handler! / generate_context!
   silvermoon.config.json # 应用元信息（编译期与运行期共用的单一真源）
 shared/            # 双端共享类型 / i18n
 example/           # 示例皮肤
@@ -229,9 +238,9 @@ scripts/           # 构建脚本（dev 编排 / esbuild 打包 Electron）
 - [hikari_novel_flutter](https://github.com/15dd/hikari_novel_flutter) —— 小说解析（© 15dd，MIT）
 - [Kazumi](https://github.com/Predidit/Kazumi) —— 动漫解析（© Predidit，GPL-3.0）
 - [LDDC](https://github.com/chenmozhijin/LDDC) —— QQ 音乐 QRC 逐字歌词模块移植自该项目（© 沉默の金，GPL-3.0-only）
-- [md3Music](https://github.com/zzyoxml/md3Music) —— 酷狗音乐 API（登录 / 音乐解析 / 每日签到），其内嵌的 Rust 服务端已原样引入 `src-tauri/kugou_server/`（© zzyoxml，AGPL-3.0）
+- [md3Music](https://github.com/zzyoxml/md3Music) —— 酷狗音乐 API（登录 / 音乐解析 / 每日签到），其内嵌的 Rust 服务端已原样引入 `backend/kugou_server/`（© zzyoxml，AGPL-3.0）
 
 > 各参考项目的许可条款适用于其对应代码；本项目的自有代码仍以 GPL-3.0-only 发布。
-> 其中 `src-tauri/kugou_server/` 为 md3Music 的 AGPL-3.0 代码，原样 vendored 并保留其
-> [LICENSE](src-tauri/kugou_server/LICENSE)。依 GPLv3 §13，AGPLv3 代码可与本项目组合，
+> 其中 `backend/kugou_server/` 为 md3Music 的 AGPL-3.0 代码，原样 vendored 并保留其
+> [LICENSE](backend/kugou_server/LICENSE)。依 GPLv3 §13，AGPLv3 代码可与本项目组合，
 > AGPL §13 的网络交互条款适用于该组合；如需在本项目中分发，请一并遵守 AGPL-3.0。

@@ -1,7 +1,7 @@
 /**
  * 系统托盘。
  *
- * 菜单结构完全由 Rust 侧车给出（`tray.rs` 构造好 `Menu`/`MenuItem`/`Submenu`
+ * 菜单结构完全由 后端进程给出（`tray.rs` 构造好 `Menu`/`MenuItem`/`Submenu`
  * 再经宿主操作 `tray.create` 送过来），这里只负责把它翻译成 Electron 的原生菜单、
  * 并把点击事件回抛给 Rust。
  *
@@ -52,7 +52,7 @@ export function createTray(payload: {
   const menu = buildMenu(payload.menu ?? []);
   if (menu) tray.setContextMenu(menu);
 
-  // 与 Tauri 的 `show_menu_on_left_click(false)` 对齐：左键点击只触发事件
+  // 左键点击只触发事件、不弹菜单（右键才弹），与托盘交互习惯一致
   tray.on("click", () => {
     void callback?.({ kind: "tray-click", button: "left", state: "up" });
   });

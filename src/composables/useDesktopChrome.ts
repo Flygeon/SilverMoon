@@ -3,11 +3,11 @@
  * 应用内热键（窗口聚焦时生效，输入框内自动忽略）。
  *
  * 与 SMTC 系统媒体键共享同一套 player store 动作；托盘/热键只在
- * Tauri 桌面环境生效，浏览器预览全部 no-op。
+ * 桌面环境生效，浏览器预览全部 no-op。
  */
 import { onBeforeUnmount, onMounted } from "vue";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { capabilities, isTauri } from "@/capabilities";
+import { getCurrentWindow } from "@/ipc/window";
+import { capabilities, isDesktop } from "@/capabilities";
 import { usePlayerStore } from "@/stores/player";
 import { useSettingsStore } from "@/stores/settings";
 
@@ -88,7 +88,7 @@ export function useDesktopChrome() {
   }
 
   onMounted(async () => {
-    if (!isTauri) return;
+    if (!isDesktop) return;
 
     let win: ReturnType<typeof getCurrentWindow>;
     try {

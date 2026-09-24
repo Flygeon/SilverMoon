@@ -1,14 +1,14 @@
 /**
  * 应用元信息与路径解析。
  *
- * 单一真源是 `src-tauri/silvermoon.config.json`：Rust 侧的 `generate_context!`
+ * 单一真源是 `backend/silvermoon.config.json`：Rust 侧的 `generate_context!`
  * 在**编译期**读它，这里在**运行期**读它（构建时被 esbuild 内联进包）。
  * 两侧必须一致，否则窗口标题、identifier、数据目录都会对不上。
  */
 import { existsSync, mkdirSync, readdirSync, statSync, copyFileSync } from "node:fs";
 import path from "node:path";
 import { app } from "electron";
-import configJson from "../src-tauri/silvermoon.config.json";
+import configJson from "../backend/silvermoon.config.json";
 
 export interface WindowConfig {
   title: string;
@@ -22,7 +22,10 @@ export interface WindowConfig {
 }
 
 export interface AppConfig {
+  /** 打包与数据目录用的技术标识（ASCII），**不随中文名变化**。 */
   productName: string;
+  /** 面向用户展示的中文名。 */
+  displayName: string;
   identifier: string;
   version: string;
   window: WindowConfig;
@@ -31,6 +34,15 @@ export interface AppConfig {
 }
 
 export const config = configJson as unknown as AppConfig;
+
+/**
+ * 展示名（中文名「银月」）。
+ *
+ * 所有**给人看**的地方（窗口标题、对话框标题、应用名查询）都用它；
+ * `productName` 只用于 electron-builder 的产物命名与系统层面的应用标识，
+ * 两者分开是为了让中文名可以随时调整而不影响安装目录与用户数据。
+ */
+export const displayName = config.displayName || config.productName;
 
 /**
  * 是否处于开发模式。
@@ -47,7 +59,7 @@ export const DEV_SERVER_URL = "http://localhost:1420";
 export const APP_SCHEME = "app";
 export const APP_ORIGIN = `${APP_SCHEME}://silvermoon`;
 
-/** 本地文件代理协议（等价 Tauri 的 `asset:`）。 */
+/** 本地文件代理协议：把磁盘文件暴露成页面可直接消费的 URL。 */
 export const ASSET_SCHEME = "asset";
 
 /** 工程根目录。 */
@@ -56,7 +68,7 @@ export const projectRoot = path.resolve(__dirname, "..");
 /**
  * 应用数据目录 —— 必须是**绝对**路径，且与 Rust 侧 `app_data_dir()` 完全一致。
  *
- * 沿用 Tauri 的约定（`<appData>/<identifier>`）而不是 Electron 默认的
+ * 用 `<appData>/<identifier>` 而不是 Electron 默认的
  * `<appData>/<productName>`，这样目录名与 identifier 同名、语义明确。
  */
 export function dataDir(appDataRoot: string): string {
@@ -119,14 +131,14 @@ function copyTree(from: string, to: string): void {
 /**
  * 应用图标路径（托盘 / 窗口图标 / 托盘降级图标）。
  *
- * 开发期直接取仓库里的 icons；打包后 `src-tauri/` 不在 app.asar 内，
+ * 开发期直接取仓库里的 icons；打包后 `backend/` 不在 app.asar 内，
  * 因此改从 `extraResources` 放进去的 `resources/icon.png` 取。
  */
 export function iconPath(): string | undefined {
   const candidates = app.isPackaged
     ? [path.join(process.resourcesPath, "icon.png")]
     : [
-        path.join(projectRoot, "src-tauri", "icons", "128x128.png"),
+        path.join(projectRoot, "backend", "icons", "128x128.png"),
         path.join(projectRoot, "app-icon.png"),
       ];
   return candidates.find((p) => existsSync(p) && statSync(p).isFile());

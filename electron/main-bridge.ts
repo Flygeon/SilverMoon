@@ -21,7 +21,7 @@ export function getSidecar(): Sidecar | null {
 /** 调用 Rust 命令；侧车不可用时返回明确的错误。 */
 export async function callSidecar(cmd: string, args: unknown): Promise<CommandReply> {
   if (!ref) {
-    return { ok: false, error: "后端未启动：Rust 侧车不可用" };
+    return { ok: false, error: "后端未启动：后端进程不可用" };
   }
   return ref.callCommand(cmd, args);
 }

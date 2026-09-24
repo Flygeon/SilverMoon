@@ -5,7 +5,7 @@
  */
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { capabilities, isTauri } from "@/capabilities";
+import { capabilities, isDesktop } from "@/capabilities";
 import { useSettingsStore } from "./settings";
 import { validateSkin, type SkinDocument } from "@/utils/skinSchema";
 import { prepareSkin } from "@/utils/skinLoader";
@@ -15,14 +15,14 @@ import type { SkinEntry } from "@shared/types";
 
 async function appVersionSafe(): Promise<string> {
   try {
-    if (isTauri) {
-      const { getVersion } = await import("@tauri-apps/api/app");
+    if (isDesktop) {
+      const { getVersion } = await import("@/ipc/app");
       return await getVersion();
     }
   } catch {
     /* 取不到版本就按当前发布版本处理，仅影响 minAppVersion 门槛 */
   }
-  // 非 Tauri（浏览器预览）时用构建期注入的版本，别再写死字符串
+  // 浏览器预览时用构建期注入的版本，别再写死字符串
   return __APP_VERSION__;
 }
 

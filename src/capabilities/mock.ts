@@ -1,5 +1,5 @@
 /**
- * 纯浏览器预览用的 mock 后端（`npm run dev` 无 Tauri 环境时生效）。
+ * 纯浏览器预览用的 mock 后端（不经 Electron 启动、只有 Vite dev server 时生效）。
  * 只为让 UI 可见，不追求行为等价。
  */
 import type {
@@ -492,7 +492,7 @@ export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case "anime_rules_index":
       return as("[]");
     case "anime_fetch":
-      throw new Error("浏览器预览不支持网络抓取，请在 Tauri 环境测试在线番剧");
+      throw new Error("浏览器预览不支持网络抓取，请在桌面端测试在线番剧");
     case "anime_media_url": {
       const url = String(args?.url ?? "");
       return as({ url: `https://demo.anime.invalid/proxy?u=${encodeURIComponent(url)}` });
@@ -580,11 +580,11 @@ export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case "is_safe_mode":
       return as(false);
     case "skin_read_external_file":
-      throw new Error("浏览器预览不支持读取本地文件，请在 Tauri 环境测试皮肤导入");
+      throw new Error("浏览器预览不支持读取本地文件，请在桌面端测试皮肤导入");
     case "skin_stage_zip":
     case "skin_commit":
     case "skin_abort":
-      throw new Error("浏览器预览不支持 ZIP 皮肤导入，请在 Tauri 环境测试");
+      throw new Error("浏览器预览不支持 ZIP 皮肤导入，请在桌面端测试");
     case "skin_dir":
       return as("C:/MockAppData/skins");
     case "skin_save":

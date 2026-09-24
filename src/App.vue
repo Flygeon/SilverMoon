@@ -6,7 +6,7 @@ import { useSkinsStore } from "@/stores/skins";
 import { usePlayerStore } from "@/stores/player";
 import { useAudioEffectsStore } from "@/stores/audioEffects";
 import { useLibraryStore } from "@/stores/library";
-import { isTauri } from "@/capabilities";
+import { isDesktop } from "@/capabilities";
 import MiniPlayer from "@/components/MiniPlayer.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import TextPrompt from "@/components/TextPrompt.vue";
@@ -14,9 +14,9 @@ import WindowTitleBar from "@/components/WindowTitleBar.vue";
 import { useDesktopChrome } from "@/composables/useDesktopChrome";
 import { activeSkinDoc, skinBgActive, skinSafeMode } from "@/utils/skinRuntime";
 import { translate } from "@shared/i18n";
-import { listen, type Event, type UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { listen, type Event, type UnlistenFn } from "@/ipc/events";
+import { onDragDropEvent, type DragDropEvent } from "@/ipc/dragdrop";
+import { getCurrentWindow } from "@/ipc/window";
 import {
   DL_BOUNDS_EVENT,
   DL_CONTROL_EVENT,
@@ -67,7 +67,7 @@ watch(
 );
 
 onMounted(async () => {
-  if (isTauri) {
+  if (isDesktop) {
     try {
       dlUnlisteners.push(
         await listen<null>(DL_READY_EVENT, () => pushDesktopLyricsState()),
@@ -92,7 +92,7 @@ onMounted(async () => {
         }),
       );
     } catch {
-      /* 非 Tauri 或权限不足时静默 */
+      /* 宿主不可用或权限不足时静默 */
     }
   }
 });
@@ -129,9 +129,9 @@ const isExtensionHostPage = computed(() => route.path === "/extension-host");
 // 扩展窗口（label: extension，由 Rust open_extension_window 创建）加载的是
 // 主 SPA，默认会 redirect 到 /images —— 按 label 重定向到扩展宿主路由。
 const isExtensionWindow = (() => {
-  if (!isTauri) return false;
+  if (!isDesktop) return false;
   try {
-    return getCurrentWebviewWindow().label === "extension";
+    return getCurrentWindow().label === "extension";
   } catch {
     return false;
   }
@@ -166,9 +166,9 @@ function isSkinFile(x: string): boolean {
   return l.endsWith(".json") || l.endsWith(".zip");
 }
 onMounted(async () => {
-  if (!isTauri) return;
+  if (!isDesktop) return;
   try {
-    unDragDrop = await getCurrentWebview().onDragDropEvent((e: Event<DragDropEvent>) => {
+    unDragDrop = await onDragDropEvent((e: Event<DragDropEvent>) => {
       const p = e.payload;
       if (p.type === "enter") {
         skinDropOver.value = p.paths.some(isSkinFile);
@@ -229,9 +229,9 @@ router.afterEach((to) => {
       aria-hidden="true"
     ></div>
 
-    <!-- Windows 自定义标题栏（仅 Tauri 桌面版，播放页/桌面歌词页/扩展宿主页隐藏） -->
+    <!-- Windows 自定义标题栏（仅桌面端，播放页/桌面歌词页/扩展宿主页隐藏） -->
     <WindowTitleBar
-      v-if="isTauri && !isPlayerPage && !isDesktopLyricsPage && !isExtensionHostPage"
+      v-if="isDesktop && !isPlayerPage && !isDesktopLyricsPage && !isExtensionHostPage"
     />
 
     <!-- 主体：左侧导航 + 内容区 -->
@@ -242,7 +242,7 @@ router.afterEach((to) => {
         class="nav-rail lm-glass"
         data-lm-region="nav"
       >
-        <div v-if="!isTauri" class="brand">
+        <div v-if="!isDesktop" class="brand">
           <span class="material-symbols-outlined brand-mark">blur_on</span>
           <span class="brand-name">{{ t("app.name") }}</span>
         </div>

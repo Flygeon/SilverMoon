@@ -1,10 +1,10 @@
 /**
- * `@tauri-apps/plugin-store` 的实现：应用数据目录下的整文件 JSON 存储。
+ * 键值存储：应用数据目录下的整文件 JSON。
  *
  * 原项目三个 store（`settings.json` / `audio-effects.json` / `bangumi.json`）都落在
  * `app_data_dir()` 下，这里沿用同一位置，保证迁移后设置与原数据完全接得上。
  *
- * 写盘是**显式**的（对应 Tauri 的 `save()`），另外在进程退出前做一次兜底落盘，
+ * 写盘是**显式**的（渲染进程调 `save()`），另外在进程退出前做一次兜底落盘，
  * 避免「改了设置但没点保存就直接退出」丢数据。
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -98,7 +98,7 @@ export async function handleStore(payload: Record<string, unknown>): Promise<unk
   switch (op) {
     case "get": {
       if (key === undefined) return null;
-      // 与 Tauri 一致：键不存在返回 null
+      // 键不存在一律返回 null，调用方无需区分「没有这个键」和「值是 null」
       return Object.prototype.hasOwnProperty.call(entry.data, key) ? entry.data[key] : null;
     }
     case "set": {

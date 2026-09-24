@@ -17,5 +17,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["electron/**/*.ts", "src-tauri/silvermoon.config.json"]
+  "include": ["electron/**/*.ts", "backend/silvermoon.config.json"]
 }

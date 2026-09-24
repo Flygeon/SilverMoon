@@ -4,7 +4,7 @@
  *
  * 仅用于「更精确的逐字歌词」回退链：搜索同名歌曲 → 拉取 KRC 逐字歌词。
  * 签名算法（MD5）与请求参数逐字移植；dfid 注册仅歌单接口需要，此处省略。
- * 请求经 tauri-plugin-http（Rust 网络栈）；浏览器预览退化为 window.fetch。
+ * 请求经宿主网络栈（主进程发起，绕开 CORS）；浏览器预览退化为 window.fetch。
  */
 import { md5 } from "./md5";
 import { krcDecrypt, krcToRawLines, krcLinesToLyricLines } from "./krc";
@@ -14,7 +14,7 @@ import type { LyricLine } from "@shared/types";
 const REQUEST_TIMEOUT_MS = 8000;
 const SIGN_KEY = "LnT6xpN3khm36zse0QzvmgTZ3waWdRSA";
 
-const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const isDesktop = typeof window !== "undefined" && !!window.__SILVERMOON__;
 
 /** 酷狗搜索到的歌曲信息（对应 kg.py format_songinfos 字段） */
 export interface KgSongInfo {
@@ -28,8 +28,8 @@ export interface KgSongInfo {
 }
 
 async function kgFetch(url: string, init: RequestInit): Promise<Response> {
-  if (isTauri) {
-    const { fetch } = await import("@tauri-apps/plugin-http");
+  if (isDesktop) {
+    const { fetch } = await import("@/ipc/http");
     return fetch(url, init);
   }
   return fetch(url, init);

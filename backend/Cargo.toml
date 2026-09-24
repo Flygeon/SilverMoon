@@ -1,0 +1,97 @@
+[package]
+name = "silvermoon"
+version = "1.2.1"
+description = "SilverMoon —— 本地优先全媒体库应用（Electron + Vue 3 + Rust 后端）"
+authors = ["SilverMoon"]
+license = "GPL-3.0-only"
+edition = "2021"
+rust-version = "1.82"
+
+[lib]
+name = "silvermoon_lib"
+crate-type = ["rlib"]
+
+# ---------------------------------------------------------------------------
+# 依赖说明
+#
+# 本 crate 是 SilverMoon 的后端（sidecar 进程），由 Electron 主进程拉起。
+# 它与宿主之间只有一个约定：`silvermoon-ipc` 把命令注册进路由表，由本地
+# HTTP 服务（`POST /cmd`）暴露；事件经 SSE（`GET /events`）回推。详见
+# `crates/silvermoon-ipc/src/lib.rs`。
+#
+# 因此这里不需要任何桌面框架依赖：
+#   * 窗口、托盘、文件对话框、系统默认程序  —— 由 Electron 主进程负责
+#   * 系统媒体控件（SMTC）                —— 本 crate 内用 smtc-tokio 直接实现
+#   * 全局热键                            —— 由 Electron 注册，回调经 /_host 转发进本进程
+# ---------------------------------------------------------------------------
+
+[dependencies]
+silvermoon-ipc = { path = "crates/silvermoon-ipc" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+# 错误处理规范化：thiserror 用于定义强类型错误枚举，anyhow 用于内部函数便捷传播
+thiserror = "1"
+anyhow = "1"
+walkdir = "2"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+lofty = "0.20"
+kamadak-exif = "0.5"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp", "tiff", "ico"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+encoding_rs = "0.8"
+scraper = "0.20"
+regex = "1"
+tokio = { version = "1", features = ["full"] }
+rayon = "1"
+base64 = "0.22"
+getrandom = "0.2"
+chrono = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "stream", "native-tls", "charset", "gzip", "json"] }
+# WebDAV 直接用到的传递依赖需显式声明（Rust 不允许隐式使用传递依赖）
+url = "2"
+httpdate = "1"
+percent-encoding = "2"
+# 网易云音乐 weapi/eapi 签名（移植自 api-enhanced，纯 Rust 实现）
+aes = "0.8"
+cbc = "0.1"
+ecb = "0.1"
+rsa = { version = "0.9", features = ["pem", "hazmat"] }
+md-5 = "0.10"
+rand_core = { version = "0.6", features = ["getrandom"] }
+# 网易云 xeapi 协议（匿名身份注册，风控必需）：X25519 + AES-128-GCM + HMAC-SHA256 + gzip
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+aes-gcm = "0.10"
+hmac = "0.12"
+sha2 = "0.10"
+flate2 = "1"
+roxmltree = "0.20"
+# WebDAV / anime 媒体本地代理：绑定 127.0.0.1 随机端口的轻量 HTTP 服务（SMTC 封面服务同款，跨平台）
+tiny_http = "0.12"
+# 酷狗音乐 API 客户端（vendored from MD3Music，AGPL-3.0）。
+# 以 path 依赖形式链接：kugou.rs 经 kugou_server::bridge 进程内直调其路由表，
+# 不启动其 HTTP 服务端。该 crate 内已自带 ureq/sha1/rand/qrcode 等依赖。
+kugou_server = { path = "kugou_server" }
+
+# Windows 系统媒体控件（SMTC）：把本应用注册为系统媒体会话。
+# 仅在 Windows 编译，Linux/macOS 构建不受影响。
+[target.'cfg(windows)'.dependencies]
+smtc-tokio = "0.1"
+
+# ---------------------------------------------------------------------------
+# 发布构建配置
+#
+# 这里刻意**不用**最激进的优化（`lto = true` 等价于 fat LTO、`codegen-units = 1`）：
+# 实测那套组合让 CI 的 Windows release 编译到 572s，而加速手段（CI 缓存）对
+# fat LTO 的最终链接阶段几乎无效。本应用后端的负载是网络抓取 / SQLite /
+# 文件解码，属于 I/O 密集型，thin LTO 与 4 个 codegen unit 的运行时差距
+# 在实测中不可感知，构建时间却能省下大约一半。
+# ---------------------------------------------------------------------------
+[profile.release]
+codegen-units = 4
+lto = "thin"
+opt-level = "s"
+strip = true
+# 注意：**不要**开 `panic = "abort"`。后端现在是长期驻留的独立进程，
+# 保留 unwind 语义才能让某个命令的 panic 只影响当次调用，而不是整块后端一起退出。

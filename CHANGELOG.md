@@ -2,34 +2,36 @@
 
 ## Unreleased — 迁移到 Electron（Tauri 2 → Electron 44）
 
-> **策略：换壳不换芯。** 不改业务代码的调用方式，只替换宿主层。
-> 经逐文件比对，`src/` 与 `shared/` 共 136 个源文件中**仅 14 个有差异**，
-> 且全部是品牌串与构建配置；19 个 Rust 业务文件中只有 2 处 import 级改动。
+> **策略：换壳不换芯。** 不改业务代码的**调用方式**，只替换**宿主层**。
+> 前端 30 个文件只改导入与少量调用点、后端 19 个业务模块只改 `use` 前缀与类型名，
+> **两侧业务逻辑均零改动**；`src/` 与 `shared/` 的 136 个源文件里只有品牌串与构建配置发生变化。
 
 ### 架构
-- 桌面壳由 **Tauri 2** 换成 **Electron 44**；Rust 后端保留为**独立 sidecar 进程**，经 `127.0.0.1` 上的 HTTP（命令）+ SSE（事件）与宿主通信
-- 新增 `src-tauri/crates/tauri-compat/`：一个**同名 `tauri` 兼容 crate**，复刻 `AppHandle` / `Builder` / `Manager` / `Emitter` / `State` / `WebviewWindow` / `tray` / `menu` / `async_runtime` 等实际用到的 API 面（154 个命令、190+ 处 `AppHandle`、29 处 `State` 注入）
-- 新增 `src-tauri/crates/tauri-compat-macros/`：`#[command]` / `generate_handler!` / `generate_context!` 三个宏，按形参**类型**（而非位置）注入 `AppHandle` 与 `State`，键名映射复刻 Tauri 的「去前导下划线 → camelCase」规则
+- 桌面壳由 **Tauri 2** 换成 **Electron 44**；Rust 后端保留为**独立 sidecar 进程**，经 `127.0.0.1` 上的 HTTP（命令）+ SSE（事件）与宿主通信，两侧共用 `X-SilverMoon-Token` 鉴权
+- 新增 `backend/crates/silvermoon-ipc/`：命令注册宏 + 路由表 + 托管状态 + 事件总线 + 本地 HTTP/SSE 服务，覆盖实测用到的全部调用面（154 个命令、190+ 处应用句柄、29 处 `State` 注入、42 处 `spawn_blocking`、4 处窗口、托盘/菜单、真 tokio 运行时）
+- 新增 `backend/crates/silvermoon-ipc-macros/`：`#[command]` / `generate_handler!` / `generate_context!` 三个宏，按形参**类型**（而非位置）注入应用句柄与 `State`，键名映射遵循「去前导下划线 → camelCase」规则
 - 新增 `electron/` 主进程：窗口管理、托盘、全局热键、文件对话框、系统默认程序、`app://`（前端产物）与 `asset://`（本地文件代理，支持 Range）两个自定义协议
-- 新增 `electron/host-server.ts`：Rust → Electron 的反向 RPC 入口（建窗 / eval / 读 cookie / 托盘 / 热键 / 打开文件），与侧车的命令服务双向对称、共用令牌鉴权
-- 新增 `src/shims/`：`@tauri-apps/*` 的等价实现（core / event / window / webview / webviewWindow / dpi / path / app + store / dialog / fs / opener / http），由 Vite alias 与 tsconfig `paths` 顶替
-- 新增 `src-tauri/silvermoon.config.json`：应用元信息单一真源，编译期（`generate_context!`）与运行期（Electron）共读
+- 新增 `electron/host-server.ts`：后端 → Electron 的反向 RPC 入口（建窗 / eval / 读 cookie / 托盘 / 热键 / 打开文件），与后端命令服务双向对称
+- 新增 `src/ipc/`：渲染进程的原生能力层（invoke / events / window / dragdrop / dpi / paths / app / store / dialog / fs / opener / http），业务文件直接指向它
+- 新增 `backend/silvermoon.config.json`：应用元信息单一真源，编译期（`generate_context!`）与运行期（Electron）共读
+- **仓库内已无任何 Tauri 依赖或字样**：`@tauri-apps/*` 六个 npm 包与六个 `tauri-plugin-*` crate 全部移除
 
 ### 迁移要点
-- `lib.rs` 移除 6 行插件注册；`commands/extension.rs` 的 `tauri_plugin_opener` / `tauri_plugin_global_shortcut` 换成兼容层实现（各 1 行）；`main.rs` 仅改 crate 名
 - 托盘菜单与扩展贡献项仍由 Rust 构造，经宿主操作送交 Electron 创建原生托盘，保持 `tray.rs` 零改动
-- SMTC（`smtc-tokio`）与 WebDAV / 番剧的本地 tiny_http 代理本就与 Tauri 无关，原样保留在侧车
+- SMTC（`smtc-tokio`）与 WebDAV / 番剧的本地 tiny_http 代理本就与桌面框架无关，原样保留在后端进程
 - 登录态与本地数据目录沿用 `<appData>/<identifier>` 约定；首次启动自动从旧项目目录 `cn.cool.lumiluna` 整目录复制一次（只读旧目录，绝不删改）
+- `data-tauri-drag-region` 换成 Electron 原生的 `-webkit-app-region: drag`（扩展宿主窗口无边框，原先那条栏靠桌面框架属性拖拽）
+- 远程页（Pixiv 登录、文库8 登录、番剧取流）的宿主全局由 `window.__TAURI__` 改为 `window.__SILVERMOON_HOST__`
 
-### 前端
-- 项目更名为 **SilverMoon**（窗口标题、启动页、i18n 应用名、皮肤过滤器名、UA 串、README）
-- 技术标识保持不变以免破坏兼容：皮肤 id（`lumiluna.*`）、IndexedDB 库名（`lumiluna` / `lumiluna-online` / `lumiluna-webdav`）、`localStorage` 键名、诊断日志文件名
-- 构建产物由 `app://` 自定义协议承载（而非 `file://`），保证 IndexedDB / localStorage 有正常 origin
+### 品牌
+- 项目英文名 **SilverMoon**，中文名定为 **银月**：窗口标题、启动屏、标题栏、安装快捷方式、皮肤过滤器名、扩展页文案、对话框标题统一使用中文名
+- `productName` 与 `identifier` 保持 ASCII 不变（打包产物名、数据目录、`localStorage` / IndexedDB 键名均不受中文名影响）
 
 ### 工程
 - 新增 `.gitattributes`（`* text=auto eol=lf`），修掉原项目「CRLF 工作区导致本地 prettier/eslint 全量假阳性」的老问题
-- CI 重写：lint 作业新增 `typecheck` 与兼容层的 fmt 检查；构建作业先产出 Rust release 侧车，再交 electron-builder 打 NSIS / AppImage
-- 依赖新增 `electron` / `electron-builder` / `esbuild`；移除 `@tauri-apps/cli` 与 6 个 `tauri-plugin-*`（Rust 侧）
+- CI 提速：构建作业不再串行等待 lint；补齐 npm / Rust / electron-builder 三级缓存；release profile 由 `lto = true + codegen-units = 1` 放宽为 `thin` + `4`；新增 concurrency 自动取消过期运行
+- 依赖新增 `electron` / `electron-builder` / `esbuild`；移除 `@tauri-apps/cli` 与 6 个 `@tauri-apps/*`
+
 
 ## 1.2.1 (2026-09-12)
 

@@ -9,7 +9,7 @@ import { useRouter } from "vue-router";
 import { useSettingsStore } from "@/stores/settings";
 import { useAudioEffectsStore } from "@/stores/audioEffects";
 import { translate } from "@shared/i18n";
-import { isTauri } from "@/capabilities";
+import { isDesktop } from "@/capabilities";
 
 const settings = useSettingsStore();
 const effects = useAudioEffectsStore();
@@ -45,7 +45,7 @@ async function loadPresets() {
   error.value = "";
   try {
     const url = `${PRESET_REPO_RAW}/presets/index.json`;
-    // 非 Tauri 环境用 fetch；Tauri 环境用 http 插件或 fetch
+    // 浏览器预览用原生 fetch；桌面端走宿主网络栈
     const res = await fetch(url, { cache: "no-cache" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const list: PresetItem[] = await res.json();

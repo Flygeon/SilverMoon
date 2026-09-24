@@ -8,7 +8,7 @@
  */
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import { LazyStore } from "@tauri-apps/plugin-store";
+import { JsonStore } from "@/ipc/store";
 import { useSettingsStore } from "@/stores/settings";
 import { animeLog } from "@/utils/animeLog";
 import {
@@ -25,7 +25,7 @@ import type {
 } from "@shared/types";
 
 /** 收藏缓存独立落盘（settings.json 保持轻量；浏览器预览下静默失败） */
-const cache = new LazyStore("bangumi.json");
+const cache = new JsonStore("bangumi.json");
 
 export type AuthState = "idle" | "checking" | "ok" | "error";
 

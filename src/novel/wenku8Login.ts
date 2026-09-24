@@ -6,9 +6,9 @@
 //      cookie（含 httpOnly），命中即保存登录态并自动关闭窗口
 //
 // 说明：注入脚本（initialization_script）仅作快速通道 + 诊断；远程 webview
-// 中 window.__TAURI__ 是否可用不影响本方案（主窗口 invoke 恒可靠）。
+// 中 window.__SILVERMOON_HOST__ 是否可用不影响本方案（主窗口 invoke 恒可靠）。
 
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getWindowByLabel, type AppWindow } from "@/ipc/window";
 import type { Wenku8LoginStatus } from "@shared/types";
 
 // 超时（毫秒）：10 分钟
@@ -26,7 +26,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export async function openWenku8Login(): Promise<Wenku8LoginStatus> {
   const label = `wenku8-login`;
   // 先关掉可能残留的窗口
-  const existing = await WebviewWindow.getByLabel(label);
+  const existing = await getWindowByLabel(label);
   if (existing) {
     try {
       await existing.close();
@@ -59,13 +59,13 @@ export async function openWenku8Login(): Promise<Wenku8LoginStatus> {
     }
   }
 
-  const win: WebviewWindow | null = await WebviewWindow.getByLabel(label);
+  const win: AppWindow | null = await getWindowByLabel(label);
   const start = Date.now();
   let userClosed = false;
   if (win) {
-    // 注意：这里绝不能注册 win.onCloseRequested —— Tauri v2 中注册后窗口的
+    // 注意：这里绝不能注册 win.onCloseRequested —— 注册后窗口的
     // 关闭请求会被前端接管（后端 prevent 默认关闭、等 JS 端 destroy），而
-    // 登录窗口加载的是远程页（wenku8.net，无 Tauri IPC），接管链走不通，
+    // 登录窗口加载的是远程页（wenku8.net，页面里没有宿主桥），接管链走不通，
     // 表现为「点 X 没反应、登录成功后端 close 也关不掉」（桌面歌词窗曾踩过
     // 同款坑，见 useDesktopChrome）。destroyed 事件仅作加速信号，可收不到；
     // 用户取消的可靠判定走 Rust 轮询的 [WENKU8_LOGIN_CANCELLED]。

@@ -2,7 +2,7 @@
  * 极简日志：同时写 stderr 与数据目录下的 `logs/main.log`。
  *
  * 之所以要落盘：Electron 打包后 stderr 不可见，而排查启动期问题
- * （Rust 侧车拉起失败、协议注册失败）只能靠日志。
+ * （后端进程拉起失败、协议注册失败）只能靠日志。
  */
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";

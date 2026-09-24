@@ -5,8 +5,8 @@
  * 视频与书籍给出信息面板 + 「用系统应用打开」。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { capabilities, isTauri } from "@/capabilities";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { capabilities, isDesktop } from "@/capabilities";
+import { toAssetUrl } from "@/ipc/invoke";
 import { formatDate, formatDuration, formatResolution, formatSize } from "@/utils/format";
 import type { MediaEntry, MediaMetadata } from "@shared/types";
 
@@ -37,7 +37,7 @@ const src = computed(() => {
   const item = current.value;
   if (!item) return "";
   if (props.srcOf) return props.srcOf(item);
-  return isTauri ? convertFileSrc(item.path) : item.path;
+  return isDesktop ? toAssetUrl(item.path) : item.path;
 });
 
 /** 原图较大，加载期间先显示已有缩略图避免白屏 */

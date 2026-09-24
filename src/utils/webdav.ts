@@ -3,7 +3,7 @@
  *
  * 所有网络请求都经 Rust command（凭据只在 Rust 侧，前端 URL 不含凭据）；
  * 媒体通过 127.0.0.1 本地代理流式访问（支持 Range/拖动进度）。
- * 浏览器预览（非 Tauri）由 capabilities mock 提供演示数据。
+ * 浏览器预览由 capabilities mock 提供演示数据。
  *
  * 缓存策略：
  * - 内存缓存（TTL 30s）：来回切目录时避免重复 PROPFIND。
@@ -122,7 +122,7 @@ export function webdavTest(): Promise<WebDavStatus> {
   return capabilities.webdavTest();
 }
 
-// ---- 条目分类（镜像 src-tauri/src/media.rs 的白名单子集）----
+// ---- 条目分类（镜像 backend/src/media.rs 的白名单子集）----
 
 const IMAGE_EXTS = new Set([
   "jpg",

@@ -13,7 +13,7 @@ export default [
       "dist-electron/**",
       "release/**",
       "node_modules/**",
-      "src-tauri/**",
+      "backend/**",
       "public/**",
       "*.config.*",
       "coverage/**",

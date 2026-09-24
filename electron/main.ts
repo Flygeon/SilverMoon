@@ -18,7 +18,15 @@
 import { app, dialog, shell } from "electron";
 import path from "node:path";
 
-import { config, cacheDir, dataDir, ensureDir, isDev, logDir, migrateLegacyData } from "./config";
+import {
+  cacheDir,
+  dataDir,
+  displayName,
+  ensureDir,
+  isDev,
+  logDir,
+  migrateLegacyData,
+} from "./config";
 import { initLog, log } from "./log";
 import { initStore, flushAllStores } from "./store";
 import { handleAppProtocol, handleAssetProtocol, registerSchemes } from "./protocols";
@@ -65,7 +73,7 @@ const appDataRoot = app.getPath("appData");
 const localAppDataRoot =
   process.platform === "win32" ? (process.env.LOCALAPPDATA ?? appDataRoot) : appDataRoot;
 
-// 数据目录沿用 Tauri 的约定 `<appData>/<identifier>`，并与 Rust 侧车共用同一份
+// 数据目录用 `<appData>/<identifier>`，并与后端进程共用同一份
 const DATA_DIR = dataDir(appDataRoot);
 const CACHE_DIR = cacheDir(localAppDataRoot);
 
@@ -125,10 +133,10 @@ async function bootstrap(): Promise<void> {
     log.error(`后端进程异常退出（code=${code}）`);
     void dialog.showMessageBox({
       type: "error",
-      title: config.productName,
+      title: displayName,
       message: "后端进程已退出",
       detail:
-        "媒体库后端（Rust 侧车）意外停止，界面上的操作会陆续失败。\n" +
+        "媒体库后端（后端进程）意外停止，界面上的操作会陆续失败。\n" +
         "建议重启应用。若反复出现，请查看日志目录下的 main.log。",
       buttons: ["知道了"],
     });
@@ -148,13 +156,13 @@ async function bootstrap(): Promise<void> {
     setTimeout(() => {
       void dialog.showMessageBox({
         type: "warning",
-        title: config.productName,
+        title: displayName,
         message: "后端未启动",
         detail:
-          "没有找到媒体库后端（Rust 侧车）可执行文件，界面上的数据操作都会失败。\n\n" +
+          "没有找到媒体库后端（后端进程）可执行文件，界面上的数据操作都会失败。\n\n" +
           (isDev
             ? `开发模式请先构建后端：\n  npm run build:backend\n` +
-              `产物应在：src-tauri/target/debug/silvermoon${exe}\n\n`
+              `产物应在：backend/target/debug/silvermoon${exe}\n\n`
             : `安装包的 resources/bin 下应包含 silvermoon-server${exe}，当前缺失，安装包可能不完整。\n\n`) +
           `也可以用 SILVERMOON_SERVER_BIN 环境变量直接指定可执行文件。\n` +
           `已尝试的完整路径见日志：${path.join(logDir(appDataRoot), "main.log")}`,
@@ -208,7 +216,7 @@ app
     log.error("启动失败：", error);
     void dialog.showMessageBoxSync({
       type: "error",
-      title: config.productName,
+      title: displayName,
       message: "启动失败",
       detail: String((error as Error)?.stack ?? error),
     });

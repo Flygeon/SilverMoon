@@ -1,6 +1,6 @@
 appId: cn.cool.silvermoon
 productName: SilverMoon
-copyright: Copyright © SilverMoon contributors
+copyright: Copyright © SilverMoon (银月) contributors
 
 directories:
   output: release
@@ -19,23 +19,23 @@ files:
 #
 # 另外**不能**把 Windows 的 .exe 写在顶层：Linux 构建会去找一个不存在的文件。
 extraResources:
-  - from: src-tauri/icons/icon.png
+  - from: backend/icons/icon.png
     to: icon.png
 
 asar: true
 
 win:
-  icon: src-tauri/icons/icon.ico
+  icon: backend/icons/icon.ico
   target:
     - target: nsis
       arch:
         - x64
   extraResources:
-    - from: src-tauri/icons/icon.png
+    - from: backend/icons/icon.png
       to: icon.png
     # 侧车以独立可执行文件随包分发（Electron 主进程 spawn 拉起，不能塞进 asar）。
     # 构建前请先执行 npm run build:backend:release。
-    - from: src-tauri/target/release/silvermoon.exe
+    - from: backend/target/release/silvermoon.exe
       to: bin/silvermoon-server.exe
 
 nsis:
@@ -44,27 +44,27 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: SilverMoon
+  shortcutName: 银月
   artifactName: ${productName}-${version}-setup.${ext}
 
 mac:
-  icon: src-tauri/icons/icon.icns
+  icon: backend/icons/icon.icns
   category: public.app-category.entertainment
   target:
     - dmg
   extraResources:
-    - from: src-tauri/icons/icon.png
+    - from: backend/icons/icon.png
       to: icon.png
-    - from: src-tauri/target/release/silvermoon
+    - from: backend/target/release/silvermoon
       to: bin/silvermoon-server
 
 linux:
-  icon: src-tauri/icons/icon.png
+  icon: backend/icons/icon.png
   category: AudioVideo
   target:
     - AppImage
   extraResources:
-    - from: src-tauri/icons/icon.png
+    - from: backend/icons/icon.png
       to: icon.png
-    - from: src-tauri/target/release/silvermoon
+    - from: backend/target/release/silvermoon
       to: bin/silvermoon-server

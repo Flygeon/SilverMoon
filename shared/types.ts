@@ -936,7 +936,7 @@ export interface AnimeFavoriteItem {
   addedAt: number;
 }
 
-/** 动漫抓取请求（跨 Tauri 边界；Rust 侧合并 cookie/UA/referer 默认值） */
+/** 动漫抓取请求（跨进程边界；后端合并 cookie/UA/referer 默认值） */
 export interface AnimeFetchSpec {
   method: "GET" | "POST";
   url: string;

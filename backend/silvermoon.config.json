@@ -1,0 +1,27 @@
+{
+  "$comment": "SilverMoon 应用元信息（中文名「银月」）。由 silvermoon-ipc 的 generate_context! 在编译期读取，Electron 主进程运行时同样读取此文件，两侧保持单一真源。",
+  "productName": "SilverMoon",
+  "displayName": "银月",
+  "$displayName": "面向用户展示的中文名。仅用于窗口标题、启动屏、对话框等 UI 文案；productName 与 identifier 是打包与数据目录的技术标识，不随中文名变化。",
+  "identifier": "cn.cool.silvermoon",
+  "version": "1.2.1",
+  "window": {
+    "title": "银月 · 光影媒体库",
+    "width": 1280,
+    "height": 800,
+    "minWidth": 900,
+    "minHeight": 600,
+    "decorations": false,
+    "center": true,
+    "resizable": true
+  },
+  "sidecar": {
+    "$comment": "Rust 后端可执行文件名（不含扩展名）。开发期指向 debug 产物，打包后随 resources 一起分发。",
+    "binary": "silvermoon-server",
+    "devBinary": "silvermoon"
+  },
+  "migration": {
+    "$comment": "从旧项目 LumiLuna 迁移数据：首次启动时若新目录不存在而旧目录存在，则整目录复制一次（只读旧目录，绝不删改）。",
+    "legacyIdentifier": "cn.cool.lumiluna"
+  }
+}

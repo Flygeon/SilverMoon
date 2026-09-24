@@ -5,11 +5,11 @@
  * - 指针拖拽窗口（screen 坐标，rAF 节流）
  * - 双击标题栏最大化/还原（300ms 判定）
  * - 4px 拖拽阈值避免点击抖动
- * - 非 Tauri / 浏览器预览全部空操作
+ * - 浏览器预览全部空操作
  */
 import { onBeforeUnmount, onMounted, ref } from "vue";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { PhysicalPosition } from "@tauri-apps/api/dpi";
+import { getCurrentWindow } from "@/ipc/window";
+import { PhysicalPosition } from "@/ipc/dpi";
 
 const DOUBLE_CLICK_MS = 300;
 const DRAG_THRESHOLD_PX = 4;
@@ -21,7 +21,7 @@ export function useWindowDrag() {
   try {
     appWindow = getCurrentWindow();
   } catch {
-    /* 浏览器预览无 Tauri 运行时 */
+    /* 浏览器预览无宿主桥 */
   }
 
   let unlistenResized: (() => void) | null = null;

@@ -7,7 +7,7 @@
  *
  * 全部异步、不阻塞播放；失败静默降级为粗排（见 getPreciseWordTimes 的 catch）。
  */
-import { isTauri } from "@/capabilities";
+import { isDesktop } from "@/capabilities";
 import { wordCacheGet, wordCacheSet, type PreciseLine } from "./wordCache";
 import type { LyricLine } from "@shared/types";
 
@@ -23,8 +23,8 @@ export interface SongSource {
 const MAX_SECONDS = 300;
 
 async function getAudioBytes(source: SongSource): Promise<ArrayBuffer> {
-  if (source.kind === "local" && source.filePath && isTauri) {
-    const { readFile } = await import("@tauri-apps/plugin-fs");
+  if (source.kind === "local" && source.filePath && isDesktop) {
+    const { readFile } = await import("@/ipc/fs");
     const data = await readFile(source.filePath);
     return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
   }

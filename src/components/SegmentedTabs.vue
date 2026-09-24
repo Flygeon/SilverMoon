@@ -41,7 +41,7 @@ const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() 
  * 强制 m3e-button-group 重算连通圆角（--connected/--first/--last）。
  *
  * 连通态由库在 connectedCallback / slotchange 时「异步」计算：updateButtons 对每个
- * 子按钮 await waitForUpgrade + waitForUpdate 后才写入自定义态。WebView2/Tauri 下自定义
+ * 子按钮 await waitForUpgrade + waitForUpdate 后才写入自定义态。Chromium 下自定义
  * 元素升级较慢，首次重算时子按钮尚未真正升级 → custom state 静默失效，且此后不再触发
  * slotchange → 连通永久丢失（全部退化为独立圆角，即「每个都是单独的胶囊」）。
  *

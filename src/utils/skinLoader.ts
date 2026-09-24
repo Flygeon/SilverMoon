@@ -10,7 +10,7 @@
  *   图标颜色自动跟随文字色，浅深模式免适配）；
  * - 字体图标包：同名 @font-face 覆盖 + 可选 @import 附加样式。
  */
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { toAssetUrl } from "@/ipc/invoke";
 import type { SkinBackgroundLayer, SkinDocument } from "./skinSchema";
 
 const STYLE_ID = "lm-skin-css";
@@ -50,7 +50,7 @@ function resolveAssetRef(ref: string, assetBase: string | null): string {
   if (/^(https?:|data:|asset:|blob:)/i.test(ref)) return ref;
   if (!assetBase) return ref;
   const norm = ref.replace(/\\/g, "/").replace(/^\.\//, "");
-  return convertFileSrc(`${assetBase}/${norm}`);
+  return toAssetUrl(`${assetBase}/${norm}`);
 }
 
 /** 重写 css 中的相对 url() 引用（嵌套引号、空白变体均处理） */

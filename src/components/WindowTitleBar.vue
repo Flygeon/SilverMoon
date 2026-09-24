@@ -3,7 +3,7 @@ import { onBeforeUnmount, ref } from "vue";
 import { useWindowDrag } from "@/composables/useWindowDrag";
 import { useSettingsStore } from "@/stores/settings";
 import { capabilities } from "@/capabilities";
-import { isTauri } from "@/capabilities";
+import { isDesktop } from "@/capabilities";
 import WindowControls from "@/components/WindowControls.vue";
 import type { ThemeMode } from "@/stores/settings";
 
@@ -61,11 +61,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <header v-if="isTauri" class="window-title-bar lm-glass" data-lm-region="titlebar">
+  <header v-if="isDesktop" class="window-title-bar lm-glass" data-lm-region="titlebar">
     <!-- 品牌 + 可拖拽区 -->
     <div class="tb-drag" @pointerdown="startDrag">
       <span class="material-symbols-outlined tb-brand-icon">blur_on</span>
-      <span class="tb-brand-name">SilverMoon</span>
+      <span class="tb-brand-name">银月</span>
     </div>
 
     <!-- 右侧操作区 -->

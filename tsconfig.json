@@ -18,20 +18,7 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
-      "@shared/*": ["shared/*"],
-      "@tauri-apps/api/core": ["src/shims/api/core.ts"],
-      "@tauri-apps/api/event": ["src/shims/api/event.ts"],
-      "@tauri-apps/api/window": ["src/shims/api/window.ts"],
-      "@tauri-apps/api/webview": ["src/shims/api/webview.ts"],
-      "@tauri-apps/api/webviewWindow": ["src/shims/api/webviewWindow.ts"],
-      "@tauri-apps/api/dpi": ["src/shims/api/dpi.ts"],
-      "@tauri-apps/api/path": ["src/shims/api/path.ts"],
-      "@tauri-apps/api/app": ["src/shims/api/app.ts"],
-      "@tauri-apps/plugin-store": ["src/shims/plugin-store.ts"],
-      "@tauri-apps/plugin-dialog": ["src/shims/plugin-dialog.ts"],
-      "@tauri-apps/plugin-fs": ["src/shims/plugin-fs.ts"],
-      "@tauri-apps/plugin-opener": ["src/shims/plugin-opener.ts"],
-      "@tauri-apps/plugin-http": ["src/shims/plugin-http.ts"]
+      "@shared/*": ["shared/*"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue", "shared/**/*.ts"],

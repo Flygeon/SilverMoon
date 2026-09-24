@@ -11,9 +11,9 @@ dist-electron/
 release/
 
 # rust
-src-tauri/target/
-src-tauri/gen/schemas/
-src-tauri/.tauri/
+backend/target/
+backend/gen/schemas/
+backend/.tauri/
 
 # logs
 *.log

@@ -3,11 +3,11 @@
  * 所有原生能力经 invoke（请求/响应）+ listen（事件推送）调用 Rust Command。
  * 前端不直接触碰磁盘/数据库/原生资源。
  */
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { open as dialogOpen, save as dialogSave } from "@tauri-apps/plugin-dialog";
-import { writeFile } from "@tauri-apps/plugin-fs";
+import { invoke, toAssetUrl } from "@/ipc/invoke";
+import { listen, type UnlistenFn } from "@/ipc/events";
+import { openPath, openUrl, revealItemInDir } from "@/ipc/opener";
+import { open as dialogOpen, save as dialogSave } from "@/ipc/dialog";
+import { writeFile } from "@/ipc/fs";
 import type {
   BookProgress,
   FfmpegStatus,
@@ -78,11 +78,11 @@ import type {
 } from "@shared/types";
 import { mockInvoke } from "./mock";
 
-/** 在 Tauri 环境下调用；非 Tauri（纯 Web 预览）时降级为 mock。 */
-export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+/** 桌面端（Electron 宿主）为真；纯 Web 预览时为假，所有原生能力降级为 mock。 */
+export const isDesktop = typeof window !== "undefined" && !!window.__SILVERMOON__;
 
 async function safeInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (!isTauri) return mockInvoke<T>(cmd, args);
+  if (!isDesktop) return mockInvoke<T>(cmd, args);
   return invoke<T>(cmd, args);
 }
 
@@ -163,7 +163,7 @@ export const capabilities = {
   },
   /** 订阅扫描进度事件；返回取消订阅函数 */
   async onScanProgress(handler: (p: ScanProgress) => void): Promise<UnlistenFn> {
-    if (!isTauri) return () => {};
+    if (!isDesktop) return () => {};
     return listen<ScanProgress>("scan:progress", (e) => handler(e.payload));
   },
 
@@ -187,7 +187,7 @@ export const capabilities = {
   async getThumbnail(fileId: string, size = 320): Promise<string | null> {
     const path = await safeInvoke<string | null>("get_thumbnail", { fileId, size });
     if (!path) return null;
-    return isTauri ? convertFileSrc(path) : path;
+    return isDesktop ? toAssetUrl(path) : path;
   },
   clearThumbnailCache(): Promise<number> {
     return safeInvoke("clear_thumbnail_cache");
@@ -198,7 +198,7 @@ export const capabilities = {
       fileId,
       size,
     });
-    return path ? (isTauri ? convertFileSrc(path) : path) : null;
+    return path ? (isDesktop ? toAssetUrl(path) : path) : null;
   },
   /** 保存前端渲染的封面（PDF 首页）到缩略图缓存 */
   async saveThumbnail(fileId: string, jpeg: Uint8Array, size = 320): Promise<string | null> {
@@ -207,7 +207,7 @@ export const capabilities = {
       size,
       jpeg: Array.from(jpeg),
     });
-    return path ? (isTauri ? convertFileSrc(path) : path) : null;
+    return path ? (isDesktop ? toAssetUrl(path) : path) : null;
   },
 
   // ---- 收藏 / 历史 / 回收站 ----
@@ -290,7 +290,7 @@ export const capabilities = {
   },
   async openFfmpegDownloadPage(): Promise<void> {
     const url = await safeInvoke<string>("ffmpeg_download_url");
-    if (isTauri) await openUrl(url);
+    if (isDesktop) await openUrl(url);
     else window.open(url, "_blank");
   },
 
@@ -303,12 +303,12 @@ export const capabilities = {
   },
   /** 订阅系统媒体键（播放/暂停/上一首/下一首/拖动进度）；返回取消订阅函数 */
   async onSmtcCommand(handler: (cmd: SmtcCommand) => void): Promise<UnlistenFn> {
-    if (!isTauri) return () => {};
+    if (!isDesktop) return () => {};
     return listen<SmtcCommand>("smtc:command", (e) => handler(e.payload));
   },
   /** 订阅 Rust 托盘菜单发出的播放器命令（play/pause/toggle/next/prev/show） */
   async onAppPlayerCommand(handler: (action: string) => void): Promise<UnlistenFn> {
-    if (!isTauri) return () => {};
+    if (!isDesktop) return () => {};
     return listen<string>("app:player-command", (e) => handler(e.payload));
   },
   /** 退出应用（配合关闭最小化到托盘：托盘菜单「退出」或关闭拦截时显式退出） */
@@ -381,7 +381,7 @@ export const capabilities = {
   },
 
   // ---- 酷狗音乐账号 ----
-  // 请求经 vendored 的 kugou_server crate 进程内直调其路由表（见 src-tauri/src/kugou.rs），
+  // 请求经 vendored 的 kugou_server crate 进程内直调其路由表（见 backend/src/kugou.rs），
   // 凭据由 Rust 侧持有并持久化，不进入 WebView。
   kugouLoginStatus(): Promise<KugouLoginStatus> {
     return safeInvoke("kugou_login_status");
@@ -773,24 +773,24 @@ export const capabilities = {
   // ---- 系统 ----
   /** 在系统浏览器中打开 URL（浏览器预览退化 window.open） */
   async openUrl(url: string): Promise<void> {
-    if (!isTauri) {
+    if (!isDesktop) {
       window.open(url, "_blank");
       return;
     }
     await openUrl(url);
   },
   async openFile(path: string): Promise<void> {
-    if (!isTauri) return;
+    if (!isDesktop) return;
     await openPath(path.replace(/\\/g, "/"));
   },
   /** 在系统文件管理器中定位并选中文件 */
   async revealInExplorer(path: string): Promise<void> {
-    if (!isTauri) return;
+    if (!isDesktop) return;
     await revealItemInDir(path.replace(/\\/g, "/"));
   },
   /** 选择目录，返回路径或 null */
   async pickDirectory(): Promise<string | null> {
-    if (!isTauri) return null;
+    if (!isDesktop) return null;
     const result = await dialogOpen({ directory: true, multiple: false });
     if (typeof result === "string") return result;
     if (result && typeof result === "object" && "path" in result) {
@@ -800,13 +800,13 @@ export const capabilities = {
   },
   /** 保存文件对话框，返回目标路径或 null（用户取消） */
   async pickSavePath(defaultName: string): Promise<string | null> {
-    if (!isTauri) return null;
+    if (!isDesktop) return null;
     const result = await dialogSave({ defaultPath: defaultName });
     return typeof result === "string" ? result : null;
   },
   /** 下载 URL 字节到本地路径（走系统网络栈，无 CORS 限制） */
   async downloadTo(url: string, dest: string): Promise<void> {
-    if (!isTauri) return;
+    if (!isDesktop) return;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`下载失败 (HTTP ${res.status})`);
     const bytes = new Uint8Array(await res.arrayBuffer());
@@ -864,10 +864,10 @@ export const capabilities = {
   },
   /** 选择皮肤文件（.json / .zip），返回路径或 null */
   async pickSkinFile(): Promise<string | null> {
-    if (!isTauri) return null;
+    if (!isDesktop) return null;
     const result = await dialogOpen({
       multiple: false,
-      filters: [{ name: "SilverMoon 皮肤", extensions: ["json", "zip"] }],
+      filters: [{ name: "银月皮肤", extensions: ["json", "zip"] }],
     });
     if (typeof result === "string") return result;
     if (result && typeof result === "object" && "path" in result) {
@@ -905,7 +905,7 @@ export const capabilities = {
   async onExtNavigate(
     handler: (payload: { ext: string; route: string }) => void,
   ): Promise<UnlistenFn> {
-    if (!isTauri) return () => {};
+    if (!isDesktop) return () => {};
     return listen<{ ext: string; route: string }>("ext:navigate", (e) => handler(e.payload));
   },
   /** 订阅扩展事件（Rust 端 emit `ext://<id>/<event>`） */
@@ -914,7 +914,7 @@ export const capabilities = {
     event: string,
     handler: (payload: unknown) => void,
   ): Promise<UnlistenFn> {
-    if (!isTauri) return () => {};
+    if (!isDesktop) return () => {};
     return listen<unknown>(`ext://${id}/${event}`, (e) => handler(e.payload));
   },
 };

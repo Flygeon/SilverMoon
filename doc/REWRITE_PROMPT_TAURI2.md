@@ -1,5 +1,10 @@
 # 提示词：用 Tauri 2 重构 LumiLuna —— 本地全媒体库应用
 
+> ⚠️ **历史归档，不是当前架构。** 本文是那次「用 Tauri 2 重写」的提示词原件。
+> 项目此后已从 Tauri 2 迁移到 **Electron 44**（更名 **银月 / SilverMoon**），
+> 当前架构见 `README_zh.md` 的「架构」一节与 `doc/AGENTS.md`。
+> 下面内容保留原样，仅作决策历史与设计意图的参考 —— **不要照着它新建 Tauri 项目**。
+
 > 目标技术栈：**Tauri 2（Windows 主力）+ Tauri 2 Android（次要）**
 > 本文在原 Flutter / EUI-NEO / Electron 重构提示词基础上改写，功能与体验保持一致，技术栈整体迁移到 **Tauri 2 + Web 前端** 架构。
 > 核心思路：**一套 Web 前端代码（HTML/CSS/TS）**作为渲染层，在 Tauri 2 的 **Windows 桌面壳**与 **Tauri Android 移动壳**之间复用；原生能力（文件扫描、元数据、播放、缩略图、数据库）收敛到 **Rust 侧（Tauri 命令 / 插件 / 原生模块）**。前端保持 **Material Design 3（M3）** 视觉，音乐播放器 **尽量 1:1 复刻 Apple Music**。
@@ -103,7 +108,7 @@
 #### 1.1 扫描管线（Scan Pipeline）
 
 ```
-┌─ Rust 侧（src-tauri/commands/scan.rs）──────────────┐
+┌─ Rust 侧（backend/commands/scan.rs）──────────────┐
 │  scan_start(config) → JobId          // 启动异步扫描任务（tokio::spawn）      │
 │  scan_cancel(JobId)                  // 取消：Drop 携带 CancellationToken     │
 │  scan_status(JobId) → {stage, done, total, percent} // 进度查询（Tauri emit 推送） │
@@ -235,7 +240,7 @@ CREATE TABLE IF NOT EXISTS media_metadata (
 #### 6.1 数据流与目录结构
 
 ```
-Rust 侧（src-tauri/commands/books.rs）：
+Rust 侧（backend/commands/books.rs）：
   book_open(path) -> BookMeta            // 解析：识别 EPUB/PDF，返回标题/作者/语言/封面/章节数/总页数
   book_chapter(path, index) -> ChapterHtml // EPUB：按章节 id 返回该章 HTML 原文（含内嵌图片引用）
   book_pdf_page(path, page) -> asset     // PDF：用 pdfium 渲染第 N 页为位图/矢量返回
@@ -495,9 +500,9 @@ Page 1（左滑→）                      Page 2（←右滑）
 
 - 工程组织建议（Tauri 2 标准脚手架 `npm create tauri-app`）：
   - `src/`：Web 前端源码（`renderer/` 渲染层、`capabilities/` 能力接口、`state/`、`views/`、`components/`、`tokens/` M3 令牌）
-  - `src-tauri/`：Rust 后端（`src/` 命令实现、`capabilities/default.json`、`tauri.conf.json`）
-  - `src-tauri/commands/`：扫描、元数据、播放、缩略图、数据库、监听等 Command
-  - `src-tauri/plugins/`：自研插件
+  - `backend/`：Rust 后端（`src/` 命令实现、`capabilities/default.json`、`tauri.conf.json`）
+  - `backend/commands/`：扫描、元数据、播放、缩略图、数据库、监听等 Command
+  - `backend/plugins/`：自研插件
   - `shared/`：双端共用的类型、常量、i18n 资源、算法（LRC 解析、主色提取）
   - `assets/`：图标、思源黑体、默认封面
 - 前端构建：**Vite + TypeScript**；Rust 侧 `cargo build --release`。
@@ -555,7 +560,7 @@ master:
         - name: install
           script: |
             npm ci
-            cd src-tauri && cargo build --release
+            cd backend && cargo build --release
         - name: build-android
           script: |
             cargo tauri android build --apk   # 产出 APK（NDK 目标已在镜像预装）

@@ -6,13 +6,13 @@
  * 而是把能力收敛成有限的几组操作。
  *
  * 所有回复统一是 `{ ok, data?, error? }`：错误以**字符串**回传，
- * 由渲染进程的 shim 转成 `Promise.reject(字符串)`，与 Tauri 的 reject 值形态一致。
+ * 由渲染进程的 `src/ipc/` 转成 `Promise.reject(字符串)`。
  */
 import { BrowserWindow, app, dialog, ipcMain, shell, screen } from "electron";
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { config, iconPath } from "./config";
+import { config, displayName, iconPath } from "./config";
 import {
   dispatchEvent,
   getWindow,
@@ -112,7 +112,7 @@ const handlers: Record<string, Handler> = {
         win.focus();
         return null;
       case "setTitle":
-        win.setTitle(String(payload.title ?? config.productName));
+        win.setTitle(String(payload.title ?? displayName));
         return null;
       case "setAlwaysOnTop":
         win.setAlwaysOnTop(payload.value === true);
@@ -218,7 +218,7 @@ const handlers: Record<string, Handler> = {
       const buttons = op === "message" ? ["确定"] : ["确定", "取消"];
       const result = await dialog.showMessageBox(parent!, {
         type: type as "info" | "warning" | "error" | "question",
-        title: options.title ?? config.productName,
+        title: options.title ?? displayName,
         message: String(payload.message ?? ""),
         buttons,
         noLink: true,
@@ -240,7 +240,7 @@ const handlers: Record<string, Handler> = {
       case "readFile":
         return readFile(target);
       // 二进制过 contextBridge 的兜底通道：万一 TypedArray 无法跨隔离世界传递，
-      // 渲染进程会退回到 base64 版本（见 src/shims/plugin-fs.ts）
+      // 渲染进程会退回到 base64 版本（见 src/ipc/fs.ts）
       case "readFileBase64":
         return (await readFile(target)).toString("base64");
       case "writeFileBase64":
@@ -349,8 +349,10 @@ const handlers: Record<string, Handler> = {
     switch (op) {
       case "version":
         return config.version;
+      case "hostVersion":
+        return process.versions.electron ?? "unknown";
       case "name":
-        return config.productName;
+        return displayName;
       case "iconPath":
         return iconPath() ?? null;
       case "exit":

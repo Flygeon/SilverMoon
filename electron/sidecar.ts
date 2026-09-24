@@ -1,9 +1,9 @@
 /**
- * Rust 侧车进程的生命周期与命令/事件通道。
+ * 后端进程进程的生命周期与命令/事件通道。
  *
  * ```
- * 渲染进程 --IPC--> 主进程 --HTTP POST /cmd--> Rust 侧车
- * 渲染进程 <--IPC-- 主进程 <----SSE /events-- Rust 侧车
+ * 渲染进程 --IPC--> 主进程 --HTTP POST /cmd--> 后端进程
+ * 渲染进程 <--IPC-- 主进程 <----SSE /events-- 后端进程
  * ```
  *
  * 端口由侧车自己选（绑 127.0.0.1:0）并打印一行
@@ -67,7 +67,7 @@ export class Sidecar extends EventEmitter {
    *
    * 注意：这里必须用 `isDev`（其真源是 `app.isPackaged`），**不要用环境变量判断**——
    * 之前误用了一个从未被设置的 `SILVERMOON_PACKAGED`，导致打包后的应用恒走开发分支，
-   * 去 `src-tauri/target/` 找可执行文件而必然失败（界面报「后端未启动」）。
+   * 去 `backend/target/` 找可执行文件而必然失败（界面报「后端未启动」）。
    */
   static resolveBinary(): string | null {
     const override = process.env.SILVERMOON_SERVER_BIN;
@@ -80,10 +80,10 @@ export class Sidecar extends EventEmitter {
     const candidates = isDev
       ? [
           // 开发期：cargo build 的产物（debug 优先，其次 release）
-          path.join(projectRoot, "src-tauri", "target", "debug", devName),
-          path.join(projectRoot, "src-tauri", "target", "release", devName),
-          path.join(projectRoot, "src-tauri", "target", "debug", exeName),
-          path.join(projectRoot, "src-tauri", "target", "release", exeName),
+          path.join(projectRoot, "backend", "target", "debug", devName),
+          path.join(projectRoot, "backend", "target", "release", devName),
+          path.join(projectRoot, "backend", "target", "debug", exeName),
+          path.join(projectRoot, "backend", "target", "release", exeName),
         ]
       : [
           // 打包后：electron-builder 的 extraResources 落在 resources/ 下
@@ -105,8 +105,8 @@ export class Sidecar extends EventEmitter {
     const binary = Sidecar.resolveBinary();
     if (!binary) {
       log.warn(
-        "未找到 Rust 侧车可执行文件，进入「后端不可用」降级模式。" +
-          "开发期请先构建：cargo build（产物在 src-tauri/target/debug/）。",
+        "未找到 后端进程可执行文件，进入「后端不可用」降级模式。" +
+          "开发期请先构建：cargo build（产物在 backend/target/debug/）。",
       );
       return false;
     }
@@ -225,7 +225,7 @@ export class Sidecar extends EventEmitter {
   /** 调用一个 Rust 命令。 */
   async callCommand(cmd: string, args: unknown): Promise<CommandReply> {
     if (!this.ready) {
-      return { ok: false, error: "后端未启动：Rust 侧车不可用，请检查是否已构建 src-tauri" };
+      return { ok: false, error: "后端未启动：后端进程不可用，请检查是否已构建 backend" };
     }
     try {
       return await this.post("/cmd", { cmd, args: args ?? {} });

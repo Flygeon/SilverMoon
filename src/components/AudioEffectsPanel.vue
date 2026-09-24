@@ -6,10 +6,10 @@
 import { ref } from "vue";
 import { useAudioEffectsStore } from "@/stores/audioEffects";
 import { useSettingsStore } from "@/stores/settings";
-import { capabilities, isTauri } from "@/capabilities";
+import { capabilities, isDesktop } from "@/capabilities";
 import { translate } from "@shared/i18n";
-import { save } from "@tauri-apps/plugin-dialog";
-import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { save } from "@/ipc/dialog";
+import { writeTextFile } from "@/ipc/fs";
 
 const effects = useAudioEffectsStore();
 const settings = useSettingsStore();
@@ -136,8 +136,8 @@ async function saveUploadJson() {
   const safeName = uploadName.value.trim().replace(/[^a-zA-Z0-9_-]/g, "") || "preset";
   const fileName = `preset-${safeName}.json`;
 
-  if (isTauri) {
-    // Tauri 原生保存对话框
+  if (isDesktop) {
+    // 桌面端：走系统保存对话框
     try {
       const filePath = await save({
         defaultPath: fileName,
@@ -156,7 +156,7 @@ async function saveUploadJson() {
       uploadStatus.value = "error";
     }
   } else {
-    // 预览/非 Tauri 环境：下载方式
+    // 浏览器预览：退化为下载方式
     try {
       const blob = new Blob([jsonStr], { type: "application/json" });
       const url = URL.createObjectURL(blob);

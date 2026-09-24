@@ -6,12 +6,12 @@
  * .epub/.pdf 就完全没有反应，表现为「点了没用」。现在改为应用内阅读，
  * 并保留「用系统应用打开」作为兜底。
  *
- * 文件通过 Tauri fs 读成 ArrayBuffer 再喂给两个库，避免依赖
+ * 文件经宿主 fs 读成 ArrayBuffer 再喂给两个库，避免依赖
  * asset:// 的 range 请求行为差异。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
-import { readFile } from "@tauri-apps/plugin-fs";
-import { capabilities, isTauri } from "@/capabilities";
+import { readFile } from "@/ipc/fs";
+import { capabilities, isDesktop } from "@/capabilities";
 import { useSettingsStore, type ReaderFontKey, type ReaderThemeKey } from "@/stores/settings";
 import { loadPdfjs, toArrayBuffer } from "@/utils/pdf";
 import { isLoginRequiredError } from "@/novel/wenku8Login";
@@ -172,7 +172,7 @@ const pdfLoadingTask = shallowRef<any>(null);
 let renderTasks: any[] = [];
 
 async function loadBytes(): Promise<ArrayBuffer> {
-  if (!isTauri || !props.item) throw new Error("仅在应用内可读取本地文件");
+  if (!isDesktop || !props.item) throw new Error("仅在应用内可读取本地文件");
   const bytes = await readFile(props.item.path);
   return toArrayBuffer(bytes);
 }

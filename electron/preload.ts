@@ -3,12 +3,12 @@
  *
  * 职责有三个：
  *
- * 1. 通过 `contextBridge` 暴露 `window.__SILVERMOON__` —— 渲染进程唯一的对外通道；
- * 2. 注入 `window.__TAURI_INTERNALS__` —— 业务代码用
- *    `"__TAURI_INTERNALS__" in window` 作为「是否运行在原生壳里」的判据
- *    （`src/capabilities/index.ts` 的 `isTauri`，约 40 处依赖），注入后
- *    所有原生能力分支会自动生效，前端无需改动；
- * 3. 把主进程推来的事件转成 DOM `CustomEvent`，并接管文件拖放（取真实路径）。
+ * 1. 通过 `contextBridge` 暴露 `window.__SILVERMOON__` —— 渲染进程唯一的对外通道，
+ *    业务代码以它的存在性判断「是否运行在桌面宿主里」（`src/capabilities/index.ts`
+ *    的 `isDesktop`）；
+ * 2. 把主进程推来的事件转成 DOM `CustomEvent`；
+ * 3. 接管文件拖放：新版 Electron 不再提供 `File.path`，必须在这里用
+ *    `webUtils.getPathForFile()` 把 `File` 换成真实路径。
  */
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 
@@ -39,11 +39,6 @@ const bridge = {
 
 contextBridge.exposeInMainWorld("__SILVERMOON__", bridge);
 
-// 让业务代码的 `isTauri` 探测成立。这里只需要「存在」，不暴露任何能力。
-contextBridge.exposeInMainWorld("__TAURI_INTERNALS__", {
-  metadata: { currentWindow: { label }, currentWebview: { label } },
-});
-
 // ---------------------------------------------------------------------------
 // 主进程 → 渲染进程事件
 // ---------------------------------------------------------------------------
@@ -60,15 +55,15 @@ ipcRenderer.on("sm:event", (_event, frame: unknown) => {
 
 /**
  * 新版 Electron 不再提供 `File.path`，必须用 `webUtils.getPathForFile()`。
- * 这里把 DOM 拖放事件翻译成与 Tauri 同名、同形状的事件，
- * 于是 `App.vue` 里 `getCurrentWebview().onDragDropEvent(...)` 的代码无需改动。
+ * 这里把 DOM 拖放事件翻译成 `drop:*` 事件，
+ * 于是 `App.vue` 里 `onDragDropEvent(...)` 的代码无需改动。
  */
 function emitDrag(frame: {
   type: "enter" | "over" | "drop" | "leave";
   paths?: string[];
   position?: { x: number; y: number };
 }): void {
-  const eventName = `tauri://drag-${frame.type}`;
+  const eventName = `drop:${frame.type}`;
   window.dispatchEvent(
     new CustomEvent("silvermoon:event", {
       detail: {

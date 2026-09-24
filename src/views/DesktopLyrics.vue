@@ -3,15 +3,15 @@
  * 桌面歌词窗口页面。
  *
  * 独立透明置顶窗口（label: desktop-lyrics）加载本路由；
- * 通过 Tauri Event 接收歌词状态。
+ * 通过应用事件接收歌词状态。
  * 控制栏：点击歌词展开，5 秒无操作自动隐藏；
  * 设置可选择始终显示。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@/ipc/window";
+import { listen, type UnlistenFn } from "@/ipc/events";
 import { useSettingsStore } from "@/stores/settings";
-import { isTauri } from "@/capabilities";
+import { isDesktop } from "@/capabilities";
 import {
   DL_STATE_EVENT,
   emitDesktopLyricsBounds,
@@ -111,9 +111,9 @@ function scheduleReportBounds() {
 }
 
 async function reportBounds() {
-  if (!isTauri) return;
+  if (!isDesktop) return;
   try {
-    const win = WebviewWindow.getCurrent();
+    const win = getCurrentWindow();
     const pos = await win.outerPosition();
     const size = await win.outerSize();
     const scale = window.devicePixelRatio || 1;
@@ -147,13 +147,13 @@ function nextSong() {
 }
 function closeLyrics() {
   void emitDesktopLyricsControl("close");
-  if (isTauri) void WebviewWindow.getCurrent().close();
+  if (isDesktop) void getCurrentWindow().close();
 }
 
 // ---- 生命周期 ----
 
 onMounted(async () => {
-  if (!isTauri) return;
+  if (!isDesktop) return;
   if (!(await isDesktopLyricsWindow())) return;
 
   window.addEventListener("blur", () => {
@@ -164,7 +164,7 @@ onMounted(async () => {
     unlistenState = await listen<DesktopLyricsState>(DL_STATE_EVENT, (e) => {
       state.value = e.payload;
     });
-    const win = WebviewWindow.getCurrent();
+    const win = getCurrentWindow();
     void win.setAlwaysOnTop(settings.desktopLyricsAlwaysOnTop);
     void win.setIgnoreCursorEvents(settings.desktopLyricsClickThrough);
     unlistenMoved = await win.onMoved(scheduleReportBounds);
@@ -178,14 +178,14 @@ onMounted(async () => {
 watch(
   () => settings.desktopLyricsAlwaysOnTop,
   (v) => {
-    if (isTauri) void WebviewWindow.getCurrent().setAlwaysOnTop(v);
+    if (isDesktop) void getCurrentWindow().setAlwaysOnTop(v);
   },
 );
 
 watch(
   () => settings.desktopLyricsClickThrough,
   (v) => {
-    if (isTauri) void WebviewWindow.getCurrent().setIgnoreCursorEvents(v);
+    if (isDesktop) void getCurrentWindow().setIgnoreCursorEvents(v);
   },
 );
 
