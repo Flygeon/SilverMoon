@@ -3,11 +3,11 @@
 //! 这里只负责把菜单结构**描述**出来（转成 JSON），真正的原生菜单由宿主机创建。
 //! 因此本模块没有「菜单对象」的运行时语义，`append` 也不会触发任何跨进程调用。
 
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use serde_json::{json, Value};
 
-use crate::app::{AppHandle, Error, Result};
+use crate::app::{AppHandle, Result};
 
 /// 菜单项 / 子菜单 id。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,33 +179,5 @@ pub struct MenuEvent {
     pub id: MenuId,
 }
 
-// ---------------------------------------------------------------------------
-// 全局分发（宿主回调入口）
-// ---------------------------------------------------------------------------
-
-pub(crate) type MenuEventHandler = Arc<dyn Fn(&AppHandle, MenuEvent) + Send + Sync>;
-
-static MENU_HANDLER: Mutex<Option<MenuEventHandler>> = Mutex::new(None);
-
-pub(crate) fn install_menu_handler(handler: MenuEventHandler) {
-    *MENU_HANDLER.lock().expect("menu handler poisoned") = Some(handler);
-}
-
-pub(crate) fn dispatch_menu(id: &str, app: &AppHandle) {
-    let handler = MENU_HANDLER.lock().expect("menu handler poisoned").clone();
-    match handler {
-        Some(f) => f(
-            app,
-            MenuEvent {
-                id: MenuId(id.to_string()),
-            },
-        ),
-        None => eprintln!("[silvermoon] 收到托盘菜单事件 `{id}`，但尚未注册处理器"),
-    }
-}
-
-/// 便于在测试/调试里构造错误
-#[allow(dead_code)]
-pub(crate) fn invalid_menu_id() -> Error {
-    Error::Other("菜单 id 非法".into())
-}
+// 说明：菜单事件的处理器由 `tray` 模块统一持有并在宿主回调时分发，
+// 这里只提供类型定义，避免出现「两套 handler 表、装了 A 却查 B」的接线错误。

@@ -170,7 +170,8 @@ async fn handle_events(
 ) -> Sse<impl tokio_stream::Stream<Item = std::result::Result<Event, Infallible>>> {
     let rx = state.inner.subscribe();
     let stream = BroadcastStream::new(rx).filter_map(|item| match item {
-        Ok(msg) => Some(Ok(Event::default().data(msg))),
+        // 显式标注错误类型：否则 `None` 分支无从定型，`Sse` 推断不出 `Infallible`
+        Ok(msg) => Some(Ok::<Event, Infallible>(Event::default().data(msg))),
         // 落后于环形缓冲时只丢帧，不中断连接
         Err(_) => None,
     });

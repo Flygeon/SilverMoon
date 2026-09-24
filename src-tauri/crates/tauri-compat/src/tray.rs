@@ -11,7 +11,7 @@ use serde_json::json;
 use crate::app::{AppHandle, Error, Result};
 use crate::host::{self, HostOp};
 use crate::image::Image;
-use crate::menu::{self, Menu, MenuEvent};
+use crate::menu::{Menu, MenuEvent, MenuId};
 
 /// 鼠标按键。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,10 +202,19 @@ impl Default for TrayIconBuilder {
 
 /// 宿主回调入口：托盘菜单项被点击。
 pub fn dispatch_menu_event(id: &str) {
-    let app = APP_HANDLE.get().cloned();
-    match app {
-        Some(app) => menu::dispatch_menu(id, &app),
-        None => eprintln!("[silvermoon] 托盘尚未初始化，忽略菜单事件 `{id}`"),
+    let Some(app) = APP_HANDLE.get().cloned() else {
+        eprintln!("[silvermoon] 托盘尚未初始化，忽略菜单事件 `{id}`");
+        return;
+    };
+    let handler = MENU_HANDLER.lock().expect("tray handler poisoned").clone();
+    match handler {
+        Some(f) => f(
+            &app,
+            MenuEvent {
+                id: MenuId::from(id),
+            },
+        ),
+        None => eprintln!("[silvermoon] 收到托盘菜单事件 `{id}`，但尚未注册处理器"),
     }
 }
 

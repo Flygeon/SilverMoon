@@ -114,7 +114,7 @@ pub fn available() -> bool {
 }
 
 /// 发起一次宿主调用。返回 `Some(data)` 表示成功；`None` 表示宿主不可达或拒绝。
-pub fn op(inner: &Arc<AppInner>, op: HostOp, args: Value) -> Option<Value> {
+pub fn op(_inner: &Arc<AppInner>, op: HostOp, args: Value) -> Option<Value> {
     let cfg = config()?;
     let body = serde_json::json!({ "op": op.as_str(), "args": args }).to_string();
     let raw = match post(cfg, &body) {
@@ -135,7 +135,6 @@ pub fn op(inner: &Arc<AppInner>, op: HostOp, args: Value) -> Option<Value> {
             .and_then(Value::as_str)
             .unwrap_or("宿主返回未知错误");
         eprintln!("[silvermoon] {} 失败：{err}", op.as_str());
-        let _ = &inner.product_name;
         None
     }
 }

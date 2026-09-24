@@ -90,11 +90,17 @@ impl StateMap {
         guard.insert(TypeId::of::<T>(), Box::new(value));
     }
 
-    fn get_ref<T: Send + Sync + 'static>(&self) -> Option<&T> {
+    /// 取托管状态引用。
+    ///
+    /// 返回 `&'static T`：这是刻意的生命周期延长，安全性论证见 [`StateMap`] 的文档。
+    /// 实现上必须先 `downcast_ref` 拿到 `&T` 再转裸指针——`&dyn Any` 是胖指针，
+    /// 直接 `as *const T` 会被 rustc 拒绝（E0606）。
+    fn get_ref<T: Send + Sync + 'static>(&self) -> Option<&'static T> {
         let guard = self.0.read().expect("state map poisoned");
         let boxed = guard.get(&TypeId::of::<T>())?;
-        // SAFETY: 见 `StateMap` 文档中的三条不变量。
-        Some(unsafe { &*(boxed.as_ref() as *const T) })
+        let value: &T = boxed.downcast_ref::<T>()?;
+        // SAFETY: 见 `StateMap` 文档中的三条不变量——堆对象地址稳定且活到进程结束。
+        Some(unsafe { &*(value as *const T) })
     }
 }
 
@@ -209,16 +215,16 @@ fn home_subdir(sub: &str) -> PathBuf {
 
 /// 事件总线：`emit` 出去的载荷经 SSE 推给宿主，由宿主再分发给各渲染窗口。
 #[derive(Default)]
-struct EventBus {
+pub(crate) struct EventBus {
     tx: OnceLock<tokio::sync::broadcast::Sender<String>>,
 }
 
 impl EventBus {
-    fn install(&self, tx: tokio::sync::broadcast::Sender<String>) {
+    pub(crate) fn install(&self, tx: tokio::sync::broadcast::Sender<String>) {
         let _ = self.tx.set(tx);
     }
 
-    fn publish(&self, event: &str, target: Option<&str>, payload: &Value) {
+    pub(crate) fn publish(&self, event: &str, target: Option<&str>, payload: &Value) {
         let Some(tx) = self.tx.get() else {
             // 服务尚未起来（例如 setup 阶段就 emit）——丢弃即可，前端此刻还没订阅
             return;
@@ -232,7 +238,7 @@ impl EventBus {
     }
 
     /// 订阅事件流（SSE 用）。服务未起来时返回一个立即挂起的接收端。
-    fn subscribe(&self) -> tokio::sync::broadcast::Receiver<String> {
+    pub(crate) fn subscribe(&self) -> tokio::sync::broadcast::Receiver<String> {
         match self.tx.get() {
             Some(tx) => tx.subscribe(),
             None => tokio::sync::broadcast::channel(1).1,
@@ -564,10 +570,7 @@ fn build_inner(ctx: &Context) -> Result<Arc<AppInner>> {
         tray_ready: Mutex::new(false),
     });
 
-    // 泄漏一份 Arc<AppInner> 供命令层取得 `&'static` 引用。
-    // 这是刻意的：见 `StateMap` 的安全性说明——应用本身就是进程级单例。
-    let leaked: &'static Arc<AppInner> = Box::leak(Box::new(Arc::clone(&inner)));
-    let _ = leaked;
-
+    // 这里**不**泄漏 Arc：命令层需要 `&'static` 时由 `server::serve` 统一泄漏一份，
+    // 而 `AppInner` 本身由服务持有的 Arc 活到进程结束（见 `StateMap` 的安全性说明）。
     Ok(inner)
 }

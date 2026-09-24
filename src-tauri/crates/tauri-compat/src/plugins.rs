@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use crate::app::{AppHandle, AppInner, Result};
+use crate::app::{AppHandle, AppInner};
 use crate::host::{self, HostOp};
 
 // ---------------------------------------------------------------------------
@@ -263,10 +263,4 @@ pub fn dispatch_shortcut(inner: &Arc<AppInner>, accelerator: &str, pressed: bool
             },
         },
     );
-}
-
-/// 便于在 `Result` 语境里使用
-#[allow(dead_code)]
-pub(crate) fn opener_unavailable() -> Result<()> {
-    Err(crate::app::Error::Host("opener 不可用".into()))
 }
