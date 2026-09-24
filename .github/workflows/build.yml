@@ -1,0 +1,173 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 静态检查：前端 lint/格式/类型 + Rust fmt/clippy
+  # ---------------------------------------------------------------------------
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # 迁移到 Electron 后不再需要 webkit2gtk / libsoup / appindicator 等
+      # Tauri 专用依赖；侧车只需要 native-tls 的 pkg-config 支持。
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Prettier check
+        run: npm run format:check
+
+      - name: Typecheck (renderer + electron main)
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Rustfmt check (backend)
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      # 兼容层是 path 依赖、不属于 workspace 成员，`cargo fmt` 不会顺带检查它，
+      # 因此这里显式各查一次
+      - name: Rustfmt check (compat layer)
+        run: |
+          cargo fmt --check --manifest-path src-tauri/crates/tauri-compat/Cargo.toml
+          cargo fmt --check --manifest-path src-tauri/crates/tauri-compat-macros/Cargo.toml
+
+      - name: Clippy (backend)
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+  # ---------------------------------------------------------------------------
+  # Windows 安装包
+  # ---------------------------------------------------------------------------
+  build-windows:
+    needs: lint
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # 侧车必须先生成：electron-builder 会把它作为 extraResources 打进安装包
+      - name: Build Rust sidecar (release)
+        run: cargo build --release --manifest-path src-tauri/Cargo.toml
+
+      - name: Build renderer + electron main
+        run: npm run build:renderer && npm run build:main
+
+      - name: Package (NSIS)
+        run: npx electron-builder --win nsis --publish never
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: release/*.exe
+
+  # ---------------------------------------------------------------------------
+  # Linux 安装包
+  # ---------------------------------------------------------------------------
+  build-linux:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Rust sidecar (release)
+        run: cargo build --release --manifest-path src-tauri/Cargo.toml
+
+      - name: Build renderer + electron main
+        run: npm run build:renderer && npm run build:main
+
+      - name: Package (AppImage)
+        run: npx electron-builder --linux AppImage --publish never
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: release/*.AppImage
+
+  # ---------------------------------------------------------------------------
+  # 打 tag 时发布
+  # ---------------------------------------------------------------------------
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release-assets/**/*

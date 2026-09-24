@@ -1,0 +1,59 @@
+appId: cn.cool.silvermoon
+productName: SilverMoon
+copyright: Copyright © SilverMoon contributors
+
+directories:
+  output: release
+  buildResources: build
+
+# 只打包运行期需要的东西：前端产物、Electron 主进程产物、package.json
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+  - "!**/*.map"
+
+# Rust 侧车以独立可执行文件随包分发（Electron 主进程用 spawn 拉起，
+# 不能塞进 asar）。构建前请先执行 npm run build:backend:release。
+extraResources:
+  - from: src-tauri/target/release/silvermoon.exe
+    to: bin/silvermoon-server.exe
+  - from: src-tauri/icons/icon.png
+    to: icon.png
+
+asar: true
+
+win:
+  icon: src-tauri/icons/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: SilverMoon
+  artifactName: ${productName}-${version}-setup.${ext}
+
+mac:
+  icon: src-tauri/icons/icon.icns
+  category: public.app-category.entertainment
+  target:
+    - dmg
+  # 侧车在非 Windows 平台没有 .exe 后缀，这里单独列一条
+  extraResources:
+    - from: src-tauri/target/release/silvermoon
+      to: bin/silvermoon-server
+
+linux:
+  icon: src-tauri/icons/icon.png
+  category: AudioVideo
+  target:
+    - AppImage
+  extraResources:
+    - from: src-tauri/target/release/silvermoon
+      to: bin/silvermoon-server

@@ -1,0 +1,208 @@
+<script setup lang="ts">
+/**
+ * 选集面板（照 Kazumi 选源后进入带线路/剧集的列表形态）：
+ * 显示已选中源的播放线路（分路）× 剧集，点某集 → 播放。
+ * 头部可一键「换源」回到聚合搜索。
+ */
+import { ref } from "vue";
+import { useSettingsStore } from "@/stores/settings";
+import { useAnimeStore } from "@/stores/anime";
+import { translate } from "@shared/i18n";
+
+const emit = defineEmits<{
+  (e: "back"): void;
+  (e: "play", roadIndex: number, episodeIndex: number): void;
+  (e: "changeSource"): void;
+}>();
+
+const settings = useSettingsStore();
+const anime = useAnimeStore();
+const t = (key: string) => translate(settings.lang, key);
+
+/** 当前选中的播放线路 */
+const roadIndex = ref(0);
+</script>
+
+<template>
+  <div class="anime-episodes">
+    <div class="head">
+      <button class="back" @click="emit('back')">
+        <span class="material-symbols-outlined">arrow_back</span>
+        {{ t("anime.back") }}
+      </button>
+      <div class="head-right">
+        <span class="src-name" :title="anime.selectedSourceName">
+          {{ anime.selectedSourceName }}
+        </span>
+        <m3e-assist-chip class="chip" @click="emit('changeSource')">
+          <span slot="icon" class="material-symbols-outlined">swap_horiz</span>
+          {{ t("anime.changeSource") }}
+        </m3e-assist-chip>
+      </div>
+    </div>
+
+    <h2 class="title">{{ anime.displayTitle }}</h2>
+
+    <div v-if="anime.episodesLoading" class="state">
+      <m3e-loading-indicator class="lm-loading" />
+      {{ t("anime.loadingEpisodes") }}
+    </div>
+    <div v-else-if="anime.episodesError && !anime.selectedRoads.length" class="state error">
+      {{ anime.episodesError }}
+      <m3e-button class="retry" variant="tonal" size="small" @click="emit('changeSource')">
+        <span slot="icon" class="material-symbols-outlined">swap_horiz</span>
+        {{ t("anime.changeSource") }}
+      </m3e-button>
+    </div>
+
+    <template v-else>
+      <div v-if="!anime.selectedRoads.length" class="state">{{ t("anime.noEpisodes") }}</div>
+      <template v-else>
+        <div class="roads">
+          <m3e-filter-chip
+            v-for="(r, ri) in anime.selectedRoads"
+            :key="ri"
+            class="road-chip"
+            :selected="roadIndex === ri"
+            @click="roadIndex = ri"
+          >
+            {{ r.name }}
+          </m3e-filter-chip>
+        </div>
+        <div class="ep-grid">
+          <button
+            v-for="(ep, ei) in anime.selectedRoads[roadIndex].episodes"
+            :key="ei"
+            class="ep"
+            @click="emit('play', roadIndex, ei)"
+          >
+            <span class="material-symbols-outlined">play_arrow</span>
+            <span class="ep-name">{{ ep.name }}</span>
+          </button>
+        </div>
+      </template>
+    </template>
+  </div>
+</template>
+
+<style scoped>
+.anime-episodes {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: lm-rise 320ms var(--md-sys-motion-spring-spatial) both;
+}
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: transparent;
+  color: var(--md-sys-color-on-surface);
+  font-family: inherit;
+  font-size: var(--md-sys-typescale-body-medium-size);
+  cursor: pointer;
+}
+.back:hover {
+  background: var(--md-sys-color-surface-container);
+}
+.head-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.src-name {
+  max-width: 200px;
+  font-size: var(--md-sys-typescale-label-small-size);
+  color: var(--md-sys-color-on-surface-variant);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.title {
+  margin: 0;
+  font-size: var(--md-sys-typescale-title-large-size);
+  font-weight: 500;
+}
+.state {
+  padding: 40px 0;
+  text-align: center;
+  font-size: var(--md-sys-typescale-body-small-size);
+  color: var(--md-sys-color-on-surface-variant);
+}
+.state.error {
+  color: var(--md-sys-color-error);
+  white-space: pre-line;
+  line-height: 1.6;
+}
+/* 布局由 m3e-button 内部负责，这里只留下原来给按钮外层的位置微调 */
+.retry {
+  margin-top: 12px;
+}
+.roads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ep-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+}
+.ep {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(--md-sys-color-surface-container);
+  color: var(--md-sys-color-on-surface);
+  font-family: inherit;
+  font-size: var(--md-sys-typescale-body-small-size);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--md-sys-motion-duration-short)
+    var(--md-sys-motion-spring-effects-fast);
+}
+.ep:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+.ep .material-symbols-outlined {
+  font-size: 15px;
+  color: var(--md-sys-color-primary);
+  flex: none;
+}
+.ep-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* chip 本体交给 m3e-filter-chip / m3e-assist-chip（选中态即 M3 规范：secondary-container 底 +
+   on-secondary-container 文字 + 无描边，与改造前 .chip.active 一致）；
+   下面把度量对齐改造前的 .chip（含选中时组件会占用 icon 槽展示勾选标记所需的 with-icon 内边距） */
+.head-right m3e-assist-chip,
+.roads m3e-filter-chip {
+  --m3e-chip-container-height: 30px;
+  --m3e-chip-container-shape: var(--md-sys-shape-corner-full);
+  --m3e-chip-padding-start: 12px;
+  --m3e-chip-padding-end: 12px;
+  --m3e-chip-with-icon-padding-start: 12px;
+  --m3e-chip-with-icon-padding-end: 12px;
+  --m3e-chip-spacing: 5px;
+  --m3e-chip-icon-size: 16px;
+  --m3e-chip-label-text-font-size: var(--md-sys-typescale-label-small-size);
+}
+</style>

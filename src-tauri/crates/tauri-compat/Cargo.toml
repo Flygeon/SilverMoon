@@ -1,0 +1,22 @@
+[package]
+name = "tauri"
+version = "2.99.0"
+description = "SilverMoon 的 Tauri 兼容层：以 Electron 为宿主的同名替身 crate"
+license = "GPL-3.0-only"
+edition = "2021"
+rust-version = "1.82"
+publish = false
+
+[lib]
+name = "tauri"
+path = "src/lib.rs"
+
+[dependencies]
+tauri-compat-macros = { path = "../tauri-compat-macros" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+axum = "0.7"
+tokio-stream = { version = "0.1", features = ["sync"] }
+url = "2"

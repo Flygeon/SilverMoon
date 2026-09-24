@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SilverMoon · 光影媒体库</title>
+    <style>
+      /* 启动加载动画：M3 Expressive 加载指示器 <m3e-loading-indicator>
+         （旋转 + 在多边形之间形变，动画由 @m3e/web 组件内部提供，不手写关键帧）。
+         内联保证首帧即显示，覆盖 bundle 加载与 Vue 初始化期间；main.ts 挂载
+         完成后淡出移除。颜色对齐 theme.css 的默认令牌，深色跟随系统。
+         组件由 src/m3e.ts 注册，bundle 就绪前该元素是空占位（标题即刻可见）。 */
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 28px;
+        background: #fcfcfc;
+        color: #1a1c1e;
+        font-family: "Helvetica Neue", "Microsoft YaHei", system-ui, sans-serif;
+        transition:
+          opacity 320ms cubic-bezier(0.2, 0, 0, 1),
+          visibility 320ms;
+      }
+      #boot-splash.boot-splash--leaving {
+        opacity: 0;
+        visibility: hidden;
+      }
+      #boot-splash m3e-loading-indicator {
+        --m3e-loading-indicator-size: 48px;
+        --m3e-loading-indicator-active-indicator-color: #1a5c9e;
+      }
+      #boot-splash .boot-title {
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+      #boot-splash .boot-sub {
+        margin-top: -18px;
+        font-size: 12px;
+        color: #44474e;
+      }
+      @media (prefers-color-scheme: dark) {
+        #boot-splash {
+          background: #0f0f11;
+          color: #e2e2e5;
+        }
+        #boot-splash m3e-loading-indicator {
+          --m3e-loading-indicator-active-indicator-color: #8bb9f0;
+        }
+        #boot-splash .boot-sub {
+          color: #c7c9cd;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        /* 指示器动画在组件 shadow DOM 内（@m3e/web 未提供降级），这里只减淡出 */
+        #boot-splash {
+          transition: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="boot-splash" aria-hidden="true">
+      <m3e-loading-indicator></m3e-loading-indicator>
+      <div class="boot-title">SilverMoon</div>
+      <div class="boot-sub">光影媒体库</div>
+    </div>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

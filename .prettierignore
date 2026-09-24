@@ -1,0 +1,24 @@
+node_modules
+dist
+dist-electron
+release
+src-tauri
+*.min.*
+package-lock.json
+public
+**/*参考*/**
+
+# 参考项目与第三方素材不参与格式化
+ECHO播放器参考
+pixiv图片客户端参考
+图片视频索引项目参考
+在线播放参考
+小说项目参考
+播放器参考
+播放器参考项目
+歌词获取项目参考
+酷狗音乐平台参考
+doc
+example
+miaohui-extension
+.trae-html-share-packages
