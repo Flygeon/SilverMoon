@@ -179,9 +179,21 @@ function attachStream(stream: { url: string; remoteUrl: string }) {
   // ArtPlayer 自带 m3u8 处理用其内置 hls.js，但保险起见我们也接管：若用户开启弹幕后
   // m3u8 必须稳定，先用自定义 customType（参照 播放器参考项目）。
   art.type = isHlsSource(stream) ? "m3u8" : "auto";
-  void art.switchUrl(stream.url).catch((e: unknown) => {
-    void animeLog(`switchUrl 失败: ${(e as Error).message}`);
-  });
+  void art
+    .switchUrl(stream.url)
+    .then(() => {
+      // 续播定位：切集/换源后跳到记录位置（仅当 new 实例已就绪才生效）
+      if (art && props.initialSeekMs && Number.isFinite(art.duration)) {
+        try {
+          art.currentTime = Math.min(props.initialSeekMs / 1000, art.duration);
+        } catch {
+          /* 切换窗口内 player 已销毁则忽略 */
+        }
+      }
+    })
+    .catch((e: unknown) => {
+      void animeLog(`switchUrl 失败: ${(e as Error).message}`);
+    });
 }
 
 // ---- 自定义 controls：关闭 / 选集 / 换源 / 倍速 / 上一集 / 下一集 / 弹幕开关 ----
@@ -441,11 +453,16 @@ onMounted(() => {
       void ensureStream();
       // 弹幕：plugin load（再触发一次）
       const d = art.plugins?.artplayerPluginDanmuku as
-        { load: (d: Danmu[]) => Promise<unknown> } | undefined;
+        { load: (d: Danmu[]) => Promise<unknown>; isHide?: boolean } | undefined;
       if (d && settings.danmakuEnabled) {
-        void loadDanmakuForEpisode().then((items) => {
-          void d.load(items);
-        });
+        void loadDanmakuForEpisode()
+          .then((items) => {
+            // 加载完成可能已切走：只在当前 player 仍存活时装载
+            if (art && art.plugins?.artplayerPluginDanmuku === d) void d.load(items);
+          })
+          .catch((e: unknown) => {
+            void animeLog(`弹幕加载失败: ${(e as Error).message}`);
+          });
       }
     },
   );

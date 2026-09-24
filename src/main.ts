@@ -53,7 +53,22 @@ window.addEventListener("error", (e) => {
 
 // 未捕获的 Promise 异常
 window.addEventListener("unhandledrejection", (e) => {
-  void reportError("unhandledrejection", { reason: safeStringify(e.reason) });
+  const reason = e.reason;
+  // Error.cause 需要 ES2022 lib，这里用宽松类型访问，避免改动全局 tsconfig
+  const cause = (reason as { cause?: unknown } | null)?.cause;
+  void reportError("unhandledrejection", {
+    message: reason instanceof Error ? reason.message : String(reason),
+    name: reason instanceof Error ? reason.name : null,
+    stack: reason instanceof Error ? (reason.stack ?? null) : null,
+    cause:
+      cause instanceof Error
+        ? (cause.stack ?? cause.message)
+        : typeof cause === "string"
+          ? cause
+          : null,
+  });
+  // 开发态直接在控制台打印，方便复现时一眼看到抛出点
+  if (import.meta.env.DEV) console.error("[unhandledrejection]", reason);
 });
 
 app.mount("#app");

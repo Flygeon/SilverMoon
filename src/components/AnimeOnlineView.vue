@@ -498,10 +498,11 @@ function backFromEpisodes() {
     <!-- 规则管理 -->
     <AnimeRuleManager v-else-if="view === 'rules'" @back="view = 'home'" />
 
-    <!-- 播放器 -->
+    <!-- 播放器：同一播放会话内常驻，切集走 AnimePlayer 内部的 switchUrl，
+         不再用 :key 整实例重建（连点/切集时反复 teardown/recreate 会让 ArtPlayer
+         始终停在半建状态，导致后续交互无响应，并引发媒体请求被中断的 AbortError） -->
     <AnimePlayer
       v-else-if="view === 'player' && playing"
-      :key="`${playing.roadIndex}-${playing.episodeIndex}`"
       :road-index="playing.roadIndex"
       :episode-index="playing.episodeIndex"
       :initial-seek-ms="playing.initialSeekMs"
