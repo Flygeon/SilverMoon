@@ -13,6 +13,9 @@
 // - m3e-bottom-sheet：底部面板（聚合搜索播放源）
 // - m3e-menu / m3e-menu-item：菜单（全局右键菜单）
 // - m3e-card：内容卡（设置页区块 / 阅读统计 / 源结果卡）
+// - m3e-toolbar：动作条（创作页的格式工具栏）
+// - m3e-form-field：表单字段容器（创作页标题输入）
+// - m3e-snackbar：底部短提示（创作页保存/导出反馈）
 import "@m3e/web/bottom-sheet";
 import "@m3e/web/button";
 import "@m3e/web/button-group";
@@ -20,13 +23,16 @@ import "@m3e/web/breadcrumb";
 import "@m3e/web/card";
 import "@m3e/web/chips";
 import "@m3e/web/dialog";
+import "@m3e/web/form-field";
 import "@m3e/web/icon-button";
 import "@m3e/web/list";
 import "@m3e/web/loading-indicator";
 import "@m3e/web/menu";
 import "@m3e/web/progress-indicator";
 import "@m3e/web/slider";
+import "@m3e/web/snackbar";
 import "@m3e/web/switch";
+import "@m3e/web/toolbar";
 
 // ---- 上游 bug 兜底（@m3e/web 2.8.x 仍未修复）----
 // m3e-bottom-sheet 的 updated() 在「打开过程中元素被暂离 DOM」时会无条件调用原生

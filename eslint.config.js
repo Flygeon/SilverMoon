@@ -107,6 +107,8 @@ export default [
       "src/views/WebDavView.vue",
       // osu! 谱面下载页（百宝箱 → 更多工具）：m3e-button 的 icon 槽
       "src/views/OsuView.vue",
+      // 创作页：m3e-list-item / m3e-form-field / m3e-button 的具名槽
+      "src/components/WritingStudio.vue",
     ],
     rules: {
       "vue/no-deprecated-slot-attribute": "off",
