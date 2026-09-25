@@ -202,7 +202,9 @@ const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
 let currentSpeed = 1;
 
 function makeControls(): Artplayer["option"]["controls"] {
-  const icon = (name: string) => `<span class="material-symbols-outlined art-icon">${name}</span>`;
+  // 类名不能叫 art-icon —— ArtPlayer 自身用 .art-icon 表示它的图标字体，复用会让
+  // Material Symbols 的 ligature 失效（图标退化成它的名字文本，如 captions → CAPTIONS）。
+  const icon = (name: string) => `<span class="material-symbols-outlined sm-icon">${name}</span>`;
   return [
     {
       name: "luna-close",
@@ -214,7 +216,7 @@ function makeControls(): Artplayer["option"]["controls"] {
     {
       name: "luna-title",
       position: "top",
-      html: `<span class="art-title" title="${escapeHtml(anime.displayTitle)}">${
+      html: `<span class="sm-title" title="${escapeHtml(anime.displayTitle)}">${
         escapeHtml(anime.displayTitle) +
         (episode.value ? ` · ${escapeHtml(episode.value.name)}` : "")
       }</span>`,
@@ -250,7 +252,7 @@ function makeControls(): Artplayer["option"]["controls"] {
     {
       name: "luna-speed",
       position: "right",
-      html: `<span class="art-speed">${currentSpeed}x</span>`,
+      html: `<span class="sm-speed">${currentSpeed}x</span>`,
       tooltip: t("anime.speed"),
       click: function (this: Artplayer) {
         const list = SPEEDS;
@@ -258,14 +260,14 @@ function makeControls(): Artplayer["option"]["controls"] {
         const next = list[(i + 1) % list.length];
         currentSpeed = next;
         this.playbackRate = next;
-        const span = container.value?.querySelector(".luna-speed .art-speed") as HTMLElement | null;
+        const span = container.value?.querySelector(".sm-speed") as HTMLElement | null;
         if (span) span.textContent = `${next}x`;
       },
     },
     {
       name: "luna-danmaku",
       position: "right",
-      html: icon("captions"),
+      html: icon("subtitles"),
       tooltip: "弹幕",
       click: function (this: Artplayer) {
         const d = this.plugins?.artplayerPluginDanmuku as
@@ -372,6 +374,17 @@ function createPlayer() {
     autoMini: false,
     fullscreen: true,
     fullscreenWeb: false,
+    // 关掉 ArtPlayer 自带的一堆默认控件，只留 play / volume / time / fullscreen。
+    // 倍速、选集、换源、弹幕、上下一集全部由我们的自定义 controls 提供；否则默认控件
+    // 与自定义控件混在一起，图标与位置重复、互相遮挡（也就有了「右下角不知道是干什么的」
+    // 和「左上角点了没反应」）。
+    playbackRate: false,
+    aspectRatio: false,
+    screenshot: false,
+    setting: false,
+    pip: false,
+    flip: false,
+    miniProgressBar: false,
     volume: 0.8,
     theme,
     type: stream && isHlsSource(stream) ? "m3u8" : "auto",
@@ -444,7 +457,7 @@ onMounted(() => {
       // 切集后：标题控件需要刷新；重挂流；弹幕插件 load
       if (!art) return;
       // 刷新顶部标题控件（用 querySelector 直接定位自定义控件 DOM）
-      const titleEl = container.value?.querySelector(".luna-title .art-title");
+      const titleEl = container.value?.querySelector(".sm-title");
       if (titleEl) {
         titleEl.textContent =
           anime.displayTitle + (episode.value ? ` · ${episode.value.name}` : "");
@@ -484,10 +497,9 @@ onBeforeUnmount(() => {
       <!-- ArtPlayer 容器；customType.m3u8 在 createPlayer 里挂 hls.js -->
       <div ref="container" class="art-container" />
 
-      <!-- 关闭按钮：Teleport overlay 浮在最上层，全屏时也始终可达 -->
-      <button class="overlay-close" :title="t('anime.exit')" @click="emit('close')">
-        <span class="material-symbols-outlined">close</span>
-      </button>
+      <!-- 关闭统一由 ArtPlayer 自定义控件（luna-close）承担：此前这里还叠了一个 Teleport
+           浮层关闭按钮，与控制栏里的关闭重复、且会被控制栏遮住导致点不到（表现为
+           「左上角的 X 点了没反应」）。 -->
 
       <!-- 选集抽屉 -->
       <div v-if="drawerOpen" class="drawer">
@@ -543,13 +555,13 @@ onBeforeUnmount(() => {
   height: 100%;
   background: #000;
 }
-/* 让 ArtPlayer 自定义控件里的 material-symbols-outlined 与按钮生效 */
-:deep(.art-icon) {
+/* 自定义控件里的 Material Symbols 图标（类名与 ArtPlayer 自带的 .art-icon 区分开） */
+:deep(.sm-icon) {
   font-size: 24px;
   color: #fff;
   line-height: 1;
 }
-:deep(.art-title) {
+:deep(.sm-title) {
   color: #fff;
   font-size: var(--md-sys-typescale-title-small-size);
   max-width: 50vw;
@@ -557,35 +569,14 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-:deep(.art-speed) {
+:deep(.sm-speed) {
   color: #fff;
   font-size: var(--md-sys-typescale-label-large-size);
   font-family: inherit;
   line-height: 1;
 }
 
-/* 顶部左侧：浮层关闭按钮（ArtPlayer 控件栏 hover 才显，全屏时常不显示；这里常驻） */
-.overlay-close {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  z-index: 6;
-  display: grid;
-  place-items: center;
-  width: 38px;
-  height: 38px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
-  cursor: pointer;
-}
-.overlay-close:hover {
-  background: rgba(0, 0, 0, 0.75);
-}
-.overlay-close .material-symbols-outlined {
-  font-size: 24px;
-}
+/* 关闭按钮的浮层样式已随 .overlay-close 一并移除（改由 ArtPlayer 自定义控件承担） */
 
 /* 选集抽屉 */
 .drawer {

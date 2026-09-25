@@ -478,13 +478,6 @@ function backFromEpisodes() {
         @open-sources="openSources"
         @open-collection="view = 'collections'"
       />
-      <SourceSheet
-        v-if="sourcesOpen"
-        :keyword="sourceKeyword"
-        :subject="currentSubject"
-        @close="closeSources"
-        @pick="onPickSource"
-      />
     </template>
 
     <!-- 选集（选中源后的线路 × 剧集） -->
@@ -509,6 +502,17 @@ function backFromEpisodes() {
       @close="onPlayerClose"
       @switch="onPlayerSwitch"
       @choose-source="openSources"
+    />
+
+    <!-- 聚合搜索面板：与视图正交（任何视图都能弹出），故放在所有视图分支之外。
+         此前它嵌在 `view === 'info'` 分支里，从选集页点「换源」（view 仍是 episodes）
+         时不会渲染 ⇒ 点了毫无反应。 -->
+    <SourceSheet
+      v-if="sourcesOpen"
+      :keyword="sourceKeyword"
+      :subject="currentSubject"
+      @close="closeSources"
+      @pick="onPickSource"
     />
   </div>
 </template>
