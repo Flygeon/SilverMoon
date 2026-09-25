@@ -13,6 +13,7 @@ const router = createRouter({
     { path: "/webdav", component: () => import("@/views/WebDavView.vue") },
     { path: "/treasure", component: () => import("@/views/TreasureView.vue") },
     { path: "/treasure/market", component: () => import("@/views/PresetMarket.vue") },
+    { path: "/treasure/osu", component: () => import("@/views/OsuView.vue") },
     { path: "/favorites", component: () => import("@/views/FavoritesView.vue") },
     { path: "/history", component: () => import("@/views/HistoryView.vue") },
     { path: "/stats", component: () => import("@/views/StatsView.vue") },

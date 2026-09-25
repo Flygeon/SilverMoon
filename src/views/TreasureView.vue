@@ -52,6 +52,12 @@ const tools = [
     title: t("settings.treasure.novelStats"),
     sub: t("settings.treasure.novelStatsHint"),
   },
+  {
+    to: "/treasure/osu",
+    icon: "music_note",
+    title: t("settings.treasure.osu"),
+    sub: t("settings.treasure.osuHint"),
+  },
 ];
 
 function open(to: string) {

@@ -7,17 +7,18 @@
 //! - `osu_search`         关键词 / 谱面链接 / 谱面集 ID → 结果列表（三源聚合去重打分）
 //! - `osu_download`       按谱面集 ID 下载并导入曲库（async，事件 `osu:progress`）
 //! - `osu_import_archive` 导入本地 `.osz` 文件
-//! - `osu_cover_url`      封面图本地代理 URL（assets.ppy.sh 校验 Referer，浏览器直连会被拒）
 //!
 //! 说明：不依赖 osu! 账号（ECHO 的 OsuAccountProvider 同样是空壳），全程匿名。
 //! 音频非 mp3 时需要 ffmpeg，缺失时给出明确中文提示而非静默失败。
+//!
+//! 不做封面代理：osu! 的封面图（`assets.ppy.sh`，需 Referer + 防盗链）在本应用
+//! 及参考实现里都取不到，前端一律显示占位图，故这里不再生成任何封面 URL。
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use base64::Engine;
 use serde::Serialize;
 use silvermoon_ipc::{EventEmitter, HostApi};
 
@@ -32,7 +33,6 @@ const OSU_ARCHIVE_ACCEPT: &str =
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(15);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
-const COVER_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// 解压 + 转码 + 落库是重 I/O，串行化避免临时文件互相踩踏
 static IMPORT_LOCK: Mutex<()> = Mutex::new(());
@@ -41,7 +41,7 @@ fn http_client() -> &'static reqwest::blocking::Client {
     static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::blocking::Client::builder()
-            // 与 anime 一致：保留系统代理（GFW 环境下 osu.ppy.sh / assets.ppy.sh 常需代理）
+            // 与 anime 一致：保留系统代理（GFW 环境下 osu.ppy.sh 常需代理）
             .connect_timeout(CONNECT_TIMEOUT)
             .pool_max_idle_per_host(8)
             .build()
@@ -60,8 +60,6 @@ pub struct OsuBeatmapset {
     pub artist: String,
     pub song_title: String,
     pub uploader: Option<String>,
-    /// 已经过本地代理的封面 URL（浏览器直连 assets.ppy.sh 会被 Referer 校验拒掉）
-    pub cover_url: Option<String>,
     pub page_url: String,
     /// 结果来自哪个源（sayobot / official / catboy / direct）
     pub source: String,
@@ -111,17 +109,6 @@ fn emit_progress(app: &silvermoon_ipc::Host, id: &str, stage: &str, message: &st
 
 fn xxh3_hex(s: &str) -> String {
     format!("{:016x}", xxhash_rust::xxh3::xxh3_64(s.as_bytes()))
-}
-
-fn b64url(s: &str) -> String {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(s.as_bytes())
-}
-
-fn b64url_decode(s: &str) -> Option<String> {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(s)
-        .ok()
-        .and_then(|b| String::from_utf8(b).ok())
 }
 
 fn ext_lower(name: &str) -> String {
@@ -220,193 +207,6 @@ fn parse_beatmapset_id(value: &str) -> Option<String> {
     }
 }
 
-// ---- 封面本地代理 ----
-//
-// assets.ppy.sh 会校验 Referer，Electron（app:// 源）直连会拿到 403；
-// 用一个独立的小 HTTP 服务转发并补上 Referer（与 anime/webdav 的 tiny_http 模式一致）。
-
-static COVER_PROXY_BASE: OnceLock<String> = OnceLock::new();
-
-fn cover_proxy_base() -> Option<String> {
-    if let Some(b) = COVER_PROXY_BASE.get() {
-        return Some(b.clone());
-    }
-    let server = tiny_http::Server::http("127.0.0.1:0").ok()?;
-    let port = server.server_addr().to_ip().map(|a| a.port()).unwrap_or(0);
-    let srv = std::sync::Arc::new(server);
-    let srv2 = srv.clone();
-    std::thread::spawn(move || {
-        for request in srv2.incoming_requests() {
-            std::thread::spawn(move || {
-                if let Err(e) = handle_cover_proxy(request) {
-                    eprintln!("[osu] 封面代理请求失败: {e}");
-                }
-            });
-        }
-    });
-    let base = format!("http://127.0.0.1:{port}");
-    let _ = COVER_PROXY_BASE.set(base.clone());
-    Some(base)
-}
-
-fn referer_for_host(host: &str) -> String {
-    let h = host.to_ascii_lowercase();
-    if h.ends_with("ppy.sh") {
-        "https://osu.ppy.sh/".to_string()
-    } else if h.ends_with("catboy.best") {
-        "https://catboy.best/".to_string()
-    } else if h.ends_with("nerinyan.moe") {
-        "https://nerinyan.moe/".to_string()
-    } else if h.ends_with("sayobot.cn") {
-        "https://sayobot.cn/".to_string()
-    } else {
-        format!("https://{host}/")
-    }
-}
-
-/// 把远端封面 URL 换成代理 URL（代理不可用时原样返回，不阻断搜索）
-fn proxy_cover(raw: &str) -> String {
-    let Ok(parsed) = url::Url::parse(raw) else {
-        return raw.to_string();
-    };
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return raw.to_string();
-    }
-    let Some(base) = cover_proxy_base() else {
-        return raw.to_string();
-    };
-    let referer = referer_for_host(parsed.host_str().unwrap_or_default());
-    format!("{base}/osu-img?u={}&r={}", b64url(raw), b64url(&referer))
-}
-
-fn proxy_header(name: &str, value: &str) -> Option<tiny_http::Header> {
-    format!("{name}: {value}").parse().ok()
-}
-
-fn respond_text(request: tiny_http::Request, status: u16, text: String) {
-    let len = text.len();
-    let mut headers = Vec::new();
-    if let Some(h) = proxy_header("Access-Control-Allow-Origin", "*") {
-        headers.push(h);
-    }
-    if let Some(h) = proxy_header("Content-Type", "text/plain; charset=utf-8") {
-        headers.push(h);
-    }
-    let body = std::io::Cursor::new(text.into_bytes());
-    let response = tiny_http::Response::new(
-        tiny_http::StatusCode(status),
-        headers,
-        body,
-        Some(len),
-        None,
-    );
-    let _ = request.respond(response);
-}
-
-fn is_loopback_host(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost")
-        || host == "127.0.0.1"
-        || host == "::1"
-        || host == "[::1]"
-}
-
-fn handle_cover_proxy(request: tiny_http::Request) -> Result<(), String> {
-    if !matches!(request.method(), tiny_http::Method::Get) {
-        respond_text(request, 405, "method not allowed".into());
-        return Ok(());
-    }
-    let (path, query) = match request.url().split_once('?') {
-        Some((p, q)) => (p, q),
-        None => (request.url(), ""),
-    };
-    if path != "/osu-img" {
-        respond_text(request, 404, "not found".into());
-        return Ok(());
-    }
-    let remote = query
-        .split('&')
-        .find_map(|kv| kv.strip_prefix("u="))
-        .and_then(b64url_decode)
-        .unwrap_or_default();
-    let referer = query
-        .split('&')
-        .find_map(|kv| kv.strip_prefix("r="))
-        .and_then(b64url_decode)
-        .unwrap_or_default();
-    if remote.is_empty() {
-        respond_text(request, 400, "bad request".into());
-        return Ok(());
-    }
-    let parsed = match url::Url::parse(&remote) {
-        Ok(u) if matches!(u.scheme(), "http" | "https") => u,
-        _ => {
-            respond_text(request, 400, "bad url".into());
-            return Ok(());
-        }
-    };
-    if parsed.host_str().map(is_loopback_host).unwrap_or(true) {
-        respond_text(request, 403, "forbidden".into());
-        return Ok(());
-    }
-
-    let mut builder = http_client()
-        .get(&remote)
-        .timeout(COVER_TIMEOUT)
-        .header(
-            reqwest::header::ACCEPT,
-            "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        )
-        .header(reqwest::header::USER_AGENT, UA);
-    if !referer.is_empty() {
-        builder = builder.header(reqwest::header::REFERER, referer);
-    }
-    let resp = match builder.send() {
-        Ok(r) => r,
-        Err(e) => {
-            respond_text(request, 502, format!("upstream error: {e}"));
-            return Ok(());
-        }
-    };
-    let status = resp.status().as_u16();
-    if !(200..300).contains(&status) {
-        respond_text(request, status, format!("upstream {status}"));
-        return Ok(());
-    }
-    let content_type = resp
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("image/jpeg")
-        .to_string();
-    let bytes = resp
-        .bytes()
-        .map_err(|e| format!("读取封面失败：{e}"))?
-        .to_vec();
-
-    let mut headers = Vec::new();
-    if let Some(h) = proxy_header("Content-Type", &content_type) {
-        headers.push(h);
-    }
-    if let Some(h) = proxy_header("Access-Control-Allow-Origin", "*") {
-        headers.push(h);
-    }
-    if let Some(h) = proxy_header("Cache-Control", "public, max-age=86400") {
-        headers.push(h);
-    }
-    let len = bytes.len();
-    // tiny_http 的 R 需要 `std::io::Read`；`Vec<u8>` 并未实现它（只有 `&[u8]` 有），
-    // 必须先包一层 Cursor（anime/webdav 的代理同样这么做）。
-    let body = std::io::Cursor::new(bytes);
-    let response = tiny_http::Response::new(
-        tiny_http::StatusCode(status),
-        headers,
-        body,
-        Some(len),
-        None,
-    );
-    request.respond(response).map_err(|e| e.to_string())
-}
-
 // ---- HTTP 小工具 ----
 
 fn get_json(
@@ -470,10 +270,6 @@ fn page_url_for(id: &str) -> String {
     format!("https://osu.ppy.sh/beatmapsets/{id}")
 }
 
-fn fallback_cover_for(id: &str) -> String {
-    format!("https://assets.ppy.sh/beatmaps/{id}/covers/card@2x.jpg")
-}
-
 // ---- 搜索：三源聚合 ----
 
 fn map_sayobot(v: &serde_json::Value) -> Option<OsuBeatmapset> {
@@ -506,28 +302,13 @@ fn map_official(v: &serde_json::Value) -> Option<OsuBeatmapset> {
     let id = jnum_pos(v, "id")?;
     let title = jprefer(v, "title_unicode", "title")?;
     let artist = jprefer(v, "artist_unicode", "artist").unwrap_or_default();
-    let covers = v.get("covers");
-    let cover = covers.and_then(|c| {
-        ["card@2x", "card", "cover@2x", "cover", "list@2x", "list"]
-            .iter()
-            .find_map(|k| jstr(c, k))
-    });
-    let mut item = build_beatmapset(
+    Some(build_beatmapset(
         &id.to_string(),
         &artist,
         &title,
         jstr(v, "creator"),
         "official",
-    );
-    if let Some(c) = cover {
-        let raw = if c.starts_with("//") {
-            format!("https:{c}")
-        } else {
-            c
-        };
-        item.cover_url = Some(proxy_cover(&raw.replace("http://", "https://")));
-    }
-    Some(item)
+    ))
 }
 
 fn build_beatmapset(
@@ -550,7 +331,6 @@ fn build_beatmapset(
         artist: artist.to_string(),
         song_title: song_title.to_string(),
         uploader,
-        cover_url: Some(proxy_cover(&fallback_cover_for(id))),
         page_url: page_url_for(id),
         source: source.to_string(),
     }
@@ -644,7 +424,6 @@ fn fallback_beatmapset(id: &str) -> OsuBeatmapset {
         artist: String::new(),
         song_title: String::new(),
         uploader: None,
-        cover_url: Some(proxy_cover(&fallback_cover_for(id))),
         page_url: page_url_for(id),
         source: "direct".to_string(),
     }
@@ -1427,14 +1206,4 @@ pub async fn osu_import_archive(
     })
     .await
     .map_err(|e| format!("任务执行失败：{e}"))?
-}
-
-/// 远端封面换成走本地代理的 URL（补 Referer，绕开 assets.ppy.sh 的防盗链）
-#[silvermoon_ipc::command]
-pub fn osu_cover_url(raw_url: String) -> Result<String, String> {
-    let parsed = url::Url::parse(&raw_url).map_err(|_| "封面 URL 无效".to_string())?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err("仅支持 http/https 封面".into());
-    }
-    Ok(proxy_cover(&raw_url))
 }

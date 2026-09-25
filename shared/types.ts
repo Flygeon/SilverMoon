@@ -990,8 +990,6 @@ export interface OsuBeatmapset {
   artist: string;
   songTitle: string;
   uploader: string | null;
-  /** 已经过本地代理的封面 URL（assets.ppy.sh 校验 Referer，直连 403） */
-  coverUrl: string | null;
   pageUrl: string;
   /** 结果来源：sayobot / official / catboy / direct */
   source: string;

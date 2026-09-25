@@ -484,10 +484,6 @@ export const capabilities = {
   onOsuProgress(handler: (p: OsuProgress) => void): Promise<UnlistenFn> {
     return listen<OsuProgress>("osu:progress", (e) => handler(e.payload));
   },
-  /** 把远端封面 URL 换成走本地代理的 URL（补 Referer，绕开防盗链） */
-  osuCoverUrl(url: string): Promise<string> {
-    return safeInvoke("osu_cover_url", { rawUrl: url });
-  },
 
   // ---- 在线小说（Wenku8）----
   novelSearch(node: string, charset: string, query: string, page = 1): Promise<NovelCover[]> {

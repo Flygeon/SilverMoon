@@ -105,8 +105,8 @@ export default [
       "src/views/PresetMarket.vue",
       // B6：面包屑条目用组件的 icon 槽
       "src/views/WebDavView.vue",
-      // osu! 谱面面板：m3e-button 的 icon 槽
-      "src/components/OsuPanel.vue",
+      // osu! 谱面下载页（百宝箱 → 更多工具）：m3e-button 的 icon 槽
+      "src/views/OsuView.vue",
     ],
     rules: {
       "vue/no-deprecated-slot-attribute": "off",

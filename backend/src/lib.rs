@@ -223,7 +223,6 @@ pub fn run() {
             osu::osu_search,
             osu::osu_download,
             osu::osu_import_archive,
-            osu::osu_cover_url,
             novel::novel_search,
             novel::novel_rank,
             novel::novel_category,

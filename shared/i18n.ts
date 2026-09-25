@@ -228,6 +228,8 @@ export const messages = {
         statsHint: "了解你的听歌习惯与趋势",
         novelStats: "小说阅读统计",
         novelStatsHint: "统计本地与在线小说的阅读数据",
+        osu: "osu! 谱面下载",
+        osuHint: "搜索并下载 osu! 谱面，音频自动入曲库",
       },
       market: {
         title: "音效预设市场",
@@ -949,6 +951,8 @@ export const messages = {
         statsHint: "Explore your listening habits and trends",
         novelStats: "Novel Reading Stats",
         novelStatsHint: "Track local and online novel reading",
+        osu: "osu! Beatmap Download",
+        osuHint: "Search and download osu! beatmaps, audio imported to library",
       },
       market: {
         title: "Preset Market",

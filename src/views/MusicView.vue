@@ -11,7 +11,6 @@ import KugouFeed from "@/components/KugouFeed.vue";
 import PlatformBar from "@/components/PlatformBar.vue";
 import CachedCover from "@/components/CachedCover.vue";
 import SegmentedTabs from "@/components/SegmentedTabs.vue";
-import OsuPanel from "@/components/OsuPanel.vue";
 import { useLibraryStore } from "@/stores/library";
 import { usePlayerStore } from "@/stores/player";
 import { useSettingsStore } from "@/stores/settings";
@@ -52,11 +51,6 @@ function notify(message: string) {
   toast.value = message;
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => (toast.value = ""), 2600);
-}
-
-/** osu! 谱面导入完成：面板内已提示，这里再给一个页面级 toast（面板可能被立刻关闭） */
-function onOsuImported(title: string) {
-  notify(`${t("osu.imported")}：${title}`);
 }
 
 function load() {
@@ -552,9 +546,6 @@ function clearSearch() {
 
 const showLocal = computed(() => !onlineMode.value || detail.value?.type === "local");
 const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
-
-/** osu! 谱面下载面板开关（与平台正交：谱面集与歌单/账号无关） */
-const osuOpen = ref(false);
 </script>
 
 <template>
@@ -678,16 +669,6 @@ const osuOpen = ref(false);
           </div>
           <!-- 歌单为预取列表，点击即进详情（内容用骨架占位），此处不再有阻塞式 loading -->
         </template>
-
-        <!-- osu! 谱面源：与平台正交（谱面集与歌单/账号无关），两家平台都展示 -->
-        <button class="osu-entry" @click="osuOpen = true">
-          <span class="material-symbols-outlined oe-icon">music_note</span>
-          <span class="oe-text">
-            <span class="oe-title">{{ t("osu.title") }}</span>
-            <span class="oe-desc">{{ t("osu.desc") }}</span>
-          </span>
-          <span class="material-symbols-outlined oe-arrow">chevron_right</span>
-        </button>
       </template>
 
       <!-- 搜索根 -->
@@ -1143,8 +1124,6 @@ const osuOpen = ref(false);
         </div>
       </div>
     </transition>
-
-    <OsuPanel v-if="osuOpen" @close="osuOpen = false" @imported="onOsuImported" />
 
     <transition name="toast">
       <div v-if="toast" class="toast">{{ toast }}</div>
@@ -1714,50 +1693,5 @@ const osuOpen = ref(false);
 .load-more:hover {
   background: var(--md-sys-color-surface-container-high);
   color: var(--md-sys-color-on-surface);
-}
-
-/* osu! 谱面源入口（歌单页底部；与平台正交，两家平台都展示） */
-.osu-entry {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  width: 100%;
-  margin-top: 18px;
-  padding: 14px 16px;
-  border: none;
-  border-radius: var(--lm-shape-card);
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: transform var(--md-sys-motion-duration-short) var(--md-sys-motion-spring-effects-fast);
-}
-.osu-entry:hover {
-  transform: translateY(-1px);
-}
-.osu-entry .oe-icon {
-  flex: none;
-  font-size: 28px;
-}
-.osu-entry .oe-text {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.osu-entry .oe-title {
-  font-size: var(--md-sys-typescale-title-small-size);
-  font-weight: 500;
-}
-.osu-entry .oe-desc {
-  font-size: var(--md-sys-typescale-body-small-size);
-  opacity: 0.85;
-}
-.osu-entry .oe-arrow {
-  flex: none;
-  font-size: 22px;
-  opacity: 0.7;
 }
 </style>

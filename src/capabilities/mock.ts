@@ -668,7 +668,6 @@ export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
             artist: "Camellia",
             songTitle: "GHOST",
             uploader: "Preview",
-            coverUrl: placeholderCover("osu", 320),
             pageUrl: "https://osu.ppy.sh/beatmapsets/1",
             source: "sayobot",
           },
@@ -678,7 +677,6 @@ export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
             artist: "xi",
             songTitle: "Freedom Dive",
             uploader: "Preview",
-            coverUrl: placeholderCover("osu", 200),
             pageUrl: "https://osu.ppy.sh/beatmapsets/2",
             source: "official",
           },
@@ -688,8 +686,6 @@ export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case "osu_import_archive":
     case "osu_download":
       throw new Error("浏览器预览不支持下载谱面，请在桌面端使用");
-    case "osu_cover_url":
-      return as(String(args?.rawUrl ?? ""));
 
     default:
       return as(null);
