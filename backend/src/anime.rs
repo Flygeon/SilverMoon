@@ -1137,6 +1137,17 @@ const INIT_SCRIPT: &str = r#"(function () {
       if (isVideo(u) && window.__animeStreams.indexOf(u) < 0) { window.__animeStreams.push(u); }
     } catch (e) {}
   }
+  // 内容确认是 m3u8（响应体前段含 #EXTM3U）→ 直接收录，不受 URL 后缀限制。
+  // 很多源把清单放在 /api/proxy?url=... 这类无后缀地址，只看后缀会全漏——这正是
+  // 「参考项目能解析、这里解析不了」的主因（Kazumi 靠响应体判定，此前我们只看后缀）。
+  function pushStream(u) {
+    try {
+      if (typeof u === 'string' && u && window.__animeStreams.indexOf(u) < 0) { window.__animeStreams.push(u); }
+    } catch (e) {}
+  }
+  function isM3u8Body(t) {
+    try { return typeof t === 'string' && t.slice(0, 256).indexOf('#EXTM3U') >= 0; } catch (e) { return false; }
+  }
   try {
     var d = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
     if (d && d.set) {
@@ -1157,8 +1168,27 @@ const INIT_SCRIPT: &str = r#"(function () {
     var f = window.fetch;
     if (f) {
       window.fetch = function () {
-        try { push(arguments.length ? (typeof arguments[0] === 'string' ? arguments[0] : (arguments[0] && arguments[0].url)) : ''); } catch (e) {}
-        return f.apply(this, arguments);
+        var args = arguments;
+        var u = args.length ? (typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url)) : '';
+        try { push(u); } catch (e) {}
+        var p = f.apply(this, args);
+        // 响应体检测：清单地址常不含 .m3u8，靠 #EXTM3U 判定（对齐 Kazumi）
+        try {
+          if (p && typeof p.then === 'function') {
+            p.then(function (resp) {
+              try {
+                if (!resp || typeof resp.clone !== 'function') { return; }
+                var ct = '';
+                try { ct = (resp.headers && resp.headers.get && resp.headers.get('content-type')) || ''; } catch (e) {}
+                if (ct && !/mpegurl/i.test(ct) && !/\.m3u8(\?|$)/i.test(u)) { return; }
+                resp.clone().text().then(function (t) {
+                  if (isM3u8Body(t)) { pushStream(resp.url || u); }
+                }).catch(function () {});
+              } catch (e) {}
+            }).catch(function () {});
+          }
+        } catch (e) {}
+        return p;
       };
     }
   } catch (e) {}
@@ -1167,6 +1197,17 @@ const INIT_SCRIPT: &str = r#"(function () {
     if (o) {
       XMLHttpRequest.prototype.open = function () {
         try { push(arguments[1]); } catch (e) {}
+        // 响应体检测：XHR 拿到清单内容（前缀 #EXTM3U）时收录其最终 URL
+        try {
+          var self = this;
+          self.addEventListener('load', function () {
+            try {
+              var rt = '';
+              try { rt = self.responseText; } catch (e) { return; }
+              if (isM3u8Body(rt)) { pushStream(self.responseURL || ''); }
+            } catch (e) {}
+          });
+        } catch (e) {}
         return o.apply(this, arguments);
       };
     }
@@ -1336,8 +1377,13 @@ fn ensure_webview(app: &silvermoon_ipc::Host) -> Result<silvermoon_ipc::Window, 
 fn pick_stream(urls: &[String]) -> Option<String> {
     urls.iter()
         .find(|u| u.contains(".m3u8"))
+        // 无后缀的清单（靠响应体 #EXTM3U 收录）URL 里通常仍含 m3u8 关键字，优先于兜底
+        .or_else(|| {
+            urls.iter()
+                .find(|u| u.to_ascii_lowercase().contains("m3u8"))
+        })
+        .or_else(|| urls.first())
         .cloned()
-        .or_else(|| urls.first().cloned())
 }
 
 /// 取流前注入的诊断快照脚本。
