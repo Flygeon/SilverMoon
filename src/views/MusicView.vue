@@ -96,12 +96,48 @@ const onlineTabs = computed(() => [
 
 type Detail =
   | { type: "local" }
-  | { type: "online"; title: string; songs: OnlineSong[] }
-  | { type: "cloud"; title: string; songs: OnlineSong[]; loadingMore?: boolean };
+  | { type: "online"; title: string; songs: OnlineSong[]; loading?: boolean }
+  | { type: "cloud"; title: string; songs: OnlineSong[]; loading?: boolean; loadingMore?: boolean };
+/** 带歌曲列表的详情（online / cloud）：详情骨架与异步填充都基于它 */
+type ListDetail = Extract<Detail, { songs: OnlineSong[] }>;
 const detail = ref<Detail | null>(null);
 
-const onlineLoading = ref(false);
 const onlineError = ref("");
+
+/**
+ * 「先转场、后加载」：立即进入详情（歌曲区骨架占位），再异步填充内容。
+ *
+ * 此前点歌单会先 `await` 请求、期间停在原列表页（无任何反馈）；现在改为马上切详情。
+ * `detail.value !== target` 守卫保证：期间用户返回或切到别的详情时丢弃本次结果，
+ * 不写已卸载/已切换的页面（避免状态竞争与陈旧覆盖）。
+ */
+async function openDetailAsync(
+  title: string,
+  loader: () => Promise<OnlineSong[]>,
+  opts: { type?: "online" | "cloud" } = {},
+): Promise<void> {
+  const seeded: ListDetail = { type: opts.type ?? "online", title, songs: [], loading: true };
+  detail.value = seeded;
+  const target = detail.value as ListDetail;
+  onlineError.value = "";
+  try {
+    const songs = await loader();
+    if (detail.value !== target) return;
+    target.songs = songs;
+    target.loading = false;
+  } catch (e) {
+    if (detail.value !== target) return;
+    target.loading = false;
+    onlineError.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
+/** 详情是否处于「已进入但歌曲尚未就绪」的骨架态 */
+const detailLoadingSkeleton = computed(() => {
+  const d = detail.value;
+  if (!d || (d.type !== "online" && d.type !== "cloud")) return false;
+  return Boolean(d.loading) && d.songs.length === 0;
+});
 const searchQuery = ref("");
 const addName = ref("");
 const addId = ref("");
@@ -244,20 +280,12 @@ async function openPlaylist(card: PlaylistCard) {
     await openCloud();
     return;
   }
-  // 网易云我的歌单
+  // 网易云我的歌单（立即进详情 + 骨架）
   if (card.key.startsWith("mine:")) {
     const id = Number(card.key.slice("mine:".length));
-    onlineLoading.value = true;
-    onlineError.value = "";
-    try {
-      const songs = await capabilities.neteasePlaylistDetail(id);
-      const online = await toOnlineSongs(songs);
-      detail.value = { type: "online", title: card.name, songs: online };
-    } catch (e) {
-      onlineError.value = e instanceof Error ? e.message : String(e);
-    } finally {
-      onlineLoading.value = false;
-    }
+    await openDetailAsync(card.name, async () =>
+      toOnlineSongs(await capabilities.neteasePlaylistDetail(id)),
+    );
     return;
   }
   // 本地音乐
@@ -265,38 +293,28 @@ async function openPlaylist(card: PlaylistCard) {
     detail.value = { type: "local" };
     return;
   }
+  // 已预取过：秒开，无需骨架
   const key = keyOf(card);
   const cached = playlistCache.get(key);
   if (cached) {
     detail.value = { type: "online", title: card.name, songs: cached };
     return;
   }
-  onlineLoading.value = true;
-  onlineError.value = "";
-  try {
-    const songs = await metingPlaylist(card.server!, card.id);
+  // 未预取：立即进详情 + 骨架，异步填充（并写入缓存供下次秒开）
+  await openDetailAsync(card.name, async () => {
+    const songs = await metingPlaylist(card.server!, card.id!);
     playlistCache.set(key, songs);
-    detail.value = { type: "online", title: card.name, songs };
-  } catch (e) {
-    onlineError.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    onlineLoading.value = false;
-  }
+    return songs;
+  });
 }
 
-/** 打开云盘：首页 + 批量解析播放 URL */
+/** 打开云盘：首页 + 批量解析播放 URL（立即进详情，歌曲区骨架占位） */
 async function openCloud() {
-  onlineLoading.value = true;
-  onlineError.value = "";
-  try {
-    const songs = await netease.loadCloudPage(0);
-    const online = await toOnlineSongs(songs);
-    detail.value = { type: "cloud", title: t("netease.cloud"), songs: online };
-  } catch (e) {
-    onlineError.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    onlineLoading.value = false;
-  }
+  await openDetailAsync(
+    t("netease.cloud"),
+    async () => toOnlineSongs(await netease.loadCloudPage(0)),
+    { type: "cloud" },
+  );
 }
 
 /** 酷狗：拉取排行榜卡片（只拉一次，失败可重试） */
@@ -314,36 +332,18 @@ async function loadKugouRanks() {
   }
 }
 
-/** 酷狗：进入某个榜单（拉取榜单歌曲） */
+/** 酷狗：进入某个榜单（立即进详情，歌曲区骨架占位） */
 async function openKugouRank(card: KugouRankCard) {
-  onlineLoading.value = true;
-  onlineError.value = "";
-  try {
-    const raw = await capabilities.kugouRankSongs(card.id);
-    detail.value = { type: "online", title: card.name, songs: kugouToOnlineSongs(raw) };
-  } catch (e) {
-    onlineError.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    onlineLoading.value = false;
-  }
+  await openDetailAsync(card.name, async () =>
+    kugouToOnlineSongs(await capabilities.kugouRankSongs(card.id)),
+  );
 }
 
-/** 酷狗：进入每日推荐 */
+/** 酷狗：进入每日推荐（立即进详情，歌曲区骨架占位） */
 async function openKugouDaily() {
-  onlineLoading.value = true;
-  onlineError.value = "";
-  try {
-    const raw = await capabilities.kugouEverydayRecommend();
-    detail.value = {
-      type: "online",
-      title: t("homeFeed.dailyRecommend"),
-      songs: kugouToOnlineSongs(raw),
-    };
-  } catch (e) {
-    onlineError.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    onlineLoading.value = false;
-  }
+  await openDetailAsync(t("homeFeed.dailyRecommend"), async () =>
+    kugouToOnlineSongs(await capabilities.kugouEverydayRecommend()),
+  );
 }
 
 /** 云盘分页加载更多 */
@@ -374,19 +374,13 @@ watch(
 async function doSearch() {
   const q = searchQuery.value.trim();
   if (!q) return;
-  onlineLoading.value = true;
-  onlineError.value = "";
-  try {
-    // 酷狗走 Rust 侧客户端（meting 实例只放行 netease，见 README 说明）
-    const songs = isKugou.value
+  // 酷狗走 Rust 侧客户端（meting 实例只放行 netease，见 README 说明）。
+  // 立即进详情 + 骨架，不阻塞在搜索页等待结果。
+  await openDetailAsync(`「${q}」`, async () =>
+    isKugou.value
       ? kugouToOnlineSongs(await capabilities.kugouSearch(q))
-      : await metingSearch(settings.musicServer, q);
-    detail.value = { type: "online", title: `「${q}」`, songs };
-  } catch (e) {
-    onlineError.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    onlineLoading.value = false;
-  }
+      : await metingSearch(settings.musicServer, q),
+  );
 }
 
 function addPlaylist() {
@@ -526,19 +520,11 @@ function handleFeedPlaySongs(songs: OnlineSong[], index: number) {
   void playOnlineSongs(songs, index);
 }
 
-/** 现在就听信息流：打开推荐歌单 */
+/** 现在就听信息流：打开推荐歌单（立即进详情，歌曲区骨架占位） */
 async function openNeteasePlaylist(id: number, name: string) {
-  onlineLoading.value = true;
-  onlineError.value = "";
-  try {
-    const songs = await capabilities.neteasePlaylistDetail(id);
-    const online = await toOnlineSongs(songs);
-    detail.value = { type: "online", title: name, songs: online };
-  } catch (e) {
-    onlineError.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    onlineLoading.value = false;
-  }
+  await openDetailAsync(name, async () =>
+    toOnlineSongs(await capabilities.neteasePlaylistDetail(id)),
+  );
 }
 
 /** 本地音乐：单击卡片即播放（原模式逻辑） */
@@ -681,10 +667,7 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
             <span class="material-symbols-outlined">error</span>
             {{ onlineError }}
           </div>
-          <div v-if="onlineLoading" class="loading">
-            <m3e-loading-indicator class="lm-loading" />
-            {{ t("online.loading") }}
-          </div>
+          <!-- 歌单为预取列表，点击即进详情（内容用骨架占位），此处不再有阻塞式 loading -->
         </template>
       </template>
 
@@ -705,10 +688,7 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
           <span class="material-symbols-outlined">error</span>
           {{ onlineError }}
         </div>
-        <div v-if="onlineLoading" class="loading">
-          <m3e-loading-indicator class="lm-loading" />
-          {{ t("online.loading") }}
-        </div>
+        <!-- 搜索同样立即进详情（骨架占位），不在此等待 -->
       </template>
     </SegmentedTabs>
 
@@ -742,8 +722,28 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
         </div>
       </div>
 
+      <!-- 详情骨架：与最终网格/列表同布局，数据到位后原地替换 -->
       <div
-        v-if="
+        v-if="detailLoadingSkeleton"
+        :class="settings.musicViewMode === 'grid' ? 'online-grid' : 'online-list'"
+      >
+        <div
+          v-for="i in 18"
+          :key="i"
+          :class="settings.musicViewMode === 'grid' ? 'song-card' : 'online-row'"
+        >
+          <div :class="settings.musicViewMode === 'grid' ? 'thumb' : 'o-thumb'">
+            <div class="sk-cover" />
+          </div>
+          <div :class="settings.musicViewMode === 'grid' ? 's-meta' : 'o-main'">
+            <div class="sk-line w80" />
+            <div class="sk-line w50" />
+          </div>
+        </div>
+      </div>
+
+      <div
+        v-else-if="
           (detail.type === 'online' || detail.type === 'cloud') && settings.musicViewMode === 'grid'
         "
         class="online-grid"
@@ -789,14 +789,11 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
           </div>
         </button>
       </div>
-      <div v-else-if="onlineLoading" class="loading">
-        <m3e-loading-indicator class="lm-loading" />
-        {{ t("online.loading") }}
-      </div>
+      <!-- 歌曲未就绪时由上方骨架承担，这里不再需要 loading 分支 -->
 
       <!-- 云盘：空态 / 加载更多 -->
       <EmptyState
-        v-if="detail.type === 'cloud' && !detail.songs.length && !onlineLoading"
+        v-if="detail.type === 'cloud' && !detail.songs.length && !detailLoadingSkeleton"
         icon="cloud_off"
         :title="t('netease.cloudEmpty')"
         :description="t('netease.cloudEmptyHint')"
@@ -1362,6 +1359,39 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 详情骨架：复用真实卡片/行的布局类，只在缩略图与文字位置放占位块，
+   加载完成后原地替换、不顶动布局 */
+.sk-cover {
+  width: 100%;
+  height: 100%;
+  background: var(--md-sys-color-surface-container-high);
+}
+.sk-line {
+  height: 0.9em;
+  margin: 4px 0;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-surface-container-high);
+}
+.sk-line.w80 {
+  width: 80%;
+}
+.sk-line.w50 {
+  width: 50%;
+}
+.sk-cover,
+.sk-line {
+  animation: sm-skeleton-pulse 1.4s ease-in-out infinite;
+}
+@keyframes sm-skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 .o-duration {
   flex: none;

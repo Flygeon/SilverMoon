@@ -114,18 +114,30 @@ const metaParts = computed(() => {
         <div class="info">
           <h2 class="title">{{ title }}</h2>
           <p v-if="subName" class="sub-name">{{ subName }}</p>
-          <div class="meta">
+          <div v-if="metaParts.length" class="meta">
             <span v-for="(part, i) in metaParts" :key="i" class="meta-chip">{{ part }}</span>
+          </div>
+          <div v-else-if="loading" class="meta">
+            <span v-for="i in 4" :key="i" class="sk-chip" />
           </div>
           <div v-if="subject.tags?.length" class="tags">
             <span v-for="(tag, i) in subject.tags.slice(0, 8)" :key="i" class="tag">{{ tag }}</span>
+          </div>
+          <div v-else-if="loading" class="tags">
+            <span v-for="i in 6" :key="i" class="sk-chip" />
           </div>
         </div>
       </div>
 
       <section class="block">
         <h3 class="block-title">{{ t("anime.summary") }}</h3>
-        <p v-if="subject.summary" class="summary">{{ subject.summary }}</p>
+        <!-- 简介未就绪时给与正文同尺寸的骨架行，避免加载完成把下方内容顶下去 -->
+        <template v-if="loading && !subject.summary">
+          <p class="sk-line w100" />
+          <p class="sk-line w100" />
+          <p class="sk-line w62" />
+        </template>
+        <p v-else-if="subject.summary" class="summary">{{ subject.summary }}</p>
         <p v-else class="summary muted">{{ t("anime.noSummary") }}</p>
       </section>
 
@@ -310,6 +322,38 @@ const metaParts = computed(() => {
 }
 .summary.muted {
   color: var(--md-sys-color-on-surface-variant);
+}
+/* 加载骨架：与最终内容同尺寸/同位置的占位，加载完成后原地替换、不顶动布局 */
+.sk-line {
+  margin: 0;
+  height: 0.95em;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-surface-container-high);
+  animation: sm-skeleton-pulse 1.4s ease-in-out infinite;
+}
+.sk-line.w100 {
+  width: 100%;
+}
+.sk-line.w62 {
+  width: 62%;
+}
+.sk-chip {
+  display: inline-block;
+  width: 56px;
+  height: 22px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-surface-container-high);
+  animation: sm-skeleton-pulse 1.4s ease-in-out infinite;
+}
+@keyframes sm-skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 .alias-row {
   display: flex;
