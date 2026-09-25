@@ -50,11 +50,15 @@ const anime = useAnimeStore();
 const t = (key: string) => translate(settings.lang, key);
 
 const container = ref<HTMLDivElement | null>(null);
-/** 播放器外层容器：自身全屏，保证顶栏 / 抽屉 / 状态层在全屏下同样可见 */
-const playerRoot = ref<HTMLDivElement | null>(null);
+/**
+ * 覆盖层挂载点：创建 ArtPlayer 后把一块宿主 div 挂进 `art.$player`（ArtPlayer 根元素
+ * `.art-video-player`，也是它原生全屏的那个元素）。按钮 / 选集面板 Teleport 到这里，
+ * 才能：① 原生全屏时同样可见；② z-index 高于 ArtPlayer 各层——否则会被它的
+ * controls / mask 盖住，表现就是「点了没反应」。
+ */
+const overlayHost = ref<HTMLElement | null>(null);
 const drawerOpen = ref(false);
 const danmakuOn = ref(settings.danmakuEnabled);
-const isFullscreen = ref(false);
 
 let art: Artplayer | null = null;
 let hls: HlsInstance | null = null;
@@ -209,9 +213,8 @@ function makeControls(): Artplayer["option"]["controls"] {
   // Material Symbols 的 ligature 失效（图标退化成它的名字文本，如 captions → CAPTIONS）。
   const icon = (name: string) => `<span class="material-symbols-outlined sm-icon">${name}</span>`;
   // 只放**播放相关**控件（上一集 / 倍速 / 弹幕 / 下一集）到控制栏右侧。
-  // 导航类（选集 / 换源 / 关闭）与标题改到自绘的右上角顶栏（模板 .player-topbar）——
-  // 它们此前用 `position: "top"` 落在控制栏上排的左下角，正好压住进度条，
-  // 既不好找、又和「点进度条跳转」抢点击区域。
+  // 导航类（选集 / 换源 / 关闭）与标题改到覆盖层（模板里的 .ep-topleft / .ep-topright）——
+  // 它们此前用 `position: "top"` 落在控制栏上排左下角，既不好找又和「点进度条跳转」抢点击。
   return [
     {
       name: "luna-prev",
@@ -302,23 +305,23 @@ function retry() {
   void ensureStream();
 }
 
-// ---- 全屏：作用在 .anime-player 自身 ----
-//
-// 不用 ArtPlayer 自带的全屏：它只把内部的 .art-video-player 元素全屏，我们加在外层的
-// 顶栏（选集 / 换源 / 全屏 / 关闭）、选集抽屉、取流状态层都会被挡在全屏之外——全屏时
-// 既关不掉播放也看不到状态。这里改为全屏外层容器，所有自定义 UI 在全屏下同样可见。
-function onFullscreenChange() {
-  isFullscreen.value = Boolean(document.fullscreenElement);
+// ---- 选集面板（右侧滑出）----
+
+function closeDrawer() {
+  drawerOpen.value = false;
 }
 
-async function toggleFullscreen() {
-  const el = playerRoot.value;
-  if (!el) return;
-  try {
-    if (document.fullscreenElement) await document.exitFullscreen();
-    else await el.requestFullscreen();
-  } catch (e) {
-    void animeLog(`全屏切换失败: ${(e as Error).message}`);
+/** 选中某一集：立即切流并收起面板 */
+function switchTo(roadIndex: number, episodeIndex: number) {
+  drawerOpen.value = false;
+  emit("switch", roadIndex, episodeIndex);
+}
+
+/** Esc 关闭面板（仅在面板打开时拦截，其余情况不干扰 ArtPlayer 自身快捷键） */
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape" && drawerOpen.value) {
+    e.stopPropagation();
+    closeDrawer();
   }
 }
 
@@ -356,9 +359,9 @@ function createPlayer() {
     poster: anime.bangumiDetail?.images?.large ?? undefined,
     autoplay: true,
     autoMini: false,
-    // 全屏改由我们自己对 .anime-player 实现（见 toggleFullscreen）：否则 ArtPlayer 只
-    // 全屏它自己，外层的顶栏 / 状态层在全屏下不可见。
-    fullscreen: false,
+    // 全屏保持 ArtPlayer 自带的（右下角）。我们的按钮挂进 art.$player，
+    // 因此原生全屏时它们同样可见（见 overlayHost）。
+    fullscreen: true,
     fullscreenWeb: false,
     // 关掉 ArtPlayer 自带的一堆默认控件，只留 play / volume / time / fullscreen。
     // 倍速、选集、换源、弹幕、上下一集全部由我们的自定义 controls 提供；否则默认控件
@@ -424,11 +427,24 @@ function createPlayer() {
     if (reportTimer) window.clearTimeout(reportTimer);
     reportHistory();
     destroyHls();
+    overlayHost.value = null;
   });
+
+  // 覆盖层宿主：挂进 ArtPlayer 根元素（= 原生全屏元素）——按钮 / 面板在全屏下才可见，
+  // 且 z-index 高于 ArtPlayer 各层（它内部最高约 120，这里给 9000）才点得到。
+  // 宿主是 JS 创建的节点，拿不到 scoped 样式，故用内联样式；pointer-events:none 让它
+  // 不吃点击，只有具体的按钮 / 面板 / 遮罩各自 auto。
+  const playerEl = (art as unknown as { $player?: HTMLElement }).$player;
+  if (playerEl) {
+    const host = document.createElement("div");
+    host.style.cssText = "position:absolute;inset:0;z-index:9000;pointer-events:none;";
+    playerEl.appendChild(host);
+    overlayHost.value = host;
+  }
 }
 
 onMounted(() => {
-  document.addEventListener("fullscreenchange", onFullscreenChange);
+  window.addEventListener("keydown", onKeydown);
   createPlayer();
   // 流就绪后挂载 / 切换剧集后刷新
   watch(
@@ -441,7 +457,7 @@ onMounted(() => {
   watch(
     () => [props.roadIndex, props.episodeIndex] as const,
     () => {
-      // 切集后：重挂流；弹幕插件 load（标题由模板里的 .pt-name / .pt-ep 响应式更新，无需手改 DOM）
+      // 切集后：重挂流；弹幕插件 load（标题由模板里的 .ep-title-* 响应式更新，无需手改 DOM）
       if (!art) return;
       void ensureStream();
       // 弹幕：plugin load（再触发一次）
@@ -464,7 +480,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  document.removeEventListener("fullscreenchange", onFullscreenChange);
+  window.removeEventListener("keydown", onKeydown);
   if (reportTimer) window.clearTimeout(reportTimer);
   destroyHls();
   art?.destroy(false);
@@ -474,81 +490,89 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
-    <div ref="playerRoot" class="anime-player">
-      <!-- ArtPlayer 容器；customType.m3u8 在 createPlayer 里挂 hls.js -->
+    <div class="anime-player">
+      <!-- ArtPlayer 容器；customType.m3u8 在 createPlayer 里挂 hls.js。
+           全屏用 ArtPlayer 自带的（右下角）；我们的按钮见下方 overlayHost。 -->
       <div ref="container" class="art-container" />
+    </div>
+  </Teleport>
 
-      <!-- 右上角顶栏：标题 + 选集 / 换源 / 关闭。
-           与底部控制栏彻底分离——不压进度条，关闭按钮位置固定、一眼可见。
-           （这几个按钮此前挂在 ArtPlayer 的 position:"top"，落在控制栏上排左下角，
-           既难找又和「点进度条跳转」抢点击区域。） -->
-      <div class="player-topbar">
-        <div class="pt-title">
-          <span class="pt-name" :title="anime.displayTitle">{{ anime.displayTitle }}</span>
-          <span v-if="episode" class="pt-ep">{{ episode.name }}</span>
-        </div>
-        <div class="pt-actions">
-          <button
-            class="pt-btn"
-            :class="{ on: drawerOpen }"
-            :title="t('anime.episodes')"
-            @click="drawerOpen = !drawerOpen"
-          >
-            <span class="material-symbols-outlined">list</span>
-          </button>
-          <button class="pt-btn" :title="t('anime.changeSource')" @click="emit('chooseSource')">
-            <span class="material-symbols-outlined">swap_horiz</span>
-          </button>
-          <button
-            class="pt-btn"
-            :title="isFullscreen ? t('anime.exitFullscreen') : t('anime.fullscreen')"
-            @click="toggleFullscreen"
-          >
-            <span class="material-symbols-outlined">{{
-              isFullscreen ? "fullscreen_exit" : "fullscreen"
-            }}</span>
-          </button>
-          <button class="pt-btn pt-close" :title="t('anime.exit')" @click="emit('close')">
+  <!-- 播放器覆盖层：Teleport 进 ArtPlayer 根元素（art.$player）——
+       这样用 ArtPlayer 自带的右下角全屏时，按钮 / 面板同样可见；且 z-index 高于
+       ArtPlayer 各层，不会被控制栏 / mask 盖住（否则表现为「点了没反应」）。
+       左上角：关闭 + 标题；右上角：选集 / 换源。 -->
+  <Teleport v-if="overlayHost" :to="overlayHost">
+    <div class="ep-topleft">
+      <button class="ep-btn" :title="t('anime.exit')" @click="emit('close')">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+      <div class="ep-title">
+        <span class="ep-title-name" :title="anime.displayTitle">{{ anime.displayTitle }}</span>
+        <span v-if="episode" class="ep-title-ep">{{ episode.name }}</span>
+      </div>
+    </div>
+
+    <div class="ep-topright">
+      <button
+        class="ep-btn"
+        :class="{ on: drawerOpen }"
+        :title="t('anime.episodes')"
+        @click="drawerOpen = !drawerOpen"
+      >
+        <span class="material-symbols-outlined">list</span>
+      </button>
+      <button class="ep-btn" :title="t('anime.changeSource')" @click="emit('chooseSource')">
+        <span class="material-symbols-outlined">swap_horiz</span>
+      </button>
+    </div>
+
+    <!-- 选集面板：右侧滑出 + 遮罩；点遮罩 / 按 Esc / 再点右上角按钮均可关闭 -->
+    <Transition name="ep-scrim">
+      <div v-if="drawerOpen" class="ep-scrim" @click="closeDrawer"></div>
+    </Transition>
+    <Transition name="ep-panel">
+      <aside v-if="drawerOpen" class="ep-panel" role="dialog" aria-modal="true">
+        <div class="ep-panel-head">
+          <span class="ep-panel-title">{{ t("anime.episodes") }}</span>
+          <button class="ep-btn" :title="t('anime.exit')" @click="closeDrawer">
             <span class="material-symbols-outlined">close</span>
           </button>
         </div>
-      </div>
+        <div class="ep-panel-body">
+          <template v-for="(road, ri) in anime.selectedRoads" :key="ri">
+            <div class="road-name">{{ road.name }}</div>
+            <div class="ep-grid">
+              <button
+                v-for="(ep, ei) in road.episodes"
+                :key="ei"
+                class="ep"
+                :class="{ active: ri === props.roadIndex && ei === props.episodeIndex }"
+                @click="switchTo(ri, ei)"
+              >
+                {{ ep.name }}
+              </button>
+            </div>
+          </template>
+        </div>
+      </aside>
+    </Transition>
 
-      <!-- 选集抽屉 -->
-      <div v-if="drawerOpen" class="drawer">
-        <template v-for="(road, ri) in anime.selectedRoads" :key="ri">
-          <div class="road-name">{{ road.name }}</div>
-          <div class="ep-grid">
-            <button
-              v-for="(ep, ei) in road.episodes"
-              :key="ei"
-              class="ep"
-              :class="{ active: ri === props.roadIndex && ei === props.episodeIndex }"
-              @click="emit('switch', ri, ei)"
-            >
-              {{ ep.name }}
-            </button>
-          </div>
-        </template>
-      </div>
+    <!-- 取流状态 / 失败 -->
+    <div v-if="anime.resolving" class="overlay state">
+      <span class="material-symbols-outlined spin">progress_activity</span>
+      <span>{{ t("anime.streamResolving") }}</span>
+    </div>
+    <div v-else-if="anime.streamError" class="overlay state error">
+      <span>{{ anime.streamError }}</span>
+      <m3e-button variant="filled" size="small" @click="retry">
+        <span slot="icon" class="material-symbols-outlined">refresh</span>
+        {{ t("anime.retry") }}
+      </m3e-button>
+    </div>
 
-      <!-- 取流状态 / 失败 -->
-      <div v-if="anime.resolving" class="overlay state">
-        <span class="material-symbols-outlined spin">progress_activity</span>
-        <span>{{ t("anime.streamResolving") }}</span>
-      </div>
-      <div v-else-if="anime.streamError" class="overlay state error">
-        <span>{{ anime.streamError }}</span>
-        <m3e-button variant="filled" size="small" @click="retry">
-          <span slot="icon" class="material-symbols-outlined">refresh</span>
-          {{ t("anime.retry") }}
-        </m3e-button>
-      </div>
-
-      <!-- 弹幕状态指示（左下角；DanDanPlay 无凭证 / 无匹配时显示原因）-->
-      <div v-if="danmakuOn && !settings.danmakuEnabled" class="danmaku-hint">
-        弹幕已开启，请在设置中配置 DanDanPlay 凭证
-      </div>
+    <!-- 弹幕状态指示（DanDanPlay 无凭证 / 无匹配时显示原因）-->
+    <div v-if="danmakuOn && !settings.danmakuEnabled" class="danmaku-hint">
+      弹幕已开启，请在设置中配置 DanDanPlay 凭证
     </div>
   </Teleport>
 </template>
@@ -581,90 +605,125 @@ onBeforeUnmount(() => {
   line-height: 1;
 }
 
-/* 右上角顶栏：标题（左）+ 选集 / 换源 / 关闭（右）。与底部控制栏分离，不压进度条 */
-.player-topbar {
+/* ---- 覆盖层 ----
+   它们被 Teleport 进 ArtPlayer 根元素；宿主 div 用内联样式设了 pointer-events:none，
+   所以下面每个可交互元素都要各自 pointer-events:auto。
+   左上角 = 关闭 + 标题；右上角 = 选集 / 换源；选集面板从右侧滑出。 */
+.ep-topleft,
+.ep-topright {
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 50;
+  top: 10px;
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  /* 容器不吃点击（视频区域仍可单击暂停 / 双击全屏），只有按钮本身可点 */
-  pointer-events: none;
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0));
+  align-items: center;
+  gap: 8px;
+  pointer-events: auto;
 }
-.pt-title {
+.ep-topleft {
+  left: 12px;
+}
+.ep-topright {
+  right: 12px;
+}
+.ep-title {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
   color: #fff;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
 }
-.pt-name {
-  max-width: 52vw;
+.ep-title-name {
+  max-width: 44vw;
   font-size: var(--md-sys-typescale-title-small-size);
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.pt-ep {
+.ep-title-ep {
   font-size: var(--md-sys-typescale-label-small-size);
   opacity: 0.85;
 }
-.pt-actions {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.pt-btn {
+.ep-btn {
   pointer-events: auto;
+  flex: none;
   display: grid;
   place-items: center;
   width: 38px;
   height: 38px;
   border: none;
   border-radius: var(--md-sys-shape-corner-full);
-  background: rgba(0, 0, 0, 0.42);
+  background: rgba(0, 0, 0, 0.45);
   color: #fff;
   cursor: pointer;
   transition: background 160ms ease;
 }
-.pt-btn:hover {
-  background: rgba(0, 0, 0, 0.68);
+.ep-btn:hover {
+  background: rgba(0, 0, 0, 0.7);
 }
-.pt-btn.on {
+.ep-btn.on {
   background: var(--md-sys-color-primary);
   color: var(--md-sys-color-on-primary);
 }
-.pt-btn .material-symbols-outlined {
+.ep-btn .material-symbols-outlined {
   font-size: 22px;
 }
-.pt-close:hover {
-  background: var(--md-sys-color-error);
-  color: var(--md-sys-color-on-error);
-}
 
-/* 选集抽屉 */
-.drawer {
+/* 选集面板：遮罩 + 从右侧滑出 */
+.ep-scrim {
   position: absolute;
-  top: 64px;
-  right: 12px;
-  width: min(360px, calc(100vw - 24px));
-  max-height: 60vh;
-  overflow-y: auto;
-  padding: 14px;
-  border-radius: var(--lm-shape-dialog);
+  inset: 0;
+  z-index: 10;
+  pointer-events: auto;
+  background: rgba(0, 0, 0, 0.42);
+}
+.ep-scrim-enter-active,
+.ep-scrim-leave-active {
+  transition: opacity 220ms ease;
+}
+.ep-scrim-enter-from,
+.ep-scrim-leave-to {
+  opacity: 0;
+}
+.ep-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 11;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  width: min(360px, 88vw);
   background: var(--md-sys-color-surface-container-high);
   color: var(--md-sys-color-on-surface);
-  box-shadow: var(--md-elevation-3);
-  z-index: 5;
+  box-shadow: -8px 0 28px rgba(0, 0, 0, 0.4);
+}
+.ep-panel-enter-active,
+.ep-panel-leave-active {
+  transition: transform 260ms var(--md-sys-motion-spring-spatial);
+}
+.ep-panel-enter-from,
+.ep-panel-leave-to {
+  transform: translateX(100%);
+}
+.ep-panel-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+}
+.ep-panel-title {
+  font-size: var(--md-sys-typescale-title-medium-size);
+  font-weight: 500;
+}
+.ep-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 14px 18px;
 }
 .road-name {
   margin: 8px 0 6px;
@@ -699,7 +758,8 @@ onBeforeUnmount(() => {
   font-weight: 500;
 }
 
-/* 状态层 */
+/* 状态层（宿主设了 pointer-events:none，这里要显式打开才能点「重试」；
+   z-index 高于选集面板，出错时不会被面板 / 遮罩挡住） */
 .overlay {
   position: absolute;
   inset: 0;
@@ -711,7 +771,8 @@ onBeforeUnmount(() => {
   background: rgba(0, 0, 0, 0.45);
   color: #fff;
   font-size: var(--md-sys-typescale-body-medium-size);
-  z-index: 4;
+  pointer-events: auto;
+  z-index: 12;
 }
 .overlay .material-symbols-outlined {
   font-size: 34px;
