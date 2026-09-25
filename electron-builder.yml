@@ -12,6 +12,20 @@ files:
   - dist-electron/**/*
   - package.json
   - "!**/*.map"
+  # 必须显式排除生产依赖树。
+  #
+  # electron-builder 打包 node_modules 是**独立于上面正向模式**的一条支路：
+  #   app-builder-lib/out/platformPackager.js 无条件调用 computeNodeModuleFileSets，
+  #   而 fileMatcher.js 里给 node_modules 用的匹配器**只取本数组中的 "!" 排除项**，
+  #   再强行 prependPattern("**/*")。所以 dist/**/* 这类正向模式对它毫无约束，
+  #   不写这一行就会把整个生产依赖树原样塞进 app.asar。
+  #
+  # 本项目不需要运行期 node_modules：渲染进程由 Vite 全量打包进 dist/，
+  # 主进程/预加载由 esbuild 打包（scripts/build-electron.mjs 只把 electron 标为
+  # external，产物 main.cjs 仅 0.03MB），electron/ 下没有任何运行时 require()。
+  # 实测生产依赖树解包后约 55MB（pdfjs-dist 32.9MB、@m3e/web 31.8MB、hls.js 31.1MB
+  # 三者就占了绝大部分），属于纯重复打包。
+  - "!node_modules/**/*"
 
 # extraResources **只在各平台条目里声明，顶层一律不写**。
 #
@@ -26,6 +40,14 @@ files:
 # 另外**不能**把 Windows 的 .exe 写在顶层：Linux 构建会去找一个不存在的文件。
 
 asar: true
+
+# Electron 自带 55 个语言包（locales/*.pak），实测解包后 48.3MB，而界面只提供中文。
+# 只保留 zh-CN / en-US 两个（各约 0.56MB），其余由 electron-builder 在打包后删除。
+# 实现见 app-builder-lib/out/electron/ElectronFramework.js 的
+# removeUnusedLanguagesIfNeeded()。系统语言不在列表内时 Electron 回退到 en-US。
+electronLanguages:
+  - zh-CN
+  - en-US
 
 win:
   icon: backend/icons/icon.ico
