@@ -434,7 +434,14 @@ function createPlayer() {
   // 且 z-index 高于 ArtPlayer 各层（它内部最高约 120，这里给 9000）才点得到。
   // 宿主是 JS 创建的节点，拿不到 scoped 样式，故用内联样式；pointer-events:none 让它
   // 不吃点击，只有具体的按钮 / 面板 / 遮罩各自 auto。
-  const playerEl = (art as unknown as { $player?: HTMLElement }).$player;
+  //
+  // ⚠️ 根元素在 `art.template.$player`，**不是** `art.$player`（后者是 undefined，
+  //    会让宿主拿不到、整个覆盖层都不渲染）。后面两个是兜底。
+  const playerEl =
+    (art.template as { $player?: HTMLElement } | undefined)?.$player ??
+    container.value?.querySelector<HTMLElement>(".art-video-player") ??
+    (container.value?.firstElementChild as HTMLElement | null) ??
+    null;
   if (playerEl) {
     const host = document.createElement("div");
     host.style.cssText = "position:absolute;inset:0;z-index:9000;pointer-events:none;";
