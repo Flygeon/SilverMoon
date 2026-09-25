@@ -107,19 +107,67 @@ watch(content, (v) => {
   scheduleRender();
 });
 
+/** 工作台根节点：用来按窗口剩余高度定尺寸 */
+const rootRef = ref<HTMLElement | null>(null);
+/** 草稿列表是否展开：收起后编辑区吃满整行 */
+const sidebarOpen = ref(true);
+let sizeObserver: ResizeObserver | null = null;
+
+/**
+ * 让工作台吃满窗口剩下的高度。
+ *
+ * 不去猜「页头 + 分段条 + 内边距」一共多少像素：main-content 的内边距是可换肤的
+ * 令牌 --lm-content-pad（0~64px），底部还可能多出一条迷你播放条，写死偏移量迟早错位。
+ * 所以直接量：工作台顶边到滚动容器内容区底部的距离。
+ *
+ * 用「内容坐标」（减掉 scrollTop）而不是视口坐标——否则页面一旦出现滚动，
+ * 量出来的值会随滚动变化，形成「越滚越高」的正反馈。
+ */
+function fitHeight() {
+  const el = rootRef.value;
+  if (!el) return;
+  const scroller = el.closest(".main-content") as HTMLElement | null;
+  if (!scroller) {
+    el.style.height = "";
+    return;
+  }
+  const cs = getComputedStyle(scroller);
+  const padTop = parseFloat(cs.paddingTop) || 0;
+  const padBottom = parseFloat(cs.paddingBottom) || 0;
+  const offsetInContent =
+    el.getBoundingClientRect().top -
+    scroller.getBoundingClientRect().top -
+    padTop +
+    scroller.scrollTop;
+  const available = scroller.clientHeight - padTop - padBottom - offsetInContent;
+  el.style.height = Math.max(360, Math.round(available)) + "px";
+}
+
 onMounted(() => {
+  fitHeight();
+  window.addEventListener("resize", fitHeight);
+  const scroller = rootRef.value?.closest(".main-content");
+  if (scroller && typeof ResizeObserver !== "undefined") {
+    sizeObserver = new ResizeObserver(fitHeight);
+    sizeObserver.observe(scroller);
+  }
   void store.load().then(() => {
     syncFromStore();
     renderNow();
+    fitHeight();
   });
 });
 
 onActivated(() => {
   if (!store.loaded) void store.load();
+  void nextTick(fitHeight);
 });
 
 onBeforeUnmount(() => {
   if (htmlTimer) clearTimeout(htmlTimer);
+  window.removeEventListener("resize", fitHeight);
+  sizeObserver?.disconnect();
+  sizeObserver = null;
   void store.flush();
 });
 
@@ -410,9 +458,9 @@ const saveLabel = computed(() => {
 </script>
 
 <template>
-  <div class="studio">
-    <!-- 左：草稿列表 -->
-    <aside class="drafts">
+  <div ref="rootRef" class="studio">
+    <!-- 左：草稿列表（可收起，把整行让给编辑区） -->
+    <aside v-show="sidebarOpen" class="drafts">
       <div class="drafts-head">
         <span class="drafts-title">{{ t("write.drafts") }}</span>
         <m3e-icon-button size="small" :title="t('write.newDraft')" @click="onNew">
@@ -447,6 +495,13 @@ const saveLabel = computed(() => {
     <!-- 右：编辑区 -->
     <section class="editor">
       <div class="doc-head">
+        <m3e-icon-button
+          size="small"
+          :title="sidebarOpen ? t('write.collapseDrafts') : t('write.expandDrafts')"
+          @click="sidebarOpen = !sidebarOpen"
+        >
+          <span class="material-symbols-outlined">{{ sidebarOpen ? "menu_open" : "menu" }}</span>
+        </m3e-icon-button>
         <m3e-form-field variant="filled" class="title-field">
           <label slot="label" for="ws-title">{{ t("write.titlePlaceholder") }}</label>
           <input
@@ -536,7 +591,8 @@ const saveLabel = computed(() => {
 <style scoped>
 .studio {
   display: flex;
-  gap: 16px;
+  gap: 14px;
+  /* 兜底高度：脚本量到精确值后会用内联样式覆盖（见 fitHeight） */
   height: clamp(480px, 68vh, 880px);
 }
 
@@ -551,8 +607,8 @@ const saveLabel = computed(() => {
 
 /* ---- 草稿列表 ---- */
 .drafts {
-  flex: 0 0 236px;
-  width: 236px;
+  flex: 0 0 208px;
+  width: 208px;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -595,7 +651,7 @@ const saveLabel = computed(() => {
 
 .draft-name {
   display: block;
-  max-width: 130px;
+  max-width: 108px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -620,13 +676,13 @@ const saveLabel = computed(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  gap: 10px;
+  gap: 8px;
 }
 
 .doc-head {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
 
 .title-field {
@@ -634,17 +690,23 @@ const saveLabel = computed(() => {
   min-width: 0;
 }
 
+/* 工具栏固定单行：换行会白吃掉一整行高度，宁可横向滚动 */
 .format-bar {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   overflow-x: auto;
   border-radius: 14px;
+  scrollbar-width: none;
+}
+
+.format-bar::-webkit-scrollbar {
+  display: none;
 }
 
 .panes {
   flex: 1;
   min-height: 0;
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .panes.mode-split {
@@ -660,7 +722,7 @@ const saveLabel = computed(() => {
   width: 100%;
   height: 100%;
   min-height: 0;
-  padding: 16px 18px;
+  padding: 12px 16px;
   font-family: ui-monospace, Consolas, "Cascadia Mono", monospace;
   font-size: 14px;
   line-height: 1.8;
@@ -686,7 +748,7 @@ const saveLabel = computed(() => {
   height: 100%;
   min-height: 0;
   overflow-y: auto;
-  padding-top: 8px;
+  padding-top: 4px;
   background: var(--md-sys-color-surface-container-low);
   border: 1px solid var(--md-sys-color-outline-variant);
   border-radius: 16px;

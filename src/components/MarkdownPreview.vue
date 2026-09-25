@@ -84,7 +84,7 @@ function onClick(e: MouseEvent) {
 
 <style scoped>
 .md-body {
-  padding: 4px 20px 32px;
+  padding: 2px 16px 24px;
   font-size: 15px;
   line-height: 1.8;
   color: var(--md-sys-color-on-surface);
@@ -92,7 +92,7 @@ function onClick(e: MouseEvent) {
 }
 
 .md-empty {
-  margin: 48px 0;
+  margin: 32px 0;
   text-align: center;
   color: var(--md-sys-color-on-surface-variant);
   opacity: 0.7;
