@@ -50,8 +50,11 @@ const anime = useAnimeStore();
 const t = (key: string) => translate(settings.lang, key);
 
 const container = ref<HTMLDivElement | null>(null);
+/** 播放器外层容器：自身全屏，保证顶栏 / 抽屉 / 状态层在全屏下同样可见 */
+const playerRoot = ref<HTMLDivElement | null>(null);
 const drawerOpen = ref(false);
 const danmakuOn = ref(settings.danmakuEnabled);
+const isFullscreen = ref(false);
 
 let art: Artplayer | null = null;
 let hls: HlsInstance | null = null;
@@ -205,42 +208,11 @@ function makeControls(): Artplayer["option"]["controls"] {
   // 类名不能叫 art-icon —— ArtPlayer 自身用 .art-icon 表示它的图标字体，复用会让
   // Material Symbols 的 ligature 失效（图标退化成它的名字文本，如 captions → CAPTIONS）。
   const icon = (name: string) => `<span class="material-symbols-outlined sm-icon">${name}</span>`;
+  // 只放**播放相关**控件（上一集 / 倍速 / 弹幕 / 下一集）到控制栏右侧。
+  // 导航类（选集 / 换源 / 关闭）与标题改到自绘的右上角顶栏（模板 .player-topbar）——
+  // 它们此前用 `position: "top"` 落在控制栏上排的左下角，正好压住进度条，
+  // 既不好找、又和「点进度条跳转」抢点击区域。
   return [
-    {
-      name: "luna-close",
-      position: "top",
-      html: icon("close"),
-      tooltip: t("anime.exit"),
-      click: () => emit("close"),
-    },
-    {
-      name: "luna-title",
-      position: "top",
-      html: `<span class="sm-title" title="${escapeHtml(anime.displayTitle)}">${
-        escapeHtml(anime.displayTitle) +
-        (episode.value ? ` · ${escapeHtml(episode.value.name)}` : "")
-      }</span>`,
-      // 只读，不响应 click；index 越大越靠右
-      index: 100,
-    },
-    {
-      name: "luna-source",
-      position: "top",
-      html: icon("swap_horiz"),
-      tooltip: t("anime.changeSource"),
-      click: () => emit("chooseSource"),
-      index: 5,
-    },
-    {
-      name: "luna-episodes",
-      position: "top",
-      html: icon("list"),
-      tooltip: t("anime.episodes"),
-      click: () => {
-        drawerOpen.value = !drawerOpen.value;
-      },
-      index: 4,
-    },
     {
       name: "luna-prev",
       position: "right",
@@ -294,14 +266,6 @@ function makeControls(): Artplayer["option"]["controls"] {
   ];
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 /** 上一集 / 下一集（同线路内切换，越界则进出相邻线路） */
 function playNext(delta: number) {
   const roads = anime.selectedRoads;
@@ -338,6 +302,26 @@ function retry() {
   void ensureStream();
 }
 
+// ---- 全屏：作用在 .anime-player 自身 ----
+//
+// 不用 ArtPlayer 自带的全屏：它只把内部的 .art-video-player 元素全屏，我们加在外层的
+// 顶栏（选集 / 换源 / 全屏 / 关闭）、选集抽屉、取流状态层都会被挡在全屏之外——全屏时
+// 既关不掉播放也看不到状态。这里改为全屏外层容器，所有自定义 UI 在全屏下同样可见。
+function onFullscreenChange() {
+  isFullscreen.value = Boolean(document.fullscreenElement);
+}
+
+async function toggleFullscreen() {
+  const el = playerRoot.value;
+  if (!el) return;
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await el.requestFullscreen();
+  } catch (e) {
+    void animeLog(`全屏切换失败: ${(e as Error).message}`);
+  }
+}
+
 // ---- ArtPlayer 实例化 ----
 function createPlayer() {
   const root = container.value;
@@ -372,7 +356,9 @@ function createPlayer() {
     poster: anime.bangumiDetail?.images?.large ?? undefined,
     autoplay: true,
     autoMini: false,
-    fullscreen: true,
+    // 全屏改由我们自己对 .anime-player 实现（见 toggleFullscreen）：否则 ArtPlayer 只
+    // 全屏它自己，外层的顶栏 / 状态层在全屏下不可见。
+    fullscreen: false,
     fullscreenWeb: false,
     // 关掉 ArtPlayer 自带的一堆默认控件，只留 play / volume / time / fullscreen。
     // 倍速、选集、换源、弹幕、上下一集全部由我们的自定义 controls 提供；否则默认控件
@@ -442,6 +428,7 @@ function createPlayer() {
 }
 
 onMounted(() => {
+  document.addEventListener("fullscreenchange", onFullscreenChange);
   createPlayer();
   // 流就绪后挂载 / 切换剧集后刷新
   watch(
@@ -454,15 +441,8 @@ onMounted(() => {
   watch(
     () => [props.roadIndex, props.episodeIndex] as const,
     () => {
-      // 切集后：标题控件需要刷新；重挂流；弹幕插件 load
+      // 切集后：重挂流；弹幕插件 load（标题由模板里的 .pt-name / .pt-ep 响应式更新，无需手改 DOM）
       if (!art) return;
-      // 刷新顶部标题控件（用 querySelector 直接定位自定义控件 DOM）
-      const titleEl = container.value?.querySelector(".sm-title");
-      if (titleEl) {
-        titleEl.textContent =
-          anime.displayTitle + (episode.value ? ` · ${episode.value.name}` : "");
-      }
-      // 触发流加载
       void ensureStream();
       // 弹幕：plugin load（再触发一次）
       const d = art.plugins?.artplayerPluginDanmuku as
@@ -484,6 +464,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  document.removeEventListener("fullscreenchange", onFullscreenChange);
   if (reportTimer) window.clearTimeout(reportTimer);
   destroyHls();
   art?.destroy(false);
@@ -493,13 +474,45 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
-    <div class="anime-player">
+    <div ref="playerRoot" class="anime-player">
       <!-- ArtPlayer 容器；customType.m3u8 在 createPlayer 里挂 hls.js -->
       <div ref="container" class="art-container" />
 
-      <!-- 关闭统一由 ArtPlayer 自定义控件（luna-close）承担：此前这里还叠了一个 Teleport
-           浮层关闭按钮，与控制栏里的关闭重复、且会被控制栏遮住导致点不到（表现为
-           「左上角的 X 点了没反应」）。 -->
+      <!-- 右上角顶栏：标题 + 选集 / 换源 / 关闭。
+           与底部控制栏彻底分离——不压进度条，关闭按钮位置固定、一眼可见。
+           （这几个按钮此前挂在 ArtPlayer 的 position:"top"，落在控制栏上排左下角，
+           既难找又和「点进度条跳转」抢点击区域。） -->
+      <div class="player-topbar">
+        <div class="pt-title">
+          <span class="pt-name" :title="anime.displayTitle">{{ anime.displayTitle }}</span>
+          <span v-if="episode" class="pt-ep">{{ episode.name }}</span>
+        </div>
+        <div class="pt-actions">
+          <button
+            class="pt-btn"
+            :class="{ on: drawerOpen }"
+            :title="t('anime.episodes')"
+            @click="drawerOpen = !drawerOpen"
+          >
+            <span class="material-symbols-outlined">list</span>
+          </button>
+          <button class="pt-btn" :title="t('anime.changeSource')" @click="emit('chooseSource')">
+            <span class="material-symbols-outlined">swap_horiz</span>
+          </button>
+          <button
+            class="pt-btn"
+            :title="isFullscreen ? t('anime.exitFullscreen') : t('anime.fullscreen')"
+            @click="toggleFullscreen"
+          >
+            <span class="material-symbols-outlined">{{
+              isFullscreen ? "fullscreen_exit" : "fullscreen"
+            }}</span>
+          </button>
+          <button class="pt-btn pt-close" :title="t('anime.exit')" @click="emit('close')">
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        </div>
+      </div>
 
       <!-- 选集抽屉 -->
       <div v-if="drawerOpen" class="drawer">
@@ -561,14 +574,6 @@ onBeforeUnmount(() => {
   color: #fff;
   line-height: 1;
 }
-:deep(.sm-title) {
-  color: #fff;
-  font-size: var(--md-sys-typescale-title-small-size);
-  max-width: 50vw;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
 :deep(.sm-speed) {
   color: #fff;
   font-size: var(--md-sys-typescale-label-large-size);
@@ -576,12 +581,80 @@ onBeforeUnmount(() => {
   line-height: 1;
 }
 
-/* 关闭按钮的浮层样式已随 .overlay-close 一并移除（改由 ArtPlayer 自定义控件承担） */
+/* 右上角顶栏：标题（左）+ 选集 / 换源 / 关闭（右）。与底部控制栏分离，不压进度条 */
+.player-topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  /* 容器不吃点击（视频区域仍可单击暂停 / 双击全屏），只有按钮本身可点 */
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0));
+}
+.pt-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+.pt-name {
+  max-width: 52vw;
+  font-size: var(--md-sys-typescale-title-small-size);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pt-ep {
+  font-size: var(--md-sys-typescale-label-small-size);
+  opacity: 0.85;
+}
+.pt-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.pt-btn {
+  pointer-events: auto;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: rgba(0, 0, 0, 0.42);
+  color: #fff;
+  cursor: pointer;
+  transition: background 160ms ease;
+}
+.pt-btn:hover {
+  background: rgba(0, 0, 0, 0.68);
+}
+.pt-btn.on {
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+}
+.pt-btn .material-symbols-outlined {
+  font-size: 22px;
+}
+.pt-close:hover {
+  background: var(--md-sys-color-error);
+  color: var(--md-sys-color-on-error);
+}
 
 /* 选集抽屉 */
 .drawer {
   position: absolute;
-  top: 58px;
+  top: 64px;
   right: 12px;
   width: min(360px, calc(100vw - 24px));
   max-height: 60vh;
