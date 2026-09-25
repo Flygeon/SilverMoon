@@ -183,8 +183,9 @@ fn unique_output_path(dir: &Path, file_name: &str) -> PathBuf {
 }
 
 fn parse_bpm_string(bpm: f64) -> String {
+    // 保留两位小数（180.0 → "180"、179.972 → "179.97"）
     let rounded = (bpm * 100.0).round() / 100.0;
-    format!("{rounded}")
+    rounded.to_string()
 }
 
 // ---- 谱面集 ID 解析 ----
@@ -393,10 +394,13 @@ fn handle_cover_proxy(request: tiny_http::Request) -> Result<(), String> {
         headers.push(h);
     }
     let len = bytes.len();
+    // tiny_http 的 R 需要 `std::io::Read`；`Vec<u8>` 并未实现它（只有 `&[u8]` 有），
+    // 必须先包一层 Cursor（anime/webdav 的代理同样这么做）。
+    let body = std::io::Cursor::new(bytes);
     let response = tiny_http::Response::new(
         tiny_http::StatusCode(status),
         headers,
-        bytes,
+        body,
         Some(len),
         None,
     );
