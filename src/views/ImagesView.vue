@@ -6,6 +6,7 @@ import LibraryToolbar from "@/components/LibraryToolbar.vue";
 import MediaGrid from "@/components/MediaGrid.vue";
 import MediaViewer from "@/components/MediaViewer.vue";
 import PixivOnlineView from "@/components/PixivOnlineView.vue";
+import DrawingStudio from "@/components/DrawingStudio.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import SegmentedTabs from "@/components/SegmentedTabs.vue";
 import { useLibraryStore } from "@/stores/library";
@@ -20,13 +21,22 @@ const items = computed(() => library.entries("image"));
 const hasScanDirs = computed(() => settings.scanDirs.length > 0);
 /** 详情查看器当前索引；-1 表示未打开 */
 const viewerIndex = ref(-1);
-/** 本地 / Pixiv 分段（在线图片开关开启时显示） */
-const imagesTab = ref<"local" | "pixiv">("local");
+/** 本地 / Pixiv / 绘画 分段（Pixiv 仅在线图片开关开启时出现） */
+const imagesTab = ref<"local" | "pixiv" | "draw">("local");
 /** 在线图片未启用时不传 tab，组件只渲染内容、不显示分段条 */
-const imageTabs = computed(() => [
-  { value: "local", label: t("pixiv.local"), icon: "photo_library" },
-  { value: "pixiv", label: t("pixiv.online"), icon: "public" },
-]);
+const imageTabs = computed(() => {
+  const tabs = [{ value: "local", label: t("pixiv.local"), icon: "photo_library" }];
+  if (settings.onlinePixivEnabled) {
+    tabs.push({ value: "pixiv", label: t("pixiv.online"), icon: "public" });
+  }
+  // 绘画常驻：它不依赖在线开关，也不依赖扫描目录
+  tabs.push({ value: "draw", label: t("draw.tab"), icon: "draw" });
+  return tabs;
+});
+/** 实际生效的分段：Pixiv 被关掉时若还停在那一页，回落到本地 */
+const activeTab = computed(() =>
+  imagesTab.value === "pixiv" && !settings.onlinePixivEnabled ? "local" : imagesTab.value,
+);
 
 function t(key: string) {
   return translate(settings.lang, key);
@@ -57,9 +67,9 @@ function clearSearch() {
     <PageHeader :title="t('nav.images')" :description="t('navDesc.images')" />
 
     <!-- 本地 / Pixiv 分段 -->
-    <SegmentedTabs v-model="imagesTab" :tabs="settings.onlinePixivEnabled ? imageTabs : []">
+    <SegmentedTabs v-model="imagesTab" :tabs="imageTabs">
       <!-- 本地图片 -->
-      <template v-if="imagesTab === 'local' || !settings.onlinePixivEnabled">
+      <template v-if="activeTab === 'local'">
         <LibraryToolbar :count="library.totalFor('image')" @changed="load" />
 
         <MediaGrid
@@ -108,7 +118,10 @@ function clearSearch() {
       </template>
 
       <!-- 在线 Pixiv -->
-      <PixivOnlineView v-else />
+      <PixivOnlineView v-else-if="activeTab === 'pixiv'" />
+
+      <!-- 绘画：本地画作，卡片排布 + LeaferJS 编辑器 -->
+      <DrawingStudio v-else />
     </SegmentedTabs>
   </div>
 </template>

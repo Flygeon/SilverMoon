@@ -35,6 +35,7 @@
     "dompurify": "^3.4.16",
     "epubjs": "^0.3.93",
     "hls.js": "^1.7.1",
+    "leafer-editor": "^2.2.11",
     "marked": "^18.0.14",
     "pako": "^1.0.11",
     "pdfjs-dist": "^6.2.108",

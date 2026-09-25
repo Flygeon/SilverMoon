@@ -109,6 +109,9 @@ export default [
       "src/views/OsuView.vue",
       // 创作页：m3e-list-item / m3e-form-field / m3e-button 的具名槽
       "src/components/WritingStudio.vue",
+      // 绘画页：m3e-button 的 icon 槽
+      "src/components/DrawingStudio.vue",
+      "src/components/DrawingBoard.vue",
     ],
     rules: {
       "vue/no-deprecated-slot-attribute": "off",
