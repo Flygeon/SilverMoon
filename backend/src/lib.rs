@@ -7,6 +7,7 @@ pub mod netease;
 pub mod novel;
 pub mod novel_auth;
 pub mod novel_bqg;
+pub mod osu;
 pub mod pixiv;
 pub mod tray;
 pub mod webdav;
@@ -218,6 +219,11 @@ pub fn run() {
             kugou::kugou_rank_list,
             kugou::kugou_rank_songs,
             kugou::kugou_everyday_recommend,
+            // ---- osu! 谱面源 ----
+            osu::osu_search,
+            osu::osu_download,
+            osu::osu_import_archive,
+            osu::osu_cover_url,
             novel::novel_search,
             novel::novel_rank,
             novel::novel_category,

@@ -75,6 +75,9 @@ import type {
   PixivUgoiraFrames,
   ExtInfo,
   ExtSource,
+  OsuSearchResult,
+  OsuImportResult,
+  OsuProgress,
 } from "@shared/types";
 import { mockInvoke } from "./mock";
 
@@ -455,6 +458,35 @@ export const capabilities = {
   },
   kugouEverydayRecommend(): Promise<unknown> {
     return safeInvoke("kugou_everyday_recommend");
+  },
+
+  // ---- osu! 谱面源（backend/src/osu.rs）----
+  /** 搜索谱面集：关键词 / osu 谱面链接 / 谱面集 ID */
+  osuSearch(query: string, limit?: number): Promise<OsuSearchResult> {
+    return safeInvoke("osu_search", { query, limit: limit ?? null });
+  },
+  /** 按谱面集 ID 下载 .osz 并导入曲库（进度见 osu:progress 事件） */
+  osuDownload(beatmapsetId: string, mirror?: string, outDir?: string): Promise<OsuImportResult> {
+    return safeInvoke("osu_download", {
+      beatmapsetId,
+      mirror: mirror ?? null,
+      outDir: outDir ?? null,
+    });
+  },
+  /** 导入本地 .osz 文件 */
+  osuImportArchive(archivePath: string, outDir?: string): Promise<OsuImportResult> {
+    return safeInvoke("osu_import_archive", {
+      archivePath,
+      outDir: outDir ?? null,
+    });
+  },
+  /** 订阅 osu 下载进度 */
+  onOsuProgress(handler: (p: OsuProgress) => void): Promise<UnlistenFn> {
+    return listen<OsuProgress>("osu:progress", (e) => handler(e.payload));
+  },
+  /** 把远端封面 URL 换成走本地代理的 URL（补 Referer，绕开防盗链） */
+  osuCoverUrl(url: string): Promise<string> {
+    return safeInvoke("osu_cover_url", { rawUrl: url });
   },
 
   // ---- 在线小说（Wenku8）----
@@ -868,6 +900,20 @@ export const capabilities = {
     const result = await dialogOpen({
       multiple: false,
       filters: [{ name: "SilverMoon 皮肤", extensions: ["json", "zip"] }],
+    });
+    if (typeof result === "string") return result;
+    if (result && typeof result === "object" && "path" in result) {
+      return (result as { path: string }).path;
+    }
+    return null;
+  },
+
+  /** 选择 osu 谱面归档文件（.osz），返回路径或 null */
+  async pickOsuArchive(): Promise<string | null> {
+    if (!isDesktop) return null;
+    const result = await dialogOpen({
+      multiple: false,
+      filters: [{ name: "osu! 谱面", extensions: ["osz", "zip"] }],
     });
     if (typeof result === "string") return result;
     if (result && typeof result === "object" && "path" in result) {

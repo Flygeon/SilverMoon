@@ -41,6 +41,8 @@ export type MusicViewMode = "grid" | "list";
 export type Wenku8Node = "cc" | "net";
 /** 小说页面字符集 */
 export type NovelCharset = "gbk" | "big5";
+/** osu! 谱面下载镜像：auto 按官方 → Sayobot → Catboy → NeriNyan 依次回退 */
+export type OsuMirror = "auto" | "official" | "sayobot" | "catboy" | "nerinyan";
 
 const store = new JsonStore("settings.json");
 
@@ -175,6 +177,10 @@ const DEFAULTS = {
   bangumiUsername: "",
   /** 上次成功同步 Bangumi 收藏的时间戳（0 = 从未同步；首次授权后自动做一次全量同步） */
   bangumiSyncedAt: 0,
+  /** osu! 谱面下载镜像偏好 */
+  osuMirror: "auto" as OsuMirror,
+  /** osu! 谱面导入输出目录；空串表示 `{应用数据}/osu` */
+  osuOutDir: "",
 };
 
 export const useSettingsStore = defineStore("settings", () => {
@@ -252,6 +258,8 @@ export const useSettingsStore = defineStore("settings", () => {
   const bangumiToken = ref(DEFAULTS.bangumiToken);
   const bangumiUsername = ref(DEFAULTS.bangumiUsername);
   const bangumiSyncedAt = ref(DEFAULTS.bangumiSyncedAt);
+  const osuMirror = ref<OsuMirror>(DEFAULTS.osuMirror);
+  const osuOutDir = ref(DEFAULTS.osuOutDir);
   const loaded = ref(false);
 
   /**
@@ -341,6 +349,8 @@ export const useSettingsStore = defineStore("settings", () => {
     bangumiToken,
     bangumiUsername,
     bangumiSyncedAt,
+    osuMirror,
+    osuOutDir,
   } as const;
 
   async function load() {

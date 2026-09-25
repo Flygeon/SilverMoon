@@ -978,6 +978,50 @@ export interface AnimeResolveStreamResult {
 }
 
 // =====================================================================
+// osu! 谱面源（backend/src/osu.rs）
+// =====================================================================
+
+/** 搜索结果中的一张谱面集 */
+export interface OsuBeatmapset {
+  /** 谱面集 ID（osu.ppy.sh/beatmapsets/<id> 的数字部分） */
+  id: string;
+  /** 完整展示名：`Artist - Title` */
+  title: string;
+  artist: string;
+  songTitle: string;
+  uploader: string | null;
+  /** 已经过本地代理的封面 URL（assets.ppy.sh 校验 Referer，直连 403） */
+  coverUrl: string | null;
+  pageUrl: string;
+  /** 结果来源：sayobot / official / catboy / direct */
+  source: string;
+}
+
+/** `osu_search` 返回：结果 + 各源失败原因（部分源不可用不阻断整体） */
+export interface OsuSearchResult {
+  items: OsuBeatmapset[];
+  errors: string[];
+}
+
+/** `osu_download` / `osu_import_archive` 返回：入库后的曲目 */
+export interface OsuImportResult {
+  fileId: string;
+  path: string;
+  title: string;
+  artist: string;
+  beatmapsetId: string;
+}
+
+/** `osu:progress` 事件载荷 */
+export interface OsuProgress {
+  beatmapsetId: string;
+  /** downloading | extracting | converting | tagging | importing | done | error */
+  stage: string;
+  message: string;
+  percent: number;
+}
+
+// =====================================================================
 // DanDanPlay 弹幕（参照在线播放参考 lib/modules/danmuku/ + lib/request/）
 // =====================================================================
 
