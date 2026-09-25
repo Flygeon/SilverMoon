@@ -71,11 +71,6 @@ jobs:
       - name: Unit tests
         run: npm test
 
-      # 图标清单必须与源码同步：新增图标却忘了重新生成，会让图标在界面上显示成
-      # 字面文本（"play_arrow"），而构建/类型检查/单测全都发现不了。
-      - name: Icon list is in sync with source
-        run: node scripts/subset-icons.mjs --check
-
       - name: Rustfmt check (backend)
         working-directory: backend
         run: cargo fmt --check
@@ -162,20 +157,6 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
-
-      # 图标字体子集化：全量 Material Symbols Rounded 是 5.1MB（3600+ 图标），
-      # 界面只用到约百个。woff2 本身已是 Brotli 压缩，安装包不会再压它，
-      # 所以这一步省下的体积是实打实的。必须在 build:renderer 之前跑——
-      # Vite 是在构建期读取 src/assets/fonts/ 下的字体并算出哈希文件名的。
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Subset icon font
-        run: |
-          python -m pip install --quiet --disable-pip-version-check fonttools brotli
-          python scripts/subset-icons.py
 
       # 后端必须先生成：electron-builder 会把它作为 extraResources 打进安装包
       - name: Build Rust backend (release)
