@@ -72,7 +72,7 @@ function clearSearch() {
     <SegmentedTabs v-model="videosTab" :tabs="settings.onlineAnimeEnabled ? videoTabs : []">
       <!-- 本地视频 -->
       <template v-if="videosTab === 'local' || !settings.onlineAnimeEnabled">
-        <LibraryToolbar :count="items.length" @changed="load" />
+        <LibraryToolbar :count="library.totalFor('video')" @changed="load" />
 
         <div v-if="ffmpeg && !ffmpeg.available && !bannerDismissed" class="ffmpeg-banner">
           <span class="material-symbols-outlined">info</span>

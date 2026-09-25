@@ -57,6 +57,7 @@ pub async fn serve(inner: Arc<AppInner>, commands: Vec<CommandDef>) -> Result<()
     let app = Router::new()
         .route("/health", get(health))
         .route("/cmd", post(handle_command))
+        .route("/batch", post(handle_batch))
         .route("/events", get(handle_events))
         .route("/_host", post(handle_host_callback))
         .with_state(state);
@@ -159,6 +160,70 @@ async fn handle_command(
         Err(error) => json!({ "ok": false, "error": error }),
     };
     (StatusCode::OK, Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// POST /batch —— 一次往返执行多条命令
+// ---------------------------------------------------------------------------
+
+/// 单次批量上限。批量通道是为了省往返，不该被当成无界扇出的入口。
+const MAX_BATCH_CALLS: usize = 256;
+
+/// 请求体：`{ "calls": [ { "cmd": "...", "args": {..} }, ... ] }`
+///
+/// 响应体：`{ "ok": true, "data": [ { "ok": true, "data": .. } | { "ok": false, "error": ".." } ] }`
+///
+/// **逐条独立成败**：某一条失败不影响其它条，结果数组与请求数组按下标一一对应。
+/// 这样调用方（如网格按可视区批量取缩略图）不必因为一张图失败就整批重来。
+async fn handle_batch(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.token) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "ok": false, "error": "令牌无效" })),
+        );
+    }
+
+    let Some(calls) = body.get("calls").and_then(Value::as_array) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": "缺少 `calls` 数组" })),
+        );
+    };
+
+    if calls.len() > MAX_BATCH_CALLS {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "ok": false,
+                "error": format!("单次批量上限 {MAX_BATCH_CALLS} 条，收到 {}", calls.len())
+            })),
+        );
+    }
+
+    let mut results = Vec::with_capacity(calls.len());
+    for call in calls {
+        let cmd = call.get("cmd").and_then(Value::as_str).unwrap_or_default();
+        let Some(def) = state.table.get(cmd) else {
+            results.push(json!({ "ok": false, "error": format!("未知命令 `{cmd}`") }));
+            continue;
+        };
+        let args = call
+            .get("args")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_else(Map::new);
+        let payload = (def.invoke)(&state.ctx, Args::new(args)).await;
+        results.push(match payload {
+            Ok(data) => json!({ "ok": true, "data": data }),
+            Err(error) => json!({ "ok": false, "error": error }),
+        });
+    }
+
+    (StatusCode::OK, Json(json!({ "ok": true, "data": results })))
 }
 
 // ---------------------------------------------------------------------------

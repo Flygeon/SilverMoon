@@ -30,6 +30,8 @@ const bridge = {
   platform: process.platform,
   invoke: (cmd: string, args: unknown): Promise<BridgeReply> =>
     ipcRenderer.invoke("sm:invoke", { cmd, args }),
+  invokeBatch: (calls: { cmd: string; args?: unknown }[]): Promise<BridgeReply> =>
+    ipcRenderer.invoke("sm:invokeBatch", { calls }),
   call: (channel: string, payload: unknown): Promise<BridgeReply> =>
     ipcRenderer.invoke("sm:call", { channel, payload }),
   emitTo: async (target: string, event: string, payload: unknown): Promise<void> => {

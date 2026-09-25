@@ -290,7 +290,9 @@ router.afterEach((to) => {
         <main ref="mainEl" class="main-content">
           <router-view v-slot="{ Component }">
             <transition :name="isPlayerPage ? 'player' : 'page'" mode="out-in">
-              <keep-alive :exclude="['PlayerView']">
+              <!-- max：keep-alive 默认永不淘汰，访问过的每个页面都会常驻（含其 DOM 与虚拟滚动层），
+                 会话越长内存/GC 压力越大，表现为"用一会儿越来越卡"。8 个足够覆盖常用来回切换。 -->
+              <keep-alive :exclude="['PlayerView']" :max="8">
                 <component :is="Component" />
               </keep-alive>
             </transition>

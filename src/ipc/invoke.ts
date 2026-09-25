@@ -7,11 +7,23 @@
  * 参数键用 camelCase，与后端命令形参的映射（`file_id` ← `fileId`）由
  * `backend/crates/silvermoon-ipc` 的命令宏负责，调用方无需关心。
  */
-import { invokeCommand } from "./bridge";
+import { invokeBatchCommands, invokeCommand, type BatchItemResult } from "./bridge";
 
 /** 调用后端命令。失败时以**原始错误字符串**拒绝。 */
 export function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   return invokeCommand<T>(cmd, args);
+}
+
+/**
+ * 一次往返调用多条后端命令。
+ *
+ * 只有整条通道失败才 reject；单条失败是结果数组里的 `{ ok: false }`。
+ * 用于把"每项一条命令"的 O(n) 扇出压成一次往返（如按可视区批量取缩略图）。
+ */
+export function invokeBatch<T = unknown>(
+  calls: { cmd: string; args?: Record<string, unknown> }[],
+): Promise<BatchItemResult<T>[]> {
+  return invokeBatchCommands<T>(calls);
 }
 
 /**

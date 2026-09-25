@@ -100,6 +100,12 @@ pub struct MediaEntry {
     pub taken_at: Option<i64>,
     pub has_cover: bool,
     pub favorite: bool,
+    /// 缩略图磁盘缓存路径（**已生成时**才有值，未生成时为 None）。
+    ///
+    /// 列表接口顺带带上它，前端可直接拼 `asset://` URL 交给 <img> 流式加载，
+    /// 无需为每张图再发一次 get_thumbnail——大图库滚动时"缓存命中"这条路径的命令数
+    /// 从 O(可见项) 降到 0。未命中项由前端经批量通道一次补齐。
+    pub thumb_path: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -150,6 +156,7 @@ pub fn run() {
             commands::scan::scan_cancel,
             commands::scan::scan_status,
             commands::scan::list_files,
+            commands::scan::count_files,
             commands::scan::library_counts,
             commands::metadata::get_metadata,
             commands::skin::skin_read_external_file,
@@ -177,6 +184,7 @@ pub fn run() {
             commands::smtc::smtc_set_media,
             commands::smtc::smtc_set_playback,
             commands::thumbnail::get_thumbnail,
+            commands::thumbnail::get_thumbnails,
             commands::thumbnail::thumbnail_cache_path,
             commands::thumbnail::save_thumbnail,
             commands::thumbnail::clear_thumbnail_cache,

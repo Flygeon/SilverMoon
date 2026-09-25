@@ -39,6 +39,13 @@ export interface MediaEntry {
   takenAt?: number | null;
   hasCover: boolean;
   favorite: boolean;
+  /**
+   * 缩略图磁盘缓存路径（后端**已生成**时才有值）。
+   *
+   * 列表接口顺带带出，前端拼 `asset://` 直接交给 <img> 流式加载——这条路径零命令。
+   * 未生成（null/undefined）的条目由 `capabilities.getThumbnails` 经批量通道一次补齐。
+   */
+  thumbPath?: string | null;
 }
 
 /** 媒体元数据（详情面板用的完整字段集） */

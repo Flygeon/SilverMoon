@@ -228,12 +228,14 @@ pub fn empty_trash(app: silvermoon_ipc::Host) -> Result<usize, String> {
 
 /// 共用的 MediaEntry 查询（列顺序必须与 list_files 一致）
 fn query_entries(app: silvermoon_ipc::Host, sql: &str) -> Result<Vec<crate::MediaEntry>, String> {
+    // 与 list_files 一致：先建缩略图索引（只读一次目录），再拿数据库锁
+    let thumb_index = crate::commands::thumbnail::cached_thumb_index(&app);
     let state = app.state::<DbState>();
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
-            Ok(crate::MediaEntry {
+            let mut entry = crate::MediaEntry {
                 id: row.get(0)?,
                 path: row.get(1)?,
                 parent: row.get(2)?,
@@ -255,7 +257,16 @@ fn query_entries(app: silvermoon_ipc::Host, sql: &str) -> Result<Vec<crate::Medi
                 taken_at: row.get(18)?,
                 has_cover: row.get::<_, Option<i64>>(19)?.unwrap_or(0) != 0,
                 favorite: row.get::<_, i64>(20)? != 0,
-            })
+                thumb_path: None,
+            };
+            entry.thumb_path = crate::commands::thumbnail::cached_thumb_path(
+                &thumb_index,
+                &entry.id,
+                entry.mtime,
+                entry.size,
+                crate::commands::thumbnail::LIST_THUMB_SIZE,
+            );
+            Ok(entry)
         })
         .map_err(|e| e.to_string())?;
     Ok(rows.filter_map(|r| r.ok()).collect())

@@ -423,6 +423,35 @@ pub struct ListQuery {
     pub offset: Option<i64>,
 }
 
+/// 列表 / 计数共用的 WHERE 子句与参数。
+///
+/// 两者**必须完全一致**，否则分页的"总数"与实际能翻到的条数对不上。
+/// 参数顺序即 SQL 里 `?` 的绑定顺序。
+fn list_filter(q: &ListQuery) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+    let mut where_sql = String::from(" WHERE f.deleted = 0");
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+    if let Some(t) = q.kind.as_deref().filter(|t| !t.is_empty()) {
+        where_sql.push_str(" AND f.type = ?");
+        params.push(Box::new(t.to_string()));
+    }
+    if let Some(min) = q.min_size.filter(|m| *m > 0) {
+        where_sql.push_str(" AND f.size >= ?");
+        params.push(Box::new(min));
+    }
+    if let Some(s) = q.search.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        where_sql.push_str(
+            " AND (f.name LIKE ? OR m.title LIKE ? OR m.artist LIKE ? OR m.album LIKE ?)",
+        );
+        let like = format!("%{s}%");
+        for _ in 0..4 {
+            params.push(Box::new(like.clone()));
+        }
+    }
+
+    (where_sql, params)
+}
+
 /// 查询文件列表（含元数据），支持类型过滤、搜索、排序、分页。
 /// 一次 JOIN 取回元数据，替代旧实现的 N 次 get_metadata IPC。
 #[silvermoon_ipc::command]
@@ -431,34 +460,21 @@ pub fn list_files(
     query: Option<ListQuery>,
 ) -> Result<Vec<crate::MediaEntry>, String> {
     let q = query.unwrap_or_default();
+    // 缩略图缓存索引要在拿数据库锁**之前**建好：它只读一次目录，
+    // 既不该占着数据库锁，也不该在锁内做文件系统调用。
+    let thumb_index = crate::commands::thumbnail::cached_thumb_index(&app);
     let db = app.state::<DbState>();
     let conn = db.0.lock().map_err(|e| e.to_string())?;
 
+    let (where_sql, mut params) = list_filter(&q);
     let mut sql = String::from(
         "SELECT f.id, f.path, f.parent, f.name, f.ext, f.type, f.size, f.mtime, f.scanned_at, f.deleted,
                 m.title, m.artist, m.album, m.duration_ms, m.width, m.height, m.codec, m.fps,
                 m.taken_at, m.has_cover,
                 EXISTS(SELECT 1 FROM favorites v WHERE v.file_id = f.id) AS favorite
-         FROM files f LEFT JOIN media_metadata m ON m.file_id = f.id
-         WHERE f.deleted = 0",
+         FROM files f LEFT JOIN media_metadata m ON m.file_id = f.id",
     );
-    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-
-    if let Some(t) = q.kind.filter(|t| !t.is_empty()) {
-        sql.push_str(" AND f.type = ?");
-        params.push(Box::new(t));
-    }
-    if let Some(min) = q.min_size.filter(|m| *m > 0) {
-        sql.push_str(" AND f.size >= ?");
-        params.push(Box::new(min));
-    }
-    if let Some(s) = q.search.filter(|s| !s.trim().is_empty()) {
-        sql.push_str(" AND (f.name LIKE ? OR m.title LIKE ? OR m.artist LIKE ? OR m.album LIKE ?)");
-        let like = format!("%{}%", s.trim());
-        for _ in 0..4 {
-            params.push(Box::new(like.clone()));
-        }
-    }
+    sql.push_str(&where_sql);
 
     // 白名单排序列，杜绝拼接注入
     let order_col = match q.sort_by.as_deref() {
@@ -489,7 +505,7 @@ pub fn list_files(
     let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
     let rows = stmt
         .query_map(param_refs.as_slice(), |row| {
-            Ok(crate::MediaEntry {
+            let mut entry = crate::MediaEntry {
                 id: row.get(0)?,
                 path: row.get(1)?,
                 parent: row.get(2)?,
@@ -511,11 +527,39 @@ pub fn list_files(
                 taken_at: row.get(18)?,
                 has_cover: row.get::<_, Option<i64>>(19)?.unwrap_or(0) != 0,
                 favorite: row.get::<_, i64>(20)? != 0,
-            })
+                thumb_path: None,
+            };
+            // 已生成过缩略图的条目直接带上缓存路径：前端拼 asset:// 即可，零命令
+            entry.thumb_path = crate::commands::thumbnail::cached_thumb_path(
+                &thumb_index,
+                &entry.id,
+                entry.mtime,
+                entry.size,
+                crate::commands::thumbnail::LIST_THUMB_SIZE,
+            );
+            Ok(entry)
         })
         .map_err(|e| e.to_string())?;
 
     Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// 当前过滤条件下的条目总数（分页用）。
+/// 过滤条件与 `list_files` 共用 `list_filter`，保证"总数"与能翻到的条数一致。
+#[silvermoon_ipc::command]
+pub fn count_files(app: silvermoon_ipc::Host, query: Option<ListQuery>) -> Result<i64, String> {
+    let q = query.unwrap_or_default();
+    let db = app.state::<DbState>();
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+
+    let (where_sql, params) = list_filter(&q);
+    let sql = format!(
+        "SELECT COUNT(*) FROM files f LEFT JOIN media_metadata m ON m.file_id = f.id{where_sql}"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    stmt.query_row(param_refs.as_slice(), |r| r.get::<_, i64>(0))
+        .map_err(|e| e.to_string())
 }
 
 /// 各类型数量统计（导航栏角标）。与列表使用同一体积过滤，避免角标数与实际条数对不上。

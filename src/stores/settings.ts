@@ -390,6 +390,38 @@ export const useSettingsStore = defineStore("settings", () => {
     }
   }
 
+  /**
+   * 自动保存节流。
+   *
+   * 设置页的滑块用 `@input`（拖动过程中连续触发）、文本框逐键触发，而 `save()` 会把
+   * **整个** settings 对象序列化两次（渲染进程的 toCloneable 深拷贝 + IPC/HTTP）再写整文件。
+   * 不节流时拖一次滑块就是几十次全量落盘，设置页明显发涩。
+   *
+   * 只对"自动保存"节流；显式调用 `save()` 仍是立即落盘。
+   */
+  let saveTimer: number | null = null;
+  function scheduleSave() {
+    if (saveTimer !== null) clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(() => {
+      saveTimer = null;
+      void save();
+    }, 400);
+  }
+
+  /** 立即落盘待写入的改动（窗口关闭/隐藏前兜底，避免丢掉最后 400ms 的编辑）。 */
+  function flushSave() {
+    if (saveTimer === null) return;
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    void save();
+  }
+  if (typeof window !== "undefined" && typeof document !== "undefined") {
+    window.addEventListener("beforeunload", flushSave);
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) flushSave();
+    });
+  }
+
   let mediaQuery: MediaQueryList | null = null;
   function resolveTheme() {
     // 单模式皮肤强制锁定解析结果（方案书 §6.4）：settings.theme 保留用户原偏好，
@@ -430,7 +462,8 @@ export const useSettingsStore = defineStore("settings", () => {
   watch(
     Object.values(fields),
     () => {
-      if (loaded.value) void save();
+      // 节流落盘：拖动滑块/逐键输入会高频触发，不能每次都全量序列化 + 写文件
+      if (loaded.value) scheduleSave();
     },
     { deep: true },
   );
@@ -471,6 +504,7 @@ export const useSettingsStore = defineStore("settings", () => {
     loaded,
     load,
     save,
+    flushSave,
     applyTheme,
     applyColorScheme,
     resolveTheme,

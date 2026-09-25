@@ -60,7 +60,7 @@ function clearSearch() {
     <SegmentedTabs v-model="imagesTab" :tabs="settings.onlinePixivEnabled ? imageTabs : []">
       <!-- 本地图片 -->
       <template v-if="imagesTab === 'local' || !settings.onlinePixivEnabled">
-        <LibraryToolbar :count="items.length" @changed="load" />
+        <LibraryToolbar :count="library.totalFor('image')" @changed="load" />
 
         <MediaGrid
           v-if="library.loading || items.length"

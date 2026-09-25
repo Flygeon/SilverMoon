@@ -814,7 +814,7 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
     <!-- 本地音乐（原模式 或 点开「本地音乐」歌单） -->
     <template v-if="showLocal">
       <div class="local-head">
-        <LibraryToolbar :count="items.length" @changed="load" />
+        <LibraryToolbar :count="library.totalFor('audio')" @changed="load" />
         <div class="segmented view-toggle">
           <button
             class="seg"

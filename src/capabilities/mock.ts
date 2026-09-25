@@ -200,6 +200,24 @@ export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       }
       return as(list.map((f) => ({ ...f, favorite: favorites.has(f.id) })));
     }
+    case "count_files": {
+      const q = (args?.query ?? {}) as {
+        type?: string;
+        search?: string;
+        minSize?: number;
+      };
+      let list = DEMO.filter((f) => !q.type || f.type === q.type);
+      if (q.minSize) list = list.filter((f) => f.size >= q.minSize!);
+      if (q.search?.trim()) {
+        const s = q.search.trim().toLowerCase();
+        list = list.filter((f) =>
+          [f.name, f.title, f.artist, f.album]
+            .filter(Boolean)
+            .some((v) => String(v).toLowerCase().includes(s)),
+        );
+      }
+      return as(list.length);
+    }
     case "library_counts": {
       const min = Number((args?.minSize as number) ?? 0);
       const counts: Record<string, number> = {};

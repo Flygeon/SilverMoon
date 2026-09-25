@@ -7,7 +7,8 @@
  * - off：纯色背景
  *
  * 性能优化（尽量不改视觉效果）：
- * - 画布像素密度封顶 dpr=2：canvas 已是 blur(30px)+scale(1.5)，更高 DPR 不可见，可大幅降填充率
+ * - 画布内部按 RENDER_SCALE(0.35) 低分辨率绘制：canvas 已是 blur(30px)+scale(1.5)，
+ *   细节不可见，每帧参与模糊的像素数降到约 1/8（只改内部倍率，不动 blur/scale 参考数值）
  * - 四张切片预渲染到离屏 canvas，逐帧只做旋转 blit，省去对大图反复缩放
  * - 移除参考实现里没有的 .dark-overlay backdrop-filter（逐帧整屏重采样，最耗 GPU）
  * - 窗口隐藏时暂停动画循环
@@ -19,6 +20,17 @@ import { useSettingsStore } from "@/stores/settings";
 const player = usePlayerStore();
 const settings = useSettingsStore();
 const canvasRef = ref<HTMLCanvasElement | null>(null);
+
+/**
+ * 画布内部渲染倍率。
+ *
+ * 最终画面要经过 `blur(30px) + scale(1.5)`，细节早已被抹平，因此 backing store
+ * 没必要按 DPR 全分辨率绘制。0.35 倍下每帧参与模糊的像素数约为原来的 1/8，
+ * 观感不变——而全屏逐帧模糊正是本组件最大的 GPU 开销，它会拖慢所有页面的交互。
+ *
+ * 注意：只改内部倍率，**不要动** CSS 里 blur/scale 的数值（Apple Music 参考值）。
+ */
+const RENDER_SCALE = 0.35;
 
 interface Slice {
   index: number;
@@ -64,8 +76,10 @@ function teardown() {
 /** 把封面四分之一预渲染成一张 tileSize×tileSize 的切片 */
 function makeTile(sx: number, sy: number, sw: number, sh: number): HTMLCanvasElement {
   const c = document.createElement("canvas");
-  c.width = Math.max(1, Math.round(tileSize));
-  c.height = Math.max(1, Math.round(tileSize));
+  // 切片同样按 RENDER_SCALE 缩小：逐帧 blit 的源纹理随之小一个数量级，
+  // 绘制时用 5 参数 drawImage 指定逻辑尺寸，由上下文变换映射回 backing store（1:1 采样）。
+  c.width = Math.max(1, Math.round(tileSize * RENDER_SCALE));
+  c.height = Math.max(1, Math.round(tileSize * RENDER_SCALE));
   const tctx = c.getContext("2d");
   if (tctx) tctx.drawImage(img!, sx, sy, sw, sh, 0, 0, c.width, c.height);
   return c;
@@ -88,16 +102,15 @@ function startLoop() {
   loopCtx = canvas.getContext("2d");
   if (!loopCtx) return;
 
-  // 像素密度封顶 2：canvas 已被 blur(30px)+scale(1.5) 重度模糊，更高 DPR 不可见
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const resize = () => {
     const w = window.innerWidth;
     const h = window.innerHeight;
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
+    canvas.width = Math.max(1, Math.round(w * RENDER_SCALE));
+    canvas.height = Math.max(1, Math.round(h * RENDER_SCALE));
     canvas.style.width = w + "px";
     canvas.style.height = h + "px";
-    loopCtx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // 逻辑坐标仍按 CSS 像素书写，由变换缩放到低分辨率 backing store
+    loopCtx?.setTransform(RENDER_SCALE, 0, 0, RENDER_SCALE, 0, 0);
     buildTiles();
   };
   resize();
@@ -134,7 +147,8 @@ function startLoop() {
       cctx.save();
       cctx.translate(cx, cy);
       cctx.rotate(s.angle);
-      cctx.drawImage(tiles[s.index], -tileSize / 2, -tileSize / 2);
+      // 5 参数形式：切片本身是低分辨率，按逻辑尺寸铺开，由上下文变换映射回 backing store
+      cctx.drawImage(tiles[s.index], -tileSize / 2, -tileSize / 2, tileSize, tileSize);
       cctx.restore();
     }
     animationId = requestAnimationFrame(animate);

@@ -1451,12 +1451,30 @@ export const messages = {
 
 export type Lang = keyof typeof messages;
 
+/**
+ * 译文缓存。
+ *
+ * `translate()` 会在 `v-for` 的每一行/每个卡片里被调用（滚动时每帧几十上百次），
+ * 而每次调用都要 `split(".")` 再逐层走对象。`messages` 是编译期常量、运行期不变，
+ * 所以按 (lang, key) 记忆化即可——纯收益，无失效风险。
+ */
+const translationCache = new Map<string, string>();
+
 export function translate(lang: Lang, key: string): string {
+  const cacheKey = `${lang}\u0000${key}`;
+  const cached = translationCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
   const keys = key.split(".");
   let node: any = messages[lang];
   for (const k of keys) {
     if (node && typeof node === "object" && k in node) node = node[k];
-    else return key;
+    else {
+      translationCache.set(cacheKey, key);
+      return key;
+    }
   }
-  return typeof node === "string" ? node : key;
+  const result = typeof node === "string" ? node : key;
+  translationCache.set(cacheKey, result);
+  return result;
 }

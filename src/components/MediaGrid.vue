@@ -221,7 +221,11 @@ function subtitleOf(item: MediaEntry): string {
   </div>
 
   <div v-else ref="scroller" class="virtual-root" :style="{ height: totalH + 'px' }">
-    <div class="layer" :style="{ transform: `translateY(${offsetY}px)` }">
+    <div
+      class="layer"
+      :class="{ 'is-refreshing': library.refreshing }"
+      :style="{ transform: `translateY(${offsetY}px)` }"
+    >
       <article
         v-for="v in visible"
         :key="v.item.id"
@@ -281,10 +285,27 @@ function subtitleOf(item: MediaEntry): string {
   position: relative;
   width: 100%;
 }
+/*
+ * 高度必须绑定在视口量级，不能等于整卷 totalH。
+ * will-change 会把本元素提升为独立合成层，而合成层的光栅/显存按元素尺寸分配；
+ * 整卷高度（上万条媒体时可达数万像素）会让每帧的光栅化范围失控，滚动与点击都会抖。
+ * 限制成 100vh 后，层范围只比视口多出上下各 OVERSCAN 行——子元素绝对定位且
+ * overflow 可见，不会被裁掉。
+ */
 .layer {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100vh;
   will-change: transform;
+  transition: opacity 140ms ease;
+}
+/* 后台重查（搜索/排序）时的轻量反馈：保留旧数据只轻微压暗，不闪骨架屏。
+   注意压暗放在 .layer（已限定 100vh）上，不要放在 .virtual-root（整卷高），
+   否则 opacity 会把整卷元素变成渲染表面，等于把上面修掉的问题再引回来。 */
+.layer.is-refreshing {
+  opacity: 0.55;
 }
 
 .skeleton-grid {

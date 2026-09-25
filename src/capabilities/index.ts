@@ -3,7 +3,7 @@
  * 所有原生能力经 invoke（请求/响应）+ listen（事件推送）调用 Rust Command。
  * 前端不直接触碰磁盘/数据库/原生资源。
  */
-import { invoke, toAssetUrl } from "@/ipc/invoke";
+import { invoke, invokeBatch, toAssetUrl } from "@/ipc/invoke";
 import { listen, type UnlistenFn } from "@/ipc/events";
 import { openPath, openUrl, revealItemInDir } from "@/ipc/opener";
 import { open as dialogOpen, save as dialogSave } from "@/ipc/dialog";
@@ -174,6 +174,10 @@ export const capabilities = {
   listFiles(query?: ListQuery): Promise<MediaEntry[]> {
     return safeInvoke("list_files", { query: query ?? null });
   },
+  /** 当前过滤条件下的条目总数（与 listFiles 共用后端过滤逻辑，供分页/总数展示）。 */
+  countFiles(query?: ListQuery): Promise<number> {
+    return safeInvoke("count_files", { query: query ?? null });
+  },
   libraryCounts(minSize = 0): Promise<Record<string, number>> {
     return safeInvoke("library_counts", { minSize });
   },
@@ -190,6 +194,35 @@ export const capabilities = {
   async getThumbnail(fileId: string, size = 320): Promise<string | null> {
     const path = await safeInvoke<string | null>("get_thumbnail", { fileId, size });
     if (!path) return null;
+    return isDesktop ? toAssetUrl(path) : path;
+  },
+  /**
+   * 批量取缩略图：一次往返处理整个可视区，替代逐张 get_thumbnail。
+   *
+   * 逐张调用时滚动一屏（30 张卡片）就是 30 次 IPC + HTTP + JSON 信封；
+   * 这是列表滚动卡顿的主要来源之一。返回值与 `fileIds` 按下标一一对应，
+   * 单张失败为 null，不影响其它。
+   */
+  async getThumbnails(fileIds: string[], size = 320): Promise<(string | null)[]> {
+    if (!fileIds.length) return [];
+    // 浏览器预览没有批量通道，退回逐张（safeInvoke 会自动走 mock）
+    if (!isDesktop) {
+      const paths = await Promise.all(
+        fileIds.map((fileId) => safeInvoke<string | null>("get_thumbnail", { fileId, size })),
+      );
+      return paths.map((p) => p ?? null);
+    }
+    const results = await invokeBatch<string | null>(
+      fileIds.map((fileId) => ({ cmd: "get_thumbnail", args: { fileId, size } })),
+    );
+    return results.map((r) => {
+      const path = r.ok ? r.data : null;
+      if (!path) return null;
+      return isDesktop ? toAssetUrl(path) : path;
+    });
+  },
+  /** 后端带出的缩略图磁盘路径 → 可直接给 <img> 用的 URL（非桌面环境下原样返回）。 */
+  thumbUrl(path: string): string {
     return isDesktop ? toAssetUrl(path) : path;
   },
   clearThumbnailCache(): Promise<number> {

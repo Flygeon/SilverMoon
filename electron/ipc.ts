@@ -23,7 +23,7 @@ import {
 } from "./windows";
 import { handleStore } from "./store";
 import { log } from "./log";
-import { callSidecar } from "./main-bridge";
+import { callSidecar, callSidecarBatch } from "./main-bridge";
 
 export interface BridgeReply {
   ok: boolean;
@@ -49,6 +49,21 @@ const handlers: Record<string, Handler> = {
       return { __commandError: reply.error ?? `命令 ${cmd} 失败` };
     }
     return reply.data ?? null;
+  },
+
+  /**
+   * 批量命令：一次 IPC + 一次 HTTP 执行多条命令。
+   *
+   * 与 `invoke` 不同，这里**不把单条失败升级成通道失败**——逐条独立成败，
+   * 由渲染进程按需决定怎么处理（缩略图场景下失败一张不该整批重来）。
+   */
+  invokeBatch: async (payload) => {
+    const calls = Array.isArray(payload.calls) ? payload.calls : [];
+    const reply = await callSidecarBatch(calls as { cmd: string; args: unknown }[]);
+    if (!reply.ok) {
+      return { __commandError: reply.error ?? "批量命令失败" };
+    }
+    return reply.data ?? [];
   },
 
   // -------------------------------------------------------------------------
@@ -451,6 +466,10 @@ export function registerIpc(): void {
 
   ipcMain.handle("sm:invoke", async (_event, request: { cmd: string; args: unknown }) => {
     return respond("invoke", { cmd: request?.cmd, args: request?.args }, _event.sender);
+  });
+
+  ipcMain.handle("sm:invokeBatch", async (_event, request: { calls: unknown }) => {
+    return respond("invokeBatch", { calls: request?.calls }, _event.sender);
   });
 
   ipcMain.handle(

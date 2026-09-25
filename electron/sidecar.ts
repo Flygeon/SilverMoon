@@ -236,6 +236,25 @@ export class Sidecar extends EventEmitter {
   }
 
   /**
+   * 一次往返执行多条命令（`POST /batch`）。
+   *
+   * 网格滚动时"每张缩略图一条命令"会让一次交互产生几十次 HTTP + 进程往返，
+   * 批量通道把它压成一次。返回数组与 `calls` 按下标一一对应，逐条独立成败。
+   */
+  async callBatch(calls: { cmd: string; args: unknown }[]): Promise<CommandReply> {
+    if (!this.ready) {
+      return { ok: false, error: "后端未启动：后端进程不可用，请检查是否已构建 backend" };
+    }
+    if (calls.length === 0) return { ok: true, data: [] };
+    try {
+      return await this.post("/batch", { calls });
+    } catch (error) {
+      log.error("批量命令调用异常：", error);
+      return { ok: false, error: "批量命令调用失败：" + (error as Error).message };
+    }
+  }
+
+  /**
    * 反向回调：宿主 → Rust（导航是否放行、托盘点击、热键）。
    *
    * 未就绪时返回 `{ ok: false }`，调用方据此走「默认放行/忽略」，

@@ -17,6 +17,8 @@ export interface SilverMoonBridge {
   readonly platform: string;
   /** 调用 Rust 侧车命令 */
   invoke(cmd: string, args: unknown): Promise<BridgeReply>;
+  /** 一次往返执行多条命令（逐条独立成败） */
+  invokeBatch(calls: { cmd: string; args?: unknown }[]): Promise<BridgeReply>;
   /** 通用能力调用（窗口 / 文件 / 对话框 / 存储 / ...） */
   call(channel: string, payload: unknown): Promise<BridgeReply>;
   /** 跨窗口派发事件 */
@@ -67,6 +69,30 @@ export async function invokeCommand<T>(cmd: string, args?: unknown): Promise<T> 
     return Promise.reject(reply.error ?? `命令 ${cmd} 失败`);
   }
   return reply.data as T;
+}
+
+/** 批量命令的单条结果。 */
+export interface BatchItemResult<T = unknown> {
+  ok: boolean;
+  data?: T;
+  error?: string;
+}
+
+/**
+ * 一次往返执行多条 Rust 命令。
+ *
+ * 与 `invokeCommand` 不同：**只有整条通道失败才 reject**；单条命令失败体现为
+ * 该下标的 `{ ok: false, error }`，不影响其它条。调用方按需忽略失败项。
+ */
+export async function invokeBatchCommands<T = unknown>(
+  calls: { cmd: string; args?: unknown }[],
+): Promise<BatchItemResult<T>[]> {
+  if (calls.length === 0) return [];
+  const reply = await bridge().invokeBatch(calls);
+  if (!reply.ok) {
+    return Promise.reject(reply.error ?? "批量命令失败");
+  }
+  return (reply.data ?? []) as BatchItemResult<T>[];
 }
 
 /** 调用主进程能力。失败时以原始错误字符串拒绝。 */

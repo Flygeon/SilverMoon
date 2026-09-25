@@ -27,6 +27,49 @@ fn cache_key(file_id: &str, mtime: i64, size: i64, target: u32) -> String {
     format!("{:016x}", xxhash_rust::xxh3::xxh3_64(raw.as_bytes()))
 }
 
+/// 列表接口使用的缩略图尺寸。
+///
+/// **必须**与前端按需请求的尺寸一致（`capabilities.getThumbnail(id, 320)`），
+/// 否则列表带出的路径与前端请求的路径落在不同缓存键上，等于白带。
+pub const LIST_THUMB_SIZE: u32 = 320;
+
+/// 缩略图缓存文件名（不含目录）。
+pub fn thumb_cache_name(file_id: &str, mtime: i64, size: i64, target: u32) -> String {
+    format!("{}.jpg", cache_key(file_id, mtime, size, target))
+}
+
+/// 缩略图缓存目录的索引：目录 + 已存在的文件名集合。
+pub type ThumbIndex = Option<(PathBuf, std::collections::HashSet<String>)>;
+
+/// 一次性列出缩略图缓存目录里的文件名。
+///
+/// 列表接口要为**每一行**判断"缩略图是否已生成"。逐行 `Path::is_file()` 在
+/// 上万行时会退化成上万次系统调用；这里只读一次目录建成 HashSet，之后每行 O(1) 查表。
+pub fn cached_thumb_index(app: &silvermoon_ipc::Host) -> ThumbIndex {
+    let dir = cache_dir(app)?;
+    let names = std::fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    Some((dir, names))
+}
+
+/// 若缩略图已在磁盘缓存中则返回其路径；**不触发生成**。
+pub fn cached_thumb_path(
+    index: &ThumbIndex,
+    file_id: &str,
+    mtime: i64,
+    size: i64,
+    target: u32,
+) -> Option<String> {
+    let (dir, names) = index.as_ref()?;
+    let name = thumb_cache_name(file_id, mtime, size, target);
+    names
+        .contains(&name)
+        .then(|| dir.join(&name).to_string_lossy().into_owned())
+}
+
 /// 把任意已解码图像缩放并编码为 JPEG 字节
 fn to_jpeg(img: image::DynamicImage, target: u32, orientation: Option<i64>) -> Option<Vec<u8>> {
     let img = apply_orientation(img, orientation);
@@ -157,7 +200,36 @@ pub fn get_thumbnail(
     size: Option<u32>,
 ) -> Result<Option<String>, String> {
     let target = size.unwrap_or(320).clamp(64, 1024);
+    thumbnail_for(&app, &file_id, target)
+}
 
+/// 批量取缩略图：一次往返处理整个可视区的 id，返回值与 `file_ids` 按下标一一对应。
+///
+/// 单张版 `get_thumbnail` 在网格滚动时会变成 N 次进程往返（30 张卡片 = 30 次
+/// IPC + HTTP + JSON 信封），这是列表滚动卡顿的主要来源之一。批量通道把它压成一次。
+#[silvermoon_ipc::command]
+pub fn get_thumbnails(
+    app: silvermoon_ipc::Host,
+    file_ids: Vec<String>,
+    size: Option<u32>,
+) -> Result<Vec<Option<String>>, String> {
+    let target = size.unwrap_or(320).clamp(64, 1024);
+    // 单张失败降级为 null，不拖垮整批（前端按 null 显示占位图）
+    Ok(file_ids
+        .iter()
+        .map(|id| thumbnail_for(&app, id.as_str(), target).unwrap_or(None))
+        .collect())
+}
+
+/// 生成/取用单张缩略图（单张命令与批量命令共用），返回磁盘缓存路径。
+///
+/// 保持 `Result` 语义与重构前一致：文件不存在等错误仍然向上抛，
+/// 只有"确实没有封面"才是 `Ok(None)`。
+fn thumbnail_for(
+    app: &silvermoon_ipc::Host,
+    file_id: &str,
+    target: u32,
+) -> Result<Option<String>, String> {
     // 取文件信息（尽早释放数据库锁，解码可能耗时）
     let (path, kind, mtime, fsize, orientation, duration) = {
         let state = app.state::<DbState>();
@@ -181,10 +253,10 @@ pub fn get_thumbnail(
         .map_err(|_| format!("文件不存在: {file_id}"))?
     };
 
-    let Some(dir) = cache_dir(&app) else {
+    let Some(dir) = cache_dir(app) else {
         return Ok(None);
     };
-    let cache_file = dir.join(format!("{}.jpg", cache_key(&file_id, mtime, fsize, target)));
+    let cache_file = dir.join(thumb_cache_name(file_id, mtime, fsize, target));
 
     // ---- 磁盘缓存命中 ----
     if cache_file.is_file() {

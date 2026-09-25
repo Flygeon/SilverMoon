@@ -78,7 +78,7 @@ function clearSearch() {
     <SegmentedTabs v-model="bookTab" :tabs="bookTabs.length > 1 ? bookTabs : []">
       <!-- 本地书籍 -->
       <template v-if="bookTab === 'local' || bookTabs.length <= 1">
-        <LibraryToolbar :count="items.length" @changed="load" />
+        <LibraryToolbar :count="library.totalFor('book')" @changed="load" />
 
         <MediaGrid
           v-if="library.loading || items.length"
