@@ -510,7 +510,7 @@ fn map_official(v: &serde_json::Value) -> Option<OsuBeatmapset> {
     let cover = covers.and_then(|c| {
         ["card@2x", "card", "cover@2x", "cover", "list@2x", "list"]
             .iter()
-            .find_map(|k| jstr(c, *k))
+            .find_map(|k| jstr(c, k))
     });
     let mut item = build_beatmapset(
         &id.to_string(),
@@ -555,6 +555,9 @@ fn build_beatmapset(
         source: source.to_string(),
     }
 }
+
+/// 单个搜索源的签名：把三个源放进数组依次尝试（够数即停）
+type OsuSearcher = fn(&str, u32) -> Result<Vec<OsuBeatmapset>, String>;
 
 fn search_sayobot(query: &str, limit: u32) -> Result<Vec<OsuBeatmapset>, String> {
     let mut url =
@@ -748,8 +751,7 @@ fn osu_search_blocking(query: String, limit: u32) -> Result<OsuSearchResult, Str
 
     let mut items: Vec<OsuBeatmapset> = Vec::new();
     let mut successful = 0u32;
-    let searchers: [fn(&str, u32) -> Result<Vec<OsuBeatmapset>, String>; 3] =
-        [search_sayobot, search_official, search_catboy];
+    let searchers: [OsuSearcher; 3] = [search_sayobot, search_official, search_catboy];
     for searcher in searchers {
         match searcher(&q, limit) {
             Ok(mut v) => {
@@ -861,7 +863,7 @@ fn download_archive(source: &DownloadSource, to: &Path) -> Result<(), String> {
     let n = f
         .read(&mut head)
         .map_err(|e| format!("读取临时文件失败：{e}"))?;
-    if n < 2 || head != [b'P', b'K'] {
+    if n < 2 || head != *b"PK" {
         return Err("下载内容不是 zip/.osz".into());
     }
     Ok(())
