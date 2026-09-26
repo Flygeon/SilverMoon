@@ -288,8 +288,12 @@ export function handleCoverProtocol(cacheDir: string): void {
       // URL 形如 `app-cover://img/<encodeURIComponent(原始URL)>`；host 段被
       // standard scheme 解析掉，编码后的原始 URL 落在 pathname 上。
       const raw = new URL(request.url);
-      const target = decodeURIComponent(raw.pathname.replace(/^\/+/, ""));
-      if (!/^https?:\/\//i.test(target)) {
+      let target = decodeURIComponent(raw.pathname.replace(/^\/+/, ""));
+      // Chromium 网络栈拒绝在明文 http 请求上手动设置 Referer（实测
+      // net::ERR_BLOCKED_BY_CLIENT），而 http/https 在这些图床完全等价，
+      // 故统一升级为 https —— 防盗链 Referer 比协议本身重要得多。
+      target = target.replace(/^http:\/\//i, "https://");
+      if (!/^https:\/\//i.test(target)) {
         return new Response("invalid url", { status: 400 });
       }
 
