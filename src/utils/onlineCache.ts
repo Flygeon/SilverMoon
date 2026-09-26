@@ -59,6 +59,28 @@ async function kvSet(key: string, value: unknown): Promise<void> {
 
 const COVER_PREFIX = "cover:";
 
+/**
+ * 把原始封面 URL 转成 `app-cover://` 代理 URL，由主进程统一取图
+ * （Referer/UA 按域伪装 → 绕开防盗链；不经过页面 fetch → 不受 CORS 约束；
+ * 主进程侧自带磁盘缓存 + 并发去重 + 负缓存）。
+ *
+ * data:/blob:/asset: 等非 http(s) 地址原样返回，不做包装。
+ */
+export function toCoverProxyUrl(url: string): string {
+  if (!url) return url;
+  if (!/^https?:\/\//i.test(url)) return url;
+  return `app-cover://img/${encodeURIComponent(url)}`;
+}
+
+/** 失败占位图：灰色圆角块 + 音符（内联 SVG，随主题缩放，永不加载失败）。 */
+export const COVER_FALLBACK_DATA_URL =
+  "data:image/svg+xml;charset=utf-8," +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">` +
+      `<rect width="96" height="96" rx="12" fill="#3a3a40"/>` +
+      `<path d="M62 22v34.5a11.5 11.5 0 1 1-6-10.1V30H42v30.5a11.5 11.5 0 1 1-6-10.1V24a4 4 0 0 1 4-4h18a4 4 0 0 1 4 4z" fill="#8b8b92" transform="scale(0.9) translate(5 5)"/></svg>`,
+  );
+
 async function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

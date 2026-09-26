@@ -50,5 +50,21 @@ export default defineConfig(async () => ({
     // 打包后由 app:// 协议从 dist/ 提供服务，绝对路径 `/assets/...` 可正常解析
     outDir: "dist",
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // 重依赖各自成块，配合动态 import 保证「进哪个页面才加载哪个块」：
+        // amll-bg（AMLL core + @pixi/*，6MB+）只有选 AMLL 背景才会拉，
+        // anime-player（artplayer + 弹幕插件）只有进番剧播放页才会拉。
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("@applemusic-like-lyrics") || /@pixi\//.test(id)) return "amll-bg";
+          if (id.includes("artplayer")) return "anime-player";
+          if (id.includes("pdfjs")) return "pdf-viewer";
+          if (id.includes("epubjs")) return "epub-reader";
+          if (id.includes("leafer")) return "drawing";
+          return undefined;
+        },
+      },
+    },
   },
 }));

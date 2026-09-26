@@ -14,10 +14,21 @@
  * - 移除参考实现里没有的 .dark-overlay backdrop-filter（逐帧整屏重采样，最耗 GPU）
  * - 窗口隐藏时暂停动画循环
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  defineAsyncComponent,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import { usePlayerStore } from "@/stores/player";
 import { useSettingsStore } from "@/stores/settings";
-import AmllBackground from "@/components/AmllBackground.vue";
+
+// AMLL 背景（连带其依赖链上的 @pixi/*）体积不小，且只有选 amll 模式才用得到——
+// 必须异步加载，避免静态 import 把它拖进常驻包（PlayerView 一进播放页就整体加载）。
+const AmllBackground = defineAsyncComponent(() => import("@/components/AmllBackground.vue"));
 
 const player = usePlayerStore();
 const settings = useSettingsStore();

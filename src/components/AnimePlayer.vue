@@ -13,11 +13,11 @@
  *   src/utils/danmaku.ts）。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import Artplayer from "artplayer";
-import artplayerPluginDanmuku, {
-  type Danmu,
-  type Option as DanmukuOption,
-} from "artplayer-plugin-danmuku";
+// artplayer 与弹幕插件改为**动态 import**（在 initPlayer 内 await）：两者加起来
+// 体积不小且只有进入番剧播放页才会用到，静态引入会把它们拖进常驻包。
+// 下面只保留类型导入（编译期擦除，不影响运行时体积）。
+import type Artplayer from "artplayer";
+import type { Danmu, Option as DanmukuOption } from "artplayer-plugin-danmuku";
 // hls.js 仅在 customType 内动态引入，避免主包膨胀；这里只声明变量类型
 type HlsInstance = { destroy(): void };
 import { useSettingsStore } from "@/stores/settings";
@@ -326,12 +326,18 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 // ---- ArtPlayer 实例化 ----
-function createPlayer() {
+async function createPlayer() {
   const root = container.value;
   if (!root) return;
   destroyHls();
   art?.destroy(false);
   art = null;
+
+  // 动态 import：进入播放页才加载 artplayer 与弹幕插件（不在常驻包里）
+  const [{ default: Artplayer }, { default: artplayerPluginDanmuku }] = await Promise.all([
+    import("artplayer"),
+    import("artplayer-plugin-danmuku"),
+  ]);
 
   const stream = anime.stream;
   const theme = readThemeColor();
@@ -447,6 +453,12 @@ function createPlayer() {
     host.style.cssText = "position:absolute;inset:0;z-index:9000;pointer-events:none;";
     playerEl.appendChild(host);
     overlayHost.value = host;
+  }
+
+  // 动态 import 让 art 就绪晚于 onMounted 里的首次 attachStream（彼时 art 为 null 被
+  // 守卫跳过）。这里补挂当前流，保持与旧同步行为一致的加载与续播定位。
+  if (anime.stream) {
+    void attachStream({ url: anime.stream.url, remoteUrl: anime.stream.remoteUrl ?? "" });
   }
 }
 

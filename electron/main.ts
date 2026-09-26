@@ -11,8 +11,8 @@
  * startHostServer()          // 侧车要用它的端口，必须先起来
  * registerIpc()
  * 注入各模块的侧车通道
- * startSidecar()             // 拿到数据目录/缓存目录/宿主端口后启动
- * createMainWindow()
+ * startSidecar() ─┐          // 拿到数据目录/缓存目录/宿主端口后启动
+ * createMainWindow() ┘       // 两者并行：界面加载不依赖后端就绪
  * ```
  */
 import { app, dialog, shell } from "electron";
@@ -21,7 +21,12 @@ import path from "node:path";
 import { config, cacheDir, dataDir, ensureDir, isDev, logDir, migrateLegacyData } from "./config";
 import { initLog, log } from "./log";
 import { initStore, flushAllStores } from "./store";
-import { handleAppProtocol, handleAssetProtocol, registerSchemes } from "./protocols";
+import {
+  handleAppProtocol,
+  handleAssetProtocol,
+  handleCoverProtocol,
+  registerSchemes,
+} from "./protocols";
 import { Sidecar, type EventFrame } from "./sidecar";
 import { setSidecar, getSidecar } from "./main-bridge";
 import { registerIpc, setDataDirs, setQuitHandler } from "./ipc";
@@ -100,10 +105,17 @@ let hostServer: HostServer | null = null;
 let quitting = false;
 
 async function bootstrap(): Promise<void> {
+  // 启动打点：一次日志看清时间花在哪段（验收优化用，保持低成本）
+  const bootT0 = performance.now();
+  const mark = (label: string) =>
+    log.info(`[启动] ${label}: ${Math.round(performance.now() - bootT0)}ms`);
+
   handleAppProtocol();
   handleAssetProtocol();
+  handleCoverProtocol(path.join(CACHE_DIR, "covers"));
 
   hostServer = await startHostServer();
+  mark("宿主服务器就绪");
   registerIpc();
 
   const sidecar = new Sidecar();
@@ -134,14 +146,25 @@ async function bootstrap(): Promise<void> {
     });
   });
 
-  const started = await sidecar.start({
-    dataDir: DATA_DIR,
-    cacheDir: CACHE_DIR,
-    hostPort: hostServer.port,
-    hostToken: hostServer.token,
-  });
+  // 窗口创建与后端握手**并行**：渲染层的页面加载与转场不依赖后端就绪（数据由
+  // "先转场、后加载"范式异步填充），后端起来后数据自然到位；后端缺失时窗口
+  // 也能立即出现并给出降级提示，而不是白等握手（上限 15s）。
+  const sidecarReady = sidecar
+    .start({
+      dataDir: DATA_DIR,
+      cacheDir: CACHE_DIR,
+      hostPort: hostServer.port,
+      hostToken: hostServer.token,
+    })
+    .then((ok) => {
+      mark("后端握手完成");
+      return ok;
+    });
 
-  if (!started) {
+  const mainWindow = createMainWindow();
+  mark("主窗口已创建");
+
+  if (!(await sidecarReady)) {
     log.warn("后端未就绪，将以降级模式启动界面");
     const exe = process.platform === "win32" ? ".exe" : "";
     // 不阻塞启动：让用户能看到界面与明确的错误提示，而不是一个白屏
@@ -162,8 +185,6 @@ async function bootstrap(): Promise<void> {
       });
     }, 1200);
   }
-
-  const mainWindow = createMainWindow();
 
   // 主窗口一旦消失就直接退出。
   //

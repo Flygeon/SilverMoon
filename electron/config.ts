@@ -51,6 +51,13 @@ export const APP_ORIGIN = `${APP_SCHEME}://silvermoon`;
 /** 本地文件代理协议：把磁盘文件暴露成页面可直接消费的 URL。 */
 export const ASSET_SCHEME = "asset";
 
+/**
+ * 在线封面代理协议：`app-cover://img/<encodeURIComponent(原始URL)>`。
+ * 主进程接管取图（Referer/UA 按域伪装、磁盘缓存、并发去重、负缓存），
+ * 渲染层 `<img>` 直接消费，绕开 CORS 与防盗链双杀。
+ */
+export const COVER_SCHEME = "app-cover";
+
 /** 工程根目录。 */
 export const projectRoot = path.resolve(__dirname, "..");
 
