@@ -202,8 +202,10 @@ export const messages = {
       detectInstrumentalHint: "将开头作词/作曲/编曲信息替换为三点前奏，长间奏插入三点等待。",
       playback: "播放器",
       playerBg: "播放器背景",
-      playerBgHint: "动态背景最耗 GPU；仅图片模糊显示静态模糊封面，关闭则纯色背景。",
+      playerBgHint:
+        "动态背景最耗 GPU；AMLL 为 WebGL 网格渐变，效果接近且开销更低；仅图片模糊显示静态模糊封面，关闭则纯色背景。",
       playerBg_animated: "动态",
+      playerBg_amll: "AMLL 流体",
       playerBg_image: "仅图片模糊",
       playerBg_off: "关闭",
       closeToTray: "关闭窗口时最小化到托盘",
@@ -990,8 +992,9 @@ export const messages = {
       playback: "Playback",
       playerBg: "Player Background",
       playerBgHint:
-        "The animated background uses the most GPU; Blurred Art shows a static blurred cover, Off uses a plain color.",
+        "The animated background uses the most GPU; AMLL renders a WebGL mesh gradient with lower cost; Blurred Art shows a static blurred cover, Off uses a plain color.",
       playerBg_animated: "Animated",
+      playerBg_amll: "AMLL Fluid",
       playerBg_image: "Blurred Art",
       playerBg_off: "Off",
       closeToTray: "Minimize to tray on close",

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 /**
  * 流体动态背景（参考《音乐播放器参考》index.js 的 Slice / animate）。
- * 三种模式（settings.playerBg）：
+ * 四种模式（settings.playerBg）：
  * - animated：4 象限旋转 canvas + screen 混合 + blur/saturate/brightness（默认）
+ * - amll：AMLL 流体网格渐变（WebGL 单 pass，无 CSS 全屏 blur，开销更低）
  * - image：仅静态模糊封面图，不起动画循环（省 GPU）
  * - off：纯色背景
  *
@@ -16,6 +17,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { usePlayerStore } from "@/stores/player";
 import { useSettingsStore } from "@/stores/settings";
+import AmllBackground from "@/components/AmllBackground.vue";
 
 const player = usePlayerStore();
 const settings = useSettingsStore();
@@ -191,6 +193,7 @@ onBeforeUnmount(teardown);
 <template>
   <div class="fluid-wrapper">
     <canvas v-if="mode === 'animated'" ref="canvasRef" class="fluid-canvas"></canvas>
+    <AmllBackground v-else-if="mode === 'amll'" />
     <div
       v-else-if="mode === 'image'"
       class="fluid-static"

@@ -16,8 +16,8 @@ export type ReaderThemeKey = "dark" | "light" | "sepia" | "green";
 export type ReaderFontKey = "system" | "serif" | "sans" | "kai" | "yuan";
 /** 歌词字体 */
 export type LyricFontKey = "system" | "sans" | "serif" | "kai" | "yuan";
-/** 播放器背景模式：animated 动态模糊 / image 仅图片模糊 / off 不启用 */
-export type PlayerBgMode = "animated" | "image" | "off";
+/** 播放器背景模式：animated 动态模糊 / amll AMLL 网格渐变 / image 仅图片模糊 / off 不启用 */
+export type PlayerBgMode = "animated" | "amll" | "image" | "off";
 /** 歌词副行显示模式：翻译 / 罗马音 */
 export type LyricSubMode = "translation" | "romaji";
 /** 预设分享码偏好：仅中文 / 仅原版 / 两者同时输出 */
@@ -75,7 +75,7 @@ const DEFAULTS = {
   lyricSourcePrefs: {} as Record<string, LyricSourcePref>,
   /** 自动识别前奏/间奏：隐藏作词/作曲/编曲为三点，长间奏插入三点 */
   detectInstrumental: true,
-  /** 播放器背景：动态模糊 / 仅图片模糊 / 关闭 */
+  /** 播放器背景：动态模糊 / AMLL 网格渐变 / 仅图片模糊 / 关闭 */
   playerBg: "animated" as PlayerBgMode,
   lyricBlur: true,
   scanDirs: [] as string[],

@@ -1019,7 +1019,7 @@ function selectSection(id: string) {
           </div>
           <div class="segmented">
             <button
-              v-for="m in ['animated', 'image', 'off'] as PlayerBgMode[]"
+              v-for="m in ['animated', 'amll', 'image', 'off'] as PlayerBgMode[]"
               :key="m"
               class="seg"
               :class="{ active: settings.playerBg === m }"
