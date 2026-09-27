@@ -38,6 +38,13 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+# Windows 控制台默认按本地代码页编码 stdout（cp1252 / cp936），下面这些中文日志会直接
+# 抛 UnicodeEncodeError —— CI 的 windows-latest 正是 cp1252，脚本会死在第一行输出上。
+# 显式切到 UTF-8。errors="replace" 是给不肯让路的终端留的退路：日志难看总好过整步失败。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = Path(__file__).resolve().parent.parent
 ICONS = ROOT / "backend" / "icons"
 SOURCE = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT / "assets" / "icon-source.png"
@@ -209,6 +216,9 @@ def main() -> None:
         f'  <color name="ic_launcher_background">{bg}</color>\n'
         "</resources>\n",
         encoding="utf-8",
+        # 仓库统一 LF（.gitattributes 的 `* text=auto eol=lf`）；不写这一句，
+        # Windows 上的 write_text 会把 \n 翻成 \r\n，每次重跑都产生假的 diff
+        newline="\n",
     )
     print(f"自适应图标背景色 {bg}")
 
