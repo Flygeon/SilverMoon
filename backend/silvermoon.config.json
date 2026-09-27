@@ -3,7 +3,7 @@
   "productName": "SilverMoon",
   "$productName": "软件的显示名（窗口标题、托盘提示、安装快捷方式都用它）。中文名「银月」只用于仓库与文档的描述，不在软件界面里出现。",
   "identifier": "cn.cool.silvermoon",
-  "version": "1.2.1",
+  "version": "0.0.1",
   "window": {
     "title": "SilverMoon · 光影媒体库",
     "width": 1280,

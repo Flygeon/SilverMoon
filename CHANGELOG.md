@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.0.1
+
+> 版本号从 1.2.1 **回落到 0.0.1**：Electron 版是相对 Tauri 版的重构分支，
+> 尚未发布过正式版本，1.x 的版本线属于前身项目，直接沿用会让首个 release 名不副实。
+
+### 品牌
+- 全平台图标换新：源图 `assets/icon-source.png`（1254² 方形插画），统一裁**圆角方形 + 保留原背景**
+- 新增 `scripts/gen_icons.py`：单张源图产出 Windows `.ico`（16/24/32/48/64/128/256）、macOS `.icns`（32→1024）、
+  Linux/Electron `.png`、Windows Store 磁贴与 Android 自适应图标全套装；改图只需重跑一条命令
+- `app-icon.png` 与 `backend/icons/**`（52 个文件）全部由该脚本重新生成，尺寸与格式随之对齐
+  （`icon.png` 512 → 1024，`.ico` 补齐 24/128 两档并全部改用 PNG 载荷）
+
 ## Unreleased — 迁移到 Electron（Tauri 2 → Electron 44）
 
 > **策略：换壳不换芯。** 不改业务代码的**调用方式**，只替换**宿主层**。

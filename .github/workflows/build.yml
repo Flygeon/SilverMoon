@@ -158,6 +158,17 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
 
+      # 图标由 assets/icon-source.png 经 scripts/gen_icons.py 生成，产物虽已入库，
+      # 这里仍重跑一遍：改了源图却忘了重跑脚本时，发出去的安装包不会静默沿用旧图标。
+      # shell 显式指定 bash，好让 Windows 用同一段 `command -v` 探测（Windows 上
+      # 有的镜像只有 python.exe，有的只有 python3.exe）。
+      - name: Generate icons
+        shell: bash
+        run: |
+          PY=$(command -v python3 || command -v python)
+          "$PY" -m pip install --disable-pip-version-check --quiet pillow
+          "$PY" scripts/gen_icons.py
+
       # 后端必须先生成：electron-builder 会把它作为 extraResources 打进安装包
       - name: Build Rust backend (release)
         run: cargo build --release --manifest-path backend/Cargo.toml
