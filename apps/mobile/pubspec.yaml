@@ -29,7 +29,9 @@ dependencies:
   # 封面
   cached_network_image: ^3.4.1
   # 权限（本地媒体库）
-  permission_handler: ^13.0.2
+  # 13.x 的 permission_handler_android 14.1.0 要求 compileSdk=37（AGP 9.1 上限 36），
+  # 12.x 已把 Permission.audio 正确映射到 Android 的 READ_MEDIA_AUDIO。
+  permission_handler: ^12.0.2
   # Monet 动态取色（Android 12+ / iOS 16+）
   # 注意：dynamic_color 2.x 起改用 material_ui(M3E) 的 ColorScheme，
   # 与 Flutter 自带 ColorScheme 不兼容，故锁在 1.9.x。
