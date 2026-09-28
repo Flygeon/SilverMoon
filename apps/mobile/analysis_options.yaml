@@ -1,0 +1,22 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    # 迁移期放宽：不阻断 CI，仅提示
+    unused_element: ignore
+    unused_field: ignore
+  exclude:
+    - build/**
+
+linter:
+  rules:
+    prefer_const_constructors: false
+    prefer_const_literals_to_create_immutables: false
+    use_build_context_synchronously: false
+    avoid_print: false
+    library_private_types_in_public_api: false
+    sort_child_properties_last: false
+    prefer_final_fields: false
+    unnecessary_brace_in_string_interps: false
+    depend_on_referenced_packages: false
+    deprecated_member_use: false

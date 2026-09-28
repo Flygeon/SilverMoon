@@ -1,0 +1,56 @@
+name: silvermoon
+description: "SilverMoon（银月）移动端 — 本地优先全媒体库 · 音乐播放器"
+publish_to: 'none'
+version: 0.0.1+1
+
+environment:
+  sdk: '>=3.5.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  # 状态管理
+  provider: ^6.1.2
+  # 音频内核：just_audio + 后台/通知栏（just_audio_background 内含 audio_service）
+  just_audio: ^0.10.6
+  just_audio_background: ^0.0.1-beta.17
+  audio_session: ^0.2.4
+  # 网络
+  http: ^1.2.2
+  crypto: ^3.0.6
+  # 存储 / 路径
+  shared_preferences: ^2.3.3
+  path_provider: ^2.1.5
+  path: ^1.9.0
+  # 封面
+  cached_network_image: ^3.4.1
+  # 权限（本地媒体库）
+  permission_handler: ^13.0.2
+  # Monet 动态取色（Android 12+）
+  dynamic_color: ^2.1.0
+  # 本地音频标签解析（ID3 / VorbisComment / MP4 atom）
+  audio_metadata_reader: ^1.8.0
+  url_launcher: ^6.3.1
+  collection: ^1.19.1
+  intl: any
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icon/
+
+flutter_launcher_icons:
+  android: "ic_launcher"
+  ios: true
+  remove_alpha_ios: true
+  image_path: "assets/icon/app_icon.png"

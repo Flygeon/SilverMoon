@@ -1,0 +1,142 @@
+name: Mobile Build (Flutter)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/mobile/**'
+      - '.github/workflows/mobile.yml'
+  pull_request:
+    paths:
+      - 'apps/mobile/**'
+      - '.github/workflows/mobile.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('apps/mobile/**/*.gradle*', 'apps/mobile/**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Bootstrap platform folders
+        run: |
+          set -eux
+          tr -d '\r' < tool/bootstrap.sh > /tmp/silvermoon-bootstrap.sh
+          bash /tmp/silvermoon-bootstrap.sh
+          ls -la android ios | head -40
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Generate launcher icons
+        run: dart run flutter_launcher_icons
+
+      - name: flutter analyze
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: flutter build apk
+        run: flutter build apk --release --split-per-abi
+
+      - name: Verify APKs
+        run: |
+          set -euo pipefail
+          ls -lh build/app/outputs/flutter-apk/ || true
+          for f in build/app/outputs/flutter-apk/*.apk; do
+            echo "=== $f ==="
+            unzip -l "$f" > /dev/null && echo "  OK"
+          done
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: silvermoon-android
+          path: apps/mobile/build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  ios:
+    name: iOS IPA (unsigned)
+    runs-on: macos-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Bootstrap platform folders
+        run: |
+          set -eux
+          tr -d '\r' < tool/bootstrap.sh > /tmp/silvermoon-bootstrap.sh
+          bash /tmp/silvermoon-bootstrap.sh
+          ls -la android ios | head -40
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Generate launcher icons
+        run: dart run flutter_launcher_icons
+
+      - name: flutter build ios (no codesign)
+        run: flutter build ios --release --no-codesign
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          rm -rf build/ipa
+          mkdir -p build/ipa/Payload
+          cp -R build/ios/iphoneos/Runner.app build/ipa/Payload/
+          cd build/ipa
+          zip -qry ../SilverMoon-ios-unsigned.ipa Payload
+          ls -lh ../SilverMoon-ios-unsigned.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: silvermoon-ios
+          path: apps/mobile/build/SilverMoon-ios-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
