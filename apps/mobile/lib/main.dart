@@ -1,30 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:just_audio_background/just_audio_background.dart';
 
-void main() {
-  runApp(const SilverMoonBootstrap());
-}
+import 'app.dart';
 
-/// Phase-1 引导壳：仅用于验证 CI 工具链（pub 解析 / 平台工程 / 打包）。
-class SilverMoonBootstrap extends StatelessWidget {
-  const SilverMoonBootstrap({super.key});
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
 
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'SilverMoon',
-      theme: ThemeData(
-        useMaterial3: true,
-        colorSchemeSeed: const Color(0xFF1A5C9E),
-        brightness: Brightness.light,
-      ),
-      darkTheme: ThemeData(
-        useMaterial3: true,
-        colorSchemeSeed: const Color(0xFF1A5C9E),
-        brightness: Brightness.dark,
-      ),
-      home: const Scaffold(
-        body: Center(child: Text('SilverMoon')),
-      ),
-    );
-  }
+  // 后台播放 / 通知栏 / 锁屏控制（Android MediaSession、iOS Now Playing）
+  await JustAudioBackground.init(
+    androidNotificationChannelId: 'cn.cool.silvermoon.channel.audio',
+    androidNotificationChannelName: 'SilverMoon 播放',
+    androidNotificationChannelDescription: '音乐播放控制',
+    androidNotificationOngoing: true,
+    androidStopForegroundOnPause: true,
+    androidNotificationIcon: 'mipmap/ic_launcher',
+  );
+
+  runApp(const SilverMoonApp());
 }
