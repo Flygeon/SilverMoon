@@ -10,7 +10,12 @@
 # 用法：cd apps/mobile && bash tool/bootstrap.sh
 set -euo pipefail
 
-APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# APP_DIR 优先取第一个参数（CI 会把脚本规范化后从别处执行），否则按脚本自身位置推断。
+if [ "$#" -ge 1 ] && [ -n "${1:-}" ]; then
+  APP_DIR="$(cd "$1" && pwd)"
+else
+  APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 cd "$APP_DIR"
 
 ORG="${SILVERMOON_ORG:-cn.cool}"
