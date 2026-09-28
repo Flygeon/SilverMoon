@@ -30,8 +30,10 @@ dependencies:
   cached_network_image: ^3.4.1
   # 权限（本地媒体库）
   permission_handler: ^13.0.2
-  # Monet 动态取色（Android 12+）
-  dynamic_color: ^2.1.0
+  # Monet 动态取色（Android 12+ / iOS 16+）
+  # 注意：dynamic_color 2.x 起改用 material_ui(M3E) 的 ColorScheme，
+  # 与 Flutter 自带 ColorScheme 不兼容，故锁在 1.9.x。
+  dynamic_color: ^1.9.0
   # 本地音频标签解析（ID3 / VorbisComment / MP4 atom）
   audio_metadata_reader: ^1.8.0
   url_launcher: ^6.3.1
