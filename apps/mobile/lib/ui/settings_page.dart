@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../models/play_mode.dart';
+import '../models/track.dart';
 import '../services/player_service.dart';
 import '../state/library_controller.dart';
 import '../state/settings_controller.dart';

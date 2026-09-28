@@ -14,6 +14,7 @@ import 'artwork_service.dart';
 import 'audio_effects_service.dart';
 import 'json_store.dart';
 import 'lyric_parser.dart';
+import 'music_api.dart';
 import 'music_repository.dart';
 
 /// 播放器内核。
@@ -32,9 +33,13 @@ class PlayerService extends ChangeNotifier {
         _store = JsonStore('playback-state.json') {
     _equalizer = AndroidEqualizer();
     _loudness = AndroidLoudnessEnhancer();
+    // 硬件音效仅 Android 可用；其他平台不挂载，避免无意义的 effect 节点
+    final bool android = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
     _player = AudioPlayer(
       audioPipeline: AudioPipeline(
-        androidAudioEffects: <AndroidAudioEffect>[_equalizer, _loudness],
+        androidAudioEffects: android
+            ? <AndroidAudioEffect>[_equalizer, _loudness]
+            : <AndroidAudioEffect>[],
       ),
     );
     effects = AudioEffectsService(equalizer: _equalizer, loudness: _loudness);

@@ -1,6 +1,9 @@
+import 'dart:io';
+
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
 import 'services/player_service.dart';
@@ -35,6 +38,12 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
   }
 
   Future<void> _bootstrap() async {
+    // Android 13+ 的通知权限（媒体通知），失败不影响播放
+    if (Platform.isAndroid) {
+      try {
+        await Permission.notification.request();
+      } catch (_) {}
+    }
     await _settings.load();
     await _player.init(
       volume: _settings.settings.volume,
@@ -60,16 +69,19 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
-      providers: <SingleChildWidget>[
+      providers: [
         ChangeNotifierProvider<SettingsController>.value(value: _settings),
         ChangeNotifierProvider<PlayerService>.value(value: _player),
         ChangeNotifierProvider<LibraryController>.value(value: _library),
         ChangeNotifierProvider<OnlineController>.value(value: _online),
       ],
-      child: DynamicColorBuilder(
-        builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
-          return Consumer<SettingsController>(
-            builder: (BuildContext context, SettingsController s, Widget? _) {
+      child: DynamicColorBuilder(builder: _buildThemedApp),
+    );
+  }
+
+  Widget _buildThemedApp(ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
+    return Consumer<SettingsController>(
+      builder: (BuildContext context, SettingsController s, Widget? _) {
               final ColorScheme light = AppTheme.schemeFor(
                 Brightness.light,
                 s.useDynamicColor ? lightDynamic : null,
@@ -98,10 +110,7 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
                     ? const AppShell()
                     : const _BootSplash(),
               );
-            },
-          );
-        },
-      ),
+      },
     );
   }
 }

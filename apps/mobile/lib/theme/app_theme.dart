@@ -50,7 +50,7 @@ class AppTheme {
       ),
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
-        shape: SM.rCardInner,
+        shape: const RoundedRectangleBorder(borderRadius: SM.rCardInner),
         backgroundColor: scheme.inverseSurface,
         contentTextStyle: TextStyle(color: scheme.onInverseSurface, fontSize: 14),
       ),
