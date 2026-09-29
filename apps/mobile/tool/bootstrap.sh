@@ -55,19 +55,51 @@ if [ -d "$OVERLAY" ]; then
   done
 fi
 
-# ---------- iOS 部署目标 ----------
+# ---------- iOS：部署目标 + permission_handler 编译期开关 ----------
 python3 - "$APP_DIR/ios/Podfile" <<'PY'
-import re, sys, pathlib
+import re
+import sys
+import pathlib
+
+NL = chr(10)
+
 p = pathlib.Path(sys.argv[1])
 if not p.exists():
     sys.exit(0)
 s = p.read_text()
+
+# 1) 部署目标。webview_flutter / video_player / photo_manager 都要 13.0 以上。
 if re.search(r'^\s*#\s*platform :ios', s, re.M):
     s = re.sub(r'^\s*#\s*platform :ios.*$', "platform :ios, '13.0'", s, flags=re.M)
 elif not re.search(r'^\s*platform :ios', s, re.M):
-    s = s.replace("target 'Runner' do", "platform :ios, '13.0'\n\ntarget 'Runner' do", 1)
+    s = s.replace("target 'Runner' do",
+                  "platform :ios, '13.0'" + NL + NL + "target 'Runner' do", 1)
+
+# 2) permission_handler 的编译期开关。
+#
+# permission_handler_apple 用 #if PERMISSION_XXX 把每个权限的实现整段包起来，
+# 没定义这些宏时对应的处理器**根本不会被编进二进制**，运行时表现为
+# "申请了但永远 denied"（不崩溃、不报错，极难排查）。所以必须在这里注入。
+MACRO_BLOCK = """    target.build_configurations.each do |config|
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
+        '$(inherited)',
+        'PERMISSION_PHOTOS=1',
+        'PERMISSION_MEDIA_LIBRARY=1',
+        'PERMISSION_CAMERA=1',
+        'PERMISSION_MICROPHONE=1',
+        'PERMISSION_NOTIFICATIONS=1',
+      ]
+    end"""
+
+ANCHOR = 'flutter_additional_ios_build_settings(target)'
+if 'PERMISSION_PHOTOS=1' not in s:
+    if ANCHOR in s:
+        s = s.replace(ANCHOR, ANCHOR + NL + MACRO_BLOCK, 1)
+    else:
+        sys.stderr.write('[bootstrap] 警告: Podfile 里找不到 ' + ANCHOR + chr(10))
+
 p.write_text(s)
-print('[bootstrap] Podfile platform -> ios 13.0')
+print('[bootstrap] Podfile -> ios 13.0 + permission_handler 宏')
 PY
 
 echo "[bootstrap] done"

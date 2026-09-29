@@ -131,10 +131,36 @@ class WebHostService {
 
   // ------------------------------------------------------------ Vue 静态产物
 
+  /// 入口 HTML 的候选名。
+  ///
+  /// vite.mobile.config.ts 的 rollupOptions.input 是 mobile.html，所以构建产物里
+  /// 叫 mobile.html；仓库里那个本地占位叫 index.html。两个都试 —— 之前只认
+  /// index.html，产物换成 mobile.html 后整个页面 404，表现就是音乐页签全黑。
+  static const List<String> _entryCandidates = <String>[
+    'index.html',
+    'mobile.html',
+  ];
+
+  Future<bool> _assetExists(String key) async {
+    try {
+      await rootBundle.load(key);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<String> _resolveEntry() async {
+    for (final String name in _entryCandidates) {
+      if (await _assetExists('assets/webapp/$name')) return name;
+    }
+    return _entryCandidates.first;
+  }
+
   Future<void> _serveBundle(HttpRequest req, String path) async {
-    final String rel = path == '/' || path.isEmpty
-        ? 'index.html'
-        : (path.startsWith('/') ? path.substring(1) : path);
+    String rel = path.startsWith('/') ? path.substring(1) : path;
+    final bool isEntry = rel.isEmpty;
+    if (isEntry) rel = await _resolveEntry();
     final String assetKey = 'assets/webapp/$rel';
     final HttpResponse res = req.response;
 
@@ -142,9 +168,9 @@ class WebHostService {
       final ByteData data = await rootBundle.load(assetKey);
       Uint8List bytes =
           data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
-      // index.html 是唯一入口，这里把本地文件的 URL 前缀注入进去：
-      // 垫片据此改写 asset:// 本地路径，无需任何原生 scheme handler。
-      if (rel == 'index.html') {
+      // 入口 HTML 里注入本地文件的 URL 前缀：垫片据此改写 asset:// 本地路径，
+      // 无需任何原生 scheme handler。
+      if (isEntry) {
         bytes = _injectAssetBase(bytes);
       }
       res.headers.set(HttpHeaders.contentTypeHeader, _mimeFor(rel));

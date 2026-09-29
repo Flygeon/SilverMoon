@@ -1,8 +1,10 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:photo_manager/photo_manager.dart';
 
 /// 本地媒体类型。音乐不走这里（音乐由 WebView 里的 Vue 前端 + 桥接管），
 /// 图片 / 视频 / 书籍三个页签用它。
@@ -69,13 +71,21 @@ class MediaItem {
     required this.kind,
     this.size = 0,
     this.modified,
+    this.assetId,
   });
 
+  /// 文件系统路径。相册资产没有路径，这里放的是资产 id（保证 == / hashCode 仍可用）。
   final String path;
   final String name;
   final MediaKind kind;
   final int size;
   final DateTime? modified;
+
+  /// iOS 相册资产 id。非空表示这条记录来自系统相册，需要走
+  /// [MediaService.materializeFile] / [MediaService.thumbnailBytes] 才能拿到内容。
+  final String? assetId;
+
+  bool get isAsset => assetId != null;
 
   /// 不带扩展名的主标题。
   String get title {
@@ -124,8 +134,12 @@ class MediaItem {
 /// 音乐曲库用的是同一套策略，行为一致，也不需要额外的原生插件。
 class MediaService {
   /// 申请该类型所需的运行时权限，返回是否可用。
-  /// iOS 上图片/视频走相册权限（这里不申请，直接读 App 沙盒目录），返回 true。
+  ///
+  /// iOS：图片/视频要的是相册权限，由 photo_manager 自己弹系统授权框
+  ///      （见 _scanPhotoLibrary），这里不重复申请。
+  ///      书籍读的是 App 文档目录（Info.plist 已开 UIFileSharingEnabled），无需权限。
   Future<bool> ensurePermission(MediaKind kind) async {
+    if (Platform.isIOS) return true;
     if (!Platform.isAndroid) return true;
     final Permission? p = kind.androidPermission;
     if (p == null) return true;
@@ -201,6 +215,13 @@ class MediaService {
     final List<MediaItem> out = <MediaItem>[];
     final Set<String> seen = <String>{};
 
+    // iOS 的图片/视频不在文件系统里，只能从系统相册取。
+    // Android 继续走目录扫描：那边 DCIM/Pictures 是真实可读的路径，
+    // 再叠一层相册枚举只会出重复项。
+    if (Platform.isIOS && kind != MediaKind.book) {
+      out.addAll(await _scanPhotoLibrary(kind, maxFiles));
+    }
+
     for (final String root in dirs) {
       if (out.length >= maxFiles) break;
       final Directory dir = Directory(root);
@@ -261,5 +282,82 @@ class MediaService {
       return mb.compareTo(ma);
     });
     return out;
+  }
+
+  // ------------------------------------------------------------------ 系统相册
+
+  static String _two(int v) => v < 10 ? '0$v' : '$v';
+
+  /// 从系统相册读图片/视频。
+  ///
+  /// 刻意**只取 id 和元信息，不落盘**：iOS 上 AssetEntity.file 会把原图
+  /// 复制一份到临时目录，几千张照片就是几个 GB。真正需要文件时再由
+  /// [materializeFile] 按需取，缩略图则由 [thumbnailBytes] 现出。
+  Future<List<MediaItem>> _scanPhotoLibrary(MediaKind kind, int maxFiles) async {
+    final RequestType type =
+        kind == MediaKind.video ? RequestType.video : RequestType.image;
+    final List<MediaItem> out = <MediaItem>[];
+    try {
+      final PermissionState ps = await PhotoManager.requestPermissionExtend();
+      if (!ps.isAuth) {
+        debugPrint('相册权限未授予: $ps');
+        return out;
+      }
+      final List<AssetPathEntity> albums =
+          await PhotoManager.getAssetPathList(type: type, onlyAll: true);
+      if (albums.isEmpty) return out;
+      final AssetPathEntity all = albums.first;
+      final int total = await all.assetCountAsync;
+      if (total <= 0) return out;
+      final int take = total > maxFiles ? maxFiles : total;
+      final List<AssetEntity> assets =
+          await all.getAssetListRange(start: 0, end: take);
+      final String ext = kind == MediaKind.video ? '.mp4' : '.jpg';
+      for (final AssetEntity a in assets) {
+        final String? raw = a.title;
+        final DateTime d = a.createDateTime;
+        final String fallback = 'IMG_${d.year}${_two(d.month)}${_two(d.day)}_'
+            '${_two(d.hour)}${_two(d.minute)}${_two(d.second)}$ext';
+        out.add(MediaItem(
+          path: a.id,
+          assetId: a.id,
+          name: (raw != null && raw.trim().isNotEmpty) ? raw.trim() : fallback,
+          kind: kind,
+          modified: d,
+        ));
+      }
+    } catch (e) {
+      debugPrint('相册扫描失败: $e');
+    }
+    return out;
+  }
+
+  /// 把 MediaItem 解析成一个真实可读的文件。
+  ///
+  /// - 文件系统条目：直接 File(path)
+  /// - 相册资产：交给 photo_manager 落盘（iCloud 上的资产会先下载）
+  static Future<File?> materializeFile(MediaItem item) async {
+    final String? id = item.assetId;
+    if (id == null) return File(item.path);
+    try {
+      final AssetEntity? asset = await AssetEntity.fromId(id);
+      return await asset?.file;
+    } catch (e) {
+      debugPrint('相册资产落盘失败 $id: $e');
+      return null;
+    }
+  }
+
+  /// 相册资产的缩略图。文件系统条目返回 null（调用方直接用 Image.file）。
+  static Future<Uint8List?> thumbnailBytes(MediaItem item, int size) async {
+    final String? id = item.assetId;
+    if (id == null) return null;
+    try {
+      final AssetEntity? asset = await AssetEntity.fromId(id);
+      return await asset?.thumbnailDataWithSize(ThumbnailSize(size, size));
+    } catch (e) {
+      debugPrint('相册缩略图失败 $id: $e');
+      return null;
+    }
   }
 }

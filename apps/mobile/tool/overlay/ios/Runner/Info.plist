@@ -65,6 +65,20 @@
 		<true/>
 	</dict>
 
+	<!-- 运行时权限说明。
+	     iOS 上缺这些键的后果不是"返回 denied"而是**直接闪退**，
+	     而且闪退发生在申请权限那一刻，堆栈里看不出是权限问题。 -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>SilverMoon 需要读取相册，用于在「图片」「视频」页签里浏览你的照片和视频。</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>SilverMoon 需要写入相册，用于把图片保存到你的相册。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>SilverMoon 需要使用相机来拍摄照片。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>SilverMoon 需要使用麦克风来录制音频。</string>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>SilverMoon 需要访问媒体资料库，用于播放设备上的音乐。</string>
+
 	<!-- 本地音乐库：通过「文件」App 把音频放进 SilverMoon 文档目录 -->
 	<key>UIFileSharingEnabled</key>
 	<true/>

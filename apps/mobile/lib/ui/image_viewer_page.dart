@@ -1,8 +1,7 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 
 import '../services/media_service.dart';
+import 'media_thumb.dart';
 
 /// 全屏图片查看：左右滑动切换，双指缩放，单击退出。
 class ImageViewerPage extends StatefulWidget {
@@ -56,14 +55,7 @@ class _ImageViewerPageState extends State<ImageViewerPage> {
                   minScale: 1,
                   maxScale: 6,
                   child: Center(
-                    child: Image.file(
-                      File(item.path),
-                      fit: BoxFit.contain,
-                      errorBuilder: (_, __, ___) => const Center(
-                        child: Icon(Icons.broken_image_outlined,
-                            color: Colors.white38, size: 48),
-                      ),
-                    ),
+                    child: MediaFullImage(item: item),
                   ),
                 ),
               );

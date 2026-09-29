@@ -31,8 +31,14 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   }
 
   Future<void> _open() async {
-    final VideoPlayerController c =
-        VideoPlayerController.file(File(widget.item.path));
+    // 相册视频得先落盘（iCloud 上的会在这步下载），文件系统的直接用原路径
+    final File? f = await MediaService.materializeFile(widget.item);
+    if (f == null) {
+      if (mounted) setState(() => _error = '无法读取该视频文件');
+      return;
+    }
+    if (!mounted) return;
+    final VideoPlayerController c = VideoPlayerController.file(f);
     _ctl = c;
     try {
       await c.initialize();

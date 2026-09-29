@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -7,6 +5,7 @@ import '../services/media_service.dart';
 import '../state/media_controller.dart';
 import 'book_reader_page.dart';
 import 'image_viewer_page.dart';
+import 'media_thumb.dart';
 import 'video_player_page.dart';
 
 // ---------------------------------------------------------------- 图片页签
@@ -62,15 +61,7 @@ class _ImagesPageState extends State<ImagesPage> {
           ),
           child: Hero(
             tag: 'img:${item.path}',
-            child: Image.file(
-              File(item.path),
-              fit: BoxFit.cover,
-              cacheWidth: 320,
-              errorBuilder: (_, __, ___) => Container(
-                color: Theme.of(c).colorScheme.surfaceContainerHighest,
-                child: const Icon(Icons.broken_image_outlined, size: 22),
-              ),
-            ),
+            child: MediaThumb(item: item),
           ),
         );
       },

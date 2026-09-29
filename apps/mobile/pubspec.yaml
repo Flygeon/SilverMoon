@@ -42,6 +42,9 @@ dependencies:
   dynamic_color: ^1.9.0
   # 本地音频标签解析（ID3 / VorbisComment / MP4 atom）
   audio_metadata_reader: ^1.8.0
+  # iOS 的图片/视频只能从系统相册取（文件系统里没有用户照片）。
+  # Android 不走它，那边 DCIM/Pictures 是真实可读的路径。
+  photo_manager: ^3.6.0
   url_launcher: ^6.3.1
   collection: ^1.19.1
   intl: any
@@ -64,4 +67,7 @@ flutter_launcher_icons:
   android: "ic_launcher"
   ios: true
   remove_alpha_ios: true
-  image_path: "assets/icon/app_icon.png"
+  # Android 用带圆角的那张：Android 不会给传统图标套蒙版，圆角必须烘进图片。
+  image_path: "assets/icon/app_icon_rounded.png"
+  # iOS 用满幅不透明的那张：系统自己套超椭圆蒙版，带 alpha 的圆角会被压成黑色。
+  image_path_ios: "assets/icon/app_icon.png"
