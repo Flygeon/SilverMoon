@@ -3,6 +3,13 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
+// 只取需要的几个名字：pointycastle/export.dart 里的 Digest / Hash 会和
+// package:crypto 撞名，SecureRandom 之类又和 dart:math 的 Random 同域。
+import 'package:pointycastle/api.dart' show KeyParameter, ParametersWithIV;
+import 'package:pointycastle/asymmetric/api.dart' show RSAPublicKey;
+import 'package:pointycastle/asymmetric/rsa.dart' show RSAKeyParser;
+import 'package:pointycastle/block/aes.dart' show AESEngine;
+import 'package:pointycastle/block/modes/cbc.dart' show CBCBlockCipher;
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -857,6 +864,8 @@ class _Online {
     String path,
     Map<String, Object?> params, {
     Map<String, Object?>? body,
+    String host = 'gateway.kugou.com',
+    Map<String, String>? headers,
   }) async {
     final _CookieJar jar = await _cookies;
     final Map<String, String> ck = jar.bucket('kugou');
@@ -885,7 +894,7 @@ class _Online {
       'kugou',
       'POST',
       Uri.https(
-        'gateway.kugou.com',
+        host,
         path,
         signed.map((String k, Object? v) => MapEntry<String, String>(k, '$v')),
       ),
@@ -894,6 +903,7 @@ class _Online {
         'mid': mid,
         'dfid': dfid,
         'clienttime': '$clienttime',
+        ...?headers,
       },
       jsonBody: bodyText.isEmpty ? null : bodyText,
     );
@@ -930,15 +940,258 @@ class _Online {
     return null;
   }
 
-  /// 手机号 + 验证码登录。
+  // ── 酷狗登录用的 AES / RSA（crypto.rs 的 Dart 版）────────────────────
+  //
+  // 手机号登录是唯一一条真正需要加密层的接口：login.rs:143 先用 AES-CBC 加密
+  // {mobile, code}，login.rs:187 再用 RSA 把那个 AES 密钥送上去。其余酷狗命令
+  // 都只有 md5 签名（见上面的 _kgSign）。
+
+  /// crypto.rs:67 aes_cbc_encrypt：PKCS7 填充，按 key 长度选 AES-128/192/256。
+  /// 注意 crypto.rs:292 里 key/iv 是按 **UTF-8 字节**用的，不是十六进制解码。
+  static String _kgAesCbcHex(String key, String iv, String data) {
+    final Uint8List keyBytes = Uint8List.fromList(utf8.encode(key));
+    final Uint8List ivBytes = Uint8List.fromList(utf8.encode(iv));
+    final Uint8List plain = Uint8List.fromList(utf8.encode(data));
+
+    // crypto.rs:76-79：pad = bs - (len % bs)，正好整块时补满一整块。
+    final int pad = 16 - (plain.length % 16);
+    final Uint8List padded = Uint8List(plain.length + pad)
+      ..setRange(0, plain.length, plain)
+      ..fillRange(plain.length, plain.length + pad, pad);
+
+    final CBCBlockCipher cbc = CBCBlockCipher(AESEngine())
+      ..init(
+        true,
+        ParametersWithIV<KeyParameter>(KeyParameter(keyBytes), ivBytes),
+      );
+    final Uint8List out = Uint8List(padded.length);
+    for (int off = 0; off < padded.length; off += 16) {
+      cbc.processBlock(padded, off, out, off);
+    }
+    return _kgHex(out);
+  }
+
+  /// crypto.rs:103 aes_cbc_decrypt + PKCS7 去填充。
+  static Uint8List _kgAesCbcDecrypt(String key, String iv, Uint8List ct) {
+    final CBCBlockCipher cbc = CBCBlockCipher(AESEngine())
+      ..init(
+        false,
+        ParametersWithIV<KeyParameter>(
+          KeyParameter(Uint8List.fromList(utf8.encode(key))),
+          Uint8List.fromList(utf8.encode(iv)),
+        ),
+      );
+    final Uint8List out = Uint8List(ct.length);
+    for (int off = 0; off < ct.length; off += 16) {
+      cbc.processBlock(ct, off, out, off);
+    }
+    if (out.isEmpty) return out;
+    final int pad = out[out.length - 1];
+    if (pad < 1 || pad > 16 || pad > out.length) return out;
+    return Uint8List.sublistView(out, 0, out.length - pad);
+  }
+
+  /// crypto.rs:292 crypto_aes_encrypt(data, None, None)：随机 16 位 tempKey，
+  /// key = md5(tempKey)[..32]，iv = key 末 16 位。密钥要跟着请求一起送上去，
+  /// 因为上游回传的 secu_params 是用同一个密钥加密的。
+  static ({String hex, String key}) _kgAesRandom(String data) {
+    final String tk = _kgRandomLower16();
+    final String md = md5.convert(utf8.encode(tk)).toString();
+    final String key = md.substring(0, 32);
+    final String iv = key.substring(key.length - 16);
+    return (hex: _kgAesCbcHex(key, iv, data), key: tk);
+  }
+
+  /// crypto.rs:315 crypto_aes_decrypt(data_hex, key, None)：key 先 md5 再取前 32 位。
+  static Object? _kgAesDecrypt(String hex, String key) {
+    final String md = md5.convert(utf8.encode(key)).toString();
+    final String realKey = md.substring(0, 32);
+    final String realIv = realKey.substring(realKey.length - 16);
+    final String text = utf8.decode(
+      _kgAesCbcDecrypt(realKey, realIv, _kgUnhex(hex)),
+      allowMalformed: true,
+    );
+    try {
+      return jsonDecode(text);
+    } catch (_) {
+      return text;
+    }
+  }
+
+  /// crypto.rs:283 概念版（lite）公钥，rsa_pk 用的就是它。
+  static const String _kgLiteRsaPem =
+      '-----BEGIN PUBLIC KEY-----\n'
+      'MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDECi0Np2UR87scwrvTr72L6oO01rBbbBPriSDFPxr3Z5syug0O24QyQO8bg27+0+4kBzTBTBOZ/WWU0WryL1JSXRTXLgFVxtzIY41Pe7lPOgsfTCn5kZcvKhYKJesKnnJDNr5/abvTGf+rHG3YRwsCHcQ08/q6ifSioBszvb3QiwIDAQAB\n'
+      '-----END PUBLIC KEY-----';
+
+  /// crypto.rs:158 rsa_raw_encrypt：**无填充**裸模幂。
+  /// 两个容易搞反的地方：输入不足模长时是往**右**补零（CryptoJS 的
+  /// Uint8Array(keyLength) 语义，数据放偏移 0），只有输出才是往**左**补零到模长。
+  static String _kgRsaRawHex(String data) {
+    final RSAPublicKey pub =
+        RSAKeyParser().parse(_kgLiteRsaPem) as RSAPublicKey;
+    final BigInt n = pub.modulus!;
+    final BigInt e = pub.exponent!;
+    final int modLen = (n.bitLength + 7) ~/ 8;
+
+    final Uint8List bytes = Uint8List.fromList(utf8.encode(data));
+    final Uint8List input = Uint8List(modLen);
+    input.setRange(0, bytes.length, bytes);
+
+    return _kgHex(_kgBigIntBytes(_kgBytesBigInt(input).modPow(e, n), modLen));
+  }
+
+  static BigInt _kgBytesBigInt(Uint8List b) {
+    BigInt v = BigInt.zero;
+    for (final int x in b) {
+      v = (v << 8) | BigInt.from(x);
+    }
+    return v;
+  }
+
+  /// 左侧补零到固定长度。
+  static Uint8List _kgBigIntBytes(BigInt v, int len) {
+    final List<int> rev = <int>[];
+    for (BigInt t = v; t > BigInt.zero; t = t >> 8) {
+      rev.add((t & BigInt.from(0xff)).toInt());
+    }
+    final Uint8List raw = Uint8List.fromList(rev.reversed.toList());
+    final Uint8List out = Uint8List(len);
+    final int take = raw.length < len ? raw.length : len;
+    out.setRange(len - take, len, raw.sublist(raw.length - take));
+    return out;
+  }
+
+  static String _kgHex(List<int> bytes) =>
+      bytes.map((int b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+  static Uint8List _kgUnhex(String s) {
+    final Uint8List out = Uint8List(s.length ~/ 2);
+    for (int i = 0; i < out.length; i++) {
+      out[i] = int.parse(s.substring(i * 2, i * 2 + 2), radix: 16);
+    }
+    return out;
+  }
+
+  /// util.rs:11 randomString(len)，字符集 '1234567890A-Z'。
+  static String _kgRandomString(int len) {
+    const String chars = '1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    return List<String>.generate(
+      len,
+      (_) => chars[_kgRng.nextInt(chars.length)],
+    ).join();
+  }
+
+  /// util.rs:18 randomString(16).toLowerCase()，登录时的 AES tempKey。
+  static String _kgRandomLower16() => _kgRandomString(16).toLowerCase();
+
+  /// helper.rs:107 signParamsKey：md5(appid + 盐 + clientver + data)。
+  static String _kgSignParamsKey(String data) =>
+      md5.convert(utf8.encode('3116$_kgRoute11440$data')).toString();
+
+  /// login.rs:16-19 两个定长 AES 密钥（设备指纹 t1/t2）。
+  static const String _kgT1Key = '5e4ef500e9597fe004bd09a46d8add98';
+  static const String _kgT1Iv = '04bd09a46d8add98';
+  static const String _kgT2Key = 'fd14b35e3f81af3817a20ae7adae7020';
+  static const String _kgT2Iv = '17a20ae7adae7020';
+
+  /// 手机号 + 验证码登录。login.rs:139 handle_cellphone。
   ///
-  /// login.rs:139 handle_cellphone 在上游请求前先做两件移动端没有的事：
-  /// login.rs:143 aes_hex 用 AES-CBC 加密 params，login.rs:187 rsa_pk 用 RSA
-  /// 加密 AES 密钥（crypto.rs:67 / crypto.rs:158,178）。pubspec 只有 crypto
-  /// （纯哈希），补上要引入 AES/RSA 实现。签名层已经具备，缺的是加密层，
-  /// 所以这里明确失败，而不是发一个必然被拒的请求。
+  /// 三步：AES 加密 {mobile, code} 当 params，RSA 裸模幂把 AES 密钥当 pk 送上去，
+  /// 上游用 secu_params 回一段同一密钥加密的数据，解出来才是真正的 token。
   Future<Object?> kugouLoginCellphone(Map<String, dynamic> args) async {
-    throw Exception('酷狗手机号登录需要 AES+RSA 加密层（桌面端在 Rust 侧），移动端未实现；请用扫码登录');
+    final String mobile = _s(args['mobile']);
+    final String code = _s(args['code']);
+    if (mobile.isEmpty) throw Exception('缺少手机号');
+    if (code.isEmpty) throw Exception('缺少验证码');
+
+    final _CookieJar jar = await _cookies;
+    final Map<String, String> ck = jar.bucket('kugou');
+    final Map<String, String> dev = jar.bucket('kugou-device');
+    final String guid = _s(dev['guid']);
+    final String devId = _s(dev['dev']);
+    const String mac = '02:00:00:00:00:00';
+    final int now = DateTime.now().millisecondsSinceEpoch;
+
+    // login.rs:143：params = AES(json({mobile, code}))，密钥随机生成。
+    final ({String hex, String key}) enc = _kgAesRandom(
+      _kgJson(<String, Object?>{'mobile': mobile, 'code': code}),
+    );
+
+    // login.rs:149-160：取前 2 位 + '*****' + 第 11 位（index 10）。
+    final String masked = (mobile.length > 2 ? mobile.substring(0, 2) : '') +
+        '*****' +
+        (mobile.length > 10 ? mobile[10] : '');
+
+    final String dfid =
+        _s(ck['dfid']).isNotEmpty ? _s(ck['dfid']) : _kgRandomString(24);
+
+    // login.rs:169-176：t1/t2 是设备指纹，参与上游风控。
+    final String t2 = _kgAesCbcHex(
+      _kgT2Key,
+      _kgT2Iv,
+      '$guid|0f607264fc6318a92b9e13c65db7cd3c|$mac|$devId|$now',
+    );
+    final String t1 = _kgAesCbcHex(_kgT1Key, _kgT1Iv, '|$now');
+
+    final Map<String, Object?> body = <String, Object?>{
+      'plat': 1,
+      'support_multi': 1,
+      't1': t1,
+      't2': t2,
+      'clienttime_ms': now,
+      'mobile': masked,
+      'key': _kgSignParamsKey('$now'),
+      'pk': _kgRsaRawHex(
+        _kgJson(<String, Object?>{'clienttime_ms': now, 'key': enc.key}),
+      ).toUpperCase(),
+      'params': enc.hex,
+      'dfid': dfid,
+      'dev': devId,
+      'gitversion': '5f0b7c4',
+      if (_s(ck['userid']).isNotEmpty) 'userid': _s(ck['userid']),
+    };
+
+    final Map<String, dynamic> json = await _kgAndroid(
+      '/v7/login_by_verifycode',
+      const <String, Object?>{},
+      body: body,
+      host: 'loginserviceretry.kugou.com',
+      headers: <String, String>{
+        'support-calm': '1',
+        'User-Agent': 'Android16-1070-11440-130-0-LOGIN-wifi',
+      },
+    );
+
+    if (_i(json['status']) != 1) {
+      throw Exception('登录失败：${_kgError(json, '验证码错误或已过期')}');
+    }
+
+    final Map<String, dynamic> data =
+        (json['data'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+
+    // login.rs:205-212：secu_params 才是真正的凭据，用刚才那个 tempKey 解。
+    final String secu = _s(data['secu_params']);
+    if (secu.isNotEmpty) {
+      final Object? got = _kgAesDecrypt(secu, enc.key);
+      if (got is Map) {
+        got.forEach((Object? k, Object? v) {
+          data['$k'] = v;
+          ck['$k'] = '$v';
+        });
+      } else {
+        data['token'] = got;
+        if (got is String) ck['token'] = got;
+      }
+    }
+
+    ck['t1'] = _s(data['t1']);
+    ck['token'] = _s(data['token']);
+    ck['userid'] = _s(data['userid']);
+    ck['vip_type'] = _s(data['vip_type']);
+    ck['vip_token'] = _s(data['vip_token']);
+    await jar.save();
+    return _kugouProfile(jar);
   }
 
   /// 每日签到：先领畅听 VIP，再升概念版。youth.rs:131 / youth.rs:147。

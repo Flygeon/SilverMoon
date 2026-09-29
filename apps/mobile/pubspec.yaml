@@ -22,6 +22,9 @@ dependencies:
   # 网络
   http: ^1.2.2
   crypto: ^3.0.6
+  # 酷狗手机号登录要 AES-CBC + RSA 裸模幂（桌面端在 Rust 的 crypto.rs 里）。
+  # 4.x 去掉了已废弃的 js 依赖，3.x 的 js>=0.6.3 <0.8.0 会和现代 Flutter 冲突。
+  pointycastle: ^4.0.0
   # 存储 / 路径
   shared_preferences: ^2.3.3
   path_provider: ^2.1.5
