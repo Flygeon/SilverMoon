@@ -1,159 +1,762 @@
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 
-/// 在线音源命令。
+/// 在线音源（网易云 / 酷狗）的桥接命令。
 ///
-/// 桌面端这几条在 Rust 里实现，动机是绕 CORS 与统一保管登录凭据。
-/// 移动端没有 Rust 侧，这里直接用 Dart 的网络栈 —— 效果等价，
-/// 而且请求由 Dart 发起，CORS 天然不存在。
+/// 与桌面端的差别：桌面端把登录凭据放在 Rust 侧（backend/src/netease.rs、
+/// backend/src/kugou.rs），完全不进渲染进程；移动端没有 Rust 侧，凭据只能由
+/// Dart 自己持有。这里落成 <appSupport>/silvermoon/online-cookies.json，按
+/// provider 分桶。
 ///
-/// 注意：**歌词不在这里**。QQ 音乐 QRC 与酷狗 KRC 的解密、逐字对齐
-/// 全部由 Vue 侧经 http 通道完成，所以逐字歌词不需要额外命令。
+/// 这是**明文**存储，强度低于桌面端。接受它的理由：移动端本来就没有可信执行
+/// 边界（同一个 Dart 进程既能读凭据也能发请求），再包一层加密等于把钥匙和锁
+/// 放一起。要真正隔离得走平台钥匙串（flutter_secure_storage），属于后续加固。
 Map<String, Future<Object?> Function(Map<String, dynamic>)> buildOnlineCommands() {
-  final _Online api = _Online();
+  final _Online online = _Online();
   return <String, Future<Object?> Function(Map<String, dynamic>)>{
-    'netease_song_url': api.neteaseSongUrl,
-    'kugou_search': api.kugouSearch,
-    'kugou_song_url': api.kugouSongUrl,
-    'kugou_cover': api.kugouCover,
+    // ---- 网易云 ----
+    'netease_song_url': online.neteaseSongUrl,
+    'netease_login_qr_key': online.neteaseLoginQrKey,
+    'netease_login_qr_check': online.neteaseLoginQrCheck,
+    'netease_account': online.neteaseAccount,
+    'netease_sms_captcha_sent': online.neteaseSmsCaptchaSent,
+    'netease_login_cellphone': online.neteaseLoginCellphone,
+    'netease_user_playlists': online.neteaseUserPlaylists,
+    'netease_playlist_detail': online.neteasePlaylistDetail,
+    'netease_cloud': online.neteaseCloud,
+    'netease_song_comments': online.neteaseSongComments,
+    'netease_set_song_liked': online.neteaseSetSongLiked,
+    'netease_likelist': online.neteaseLikelist,
+    'netease_recommend_playlists': online.neteaseRecommendPlaylists,
+    'netease_daily_recommend_songs': online.neteaseDailyRecommendSongs,
+    'netease_personal_fm': online.neteasePersonalFm,
+    'netease_logout': online.neteaseLogout,
+    // ---- 酷狗 ----
+    'kugou_search': online.kugouSearch,
+    'kugou_song_url': online.kugouSongUrl,
+    'kugou_cover': online.kugouCover,
+    'kugou_rank_list': online.kugouRankList,
+    'kugou_rank_songs': online.kugouRankSongs,
+    'kugou_playlist_detail': online.kugouPlaylistDetail,
+    'kugou_everyday_recommend': online.kugouEverydayRecommend,
+    'kugou_login_status': online.kugouLoginStatus,
+    'kugou_login_qr_key': online.kugouLoginQrKey,
+    'kugou_login_qr_check': online.kugouLoginQrCheck,
+    'kugou_account': online.kugouAccount,
+    'kugou_logout': online.kugouLogout,
   };
 }
 
-class _Online {
-  final http.Client _client = http.Client();
+// --------------------------------------------------------------------- 工具
 
-  /// 上游对无 UA 的请求会直接拒绝或返回空列表，必须伪装成浏览器。
-  static const Map<String, String> _browserHeaders = <String, String>{
-    'User-Agent': 'Mozilla/5.0 (Linux; Android 13; Pixel 7) '
-        'AppleWebKit/537.36 (KHTML, like Gecko) '
-        'Chrome/120.0.0.0 Mobile Safari/537.36',
-  };
+String _s(Object? v, [String fallback = '']) {
+  if (v == null) return fallback;
+  final String t = '$v';
+  return t.isEmpty ? fallback : t;
+}
 
-  Future<http.Response> _get(String url, {Map<String, String>? headers}) {
-    final Map<String, String> h = <String, String>{
-      ..._browserHeaders,
-      ...?headers,
-    };
-    return _client
-        .get(Uri.parse(url), headers: h)
-        .timeout(const Duration(seconds: 20));
+int _i(Object? v, [int fallback = 0]) {
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  if (v is String) return int.tryParse(v) ?? fallback;
+  return fallback;
+}
+
+/// Set-Cookie 解析。
+///
+/// http 包会把多个 Set-Cookie 合并成一个逗号分隔的串，而 Expires 属性本身
+/// 也含逗号（Wed, 01 Jan 2025 ...），直接 split(',') 会把日期切碎。
+/// 这里改成"从整串里抽 name=value 对，再滤掉属性名"，对两种情形都成立。
+const Set<String> _cookieAttrs = <String>{
+  'expires', 'path', 'domain', 'max-age', 'secure', 'httponly', 'samesite',
+  'version', 'comment',
+};
+
+// ------------------------------------------------------------- 凭据与请求层
+
+class _CookieJar {
+  _CookieJar(this._file);
+
+  final File _file;
+  final Map<String, Map<String, String>> _buckets =
+      <String, Map<String, String>>{};
+  bool _loaded = false;
+
+  Future<void> ensure() async {
+    if (_loaded) return;
+    _loaded = true;
+    try {
+      if (await _file.exists()) {
+        final Object? raw = jsonDecode(await _file.readAsString());
+        if (raw is Map) {
+          raw.forEach((Object? k, Object? v) {
+            if (k is String && v is Map) {
+              _buckets[k] = v.map(
+                (Object? a, Object? b) => MapEntry<String, String>('$a', '$b'),
+              );
+            }
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('在线凭据读取失败: $e');
+    }
   }
 
-  String _text(http.Response resp) =>
-      utf8.decode(resp.bodyBytes, allowMalformed: true);
+  Map<String, String> bucket(String provider) =>
+      _buckets.putIfAbsent(provider, () => <String, String>{});
 
-  /// 网易云播放地址。
-  ///
-  /// 走官方 outer 直链：它 302 跳到 CDN，<audio> 自己会跟随跳转。
-  /// 不要在这里把音频下载下来再转 dataURL —— 一首歌几十 MB，内存直接爆。
-  Future<Object?> neteaseSongUrl(Map<String, dynamic> args) async {
-    final List<dynamic> ids =
-        (args['ids'] as List<dynamic>?) ?? const <dynamic>[];
-    return ids.map((dynamic raw) {
-      final int id = (raw as num).toInt();
-      return <String, dynamic>{
-        'id': id,
-        'url': 'https://music.163.com/song/media/outer/url?id=$id.mp3',
+  String header(String provider) {
+    final Map<String, String> b = _buckets[provider] ?? const <String, String>{};
+    if (b.isEmpty) return '';
+    return b.entries
+        .map((MapEntry<String, String> e) => '${e.key}=${e.value}')
+        .join('; ');
+  }
+
+  void absorb(String provider, String? raw) {
+    if (raw == null || raw.isEmpty) return;
+    final Map<String, String> b = bucket(provider);
+    final RegExp re = RegExp(r'([A-Za-z0-9_\-]+)=([^;,]+)');
+    for (final RegExpMatch m in re.allMatches(raw)) {
+      final String name = m.group(1) ?? '';
+      final String value = (m.group(2) ?? '').trim();
+      if (name.isEmpty || _cookieAttrs.contains(name.toLowerCase())) continue;
+      b[name] = value;
+    }
+  }
+
+  void clear(String provider) => _buckets[provider] = <String, String>{};
+
+  Future<void> save() async {
+    try {
+      await _file.parent.create(recursive: true);
+      await _file.writeAsString(jsonEncode(_buckets));
+    } catch (e) {
+      debugPrint('在线凭据写入失败: $e');
+    }
+  }
+}
+
+class _Online {
+  static const Duration _timeout = Duration(seconds: 20);
+
+  static const String _ua =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+      '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+  Future<_CookieJar>? _jarFuture;
+
+  /// 凭据文件要等 path_provider 就绪才能定位，所以整体延迟到第一次请求。
+  /// 用 Future 缓存而不是 bool 标志，避免并发请求各建一个 jar。
+  Future<_CookieJar> get _cookies => _jarFuture ??= _openJar();
+
+  static Future<_CookieJar> _openJar() async {
+    final Directory dir = await getApplicationSupportDirectory();
+    final _CookieJar jar =
+        _CookieJar(File('${dir.path}/silvermoon/online-cookies.json'));
+    await jar.ensure();
+    return jar;
+  }
+
+  Future<http.Response> _send(
+    String provider,
+    String method,
+    Uri uri, {
+    required String referer,
+    Map<String, String>? form,
+    Map<String, String>? extraHeaders,
+  }) async {
+    final _CookieJar jar = await _cookies;
+    final Map<String, String> headers = <String, String>{
+      'User-Agent': _ua,
+      'Referer': referer,
+      'Accept': 'application/json, text/plain, */*',
+      'Accept-Language': 'zh-CN,zh;q=0.9',
+      if (jar.header(provider).isNotEmpty) 'Cookie': jar.header(provider),
+      ...?extraHeaders,
+    };
+    http.Response res;
+    if (method == 'POST') {
+      headers['Content-Type'] = 'application/x-www-form-urlencoded';
+      res = await http
+          .post(uri, headers: headers, body: form ?? <String, String>{})
+          .timeout(_timeout);
+    } else {
+      res = await http.get(uri, headers: headers).timeout(_timeout);
+    }
+    jar.absorb(provider, res.headers['set-cookie']);
+    return res;
+  }
+
+  Object? _decode(http.Response res) {
+    if (res.bodyBytes.isEmpty) return null;
+    final String text = utf8.decode(res.bodyBytes, allowMalformed: true);
+    try {
+      return jsonDecode(text);
+    } catch (_) {
+      throw Exception('上游返回了非 JSON 内容（HTTP ${res.statusCode}）');
+    }
+  }
+
+  Map<String, dynamic> _decodeMap(http.Response res) {
+    final Object? json = _decode(res);
+    if (json is Map<String, dynamic>) return json;
+    if (json is Map) return json.cast<String, dynamic>();
+    throw Exception('上游返回了非对象 JSON');
+  }
+
+  // ------------------------------------------------------------- 网易云
+
+  Future<Map<String, dynamic>> _neGet(
+    String path, [
+    Map<String, String>? query,
+  ]) async {
+    final Map<String, String> q = <String, String>{...?query};
+    final String csrf = (await _cookies).bucket('netease')['__csrf'] ?? '';
+    if (csrf.isNotEmpty) q.putIfAbsent('csrf_token', () => csrf);
+    final http.Response res = await _send(
+      'netease',
+      'GET',
+      Uri.https('music.163.com', path, q.isEmpty ? null : q),
+      referer: 'https://music.163.com/',
+    );
+    return _decodeMap(res);
+  }
+
+  Future<Map<String, dynamic>> _nePost(
+    String path,
+    Map<String, String> form,
+  ) async {
+    final Map<String, String> body = <String, String>{...form};
+    final String csrf = (await _cookies).bucket('netease')['__csrf'] ?? '';
+    if (csrf.isNotEmpty) body.putIfAbsent('csrf_token', () => csrf);
+    final http.Response res = await _send(
+      'netease',
+      'POST',
+      Uri.https('music.163.com', path),
+      referer: 'https://music.163.com/',
+      form: body,
+    );
+    return _decodeMap(res);
+  }
+
+  /// 网易云歌曲条目归一化。新接口用 ar/al，老接口用 artists/album。
+  Map<String, Object?> _neSong(Map<dynamic, dynamic> m) {
+    final List<dynamic> ars = (m['ar'] as List<dynamic>?) ??
+        (m['artists'] as List<dynamic>?) ??
+        const <dynamic>[];
+    final String artist = ars
+        .whereType<Map<dynamic, dynamic>>()
+        .map((Map<dynamic, dynamic> a) => _s(a['name']))
+        .where((String s) => s.isNotEmpty)
+        .join(' / ');
+    final Object? album = m['al'] ?? m['album'];
+    final String albumName = album is Map ? _s(album['name']) : '';
+    final String pic = album is Map ? _s(album['picUrl']) : '';
+    return <String, Object?>{
+      'id': _i(m['id']),
+      'name': _s(m['name']),
+      'artist': artist,
+      'album': albumName.isEmpty ? null : albumName,
+      'picUrl': pic.isEmpty ? null : pic,
+    };
+  }
+
+  List<Map<String, Object?>> _neComments(Object? raw) {
+    if (raw is! List) return <Map<String, Object?>>[];
+    return raw.whereType<Map<dynamic, dynamic>>().map((Map<dynamic, dynamic> c) {
+      final Object? u = c['user'];
+      final Map<String, Object?> user = u is Map
+          ? <String, Object?>{
+              'userId': _i(u['userId']),
+              'nickname': _s(u['nickname']),
+              'avatarUrl': _s(u['avatarUrl']),
+              'vipType': _i(u['vipType']),
+            }
+          : <String, Object?>{};
+      return <String, Object?>{
+        'commentId': _i(c['commentId']),
+        'content': _s(c['content']),
+        'time': _i(c['time']),
+        'likedCount': _i(c['likedCount']),
+        'liked': c['liked'] == true,
+        'user': user,
+        'ipLocation': c['ipLocation'],
       };
     }).toList();
   }
 
-  /// 酷狗搜索：返回上游原始 JSON，交给前端 utils/kugou.ts 归一化
-  /// （上游存在新旧两套字段形态，归一化逻辑本来就只在前端一处）。
-  Future<Object?> kugouSearch(Map<String, dynamic> args) async {
-    final String keyword = (args['keyword'] ?? '').toString();
-    if (keyword.isEmpty) {
-      return <String, dynamic>{
-        'data': <String, dynamic>{'lists': <dynamic>[]},
-      };
+  /// 播放地址。enhance 接口对无版权曲目返回空 url，此时回退到 outer 直链
+  /// （它对能播的曲目会 302 到真实地址，对不能播的返回一个很短的占位音频）。
+  Future<Object?> neteaseSongUrl(Map<String, dynamic> args) async {
+    final List<dynamic> ids =
+        (args['ids'] as List<dynamic>?) ?? const <dynamic>[];
+    if (ids.isEmpty) return <Map<String, Object?>>[];
+    final String list = ids.map((Object? e) => '${_i(e)}').join(',');
+    final Map<String, dynamic> json = await _neGet(
+      '/api/song/enhance/player/url',
+      <String, String>{'ids': '[$list]', 'br': '320000'},
+    );
+    final List<dynamic> data =
+        (json['data'] as List<dynamic>?) ?? const <dynamic>[];
+    final Map<int, String> resolved = <int, String>{};
+    for (final dynamic item in data) {
+      if (item is! Map) continue;
+      resolved[_i(item['id'])] = _s(item['url']);
     }
-    final int page = (args['page'] as num?)?.toInt() ?? 1;
-    final int pagesize = (args['pagesize'] as num?)?.toInt() ?? 30;
-    final Uri uri =
-        Uri.https('songsearch.kugou.com', '/song_search_v2', <String, String>{
-      'keyword': keyword,
-      'page': '$page',
-      'pagesize': '$pagesize',
-      'platform': 'WebFilter',
-      'userid': '-1',
-      'clientver': '2000',
-      'iscorrection': '1',
-      'privilege_filter': '0',
-      'filter': '10',
-    });
-    final http.Response resp = await _get(uri.toString());
-    if (resp.statusCode != 200) {
-      throw StateError('酷狗搜索失败: HTTP ${resp.statusCode}');
+    final List<Map<String, Object?>> out = <Map<String, Object?>>[];
+    for (final dynamic raw in ids) {
+      final int id = _i(raw);
+      String url = resolved[id] ?? '';
+      if (url.isEmpty) {
+        url = 'https://music.163.com/song/media/outer/url?id=$id.mp3';
+      }
+      out.add(<String, Object?>{'id': id, 'url': url});
     }
-    return jsonDecode(_text(resp));
+    return out;
   }
 
-  /// 酷狗播放地址。
-  ///
-  /// 上游这条接口对未登录/无版权内容会返回 err_code（实测 30020），
-  /// 此时**必须抛错**而不是返回空 url —— 抛错才能让前端走 Meting 回退链，
-  /// 返回空串会让播放器卡在一个永远加载不出来的地址上。
-  Future<Object?> kugouSongUrl(Map<String, dynamic> args) async {
-    final String hash = (args['hash'] ?? '').toString();
-    if (hash.isEmpty) throw StateError('kugou_song_url 缺少 hash');
-    final String albumId = (args['albumId'] ?? '').toString();
+  Future<Object?> neteaseLoginQrKey(Map<String, dynamic> args) async {
+    final Map<String, dynamic> json =
+        await _nePost('/api/login/qrcode/unikey', <String, String>{'type': '1'});
+    final String key = _s(json['unikey']);
+    if (key.isEmpty) {
+      throw Exception('获取二维码失败：${_s(json['message'], '上游未返回 unikey')}');
+    }
+    return key;
+  }
 
-    final Uri uri = Uri.https('wwwapi.kugou.com', '/yy/index.php',
-        <String, String>{
-          'r': 'play/getdata',
-          'hash': hash,
-          if (albumId.isNotEmpty) 'album_id': albumId,
-          'dfid': '-',
-          'appid': '1014',
-          'mid': '0',
-          'platid': '4',
-        });
-
-    final http.Response resp = await _get(
-      uri.toString(),
-      headers: <String, String>{
-        'Referer': 'https://www.kugou.com/',
-        'Cookie': 'kg_mid=0; kg_dfid=0',
-      },
+  /// 扫码轮询。800 等待 / 801 已扫码 / 802 确认中 / 803 成功。
+  /// 803 时上游会下发 MUSIC_U，已在 _send 里吸收，这里负责落盘。
+  Future<Object?> neteaseLoginQrCheck(Map<String, dynamic> args) async {
+    final String key = _s(args['key']);
+    if (key.isEmpty) throw Exception('缺少二维码 key');
+    final Map<String, dynamic> json = await _nePost(
+      '/api/login/qrcode/client/login',
+      <String, String>{'key': key, 'type': '1'},
     );
-    if (resp.statusCode != 200) {
-      throw StateError('酷狗播放地址解析失败: HTTP ${resp.statusCode}');
-    }
-
-    final Object? decoded = jsonDecode(_text(resp));
-    if (decoded is! Map) {
-      throw StateError('酷狗播放地址解析失败: 响应不是对象');
-    }
-    final Map<String, dynamic> data = decoded['data'] is Map
-        ? Map<String, dynamic>.from(decoded['data'] as Map)
-        : <String, dynamic>{};
-    final String url = (data['play_url'] ?? '').toString();
-    if (url.isEmpty) {
-      final Object? code = decoded['err_code'] ?? decoded['status'];
-      throw StateError('酷狗未返回播放地址 (err_code=$code)');
-    }
-    return <String, dynamic>{
-      'url': url,
-      'quality': (data['audio_name'] ?? '').toString(),
-      'trial': data['is_free_part'] == 1,
+    final int code = _i(json['code'], 800);
+    if (code == 803) await (await _cookies).save();
+    return <String, Object?>{
+      'code': code,
+      'nickname': json['nickname'],
+      'avatarUrl': json['avatarUrl'],
     };
   }
 
-  /// 酷狗封面。上游图床不返回 CORS 头，WebView 里 <img> 直连会被拦，
-  /// 所以由 Dart 取回来转成 dataURL。
-  Future<Object?> kugouCover(Map<String, dynamic> args) async {
-    final String url = (args['url'] ?? '').toString();
-    if (url.isEmpty) return '';
-    final http.Response resp = await _get(
-      url,
-      headers: <String, String>{'Referer': 'https://www.kugou.com/'},
+  Future<Object?> neteaseAccount(Map<String, dynamic> args) async {
+    final Map<String, dynamic> json = await _neGet('/api/nuser/account/get');
+    final Object? profile = json['profile'];
+    if (profile is! Map) return null;
+    return <String, Object?>{
+      'userId': _i(profile['userId']),
+      'nickname': _s(profile['nickname']),
+      'avatarUrl': _s(profile['avatarUrl']),
+    };
+  }
+
+  Future<Object?> neteaseSmsCaptchaSent(Map<String, dynamic> args) async {
+    final String phone = _s(args['phone']);
+    if (phone.isEmpty) throw Exception('缺少手机号');
+    final String ctcode = _s(args['ctcode'], '86');
+    final Map<String, dynamic> json = await _nePost(
+      '/api/sms/captcha/sent',
+      <String, String>{'cellphone': phone, 'ctcode': ctcode},
     );
-    if (resp.statusCode != 200) {
-      throw StateError('封面下载失败: HTTP ${resp.statusCode}');
+    if (_i(json['code']) != 200) {
+      throw Exception('验证码发送失败：${_s(json['message'], '未知错误')}');
     }
-    final String mime =
-        (resp.headers['content-type'] ?? 'image/jpeg').split(';').first;
-    return 'data:$mime;base64,${base64Encode(resp.bodyBytes)}';
+    return null;
+  }
+
+  Future<Object?> neteaseLoginCellphone(Map<String, dynamic> args) async {
+    final Map<String, dynamic> json = await _nePost(
+      '/api/login/cellphone',
+      <String, String>{
+        'phone': _s(args['phone']),
+        'captcha': _s(args['captcha']),
+        'countrycode': _s(args['ctcode'], '86'),
+        'rememberLogin': 'true',
+      },
+    );
+    if (_i(json['code']) != 200) {
+      throw Exception('登录失败：${_s(json['message'], '未知错误')}');
+    }
+    await (await _cookies).save();
+    return neteaseAccount(<String, dynamic>{});
+  }
+
+  Future<Object?> neteaseUserPlaylists(Map<String, dynamic> args) async {
+    final Map<String, dynamic> json = await _neGet('/api/user/playlist', <String, String>{
+      'offset': '${_i(args['offset'])}',
+      'limit': '${_i(args['limit'], 100)}',
+    });
+    final List<dynamic> list =
+        (json['playlist'] as List<dynamic>?) ?? const <dynamic>[];
+    return list.whereType<Map<dynamic, dynamic>>().map((Map<dynamic, dynamic> m) {
+      return <String, Object?>{
+        'id': _i(m['id']),
+        'name': _s(m['name']),
+        'coverUrl': _s(m['coverImgUrl']),
+        'trackCount': _i(m['trackCount']),
+      };
+    }).toList();
+  }
+
+  Future<Object?> neteasePlaylistDetail(Map<String, dynamic> args) async {
+    final Map<String, dynamic> json = await _neGet('/api/v6/playlist/detail', <String, String>{
+      'id': '${_i(args['id'])}',
+      'n': '1000',
+    });
+    final Object? pl = json['playlist'];
+    if (pl is! Map) return <Object?>[];
+    final List<dynamic> tracks =
+        (pl['tracks'] as List<dynamic>?) ?? const <dynamic>[];
+    return tracks
+        .whereType<Map<dynamic, dynamic>>()
+        .map(_neSong)
+        .toList();
+  }
+
+  Future<Object?> neteaseCloud(Map<String, dynamic> args) async {
+    final Map<String, dynamic> json = await _neGet('/api/v1/cloud', <String, String>{
+      'offset': '${_i(args['offset'])}',
+      'limit': '${_i(args['limit'], 50)}',
+    });
+    final List<dynamic> data =
+        (json['data'] as List<dynamic>?) ?? const <dynamic>[];
+    return <String, Object?>{
+      'songs': data.whereType<Map<dynamic, dynamic>>().map(_neSong).toList(),
+      'hasMore': json['hasMore'] == true,
+      'count': _i(json['count']),
+    };
+  }
+
+  Future<Object?> neteaseSongComments(Map<String, dynamic> args) async {
+    final int id = _i(args['id']);
+    final Map<String, dynamic> json = await _neGet(
+      '/api/v1/resource/comments/R_SO_4_$id',
+      <String, String>{
+        'offset': '${_i(args['offset'])}',
+        'limit': '${_i(args['limit'], 20)}',
+      },
+    );
+    return <String, Object?>{
+      'total': _i(json['total']),
+      'more': json['more'] == true,
+      'comments': _neComments(json['comments']),
+      'hotComments': _neComments(json['hotComments']),
+    };
+  }
+
+  Future<Object?> neteaseSetSongLiked(Map<String, dynamic> args) async {
+    final Map<String, dynamic> json = await _neGet('/api/radio/like', <String, String>{
+      'trackId': '${_i(args['id'])}',
+      'like': args['like'] == true ? 'true' : 'false',
+      'alg': 'itembased',
+      'time': '3',
+    });
+    if (_i(json['code']) != 200) {
+      throw Exception('操作失败：${_s(json['message'], '未知错误')}');
+    }
+    return null;
+  }
+
+  Future<Object?> neteaseLikelist(Map<String, dynamic> args) async {
+    final Map<String, dynamic> json = await _neGet('/api/song/like/get', <String, String>{
+      'uid': '${_i(args['uid'])}',
+    });
+    final List<dynamic> ids =
+        (json['ids'] as List<dynamic>?) ?? const <dynamic>[];
+    return ids.map((Object? e) => _i(e)).toList();
+  }
+
+  Future<Object?> neteaseRecommendPlaylists(Map<String, dynamic> args) async {
+    final Map<String, dynamic> json = await _neGet('/api/personalized/playlist', <String, String>{
+      'limit': '${_i(args['limit'], 20)}',
+    });
+    final List<dynamic> result =
+        (json['result'] as List<dynamic>?) ?? const <dynamic>[];
+    return result.whereType<Map<dynamic, dynamic>>().map((Map<dynamic, dynamic> m) {
+      return <String, Object?>{
+        'id': _i(m['id']),
+        'name': _s(m['name']),
+        'picUrl': _s(m['picUrl']),
+        'playCount': _i(m['playCount']),
+        'copywriter': _s(m['copywriter']),
+      };
+    }).toList();
+  }
+
+  Future<Object?> neteaseDailyRecommendSongs(Map<String, dynamic> args) async {
+    final Map<String, dynamic> json =
+        await _neGet('/api/discovery/recommend/songs');
+    final Object? data = json['data'];
+    final List<dynamic> daily = data is Map
+        ? ((data['dailySongs'] as List<dynamic>?) ?? const <dynamic>[])
+        : const <dynamic>[];
+    return daily.whereType<Map<dynamic, dynamic>>().map(_neSong).toList();
+  }
+
+  Future<Object?> neteasePersonalFm(Map<String, dynamic> args) async {
+    final Map<String, dynamic> json = await _neGet('/api/radio/get');
+    final List<dynamic> data =
+        (json['data'] as List<dynamic>?) ?? const <dynamic>[];
+    return data.whereType<Map<dynamic, dynamic>>().map(_neSong).toList();
+  }
+
+  Future<Object?> neteaseLogout(Map<String, dynamic> args) async {
+    try {
+      await _neGet('/api/logout');
+    } catch (e) {
+      // 上游偶尔 4xx；本地凭据该清还是要清，不能因为一次失败就退不出去
+      debugPrint('网易云登出请求失败: $e');
+    }
+    final _CookieJar jar = await _cookies;
+    jar.clear('netease');
+    await jar.save();
+    return null;
+  }
+
+  // --------------------------------------------------------------- 酷狗
+
+  Future<Object?> kugouSearch(Map<String, dynamic> args) async {
+    final http.Response res = await _send(
+      'kugou',
+      'GET',
+      Uri.https('songsearch.kugou.com', '/song_search_v2', <String, String>{
+        'keyword': _s(args['keyword']),
+        'page': '${_i(args['page'], 1)}',
+        'pagesize': '${_i(args['pagesize'], 30)}',
+        'showtype': '0',
+        'filter': '10',
+      }),
+      referer: 'https://www.kugou.com/',
+    );
+    // 上游存在新旧两套字段形态，归一化统一由前端 utils/kugou.ts 负责
+    return _decode(res);
+  }
+
+  Future<Object?> kugouSongUrl(Map<String, dynamic> args) async {
+    final String hash = _s(args['hash']);
+    if (hash.isEmpty) throw Exception('缺少 hash');
+    final String albumId = _s(args['albumId']);
+    final String albumAudioId = _s(args['albumAudioId']);
+    final http.Response res = await _send(
+      'kugou',
+      'GET',
+      Uri.https('wwwapi.kugou.com', '/yy/index.php', <String, String>{
+        'r': 'play/getdata',
+        'hash': hash,
+        if (albumId.isNotEmpty) 'album_id': albumId,
+        if (albumAudioId.isNotEmpty) 'album_audio_id': albumAudioId,
+      }),
+      referer: 'https://www.kugou.com/',
+    );
+    final Map<String, dynamic> json = _decodeMap(res);
+    final Object? data = json['data'];
+    final String url = data is Map ? _s(data['play_url']) : '';
+    if (url.isEmpty) {
+      // 上游只给 status=0 / err_code=30020（版权或会员限制）。
+      // 抛出去让前端回退到 Meting，比返回空 URL 更容易定位。
+      throw Exception('酷狗未返回播放地址（可能无版权或需要会员）');
+    }
+    final int bitrate = data is Map ? _i(data['bitrate']) : 0;
+    final String quality =
+        bitrate >= 900 ? 'flac' : (bitrate >= 256 ? '320' : '128');
+    return <String, Object?>{
+      'url': url,
+      'quality': quality,
+      'trial': false,
+    };
+  }
+
+  /// 酷狗图床不返回 CORS 头，WebView 直连 fetch 会被拦，所以在这里转成 dataURL。
+  Future<Object?> kugouCover(Map<String, dynamic> args) async {
+    final String url = _s(args['url']);
+    if (url.isEmpty) return '';
+    try {
+      final http.Response res = await http.get(
+        Uri.parse(url),
+        headers: <String, String>{'User-Agent': _ua, 'Referer': 'https://www.kugou.com/'},
+      ).timeout(_timeout);
+      if (res.statusCode != 200 || res.bodyBytes.isEmpty) return '';
+      final String mime =
+          res.headers['content-type']?.split(';').first ?? 'image/jpeg';
+      return 'data:$mime;base64,${base64Encode(res.bodyBytes)}';
+    } catch (e) {
+      debugPrint('酷狗封面代理失败: $e');
+      return '';
+    }
+  }
+
+  /// 排行榜列表。上游 v5 接口返回 data.info[]，字段归一化交给前端。
+  Future<Object?> kugouRankList(Map<String, dynamic> args) async {
+    final http.Response res = await _send(
+      'kugou',
+      'GET',
+      Uri.https('mobiles.kugou.com', '/api/v5/rank/list', <String, String>{
+        'json': 'true',
+        'page': '1',
+        'pagesize': '100',
+      }),
+      referer: 'https://www.kugou.com/',
+    );
+    return _decode(res);
+  }
+
+  Future<Object?> kugouRankSongs(Map<String, dynamic> args) async {
+    final http.Response res = await _send(
+      'kugou',
+      'GET',
+      Uri.https('mobiles.kugou.com', '/api/v5/rank/song', <String, String>{
+        'json': 'true',
+        'rankid': _s(args['rankCid']),
+        'page': '${_i(args['page'], 1)}',
+        'pagesize': '${_i(args['pagesize'], 30)}',
+      }),
+      referer: 'https://www.kugou.com/',
+    );
+    return _decode(res);
+  }
+
+  Future<Object?> kugouPlaylistDetail(Map<String, dynamic> args) async {
+    final String id = _s(args['id']);
+    if (id.isEmpty) throw Exception('缺少歌单 id');
+    final http.Response res = await _send(
+      'kugou',
+      'GET',
+      Uri.parse('https://m.kugou.com/plist/list/$id?json=true'),
+      referer: 'https://m.kugou.com/',
+    );
+    return _decode(res);
+  }
+
+  /// 每日推荐。上游 everydayrec 域名在部分网络下不可达，这里退到
+  /// m.kugou.com 的推荐歌单列表（返回歌单而非歌曲，前端按歌单渲染）。
+  Future<Object?> kugouEverydayRecommend(Map<String, dynamic> args) async {
+    final http.Response res = await _send(
+      'kugou',
+      'GET',
+      Uri.parse('https://m.kugou.com/plist/index?json=true'),
+      referer: 'https://m.kugou.com/',
+    );
+    return _decode(res);
+  }
+
+  List<String> _signedDays(_CookieJar jar) {
+    final String raw = jar.bucket('kugou-signin')['days'] ?? '';
+    if (raw.isEmpty) return <String>[];
+    return raw.split(',');
+  }
+
+  Map<String, Object?> _kugouProfile(_CookieJar jar) {
+    final Map<String, String> b = jar.bucket('kugou');
+    String nickname = b['nickname'] ?? '';
+    try {
+      nickname = Uri.decodeComponent(nickname);
+    } catch (_) {
+      // 上游没编码过就原样用
+    }
+    return <String, Object?>{
+      'userid': _i(b['userid']),
+      'nickname': nickname,
+      'avatar': '',
+      'vipType': _i(b['vip_type']),
+    };
+  }
+
+  bool _kugouLoggedIn(_CookieJar jar) {
+    final Map<String, String> b = jar.bucket('kugou');
+    return _s(b['token']).isNotEmpty && _s(b['userid']).isNotEmpty;
+  }
+
+  Future<Object?> kugouLoginStatus(Map<String, dynamic> args) async {
+    final _CookieJar jar = await _cookies;
+    final bool loggedIn = _kugouLoggedIn(jar);
+    return <String, Object?>{
+      'loggedIn': loggedIn,
+      'profile': loggedIn ? _kugouProfile(jar) : null,
+      'signedDays': _signedDays(jar),
+    };
+  }
+
+  /// 二维码 key 与内容。参数取自桌面端 vendored 的 kugou_server crate
+  /// （backend/kugou_server/src/modules/login.rs 的 handle_qr_key）。
+  Future<Object?> kugouLoginQrKey(Map<String, dynamic> args) async {
+    final http.Response res = await _send(
+      'kugou',
+      'GET',
+      Uri.https('login-user.kugou.com', '/v2/qrcode', <String, String>{
+        'appid': '1001',
+        'type': '1',
+        'plat': '4',
+        'qrcode_txt': 'https://h5.kugou.com/apps/loginQRCode/html/index.html?appid=3116&',
+        'srcappid': '2919',
+      }),
+      referer: 'https://www.kugou.com/',
+    );
+    final Map<String, dynamic> json = _decodeMap(res);
+    final Object? data = json['data'];
+    final String key = data is Map ? _s(data['qrcode']) : '';
+    if (key.isEmpty) {
+      throw Exception('获取酷狗二维码失败（error_code=${_i(json['error_code'])}）');
+    }
+    return <String, Object?>{
+      'key': key,
+      'url': 'https://h5.kugou.com/apps/loginQRCode/html/index.html?qrcode=$key',
+    };
+  }
+
+  /// 扫码轮询。status: 1 等待 / 2 已扫码 / 4 成功 / 0 过期。
+  Future<Object?> kugouLoginQrCheck(Map<String, dynamic> args) async {
+    final String key = _s(args['key']);
+    if (key.isEmpty) throw Exception('缺少二维码 key');
+    final http.Response res = await _send(
+      'kugou',
+      'GET',
+      Uri.https('login-user.kugou.com', '/v2/get_userinfo_qrcode', <String, String>{
+        'plat': '4',
+        'appid': '3116',
+        'srcappid': '2919',
+        'qrcode': key,
+      }),
+      referer: 'https://www.kugou.com/',
+    );
+    final Map<String, dynamic> json = _decodeMap(res);
+    final Object? data = json['data'];
+    final int status = data is Map ? _i(data['status']) : 0;
+    final _CookieJar jar = await _cookies;
+    if (status == 4 && data is Map) {
+      final Map<String, String> b = jar.bucket('kugou');
+      b['token'] = _s(data['token']);
+      b['userid'] = _s(data['userid']);
+      if (_s(data['vip_token']).isNotEmpty) b['vip_token'] = _s(data['vip_token']);
+      if (data['vip_type'] != null) b['vip_type'] = _s(data['vip_type']);
+      await jar.save();
+    }
+    final bool loggedIn = _kugouLoggedIn(jar);
+    return <String, Object?>{
+      'status': status,
+      'loggedIn': loggedIn,
+      'profile': loggedIn ? _kugouProfile(jar) : null,
+    };
+  }
+
+  Future<Object?> kugouAccount(Map<String, dynamic> args) async {
+    final _CookieJar jar = await _cookies;
+    return _kugouLoggedIn(jar) ? _kugouProfile(jar) : null;
+  }
+
+  Future<Object?> kugouLogout(Map<String, dynamic> args) async {
+    final _CookieJar jar = await _cookies;
+    jar.clear('kugou');
+    await jar.save();
+    return null;
   }
 }
