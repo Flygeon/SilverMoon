@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:photo_manager/photo_manager.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
 
 /// 本地媒体类型。音乐不走这里（音乐由 WebView 里的 Vue 前端 + 桥接管），
 /// 图片 / 视频 / 书籍三个页签用它。
@@ -348,16 +349,52 @@ class MediaService {
     }
   }
 
-  /// 相册资产的缩略图。文件系统条目返回 null（调用方直接用 Image.file）。
+  /// 缩略图内存缓存。列表滚动时会反复重建，视频抽帧尤其贵。
+  static final Map<String, Uint8List> _thumbCache = <String, Uint8List>{};
+
+  /// 相册资产的缩略图（图片和视频都能出）。
+  /// 文件系统条目返回 null（调用方直接用 Image.file）。
   static Future<Uint8List?> thumbnailBytes(MediaItem item, int size) async {
     final String? id = item.assetId;
     if (id == null) return null;
+    final String key = 'a:$id:$size';
+    final Uint8List? hit = _thumbCache[key];
+    if (hit != null) return hit;
     try {
       final AssetEntity? asset = await AssetEntity.fromId(id);
-      return await asset?.thumbnailDataWithSize(ThumbnailSize(size, size));
+      final Uint8List? bytes =
+          await asset?.thumbnailDataWithSize(ThumbnailSize(size, size));
+      if (bytes != null) _thumbCache[key] = bytes;
+      return bytes;
     } catch (e) {
       debugPrint('相册缩略图失败 $id: $e');
       return null;
     }
   }
+
+  /// 缩略图总入口：相册资产走 photo_manager，文件系统里的视频抽帧，
+  /// 文件系统里的图片交给 Image.file（返回 null）。
+  static Future<Uint8List?> thumbBytes(MediaItem item, int size) async {
+    if (item.assetId != null) return thumbnailBytes(item, size);
+    if (item.kind != MediaKind.video) return null;
+    final String key = 'v:${item.path}:$size';
+    final Uint8List? hit = _thumbCache[key];
+    if (hit != null) return hit;
+    try {
+      final Uint8List? bytes = await VideoThumbnail.thumbnailData(
+        video: item.path,
+        imageFormat: ImageFormat.JPEG,
+        maxWidth: size,
+        quality: 70,
+      );
+      if (bytes != null) _thumbCache[key] = bytes;
+      return bytes;
+    } catch (e) {
+      debugPrint('视频缩略图失败 ${item.path}: $e');
+      return null;
+    }
+  }
+
+  /// 切换媒体库/刷新时清掉缩略图缓存。
+  static void clearThumbCache() => _thumbCache.clear();
 }

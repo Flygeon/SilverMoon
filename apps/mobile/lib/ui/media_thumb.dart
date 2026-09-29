@@ -48,13 +48,18 @@ class _MediaThumbState extends State<MediaThumb> {
     }
   }
 
+  /// 相册资产（图片/视频）和文件系统里的视频都要异步出缩略图；
+  /// 只有文件系统里的图片能直接 Image.file。
+  bool get _needsBytes =>
+      widget.item.isAsset || widget.item.kind == MediaKind.video;
+
   Future<void> _load() async {
-    if (!widget.item.isAsset) {
+    if (!_needsBytes) {
       if (mounted) setState(() => _done = true);
       return;
     }
     final Uint8List? bytes =
-        await MediaService.thumbnailBytes(widget.item, widget.thumbSize);
+        await MediaService.thumbBytes(widget.item, widget.thumbSize);
     if (!mounted) return;
     setState(() {
       _bytes = bytes;
@@ -64,17 +69,17 @@ class _MediaThumbState extends State<MediaThumb> {
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.item.isAsset) {
+    final Uint8List? bytes = _bytes;
+    if (bytes != null) {
+      return Image.memory(bytes, fit: widget.fit, gaplessPlayback: true);
+    }
+    if (!_needsBytes) {
       return Image.file(
         File(widget.item.path),
         fit: widget.fit,
         cacheWidth: widget.thumbSize,
         errorBuilder: (_, __, ___) => _broken(context),
       );
-    }
-    final Uint8List? bytes = _bytes;
-    if (bytes != null) {
-      return Image.memory(bytes, fit: widget.fit, gaplessPlayback: true);
     }
     if (!_done) {
       return Container(

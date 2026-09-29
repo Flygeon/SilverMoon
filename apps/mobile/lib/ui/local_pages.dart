@@ -98,12 +98,26 @@ class _VideosPageState extends State<VideosPage> {
       controller: ctl,
       emptyIcon: Icons.movie_outlined,
       emptyText: '没有找到本地视频',
-      bodyBuilder: (BuildContext c, List<MediaItem> items) =>
-          _fileList(c, items, Icons.play_circle_outline_rounded, (MediaItem it) {
-        Navigator.of(c).push(
-          MaterialPageRoute<void>(builder: (_) => VideoPlayerPage(item: it)),
-        );
-      }),
+      bodyBuilder: (BuildContext c, List<MediaItem> items) => _fileList(
+        c,
+        items,
+        Icons.play_circle_outline_rounded,
+        (MediaItem it) {
+          Navigator.of(c).push(
+            MaterialPageRoute<void>(builder: (_) => VideoPlayerPage(item: it)),
+          );
+        },
+        // 视频抽首帧当封面。之前这里是统一的图标占位，
+        // 一列视频长得一模一样，根本认不出哪个是哪个。
+        leading: (MediaItem it) => ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: SizedBox(
+            width: 56,
+            height: 56,
+            child: MediaThumb(item: it, thumbSize: 160),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -153,8 +167,9 @@ Widget _fileList(
   BuildContext context,
   List<MediaItem> items,
   IconData icon,
-  void Function(MediaItem) onTap,
-) {
+  void Function(MediaItem) onTap, {
+  Widget Function(MediaItem)? leading,
+}) {
   return ListView.separated(
     padding: const EdgeInsets.only(bottom: 96),
     itemCount: items.length,
@@ -162,11 +177,12 @@ Widget _fileList(
     itemBuilder: (BuildContext c, int i) {
       final MediaItem item = items[i];
       return ListTile(
-        leading: CircleAvatar(
-          backgroundColor:
-              Theme.of(c).colorScheme.surfaceContainerHighest,
-          child: Icon(icon, size: 20),
-        ),
+        leading: leading?.call(item) ??
+            CircleAvatar(
+              backgroundColor:
+                  Theme.of(c).colorScheme.surfaceContainerHighest,
+              child: Icon(icon, size: 20),
+            ),
         title: Text(item.title,
             maxLines: 1, overflow: TextOverflow.ellipsis),
         subtitle: Text(

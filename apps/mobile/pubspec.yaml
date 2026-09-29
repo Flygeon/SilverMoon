@@ -45,6 +45,8 @@ dependencies:
   # iOS 的图片/视频只能从系统相册取（文件系统里没有用户照片）。
   # Android 不走它，那边 DCIM/Pictures 是真实可读的路径。
   photo_manager: ^3.6.0
+  # 文件系统里的视频抽首帧当封面（相册视频由 photo_manager 出，不走它）
+  video_thumbnail: ^0.5.6
   url_launcher: ^6.3.1
   collection: ^1.19.1
   intl: any
