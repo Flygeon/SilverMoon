@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'bridge_online.dart';
 import 'bridge_service.dart';
 import 'library_service.dart';
 import 'web_host_service.dart';
@@ -60,6 +61,9 @@ Map<String, Future<Object?> Function(Map<String, dynamic>)> buildBridgeCommands(
     'get_listen_stats': lib.stats,
     'list_listen_stats': lib.listStats,
     'listen_source_breakdown': lib.sourceBreakdown,
+
+    // ---- 在线音源（本地曲库之外的部分）----
+    ...buildOnlineCommands(),
   };
 }
 
@@ -81,8 +85,10 @@ class _Entry {
   final String path;
   final String name;
   final String ext;
-  final int size;
-  final int mtime;
+
+  // 扫描时会被就地更新（文件可能被替换），因此不能是 final
+  int size;
+  int mtime;
 
   String? title;
   String? artist;

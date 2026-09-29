@@ -163,7 +163,16 @@ jobs:
           ls -la ../mobile/assets/webapp | head -30
 
       - name: flutter build ios (no codesign)
-        run: flutter build ios --release --no-codesign
+        # --no-codesign 已经关掉签名，但新增的插件（webview_flutter / video_player）
+        # 会让 xcodebuild 重新引入签名要求，CI 上拿不到开发者证书。这里再压一层
+        # 显式构建设置。--verbose 是为了失败时能在日志里看到 xcodebuild 的真实报错。
+        env:
+          FLUTTER_XCODE_CODE_SIGNING_ALLOWED: 'NO'
+          FLUTTER_XCODE_CODE_SIGNING_REQUIRED: 'NO'
+          FLUTTER_XCODE_CODE_SIGN_IDENTITY: ''
+        run: |
+          set -o pipefail
+          flutter build ios --release --no-codesign --verbose 2>&1 | tail -n 400
 
       - name: Package unsigned IPA
         run: |
