@@ -1,0 +1,70 @@
+/**
+ * 移动端平台层适配（页面跑在 WebView 里）。
+ *
+ * 只处理"这是个网页"的破绽：点按高亮、悬浮态粘住、输入框聚焦放大、
+ * 过度滚动、长按选中。
+ *
+ * 布局层面的窄屏覆盖**不放在这里** —— Vue 的 scoped 样式会带 [data-v-*] 属性，
+ * 全局选择器权重压不过它，只能写进各组件自己的 <style scoped>。
+ */
+
+html {
+  /* iOS / Android 点按元素时盖上去的灰色高亮块，是最大的"这是个网站"信号。
+     去掉之后必须自己给 :active 反馈（见下面），否则点按毫无回应。 */
+  -webkit-tap-highlight-color: transparent;
+  /* 横屏时浏览器会自动放大正文，排版会跳 */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  /* WebView 里不需要下拉刷新与整页橡皮筋 */
+  overscroll-behavior: none;
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: var(--md-sys-color-surface, #101014);
+}
+
+/* iOS 聚焦到字号 < 16px 的输入框时会放大整页，且失焦不缩回。
+   正解是把字号提到 16px，而不是 user-scalable=no（那会连双指缩放一起禁掉，
+   是无障碍问题）。用 !important 是因为组件的 scoped 规则权重更高。 */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+/* 控件不该被长按选中或弹出复制菜单；正文不设，用户要能复制歌名和报错信息。 */
+button,
+[role="button"],
+a,
+label,
+summary {
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* 触摸端没有 hover，浏览器会拿第一次点按伪造一个并"粘"住不放。
+   按压缩放放到 :active 上才跟手。 */
+@media (hover: none), (pointer: coarse) {
+  button:active,
+  [role="button"]:active,
+  a:active {
+    transform: scale(0.97);
+    transition: transform 100ms ease-out;
+  }
+}
+
+/* 内部滚动容器：滚到边界不要把滚动链传给外层 */
+.sm-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}

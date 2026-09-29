@@ -1694,4 +1694,28 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
   background: var(--md-sys-color-surface-container-high);
   color: var(--md-sys-color-on-surface);
 }
+/* ── 窄屏 ─────────────────────────────────────────────────────────── */
+@media (max-width: 720px) {
+  /* 手机上 180px 起跳只能排一列，压到 140 能出两列 */
+  .online-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  }
+  .qr-card {
+    min-width: 0;
+    width: min(88vw, 320px);
+    padding: 20px 18px 16px;
+  }
+  .qr-img-wrap {
+    width: min(58vw, 200px);
+    height: min(58vw, 200px);
+  }
+}
+
+/* 触摸设备上 :hover 永远不触发 —— 只靠 hover 显形的删除按钮等于不存在 */
+@media (hover: none) {
+  .song-card .p-remove {
+    opacity: 1;
+  }
+}
+
 </style>

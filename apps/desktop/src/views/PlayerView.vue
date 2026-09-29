@@ -818,4 +818,69 @@ onBeforeUnmount(() => {
   text-align: center;
   margin-top: 40%;
 }
+/* ── 窄屏（手机竖屏 / 分屏）─────────────────────────────────────────
+   桌面版是左右双栏 + 固定 425px 的控制区，手机上放不下：
+   两栏各剩不到 200px，进度条直接溢出。这里改成上下堆叠，
+   并把固定宽度交还给容器。 */
+@media (max-width: 720px) {
+  .player-body {
+    flex-direction: column;
+    padding-top: 8px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .left-col {
+    flex: 0 0 auto;
+    justify-content: flex-start;
+    padding: 0 20px;
+  }
+  .right-col {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 0 16px 12px;
+  }
+  .cover-wrap {
+    width: min(62vw, 32vh);
+    border-radius: calc(min(62vw, 32vh) * 0.14);
+  }
+  .song-info {
+    margin-top: 16px;
+  }
+  .song-info .title {
+    font-size: 19px;
+  }
+  .progress-section,
+  .progress-bar,
+  .controls {
+    width: 100%;
+  }
+  .progress-section {
+    margin-top: 16px;
+  }
+  /* 6px 的进度条手指点不准 */
+  .progress-bar {
+    height: 10px;
+  }
+  .progress-thumb {
+    opacity: 1;
+    width: 16px;
+    height: 16px;
+  }
+  .tools-panel {
+    min-width: 0;
+    width: min(88vw, 340px);
+  }
+}
+
+/* 触摸设备没有 hover，靠 hover 才出现的反馈会"粘"住或者永远不出现 */
+@media (hover: none) {
+  .cover-wrap:hover {
+    transform: none;
+    filter: none;
+  }
+  .progress-thumb {
+    opacity: 1;
+  }
+}
+
 </style>

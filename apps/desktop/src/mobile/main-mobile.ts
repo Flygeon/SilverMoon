@@ -8,6 +8,7 @@
  * 顺序很重要：shim 必须在任何 store 被 import 之前安装 window.__SILVERMOON__。
  */
 import "./shim";
+import "./mobile.css";
 
 import { createApp, watch } from "vue";
 import { createPinia } from "pinia";
