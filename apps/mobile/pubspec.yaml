@@ -28,6 +28,10 @@ dependencies:
   path: ^1.9.0
   # 封面
   cached_network_image: ^3.4.1
+  # WebView：承载复用自桌面端的 Vue 音乐前端（apps/desktop 的移动端构建）
+  webview_flutter: ^4.14.1
+  # 视频页签播放
+  video_player: ^2.14.0
   # 权限（本地媒体库）
   # 13.x 的 permission_handler_android 14.1.0 要求 compileSdk=37（AGP 9.1 上限 36），
   # 12.x 已把 Permission.audio 正确映射到 Android 的 READ_MEDIA_AUDIO。
@@ -52,6 +56,9 @@ flutter:
   uses-material-design: true
   assets:
     - assets/icon/
+    # Vue 移动端产物：CI 构建 apps/desktop 的 vite.mobile.config.ts 后拷入。
+    # 仓库里只保留一个占位 index.html，保证本地直接 flutter build 也能过。
+    - assets/webapp/
 
 flutter_launcher_icons:
   android: "ic_launcher"

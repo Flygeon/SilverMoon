@@ -6,8 +6,13 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
+import 'services/bridge_commands.dart';
+import 'services/bridge_service.dart';
+import 'services/media_service.dart';
 import 'services/player_service.dart';
+import 'services/web_host_service.dart';
 import 'state/library_controller.dart';
+import 'state/media_controller.dart';
 import 'state/online_controller.dart';
 import 'state/settings_controller.dart';
 import 'theme/app_theme.dart';
@@ -25,6 +30,11 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
   late final PlayerService _player;
   late final LibraryController _library;
   late final OnlineController _online;
+
+  /// 音乐页签的 WebView 宿主：loopback HTTP 服务 + JS 桥。
+  late final WebHostService _webHost;
+  late final BridgeService _bridge;
+  late final MediaController _media;
   bool _ready = false;
 
   @override
@@ -34,6 +44,9 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
     _player = PlayerService();
     _library = LibraryController();
     _online = OnlineController(repository: _player.repository);
+    _webHost = WebHostService();
+    _bridge = BridgeService(host: _webHost);
+    _media = MediaController(MediaService());
     _bootstrap();
   }
 
@@ -53,12 +66,20 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
       restoreLastSession: true,
     );
     await _library.load();
+    // 先把 loopback 服务起起来，WebView 才能加载到 Vue 产物与本地媒体文件
+    await _webHost.start();
+    _bridge.registerCommands(
+      buildBridgeCommands(host: _webHost, bridge: _bridge),
+    );
     if (!mounted) return;
     setState(() => _ready = true);
   }
 
   @override
   void dispose() {
+    _bridge.dispose();
+    _webHost.stop();
+    _media.dispose();
     _player.dispose();
     _settings.dispose();
     _library.dispose();
@@ -74,6 +95,9 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
         ChangeNotifierProvider<PlayerService>.value(value: _player),
         ChangeNotifierProvider<LibraryController>.value(value: _library),
         ChangeNotifierProvider<OnlineController>.value(value: _online),
+        Provider<WebHostService>.value(value: _webHost),
+        Provider<BridgeService>.value(value: _bridge),
+        ChangeNotifierProvider<MediaController>.value(value: _media),
       ],
       child: DynamicColorBuilder(builder: _buildThemedApp),
     );

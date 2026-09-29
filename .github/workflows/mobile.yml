@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - 'apps/mobile/**'
+      - 'apps/desktop/**'
       - '.github/workflows/mobile.yml'
   pull_request:
     paths:
       - 'apps/mobile/**'
+      - 'apps/desktop/**'
       - '.github/workflows/mobile.yml'
   workflow_dispatch:
 
@@ -68,6 +70,25 @@ jobs:
       - name: Generate launcher icons
         run: dart run flutter_launcher_icons
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Build mobile web bundle
+        working-directory: apps/desktop
+        run: |
+          set -eux
+          npm ci --no-audit --no-fund
+          npx vite build --config vite.mobile.config.ts
+          rm -rf ../mobile/assets/webapp
+          mkdir -p ../mobile/assets/webapp
+          cp -R dist-mobile/. ../mobile/assets/webapp/
+          du -sh ../mobile/assets/webapp
+          ls -la ../mobile/assets/webapp | head -30
+
       - name: flutter analyze
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
@@ -122,6 +143,25 @@ jobs:
       - name: Generate launcher icons
         run: dart run flutter_launcher_icons
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Build mobile web bundle
+        working-directory: apps/desktop
+        run: |
+          set -eux
+          npm ci --no-audit --no-fund
+          npx vite build --config vite.mobile.config.ts
+          rm -rf ../mobile/assets/webapp
+          mkdir -p ../mobile/assets/webapp
+          cp -R dist-mobile/. ../mobile/assets/webapp/
+          du -sh ../mobile/assets/webapp
+          ls -la ../mobile/assets/webapp | head -30
+
       - name: flutter build ios (no codesign)
         run: flutter build ios --release --no-codesign
 
@@ -142,3 +182,38 @@ jobs:
           path: apps/mobile/build/SilverMoon-ios-unsigned.ipa
           if-no-files-found: error
           retention-days: 30
+
+  release:
+    name: Publish installers
+    needs: [android, ios]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect installers
+        run: |
+          set -eux
+          mkdir -p dist
+          find artifacts -type f \( -name '*.apk' -o -name '*.ipa' \) -exec cp {} dist/ \;
+          ls -lh dist
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: mobile-v${{ github.run_number }}
+          name: SilverMoon Mobile build ${{ github.run_number }}
+          prerelease: true
+          body: |
+            Flutter 移动端（音乐播放器）自动构建产物。
+
+            - **Android**：`app-arm64-v8a-release.apk` / `app-armeabi-v7a-release.apk` / `app-x86_64-release.apk`（按 ABI 拆分）
+            - **iOS**：`SilverMoon-ios-unsigned.ipa`（未签名，需自行用开发者证书重签后安装）
+
+            本地曲库、在线音源（网易云 / 酷狗 / Meting）、动态背景、逐字歌词、硬件均衡器。
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

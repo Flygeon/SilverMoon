@@ -51,6 +51,72 @@ List<Map<String, dynamic>> readAudioMetadataInIsolate(List<String> filePaths) {
   return out;
 }
 
+/// Isolate 入口：批量读标签 + 抽取内嵌封面。
+///
+/// 与 [readAudioMetadataInIsolate] 的区别有两点，都是移动端曲库扫描必需的：
+/// 1. 返回项带 filePath，调用方可以按路径对齐（无法解析的文件会被跳过，
+///    所以下标对齐是不可靠的）；
+/// 2. 顺带把内嵌封面写成缩略图文件，列表页因此能直接显示专辑图。
+///
+/// job: { paths: List<String>, ids: List<String>, thumbDir: String }
+/// 返回: { items: List<Map> }
+Map<String, dynamic> scanAudioBatchInIsolate(Map<String, dynamic> job) {
+  final List<String> paths = (job['paths'] as List<dynamic>).cast<String>();
+  final List<String> ids = (job['ids'] as List<dynamic>).cast<String>();
+  final String thumbDir = (job['thumbDir'] ?? '').toString();
+  final String sep = Platform.pathSeparator;
+  final List<Map<String, dynamic>> items = <Map<String, dynamic>>[];
+
+  for (int i = 0; i < paths.length; i++) {
+    final String path = paths[i];
+    try {
+      final File f = File(path);
+      if (!f.existsSync()) continue;
+      final FileStat st = f.statSync();
+      final AudioMetadata meta = readMetadata(f, getImage: true);
+      final String fileName = path.split(sep).last;
+      final int dot = fileName.lastIndexOf('.');
+
+      String? thumbPath;
+      if (thumbDir.isNotEmpty && meta.pictures.isNotEmpty) {
+        final Picture pic = meta.pictures.firstWhere(
+          (Picture e) => e.pictureType == PictureType.coverFront,
+          orElse: () => meta.pictures.first,
+        );
+        if (pic.bytes.isNotEmpty) {
+          final String id = i < ids.length ? ids[i] : fileName;
+          // 扩展名统一按 jpg 写：<img> 会嗅探真实格式，Content-Type 不影响渲染
+          final File tf = File(thumbDir + sep + id + '.jpg');
+          try {
+            if (!tf.existsSync()) tf.writeAsBytesSync(pic.bytes, flush: true);
+            thumbPath = tf.path;
+          } catch (_) {
+            thumbPath = null;
+          }
+        }
+      }
+
+      items.add(<String, dynamic>{
+        'filePath': path,
+        'title': (meta.title ?? '').trim().isEmpty
+            ? (dot > 0 ? fileName.substring(0, dot) : fileName)
+            : meta.title,
+        'artist': meta.artist ?? '',
+        'album': meta.album ?? '',
+        'durationMs': meta.duration?.inMilliseconds ?? 0,
+        'bitrate': meta.bitrate ?? 0,
+        'size': st.size,
+        'mtime': st.modified.millisecondsSinceEpoch,
+        'hasCover': thumbPath != null,
+        'thumbPath': thumbPath,
+      });
+    } catch (_) {
+      // 坏文件直接跳过，不让它中断整批扫描
+    }
+  }
+  return <String, dynamic>{'items': items};
+}
+
 /// Isolate 入口：读内嵌封面字节
 Map<String, dynamic>? readArtworkInIsolate(String filePath) {
   try {
