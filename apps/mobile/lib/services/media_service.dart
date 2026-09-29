@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:photo_manager/photo_manager.dart';
-import 'package:video_thumbnail/video_thumbnail.dart';
+import 'package:fc_native_video_thumbnail/fc_native_video_thumbnail.dart';
 
 /// 本地媒体类型。音乐不走这里（音乐由 WebView 里的 Vue 前端 + 桥接管），
 /// 图片 / 视频 / 书籍三个页签用它。
@@ -381,10 +381,11 @@ class MediaService {
     final Uint8List? hit = _thumbCache[key];
     if (hit != null) return hit;
     try {
-      final Uint8List? bytes = await VideoThumbnail.thumbnailData(
-        video: item.path,
-        imageFormat: ImageFormat.JPEG,
-        maxWidth: size,
+      final Uint8List? bytes = await FcNativeVideoThumbnail()
+          .saveThumbnailToBytes(
+        srcFile: item.path,
+        width: size,
+        height: size,
         quality: 70,
       );
       if (bytes != null) _thumbCache[key] = bytes;
