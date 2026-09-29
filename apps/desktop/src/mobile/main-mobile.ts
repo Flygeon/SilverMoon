@@ -8,6 +8,10 @@
  * 顺序很重要：shim 必须在任何 store 被 import 之前安装 window.__SILVERMOON__。
  */
 import "./shim";
+// 必须在任何 new Audio() 之前装上替身。new Audio() 发生在挂载后的
+// initAudio()，所以放在模块顶部即可 —— 但顺序仍保持在前，免得以后
+// 有人在模块求值期就建元素。
+import "./audio-shim";
 import "./mobile.css";
 
 import { createApp, watch } from "vue";
@@ -33,8 +37,12 @@ app.mount("#app");
 
 // ── 与 Flutter 原生的双向通道 ────────────────────────────────────────
 //
-// 播放引擎仍然在 WebView 里（就是桌面端那一套 <audio> + Web Audio），
-// 这里只把状态镜像给原生：原生负责迷你播放器，后续接通知栏与耳机线控。
+// 播放逻辑（队列、歌词、UI）留在 WebView，音频输出交给 Flutter 的 just_audio
+// —— 见 audio-shim.ts 与 apps/mobile/lib/services/web_audio_host.dart。
+// 这样息屏后音频继续播，通知栏和锁屏有控制。
+//
+// 这里把状态镜像给原生：原生迷你播放器用它，音频出口用它填 MediaItem
+// （通知栏的标题/歌手/封面）。
 
 interface NativeChannel {
   postMessage: (s: string) => void;
