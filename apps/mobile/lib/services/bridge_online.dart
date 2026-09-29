@@ -1,5 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
+
+import 'package:crypto/crypto.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -46,6 +49,9 @@ Map<String, Future<Object?> Function(Map<String, dynamic>)> buildOnlineCommands(
     'kugou_login_status': online.kugouLoginStatus,
     'kugou_login_qr_key': online.kugouLoginQrKey,
     'kugou_login_qr_check': online.kugouLoginQrCheck,
+    'kugou_captcha_sent': online.kugouCaptchaSent,
+    'kugou_login_cellphone': online.kugouLoginCellphone,
+    'kugou_sign_in': online.kugouSignIn,
     'kugou_account': online.kugouAccount,
     'kugou_logout': online.kugouLogout,
   };
@@ -170,6 +176,7 @@ class _Online {
     required String referer,
     Map<String, String>? form,
     Map<String, String>? extraHeaders,
+    String? jsonBody,
   }) async {
     final _CookieJar jar = await _cookies;
     final Map<String, String> headers = <String, String>{
@@ -182,10 +189,19 @@ class _Online {
     };
     http.Response res;
     if (method == 'POST') {
-      headers['Content-Type'] = 'application/x-www-form-urlencoded';
-      res = await http
-          .post(uri, headers: headers, body: form ?? <String, String>{})
-          .timeout(_timeout);
+      if (jsonBody != null) {
+        // 酷狗 android 接口的 body 是 JSON，且签名原文包含它的精确文本，
+        // 所以这里必须原样发送，不能让 http 包再编码一次。
+        headers['Content-Type'] = 'application/json; charset=utf-8';
+        res = await http
+            .post(uri, headers: headers, body: utf8.encode(jsonBody))
+            .timeout(_timeout);
+      } else {
+        headers['Content-Type'] = 'application/x-www-form-urlencoded';
+        res = await http
+            .post(uri, headers: headers, body: form ?? <String, String>{})
+            .timeout(_timeout);
+      }
     } else {
       res = await http.get(uri, headers: headers).timeout(_timeout);
     }
@@ -745,6 +761,251 @@ class _Online {
       'status': status,
       'loggedIn': loggedIn,
       'profile': loggedIn ? _kugouProfile(jar) : null,
+    };
+  }
+
+  // ── 酷狗 android 端签名 ─────────────────────────────────────────────
+  //
+  // 桌面端这三个命令由 vendored 的 kugou_server 以 android 模式发出。先前判断
+  // 「移动端做不了」是错的，错在两处：
+  //   1. mid 不是注册来的。device.rs:49 init_device_info() 本地生成 guid
+  //      （util.rs:221 getGuid），再 mid = md5(guid) 当大整数转十进制
+  //      （util.rs:216 / crypto.rs:262）。全程无网络、无加密。
+  //   2. android 模式**不加密 body**。request.rs:520-537 只做两件事：给参数加一个
+  //      signature，再补 dfid/clienttime/mid 三个头。body 是明文 JSON。
+  //
+  // 所以 captcha_sent 与 sign_in 可以完整移植。真正需要 AES/RSA 的只有
+  // login_cellphone（login.rs:143 aes_hex + login.rs:187 rsa_pk），见下。
+
+  /// helper.rs:4 概念版盐值。
+  static const String _kgRoute = 'LnT6xpN3khm36zse0QzvmgTZ3waWdRSA';
+
+  static final Random _kgRng = Random();
+
+  /// util.rs:35 random_guid_part：((65536*(1+rand))|0).toString(16).substring(1)。
+  /// 取值落在 65536..131071，十六进制是 5 位，砍掉首位正好 4 位。
+  static String _kgGuidPart() =>
+      (65536 + _kgRng.nextInt(65536)).toRadixString(16).substring(1);
+
+  /// util.rs:221 getGuid：八段拼成 UUID 形状。
+  static String _kgGuid() {
+    final String a = _kgGuidPart();
+    final String b = _kgGuidPart();
+    final String c = _kgGuidPart();
+    final String d = _kgGuidPart();
+    final String e = _kgGuidPart();
+    final String f = _kgGuidPart();
+    final String g = _kgGuidPart();
+    final String h = _kgGuidPart();
+    return '$a$b-$c-$d-$e-$f$g$h';
+  }
+
+  /// util.rs:216 calculateMid：md5 hex 当大整数读，再转十进制字符串。
+  static String _kgMidOf(String guid) => BigInt.parse(
+        md5.convert(utf8.encode(guid)).toString(),
+        radix: 16,
+      ).toString();
+
+  /// 设备身份要跨启动稳定，否则每次冷启动都是一个新设备。
+  Future<String> _kgMid(_CookieJar jar) async {
+    final Map<String, String> b = jar.bucket('kugou-device');
+    String mid = _s(b['mid']);
+    if (mid.isEmpty) {
+      final String guid = _s(b['guid']).isEmpty ? _kgGuid() : _s(b['guid']);
+      b['guid'] = guid;
+      mid = _kgMidOf(guid);
+      b['mid'] = mid;
+      await jar.save();
+    }
+    return mid;
+  }
+
+  /// helper.rs:13 params_joined_sorted：按键排序后拼 key=value，无分隔符。
+  static String _kgJoinSorted(Map<String, Object?> params) {
+    final List<String> keys = params.keys.toList()..sort();
+    return keys.map((String k) {
+      final Object? v = params[k];
+      final String vs = (v is Map || v is List) ? _kgJson(v) : '$v';
+      return '$k=$vs';
+    }).join();
+  }
+
+  /// 复刻 serde_json 的紧凑输出。kugou_server 刻意没开 preserve_order
+  /// （Cargo.toml:11），所以 Value::Object 是 BTreeMap，键是**排序**的；
+  /// Dart 的 Map 保持插入顺序，不显式排序就会拼出不同的签名原文。
+  static String _kgJson(Object? v) {
+    if (v is Map) {
+      final List<String> keys = v.keys.map((Object? k) => '$k').toList()..sort();
+      return '{' +
+          keys.map((String k) => '${jsonEncode(k)}:${_kgJson(v[k])}').join(',') +
+          '}';
+    }
+    if (v is List) return '[' + v.map(_kgJson).join(',') + ']';
+    return jsonEncode(v);
+  }
+
+  /// helper.rs:35 signature_android_params：md5(ROUTE + 排序参数 + body + ROUTE)。
+  static String _kgSign(Map<String, Object?> params, String body) => md5
+      .convert(utf8.encode('$_kgRoute${_kgJoinSorted(params)}$body$_kgRoute'))
+      .toString();
+
+  /// 以 android 模式发一个酷狗网关请求。
+  ///
+  /// 参数进 query（request.rs:343 serialize_params），body 单独发 JSON
+  /// （request.rs:67 用 json_stringify 序列化）。
+  Future<Map<String, dynamic>> _kgAndroid(
+    String path,
+    Map<String, Object?> params, {
+    Map<String, Object?>? body,
+  }) async {
+    final _CookieJar jar = await _cookies;
+    final Map<String, String> ck = jar.bucket('kugou');
+    final String mid = await _kgMid(jar);
+    final String dfid = _s(ck['dfid']);
+    final String token = _s(ck['token']);
+    final int userid = _i(ck['userid']);
+    final int clienttime = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+    // request.rs:466-494：默认参数在前，请求参数覆盖在后。
+    final Map<String, Object?> signed = <String, Object?>{
+      'dfid': dfid,
+      'mid': mid,
+      'uuid': '-',
+      'appid': 3116,
+      'clientver': 11440,
+      'clienttime': clienttime,
+      if (token.isNotEmpty) 'token': token,
+      if (userid != 0) 'userid': userid,
+      ...params,
+    };
+    final String bodyText = body == null ? '' : _kgJson(body);
+    signed['signature'] = _kgSign(signed, bodyText);
+
+    final http.Response res = await _send(
+      'kugou',
+      'POST',
+      Uri.https(
+        'gateway.kugou.com',
+        path,
+        signed.map((String k, Object? v) => MapEntry<String, String>(k, '$v')),
+      ),
+      referer: 'https://www.kugou.com/',
+      extraHeaders: <String, String>{
+        'mid': mid,
+        'dfid': dfid,
+        'clienttime': '$clienttime',
+      },
+      jsonBody: bodyText.isEmpty ? null : bodyText,
+    );
+    return _decodeMap(res);
+  }
+
+  static String _kgError(Map<String, dynamic> json, String fallback) {
+    final String msg = _s(json['error_msg']);
+    return msg.isEmpty ? fallback : msg;
+  }
+
+  /// 北京时间的日期，签到接口按天判定。
+  static String _chinaDate() {
+    final DateTime t = DateTime.now().toUtc().add(const Duration(hours: 8));
+    final String m = t.month.toString().padLeft(2, '0');
+    final String d = t.day.toString().padLeft(2, '0');
+    return '${t.year}-$m-$d';
+  }
+
+  /// 发送手机短信验证码。misc.rs:136 → POST /v7/send_mobile_code，
+  /// body {businessid:5, mobile, plat:3}，cookie 清空后只留 mid（misc.rs:142-147）。
+  Future<Object?> kugouCaptchaSent(Map<String, dynamic> args) async {
+    final String mobile = _s(args['mobile']);
+    if (mobile.isEmpty) throw Exception('缺少手机号');
+    final Map<String, dynamic> json = await _kgAndroid(
+      '/v7/send_mobile_code',
+      const <String, Object?>{},
+      body: <String, Object?>{'businessid': 5, 'mobile': mobile, 'plat': 3},
+    );
+    final int code = _i(json['error_code'], -1);
+    if (_i(json['status']) != 1 && code != 0) {
+      throw Exception('验证码发送失败：${_kgError(json, '未知错误')}');
+    }
+    return null;
+  }
+
+  /// 手机号 + 验证码登录。
+  ///
+  /// login.rs:139 handle_cellphone 在上游请求前先做两件移动端没有的事：
+  /// login.rs:143 aes_hex 用 AES-CBC 加密 params，login.rs:187 rsa_pk 用 RSA
+  /// 加密 AES 密钥（crypto.rs:67 / crypto.rs:158,178）。pubspec 只有 crypto
+  /// （纯哈希），补上要引入 AES/RSA 实现。签名层已经具备，缺的是加密层，
+  /// 所以这里明确失败，而不是发一个必然被拒的请求。
+  Future<Object?> kugouLoginCellphone(Map<String, dynamic> args) async {
+    throw Exception('酷狗手机号登录需要 AES+RSA 加密层（桌面端在 Rust 侧），移动端未实现；请用扫码登录');
+  }
+
+  /// 每日签到：先领畅听 VIP，再升概念版。youth.rs:131 / youth.rs:147。
+  ///
+  /// 两步都必须严格判定（kugou.rs:551 的注释）：升级失败却报成功，会出现
+  /// 「提示签到成功但官方只加了畅听 VIP」的假成功。
+  Future<Object?> kugouSignIn(Map<String, dynamic> args) async {
+    final _CookieJar jar = await _cookies;
+    if (!_kugouLoggedIn(jar)) throw Exception('请先登录酷狗账号');
+    final String day = _chinaDate();
+
+    final Map<String, dynamic> claim = await _kgAndroid(
+      '/youth/v1/recharge/receive_vip_listen_song',
+      <String, Object?>{'source_id': 90139, 'receive_day': day},
+      body: <String, Object?>{'receive_day': day},
+    );
+    final int claimErr = _i(claim['error_code'], -1);
+    final bool claimOk = _i(claim['status']) == 1 || claimErr == 131001;
+    if (!claimOk) {
+      if (claimErr == 20028) {
+        final String ssa = _s(claim['ssaCode']);
+        if (ssa.isNotEmpty) {
+          return <String, Object?>{
+            'ok': false, 'message': '', 'ssaCode': ssa, 'svip': false,
+          };
+        }
+      }
+      return <String, Object?>{
+        'ok': false,
+        'message': _kgError(claim, '签到失败'),
+        'ssaCode': null,
+        'svip': false,
+      };
+    }
+
+    final int userid = _i(jar.bucket('kugou')['userid']);
+    Map<String, dynamic> up;
+    try {
+      up = await _kgAndroid(
+        '/youth/v1/listen_song/upgrade_vip_reward',
+        <String, Object?>{'kugouid': userid, 'ad_type': 1},
+      );
+    } catch (e) {
+      // 网络层异常不标记成功（kugou.rs:572 同样的处理）
+      return <String, Object?>{
+        'ok': true,
+        'message': '签到成功（畅听 VIP，概念版升级未确认）',
+        'ssaCode': null,
+        'svip': false,
+      };
+    }
+    final int upErr = _i(up['error_code'], -1);
+    final bool upgraded =
+        upErr == 20030 || upErr == 131001 || _i(up['status']) == 1;
+    if (!upgraded && upErr == 20028) {
+      final String ssa = _s(up['ssaCode']);
+      if (ssa.isNotEmpty) {
+        return <String, Object?>{
+          'ok': false, 'message': '', 'ssaCode': ssa, 'svip': false,
+        };
+      }
+    }
+    return <String, Object?>{
+      'ok': true,
+      'message': upgraded ? '签到成功（概念版会员）' : '签到成功（畅听 VIP）',
+      'ssaCode': null,
+      'svip': upgraded,
     };
   }
 

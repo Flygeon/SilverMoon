@@ -152,7 +152,7 @@ class WebAudioHost {
       return;
     }
     _src = src;
-    final Future<void> pending = _player.setAudioSource<Duration>(
+    await _player.setAudioSource(
       AudioSource.uri(
         _uriFor(src),
         tag: MediaItem(
@@ -163,7 +163,6 @@ class WebAudioHost {
         ),
       ),
     );
-    await pending;
   }
 
   Future<void> dispose() async {
