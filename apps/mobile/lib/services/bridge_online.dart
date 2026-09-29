@@ -6,8 +6,6 @@ import 'package:crypto/crypto.dart';
 // 只取需要的几个名字：pointycastle/export.dart 里的 Digest / Hash 会和
 // package:crypto 撞名，SecureRandom 之类又和 dart:math 的 Random 同域。
 import 'package:pointycastle/api.dart' show KeyParameter, ParametersWithIV;
-import 'package:pointycastle/asymmetric/api.dart' show RSAPublicKey;
-import 'package:pointycastle/key_parsers.dart' show RSAKeyParser;
 import 'package:pointycastle/block/aes.dart' show AESEngine;
 import 'package:pointycastle/block/modes/cbc.dart' show CBCBlockCipher;
 
@@ -1024,21 +1022,58 @@ class _Online {
       'MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDECi0Np2UR87scwrvTr72L6oO01rBbbBPriSDFPxr3Z5syug0O24QyQO8bg27+0+4kBzTBTBOZ/WWU0WryL1JSXRTXLgFVxtzIY41Pe7lPOgsfTCn5kZcvKhYKJesKnnJDNr5/abvTGf+rHG3YRwsCHcQ08/q6ifSioBszvb3QiwIDAQAB\n'
       '-----END PUBLIC KEY-----';
 
+  /// 解析 crypto.rs:283 的 PEM，取出模数 n 与指数 e。
+  ///
+  /// pointycastle 4.0.0 把整个 key_parsers 库删了（RSAKeyParser 已不存在），
+  /// 所以这里自己走一遍 DER。SubjectPublicKeyInfo 的结构是固定的：
+  ///   SEQUENCE { AlgorithmIdentifier, BIT STRING { SEQUENCE { n, e } } }
+  static ({BigInt n, BigInt e})? _kgRsaKeyCache;
+
+  static ({BigInt n, BigInt e}) _kgLiteRsaKey() {
+    final ({BigInt n, BigInt e})? cached = _kgRsaKeyCache;
+    if (cached != null) return cached;
+
+    final String b64 = _kgLiteRsaPem
+        .replaceAll('-----BEGIN PUBLIC KEY-----', '')
+        .replaceAll('-----END PUBLIC KEY-----', '')
+        .replaceAll(RegExp(r'\s'), '');
+    final Uint8List der = base64.decode(b64);
+
+    final (int, Uint8List) spki = _Der(der).next();
+    final _Der lvl1 = _Der(spki.$2);
+    lvl1.next(); // AlgorithmIdentifier
+    final (int, Uint8List) bits = lvl1.next();
+
+    // BIT STRING 首字节是「未使用位数」，RSA 恒为 0，后面才是 RSAPublicKey。
+    final (int, Uint8List) rsa =
+        _Der(Uint8List.sublistView(bits.$2, 1)).next();
+    final _Der lvl3 = _Der(rsa.$2);
+    final (int, Uint8List) nBytes = lvl3.next();
+    final (int, Uint8List) eBytes = lvl3.next();
+
+    final ({BigInt n, BigInt e}) key = (
+      n: _kgBytesBigInt(nBytes.$2),
+      e: _kgBytesBigInt(eBytes.$2),
+    );
+    _kgRsaKeyCache = key;
+    return key;
+  }
+
   /// crypto.rs:158 rsa_raw_encrypt：**无填充**裸模幂。
   /// 两个容易搞反的地方：输入不足模长时是往**右**补零（CryptoJS 的
   /// Uint8Array(keyLength) 语义，数据放偏移 0），只有输出才是往**左**补零到模长。
   static String _kgRsaRawHex(String data) {
-    final RSAPublicKey pub =
-        RSAKeyParser().parse(_kgLiteRsaPem) as RSAPublicKey;
-    final BigInt n = pub.modulus!;
-    final BigInt e = pub.exponent!;
+    final ({BigInt n, BigInt e}) key = _kgLiteRsaKey();
+    final BigInt n = key.n;
     final int modLen = (n.bitLength + 7) ~/ 8;
 
     final Uint8List bytes = Uint8List.fromList(utf8.encode(data));
     final Uint8List input = Uint8List(modLen);
     input.setRange(0, bytes.length, bytes);
 
-    return _kgHex(_kgBigIntBytes(_kgBytesBigInt(input).modPow(e, n), modLen));
+    return _kgHex(
+      _kgBigIntBytes(_kgBytesBigInt(input).modPow(key.e, n), modLen),
+    );
   }
 
   static BigInt _kgBytesBigInt(Uint8List b) {
@@ -1272,5 +1307,35 @@ class _Online {
     jar.clear('kugou');
     await jar.save();
     return null;
+  }
+}
+
+/// 极简 DER 读取器：只够把 SubjectPublicKeyInfo 拆成 TLV 序列。
+/// pointycastle 4.0.0 删掉了 RSAKeyParser，而这里只需要 n 和 e 两个整数。
+class _Der {
+  _Der(this._b);
+
+  final Uint8List _b;
+  int _i = 0;
+
+  int _readLen() {
+    int l = _b[_i++];
+    if (l & 0x80 != 0) {
+      final int count = l & 0x7f;
+      l = 0;
+      for (int k = 0; k < count; k++) {
+        l = (l << 8) | _b[_i++];
+      }
+    }
+    return l;
+  }
+
+  /// 读一个 TLV，返回 (tag, value)。
+  (int, Uint8List) next() {
+    final int tag = _b[_i++];
+    final int len = _readLen();
+    final Uint8List v = Uint8List.sublistView(_b, _i, _i + len);
+    _i += len;
+    return (tag, v);
   }
 }
