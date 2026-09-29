@@ -7,7 +7,7 @@ import 'package:crypto/crypto.dart';
 // package:crypto 撞名，SecureRandom 之类又和 dart:math 的 Random 同域。
 import 'package:pointycastle/api.dart' show KeyParameter, ParametersWithIV;
 import 'package:pointycastle/asymmetric/api.dart' show RSAPublicKey;
-import 'package:pointycastle/asymmetric/rsa.dart' show RSAKeyParser;
+import 'package:pointycastle/key_parsers.dart' show RSAKeyParser;
 import 'package:pointycastle/block/aes.dart' show AESEngine;
 import 'package:pointycastle/block/modes/cbc.dart' show CBCBlockCipher;
 
@@ -1087,7 +1087,7 @@ class _Online {
 
   /// helper.rs:107 signParamsKey：md5(appid + 盐 + clientver + data)。
   static String _kgSignParamsKey(String data) =>
-      md5.convert(utf8.encode('3116$_kgRoute11440$data')).toString();
+      md5.convert(utf8.encode('3116${_kgRoute}11440$data')).toString();
 
   /// login.rs:16-19 两个定长 AES 密钥（设备指纹 t1/t2）。
   static const String _kgT1Key = '5e4ef500e9597fe004bd09a46d8add98';
