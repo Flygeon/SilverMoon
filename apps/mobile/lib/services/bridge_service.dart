@@ -526,10 +526,54 @@ class BridgeService {
     final Map<String, Object?> data = _stores[file] ?? <String, Object?>{};
     try {
       final File f = File(await _storePathAsync(file));
-      await f.writeAsString(jsonEncode(data), flush: true);
+      // 同一个文件还有第二个写入者：原生设置页的 JsonStore（扁平键）。
+      // 两边都整份覆盖，后写的会把对方整个抹掉，所以落盘前先读回磁盘合并。
+      // 顶层键不重叠（这里只有 `settings` 之类的键），合并不冲突。
+      final Map<String, Object?> merged = <String, Object?>{};
+      if (await f.exists()) {
+        try {
+          final Object? j = jsonDecode(await f.readAsString());
+          if (j is Map) merged.addAll(Map<String, Object?>.from(j));
+        } catch (_) {
+          // 读不动就当成空的
+        }
+      }
+      merged.addAll(data);
+      await f.writeAsString(jsonEncode(merged), flush: true);
       _dirty.remove(file);
     } catch (e) {
       debugPrint('store 写入 $file 失败: $e');
+    }
+  }
+
+
+  /// 把原生设置页的改动推进 WebView 那套设置。
+  ///
+  /// 移动端是两套并存的设置，键空间完全不同：
+  ///   - 原生（这里）：扁平键直接铺在 settings.json 顶层
+  ///   - WebView（Vue）：整个设置对象放在单个 `settings` 键下面
+  ///     （ipc/store.ts 的 JsonStore + stores/settings.ts:386 的 store.set("settings", ...)）
+  ///
+  /// 所以不能只靠同名键自动对上，必须显式写进嵌套对象，否则用户在原生
+  /// 「设置」页打开在线音乐，音乐页压根不知道 —— 表现就是「网易云/酷狗的
+  /// 源移植过来全没了」。
+  Future<void> pushWebSettings(Map<String, Object?> patch) async {
+    if (patch.isEmpty) return;
+    try {
+      final Map<String, Object?> store = await _loadStore('settings.json');
+      final Object? cur = store['settings'];
+      final Map<String, Object?> nested = cur is Map
+          ? Map<String, Object?>.from(cur)
+          : <String, Object?>{};
+      nested.addAll(patch);
+      store['settings'] = nested;
+      _dirty.add('settings.json');
+      await _saveStore('settings.json');
+      // WebView 还没加载时 runJavaScript 是空操作，不影响：
+      // 它加载时会自己从同一个文件里读到刚写进去的值。
+      await emit('settings:patch', patch);
+    } catch (e) {
+      debugPrint('推送 Web 设置失败: $e');
     }
   }
 

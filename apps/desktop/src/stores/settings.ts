@@ -377,6 +377,28 @@ export const useSettingsStore = defineStore("settings", () => {
     loaded.value = true;
   }
 
+  /**
+   * 应用原生设置页推来的改动。
+   *
+   * 移动端有两套设置：原生是扁平键，这里把整个设置对象存在单个 `settings`
+   * 键下（见上面的 save()）。键名由原生侧映射好（只有 themeMode -> theme
+   * 不同），这里只负责落到对应的 ref 上，让音乐页立刻生效而不必重启。
+   *
+   * 不写盘：原生那边已经写进同一个文件了，这里的 watch 会在下次变更时
+   * 带上这些值一起保存。
+   */
+  function applyPatch(patch: Record<string, unknown>) {
+    if (!patch || typeof patch !== "object") return;
+    for (const [key, value] of Object.entries(patch)) {
+      const refObj = (fields as Record<string, unknown>)[key] as
+        | { value: unknown }
+        | undefined;
+      if (refObj && typeof refObj === "object" && "value" in refObj) {
+        refObj.value = value;
+      }
+    }
+  }
+
   async function save() {
     try {
       const payload: Record<string, unknown> = {};
@@ -505,6 +527,7 @@ export const useSettingsStore = defineStore("settings", () => {
     load,
     save,
     flushSave,
+    applyPatch,
     applyTheme,
     applyColorScheme,
     resolveTheme,

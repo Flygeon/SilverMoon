@@ -380,7 +380,13 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 16px 24px;
+  /* .player-page 是 position:fixed; inset:0，绝对定位子元素又是相对它的
+     内边距盒定位，所以给父级加 padding 不会把顶栏推下去 —— 安全区必须写在
+     顶栏自己身上。移动端的 env() 才有值，桌面端为 0。 */
+  padding-top: calc(16px + env(safe-area-inset-top));
+  padding-bottom: 16px;
+  padding-left: calc(24px + env(safe-area-inset-left));
+  padding-right: calc(24px + env(safe-area-inset-right));
   z-index: 10;
   background: linear-gradient(to bottom, rgba(0, 0, 0, 0.5), transparent);
 }
@@ -463,7 +469,8 @@ onBeforeUnmount(() => {
 .player-body {
   height: 100%;
   display: flex;
-  padding-top: 60px;
+  /* 60px 是给顶部返回按钮让位；移动端还要再让开状态栏/灵动岛。 */
+  padding-top: calc(60px + env(safe-area-inset-top));
 }
 .left-col {
   flex: 5;
@@ -825,7 +832,9 @@ onBeforeUnmount(() => {
 @media (max-width: 720px) {
   .player-body {
     flex-direction: column;
-    padding-top: 8px;
+    /* 原先只有 8px，连顶栏都让不开，封面直接顶到返回按钮那一行。
+       顶栏高度 = 24px 图标 + 上下 16px 内边距。 */
+    padding-top: calc(56px + env(safe-area-inset-top));
     overflow-y: auto;
     overscroll-behavior: contain;
   }

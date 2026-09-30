@@ -120,7 +120,16 @@ watch(
 // 原生发来的播放控制（迷你播放器、通知栏、耳机线控）
 window.addEventListener("silvermoon:native", ((ev: CustomEvent) => {
   const detail = ev.detail as { name?: string; payload?: unknown } | undefined;
-  if (!detail || detail.name !== "player:command") return;
+  if (!detail) return;
+
+  // 原生「设置」页改动的项。两套设置的键空间不同（原生扁平键、这里嵌套在
+  // settings 键下），映射由原生侧做好，这里只把它落到 ref 上。
+  if (detail.name === "settings:patch") {
+    settings.applyPatch((detail.payload ?? {}) as Record<string, unknown>);
+    return;
+  }
+
+  if (detail.name !== "player:command") return;
   const cmd = detail.payload;
   if (cmd === "toggle") void player.togglePlay();
   else if (cmd === "next") void player.next();

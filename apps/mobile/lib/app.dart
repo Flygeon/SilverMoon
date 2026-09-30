@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:dynamic_color/dynamic_color.dart';
@@ -14,6 +15,7 @@ import 'services/web_host_service.dart';
 import 'state/library_controller.dart';
 import 'state/media_controller.dart';
 import 'state/online_controller.dart';
+import 'models/settings.dart';
 import 'state/settings_controller.dart';
 import 'theme/app_theme.dart';
 import 'ui/app_shell.dart';
@@ -58,6 +60,12 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
       } catch (_) {}
     }
     await _settings.load();
+    // 原生设置页改动的项要能作用到 WebView 里的音乐页。两套设置的键空间
+    // 不同（见 BridgeService.pushWebSettings），所以这里显式推一次；
+    // 首次启动时这一推也顺带把 enableOnlineMusic 这类默认值对齐 ——
+    // Vue 侧的默认是关，原生侧默认是开，不推的话音乐页永远看不到在线入口。
+    _settings.addListener(_scheduleWebSettingsPush);
+    unawaited(_bridge.pushWebSettings(_webSettingsPatch(_settings.settings)));
     await _player.init(
       volume: _settings.settings.volume,
       speed: _settings.settings.playbackRate,
@@ -75,8 +83,39 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
     setState(() => _ready = true);
   }
 
+  /// 原生设置 -> WebView 设置的键映射。
+  ///
+  /// 只有 theme 一个名字不同（Vue 用 theme，原生的 AppSettings 用 themeMode），
+  /// 其余字段刻意同名 —— AppSettings 的字段名本来就是照着 settings.ts 的
+  /// DEFAULTS 起的，便于两边互导。
+  Map<String, Object?> _webSettingsPatch(AppSettings s) => <String, Object?>{
+        'theme': s.themeMode,
+        'enableOnlineMusic': s.enableOnlineMusic,
+        'musicServer': s.musicServer,
+        'playerBg': s.playerBg,
+        'wordLyrics': s.wordLyrics,
+        'detectInstrumental': s.detectInstrumental,
+        'lyricBlur': s.lyricBlur,
+        'lyricFontSize': s.lyricFontSize,
+        'lyricLineGap': s.lyricLineGap,
+        'lyricTranslationSize': s.lyricTranslationSize,
+        'lyricSubMode': s.lyricSubMode,
+        'minFileSizeMb': s.minFileSizeMb,
+      };
+
+  /// 拖滑块会高频触发 notifyListeners，每次都落盘没必要。
+  Timer? _webPushTimer;
+
+  void _scheduleWebSettingsPush() {
+    _webPushTimer?.cancel();
+    _webPushTimer = Timer(const Duration(milliseconds: 400), () {
+      unawaited(_bridge.pushWebSettings(_webSettingsPatch(_settings.settings)));
+    });
+  }
+
   @override
   void dispose() {
+    _webPushTimer?.cancel();
     _bridge.dispose();
     _webHost.stop();
     _media.dispose();

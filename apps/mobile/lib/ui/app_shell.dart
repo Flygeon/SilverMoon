@@ -47,8 +47,9 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell> {
-  /// 默认停在音乐（本次开发重点），其余四个是基础本地功能。
-  int _index = 2;
+  /// 默认停在「图片」——第一个页签，和桌面端进入应用落在默认视图一致。
+  /// （之前为了开发方便停在音乐，等于每次冷启动都强制跳转，很突兀。）
+  int _index = 0;
 
   @override
   Widget build(BuildContext context) {

@@ -48,12 +48,28 @@ class JsonStore {
   }
 
   /// 写整对象（先写临时文件再 rename，避免写一半掉电损坏）
+  ///
+  /// 写前会先把磁盘上的现有内容读回来合并。settings.json 还有第二个写入者：
+  /// WebView 里 Vue 的那套设置（把整个设置对象存在单个 `settings` 键下，
+  /// 见 ipc/store.ts 与 stores/settings.ts）。两边都是整份读写、各自还有内存
+  /// 缓存，直接覆盖会把对方整个抹掉 —— 表现就是「设置改了一会儿又自己变回去」。
+  /// 两边的顶层键不重叠（扁平键 vs `settings`），所以合并即可共存。
   Future<void> write(Map<String, dynamic> data) async {
-    _cache = data;
     try {
       final File f = await _resolve();
+      final Map<String, dynamic> merged = <String, dynamic>{};
+      if (await f.exists()) {
+        try {
+          final Object? j = jsonDecode(await f.readAsString());
+          if (j is Map) merged.addAll(Map<String, dynamic>.from(j));
+        } catch (_) {
+          // 读不动就当成空的，照常写下去
+        }
+      }
+      merged.addAll(data);
+      _cache = merged;
       final File tmp = File(f.path + '.tmp');
-      await tmp.writeAsString(jsonEncode(data), flush: true);
+      await tmp.writeAsString(jsonEncode(merged), flush: true);
       if (await f.exists()) {
         await f.delete();
       }
