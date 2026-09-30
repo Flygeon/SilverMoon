@@ -98,6 +98,7 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
         'kugouEnabled': s.kugouEnabled,
         'playerBg': s.playerBg,
         'wordLyrics': s.wordLyrics,
+        'preciseLyrics': s.preciseLyrics,
         'detectInstrumental': s.detectInstrumental,
         'lyricBlur': s.lyricBlur,
         'lyricFontSize': s.lyricFontSize,
@@ -105,6 +106,8 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
         'lyricTranslationSize': s.lyricTranslationSize,
         'lyricSubMode': s.lyricSubMode,
         'minFileSizeMb': s.minFileSizeMb,
+        'gridColumns': s.gridColumns,
+        'kugouAutoSignIn': s.kugouAutoSignIn,
       };
 
   /// 拖滑块会高频触发 notifyListeners，每次都落盘没必要。

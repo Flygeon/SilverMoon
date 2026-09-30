@@ -72,6 +72,13 @@ class SettingsPage extends StatelessWidget {
             onChanged: s.setWordLyrics,
           ),
           SwitchListTile(
+            secondary: const Icon(Icons.manage_search_rounded),
+            title: const Text('精确逐字歌词'),
+            subtitle: const Text('按 QQ 音乐 → 酷狗 → 网易云 → 本地 回退链取逐字时间轴'),
+            value: s.settings.preciseLyrics,
+            onChanged: s.setPreciseLyrics,
+          ),
+          SwitchListTile(
             secondary: const Icon(Icons.hourglass_empty_rounded),
             title: const Text('间奏识别'),
             subtitle: const Text('纯停顿超过 3 秒时插入等待标记'),
@@ -171,6 +178,16 @@ class SettingsPage extends StatelessWidget {
           ),
           _slider(
             context,
+            icon: Icons.grid_view_rounded,
+            title: '网格列数',
+            value: s.settings.gridColumns.toDouble(),
+            min: 2,
+            max: 8,
+            label: s.settings.gridColumns.toString(),
+            onChanged: (double v) => s.setGridColumns(v.round()),
+          ),
+          _slider(
+            context,
             icon: Icons.filter_alt_outlined,
             title: '最小文件大小',
             value: s.settings.minFileSizeMb,
@@ -201,6 +218,13 @@ class SettingsPage extends StatelessWidget {
             subtitle: const Text('扫码 / 手机号登录，每日推荐与榜单'),
             value: s.settings.kugouEnabled,
             onChanged: s.setKugouEnabled,
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.event_available_rounded),
+            title: const Text('酷狗自动签到'),
+            subtitle: const Text('登录后自动领畅听 VIP 并升级概念版（今日已签则跳过）'),
+            value: s.settings.kugouAutoSignIn,
+            onChanged: s.setKugouAutoSignIn,
           ),
           ListTile(
             leading: const Icon(Icons.dns_outlined),

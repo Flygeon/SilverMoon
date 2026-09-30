@@ -87,8 +87,17 @@ class SettingsController extends ChangeNotifier {
   Future<void> setKugouEnabled(bool on) =>
       update((AppSettings s) => s.copyWith(kugouEnabled: on));
 
+  Future<void> setKugouAutoSignIn(bool on) =>
+      update((AppSettings s) => s.copyWith(kugouAutoSignIn: on));
+
   Future<void> setWordLyrics(bool on) =>
       update((AppSettings s) => s.copyWith(wordLyrics: on));
+
+  Future<void> setPreciseLyrics(bool on) =>
+      update((AppSettings s) => s.copyWith(preciseLyrics: on));
+
+  Future<void> setGridColumns(int n) =>
+      update((AppSettings s) => s.copyWith(gridColumns: n));
 
   Future<void> setDetectInstrumental(bool on) =>
       update((AppSettings s) => s.copyWith(detectInstrumental: on));

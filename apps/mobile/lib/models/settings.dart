@@ -14,6 +14,9 @@ class AppSettings {
     this.lyricTranslationGap = 4,
     this.lyricSubMode = 'translation',
     this.wordLyrics = true,
+    // 桌面端 settings.ts:73 preciseLyrics 的同名项：播放时按
+    // QQ -> 酷狗 -> [登录网易云后 Meting] -> 本地 的回退链取逐字歌词。
+    this.preciseLyrics = false,
     this.detectInstrumental = true,
     this.playerBg = 'animated',
     this.lyricBlur = true,
@@ -27,6 +30,10 @@ class AppSettings {
     this.neteaseEnabled = true,
     this.kugouEnabled = true,
     this.onlinePlaylists = const <String>[],
+    // 桌面端 settings.ts:82 gridColumns
+    this.gridColumns = 6,
+    // 桌面端 settings.ts:120 kugouAutoSignIn
+    this.kugouAutoSignIn = true,
     this.volume = 1.0,
     this.playbackRate = 1.0,
     this.effectsEnabled = false,
@@ -50,6 +57,10 @@ class AppSettings {
   final String lyricSubMode;
 
   final bool wordLyrics;
+
+  /// 更精确的逐字歌词：按 QQ -> 酷狗 -> Meting -> 本地 的回退链取逐字时间轴
+  final bool preciseLyrics;
+
   final bool detectInstrumental;
 
   /// animated / amll / image / off
@@ -76,6 +87,12 @@ class AppSettings {
   /// `server:id` 列表
   final List<String> onlinePlaylists;
 
+  /// 媒体库网格列数
+  final int gridColumns;
+
+  /// 酷狗：登录后自动签到（今日已签则跳过）
+  final bool kugouAutoSignIn;
+
   final double volume;
   final double playbackRate;
   final bool effectsEnabled;
@@ -93,6 +110,7 @@ class AppSettings {
     double? lyricTranslationGap,
     String? lyricSubMode,
     bool? wordLyrics,
+    bool? preciseLyrics,
     bool? detectInstrumental,
     String? playerBg,
     bool? lyricBlur,
@@ -104,6 +122,8 @@ class AppSettings {
     bool? neteaseEnabled,
     bool? kugouEnabled,
     List<String>? onlinePlaylists,
+    int? gridColumns,
+    bool? kugouAutoSignIn,
     double? volume,
     double? playbackRate,
     bool? effectsEnabled,
@@ -119,6 +139,7 @@ class AppSettings {
       lyricTranslationGap: lyricTranslationGap ?? this.lyricTranslationGap,
       lyricSubMode: lyricSubMode ?? this.lyricSubMode,
       wordLyrics: wordLyrics ?? this.wordLyrics,
+      preciseLyrics: preciseLyrics ?? this.preciseLyrics,
       detectInstrumental: detectInstrumental ?? this.detectInstrumental,
       playerBg: playerBg ?? this.playerBg,
       lyricBlur: lyricBlur ?? this.lyricBlur,
@@ -130,6 +151,8 @@ class AppSettings {
       neteaseEnabled: neteaseEnabled ?? this.neteaseEnabled,
       kugouEnabled: kugouEnabled ?? this.kugouEnabled,
       onlinePlaylists: onlinePlaylists ?? this.onlinePlaylists,
+      gridColumns: gridColumns ?? this.gridColumns,
+      kugouAutoSignIn: kugouAutoSignIn ?? this.kugouAutoSignIn,
       volume: volume ?? this.volume,
       playbackRate: playbackRate ?? this.playbackRate,
       effectsEnabled: effectsEnabled ?? this.effectsEnabled,
@@ -147,6 +170,7 @@ class AppSettings {
         'lyricTranslationGap': lyricTranslationGap,
         'lyricSubMode': lyricSubMode,
         'wordLyrics': wordLyrics,
+        'preciseLyrics': preciseLyrics,
         'detectInstrumental': detectInstrumental,
         'playerBg': playerBg,
         'lyricBlur': lyricBlur,
@@ -158,6 +182,8 @@ class AppSettings {
         'neteaseEnabled': neteaseEnabled,
         'kugouEnabled': kugouEnabled,
         'onlinePlaylists': onlinePlaylists,
+        'gridColumns': gridColumns,
+        'kugouAutoSignIn': kugouAutoSignIn,
         'volume': volume,
         'playbackRate': playbackRate,
         'effectsEnabled': effectsEnabled,
@@ -181,6 +207,7 @@ class AppSettings {
       lyricTranslationGap: num2(j['lyricTranslationGap'], d.lyricTranslationGap),
       lyricSubMode: str2(j['lyricSubMode'], d.lyricSubMode),
       wordLyrics: bool2(j['wordLyrics'], d.wordLyrics),
+      preciseLyrics: bool2(j['preciseLyrics'], d.preciseLyrics),
       detectInstrumental: bool2(j['detectInstrumental'], d.detectInstrumental),
       playerBg: str2(j['playerBg'], d.playerBg),
       lyricBlur: bool2(j['lyricBlur'], d.lyricBlur),
@@ -194,6 +221,8 @@ class AppSettings {
       neteaseEnabled: bool2(j['neteaseEnabled'], d.neteaseEnabled),
       kugouEnabled: bool2(j['kugouEnabled'], d.kugouEnabled),
       onlinePlaylists: list2(j['onlinePlaylists']),
+      gridColumns: num2(j['gridColumns'], d.gridColumns.toDouble()).round(),
+      kugouAutoSignIn: bool2(j['kugouAutoSignIn'], d.kugouAutoSignIn),
       volume: num2(j['volume'], d.volume),
       playbackRate: num2(j['playbackRate'], d.playbackRate),
       effectsEnabled: bool2(j['effectsEnabled'], d.effectsEnabled),

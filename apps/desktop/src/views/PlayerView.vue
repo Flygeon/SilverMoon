@@ -24,6 +24,48 @@ const commentsOpen = ref(false);
 const panelOpen = ref(false);
 const panelAnchor = ref<HTMLElement | null>(null);
 
+/**
+ * 窄屏（移动端）下封面与歌词互斥显示。
+ *
+ * 桌面端是左右两栏并排；窄屏堆叠成一列之后，封面、控制、歌词全挤在一屏里，
+ * 歌词被压成很窄的一条，也不是移动端音乐 App 的习惯做法。
+ * 移动端改成：默认只显示封面与控制，点封面切到歌词，点歌词以外的空白切回封面。
+ */
+const isNarrow = ref(false);
+const mobileLyrics = ref(false);
+let narrowMq: MediaQueryList | null = null;
+function onNarrowChange(e: MediaQueryListEvent) {
+  isNarrow.value = e.matches;
+  // 回到宽屏就把互斥状态清掉，免得下次变窄时停在歌词页
+  if (!e.matches) mobileLyrics.value = false;
+}
+if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+  narrowMq = window.matchMedia("(max-width: 720px)");
+  isNarrow.value = narrowMq.matches;
+  narrowMq.addEventListener("change", onNarrowChange);
+}
+onBeforeUnmount(() => narrowMq?.removeEventListener("change", onNarrowChange));
+
+/** 点封面：窄屏进歌词，桌面端维持原有「看评论」行为。 */
+function onCoverTap() {
+  if (isNarrow.value) {
+    mobileLyrics.value = true;
+    return;
+  }
+  toggleComments();
+}
+
+/** 点空白处切回封面。歌词行、按钮、进度条这些可交互元素不算空白。 */
+function onBodyTap(e: MouseEvent) {
+  if (!isNarrow.value || !mobileLyrics.value) return;
+  const el = e.target as HTMLElement | null;
+  if (!el) return;
+  const hit = el.closest(
+    "button, a, m3e-button, m3e-icon-button, .lyric-item, .progress-bar, .tools-panel, input, textarea",
+  );
+  if (!hit) mobileLyrics.value = false;
+}
+
 const { startDrag } = useWindowDrag();
 
 /** 当前在线歌曲的网易云 ID（仅网易云在线歌曲可查评论/红心） */
@@ -149,10 +191,14 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <div class="player-body">
+    <div
+      class="player-body"
+      :class="{ 'mobile-lyrics': mobileLyrics, 'show-panel': rightTab !== 'lyrics' }"
+      @click="onBodyTap"
+    >
       <!-- 左栏：封面 + 信息 + 进度 + 控制 -->
       <div class="left-col">
-        <div class="cover-wrap" :class="{ clickable: canShowComments }" @click="toggleComments">
+        <div class="cover-wrap" :class="{ clickable: canShowComments }" @click="onCoverTap">
           <div v-if="player.song?.cover" class="cover">
             <img :src="player.song.cover" alt="" />
           </div>
@@ -837,6 +883,19 @@ onBeforeUnmount(() => {
     padding-top: calc(56px + env(safe-area-inset-top));
     overflow-y: auto;
     overscroll-behavior: contain;
+  }
+
+  /* 窄屏下封面与歌词互斥，详见 <script> 里 mobileLyrics 的说明。
+     切成队列/音效面板时照常显示右栏，否则那两个功能在移动端就没入口了。 */
+  .player-body:not(.mobile-lyrics):not(.show-panel) .right-col {
+    display: none;
+  }
+  .player-body.mobile-lyrics .left-col {
+    display: none;
+  }
+  .player-body.mobile-lyrics .right-col {
+    flex: 1 1 auto;
+    min-height: 0;
   }
   .left-col {
     flex: 0 0 auto;

@@ -46,6 +46,12 @@ const showMiniPlayer = computed(() => Boolean(player.song) && !isPlayerPage.valu
   overflow: hidden;
   background: var(--md-sys-color-surface, #101014);
 
+  /* --lm-nav-width 是桌面端左侧导航栏的宽度（88px），MiniPlayer 用它做左偏移
+     （MiniPlayer.vue:97 的 left）。移动端没有侧栏，留着这一条迷你播放器就会
+     整体右移 88px，左边露出一条列表内容 —— 看起来就是「底部状态条错位」。
+     自定义属性会沿 DOM 继承，MiniPlayer 虽然是 fixed 定位也照收不误。 */
+  --lm-nav-width: 0px;
+
   /* WebView 是铺满的（Flutter 侧 SafeArea top:false），所以状态栏、灵动岛
      和横屏刘海都会盖在内容上 —— 不内缩的话标题会压在时间和电量下面。
      桌面端没有安全区这个概念，Vue 各处也都没用 env()，所以统一在这里兜住。
