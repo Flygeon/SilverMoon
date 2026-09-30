@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
 import 'services/bridge_commands.dart';
+import 'services/bridge_online.dart';
 import 'services/bridge_service.dart';
 import 'services/media_service.dart';
 import 'services/player_service.dart';
@@ -33,6 +34,10 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
   late final LibraryController _library;
   late final OnlineController _online;
 
+  /// 在线服务（网易云 / 酷狗）。原生 UI 与桥接**共用这一个实例** ——
+  /// 否则 cookie jar 各建各的，一边登录另一边看不见。
+  late final OnlineMusicService _onlineMusic;
+
   /// 音乐页签的 WebView 宿主：loopback HTTP 服务 + JS 桥。
   late final WebHostService _webHost;
   late final BridgeService _bridge;
@@ -45,7 +50,11 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
     _settings = SettingsController();
     _player = PlayerService();
     _library = LibraryController();
-    _online = OnlineController(repository: _player.repository);
+    _onlineMusic = OnlineMusicService();
+    _online = OnlineController(
+      repository: _player.repository,
+      online: _onlineMusic,
+    );
     _webHost = WebHostService();
     _bridge = BridgeService(host: _webHost);
     _media = MediaController(MediaService());
@@ -82,7 +91,7 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
     // 先把 loopback 服务起起来，WebView 才能加载到 Vue 产物与本地媒体文件
     await _webHost.start();
     _bridge.registerCommands(
-      buildBridgeCommands(host: _webHost, bridge: _bridge),
+      buildBridgeCommands(host: _webHost, bridge: _bridge, online: _onlineMusic),
     );
     if (!mounted) return;
     setState(() => _ready = true);
@@ -146,6 +155,7 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
         ChangeNotifierProvider<PlayerService>.value(value: _player),
         ChangeNotifierProvider<LibraryController>.value(value: _library),
         ChangeNotifierProvider<OnlineController>.value(value: _online),
+        Provider<OnlineMusicService>.value(value: _onlineMusic),
         Provider<WebHostService>.value(value: _webHost),
         Provider<BridgeService>.value(value: _bridge),
         ChangeNotifierProvider<MediaController>.value(value: _media),

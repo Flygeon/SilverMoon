@@ -21,6 +21,8 @@ import 'web_host_service.dart';
 Map<String, Future<Object?> Function(Map<String, dynamic>)> buildBridgeCommands({
   required WebHostService host,
   required BridgeService bridge,
+  /// 与原生 UI 共用的在线服务实例（不传则桥接自己建一个）。
+  OnlineMusicService? online,
 }) {
   final _Library lib = _Library(bridge);
   return <String, Future<Object?> Function(Map<String, dynamic>)>{
@@ -68,7 +70,7 @@ Map<String, Future<Object?> Function(Map<String, dynamic>)> buildBridgeCommands(
     'listen_source_breakdown': lib.sourceBreakdown,
 
     // ---- 在线音源（本地曲库之外的部分）----
-    ...buildOnlineCommands(),
+    ...buildOnlineCommands(online),
   };
 }
 

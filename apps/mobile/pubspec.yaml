@@ -53,6 +53,9 @@ dependencies:
   # 已移除的 jcenter()，构建期直接失败。这个包 3.x 要求 Flutter>=3.44，是活的。
   fc_native_video_thumbnail: ^3.0.1
   url_launcher: ^6.3.1
+  # 扫码登录要原生渲染二维码（复用桌面端 Vue 前端时是前端自己画的）。
+  # 纯 Dart，无原生代码。
+  qr_flutter: ^4.1.0
   collection: ^1.19.1
   intl: any
 
