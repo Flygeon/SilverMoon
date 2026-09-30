@@ -7,6 +7,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import '../services/bridge_service.dart';
 import '../services/web_audio_host.dart';
 import '../services/web_host_service.dart';
+import '../state/settings_controller.dart';
 
 /// 音乐页签：用 WebView 承载复用自桌面端的 Vue 前端。
 ///
@@ -26,6 +27,7 @@ class _MusicWebPageState extends State<MusicWebPage> {
   WebViewController? _controller;
   BridgeService? _bridge;
   WebAudioHost? _audio;
+  SettingsController? _settings;
   bool _loading = true;
   String? _error;
 
@@ -40,9 +42,22 @@ class _MusicWebPageState extends State<MusicWebPage> {
   @override
   void dispose() {
     _bridge?.player.removeListener(_pushAudioMeta);
+    _settings?.removeListener(_applyEffects);
     final WebAudioHost? a = _audio;
     if (a != null) unawaited(a.dispose());
     super.dispose();
+  }
+
+  /// 把当前音效配置应用到音频出口。
+  ///
+  /// 音效必须挂在真正出声的那个播放器上（WebAudioHost），并在设置变化时
+  /// 重新应用 —— 之前只挂在原生兜底播放器上，而那个只有在 WebView 起不来时
+  /// 才会用，等于设置页的均衡器对实际播放毫无作用。
+  void _applyEffects() {
+    final WebAudioHost? a = _audio;
+    final SettingsController? s = _settings;
+    if (a == null || s == null) return;
+    unawaited(a.setEffects(s.effects));
   }
 
   /// 通知栏/锁屏的标题与封面。player:state 已经由 main-mobile.ts 周期上报，
@@ -58,6 +73,7 @@ class _MusicWebPageState extends State<MusicWebPage> {
   Future<void> _boot() async {
     final WebHostService host = context.read<WebHostService>();
     final BridgeService bridge = context.read<BridgeService>();
+    final SettingsController settings = context.read<SettingsController>();
     setState(() {
       _loading = true;
       _error = null;
@@ -70,6 +86,11 @@ class _MusicWebPageState extends State<MusicWebPage> {
       bridge.player.removeListener(_pushAudioMeta);
       bridge.player.addListener(_pushAudioMeta);
       _pushAudioMeta();
+
+      _settings?.removeListener(_applyEffects);
+      _settings = settings;
+      _settings!.addListener(_applyEffects);
+      _applyEffects();
 
       final Uri root = await host.start();
       final WebViewController c = WebViewController()

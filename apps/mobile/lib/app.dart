@@ -71,7 +71,12 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
       speed: _settings.settings.playbackRate,
       effectsConfig: _settings.effects,
       detectInstrumental: _settings.settings.detectInstrumental,
-      restoreLastSession: true,
+      // 必须是 false。just_audio_background 只支持单个 AudioPlayer 实例，
+      // 而移动端原则上由 WebView 里那套 Vue 播放器出声（WebAudioHost）；
+      // PlayerService 只是 WebView 起不来时的兜底。这里若恢复上次会话，
+      // 兜底播放器会预载一首歌、挂上自己的 MediaItem，通知栏与锁屏的
+      // 播放/暂停就绑到那个不出声的播放器上去了。
+      restoreLastSession: false,
     );
     await _library.load();
     // 先把 loopback 服务起起来，WebView 才能加载到 Vue 产物与本地媒体文件

@@ -5,6 +5,9 @@ import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 
+import '../models/audio_effect_config.dart';
+import 'audio_effects_service.dart';
+
 /// WebView 的音频出口。
 ///
 /// 架构：WebView 里的 Vue 播放器 store 仍然是队列、歌词、UI 的唯一真相，
@@ -30,7 +33,25 @@ class WebAudioHost {
   /// 把事件回灌给 WebView（走 bridge 的 silvermoon:native 通道）。
   final Future<void> Function(Map<String, Object?> event) emit;
 
-  final AudioPlayer _player = AudioPlayer();
+  // 硬件音效只有 Android 有（多段 EQ + 低音增强）。
+  //
+  // 挂在**这个**播放器上很关键：真正出声的是它。桌面端那套 Web Audio 音效
+  // 在 WebView 里用不了（虚拟 <audio> 不是真的 HTMLMediaElement，
+  // createMediaElementSource 会抛错，前端据此把音效开关自动关掉）。
+  // 之前音效只挂在原生兜底播放器上，而那个只有在 WebView 起不来时才会用 ——
+  // 等于设置页的「启用均衡器 / 音效」对实际播放完全没有作用。
+  final AndroidEqualizer _equalizer = AndroidEqualizer();
+  final AndroidLoudnessEnhancer _loudness = AndroidLoudnessEnhancer();
+  late final AudioEffectsService effects =
+      AudioEffectsService(equalizer: _equalizer, loudness: _loudness);
+  late final AudioPlayer _player = AudioPlayer(
+    audioPipeline: AudioPipeline(
+      androidAudioEffects:
+          (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
+              ? <AndroidAudioEffect>[_equalizer, _loudness]
+              : <AndroidAudioEffect>[],
+    ),
+  );
 
   StreamSubscription<Duration?>? _durSub;
   StreamSubscription<PlayerState>? _stateSub;
@@ -74,6 +95,17 @@ class WebAudioHost {
         'currentTime': _player.position.inMilliseconds / 1000.0,
       }));
     });
+  }
+
+  /// 应用音效配置。移动端只有 Android 的硬件多段 EQ 与低音增强是真的；
+  /// 混响 / 立体声宽度没有实现（桌面端走 Web Audio 的 ConvolverNode 与
+  /// Splitter-Merger），对应开关在移动端应当视为不可用。
+  Future<void> setEffects(AudioEffectConfig cfg) async {
+    try {
+      await effects.init(cfg);
+    } catch (e) {
+      debugPrint('音效应用失败: $e');
+    }
   }
 
   /// 由 player:state 事件填充，只用于 MediaItem 的展示。
