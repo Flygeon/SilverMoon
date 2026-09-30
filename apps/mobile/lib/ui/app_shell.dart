@@ -113,8 +113,7 @@ class _AppShellState extends State<AppShell> {
 
 /// 原生迷你播放器：数据直接来自 PlayerService。
 ///
-/// 之前它读的是 BridgeService.player —— WebView 里 Vue store 推过来的状态。
-/// 去掉 WebView 之后那个会永远为空，所以整条数据源换掉。
+/// 数据源就是 PlayerService —— 早先经 WebView 桥转发的那条链路已随 WebView 移除。
 class NativeMiniPlayer extends StatelessWidget {
   const NativeMiniPlayer({super.key});
 

@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:dynamic_color/dynamic_color.dart';
@@ -7,16 +6,12 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
-import 'services/bridge_commands.dart';
 import 'services/bridge_online.dart';
-import 'services/bridge_service.dart';
 import 'services/media_service.dart';
 import 'services/player_service.dart';
-import 'services/web_host_service.dart';
 import 'state/library_controller.dart';
 import 'state/media_controller.dart';
 import 'state/online_controller.dart';
-import 'models/settings.dart';
 import 'state/settings_controller.dart';
 import 'theme/app_theme.dart';
 import 'ui/app_shell.dart';
@@ -38,9 +33,6 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
   /// 否则 cookie jar 各建各的，一边登录另一边看不见。
   late final OnlineMusicService _onlineMusic;
 
-  /// 音乐页签的 WebView 宿主：loopback HTTP 服务 + JS 桥。
-  late final WebHostService _webHost;
-  late final BridgeService _bridge;
   late final MediaController _media;
   bool _ready = false;
 
@@ -55,8 +47,6 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
       repository: _player.repository,
       online: _onlineMusic,
     );
-    _webHost = WebHostService();
-    _bridge = BridgeService(host: _webHost);
     _media = MediaController(MediaService());
     _bootstrap();
   }
@@ -69,76 +59,23 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
       } catch (_) {}
     }
     await _settings.load();
-    // 原生设置页改动的项要能作用到 WebView 里的音乐页。两套设置的键空间
-    // 不同（见 BridgeService.pushWebSettings），所以这里显式推一次；
-    // 首次启动时这一推也顺带把 enableOnlineMusic 这类默认值对齐 ——
-    // Vue 侧的默认是关，原生侧默认是开，不推的话音乐页永远看不到在线入口。
-    _settings.addListener(_scheduleWebSettingsPush);
-    unawaited(_bridge.pushWebSettings(_webSettingsPatch(_settings.settings)));
     await _player.init(
       volume: _settings.settings.volume,
       speed: _settings.settings.playbackRate,
       effectsConfig: _settings.effects,
       detectInstrumental: _settings.settings.detectInstrumental,
-      // 必须是 false。just_audio_background 只支持单个 AudioPlayer 实例，
-      // 而移动端原则上由 WebView 里那套 Vue 播放器出声（WebAudioHost）；
-      // PlayerService 只是 WebView 起不来时的兜底。这里若恢复上次会话，
-      // 兜底播放器会预载一首歌、挂上自己的 MediaItem，通知栏与锁屏的
-      // 播放/暂停就绑到那个不出声的播放器上去了。
+      // 必须是 false。这里是应用启动的最早期，恢复上次会话会让播放器预载
+      // 一首歌、挂上自己的 MediaItem，冷启动就冒出一条「正在播放」通知，
+      // 与用户「打开应用但还没点播放」的预期不符。
       restoreLastSession: false,
     );
     await _library.load();
-    // 先把 loopback 服务起起来，WebView 才能加载到 Vue 产物与本地媒体文件
-    await _webHost.start();
-    _bridge.registerCommands(
-      buildBridgeCommands(host: _webHost, bridge: _bridge, online: _onlineMusic),
-    );
     if (!mounted) return;
     setState(() => _ready = true);
   }
 
-  /// 原生设置 -> WebView 设置的键映射。
-  ///
-  /// 只有 theme 一个名字不同（Vue 用 theme，原生的 AppSettings 用 themeMode），
-  /// 其余字段刻意同名 —— AppSettings 的字段名本来就是照着 settings.ts 的
-  /// DEFAULTS 起的，便于两边互导。
-  Map<String, Object?> _webSettingsPatch(AppSettings s) => <String, Object?>{
-        'theme': s.themeMode,
-        'enableOnlineMusic': s.enableOnlineMusic,
-        'musicServer': s.musicServer,
-        // Vue 侧的 enabledServers 由这两个开关推导（settings.ts:269），
-        // 它们为 false 时平台条整个不渲染 —— 也就是没有切源、没有登录入口。
-        'neteaseEnabled': s.neteaseEnabled,
-        'kugouEnabled': s.kugouEnabled,
-        'playerBg': s.playerBg,
-        'wordLyrics': s.wordLyrics,
-        'preciseLyrics': s.preciseLyrics,
-        'detectInstrumental': s.detectInstrumental,
-        'lyricBlur': s.lyricBlur,
-        'lyricFontSize': s.lyricFontSize,
-        'lyricLineGap': s.lyricLineGap,
-        'lyricTranslationSize': s.lyricTranslationSize,
-        'lyricSubMode': s.lyricSubMode,
-        'minFileSizeMb': s.minFileSizeMb,
-        'gridColumns': s.gridColumns,
-        'kugouAutoSignIn': s.kugouAutoSignIn,
-      };
-
-  /// 拖滑块会高频触发 notifyListeners，每次都落盘没必要。
-  Timer? _webPushTimer;
-
-  void _scheduleWebSettingsPush() {
-    _webPushTimer?.cancel();
-    _webPushTimer = Timer(const Duration(milliseconds: 400), () {
-      unawaited(_bridge.pushWebSettings(_webSettingsPatch(_settings.settings)));
-    });
-  }
-
   @override
   void dispose() {
-    _webPushTimer?.cancel();
-    _bridge.dispose();
-    _webHost.stop();
     _media.dispose();
     _player.dispose();
     _settings.dispose();
@@ -156,8 +93,6 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
         ChangeNotifierProvider<LibraryController>.value(value: _library),
         ChangeNotifierProvider<OnlineController>.value(value: _online),
         Provider<OnlineMusicService>.value(value: _onlineMusic),
-        Provider<WebHostService>.value(value: _webHost),
-        Provider<BridgeService>.value(value: _bridge),
         ChangeNotifierProvider<MediaController>.value(value: _media),
       ],
       child: DynamicColorBuilder(builder: _buildThemedApp),

@@ -5,12 +5,10 @@ on:
     branches: [main]
     paths:
       - 'apps/mobile/**'
-      - 'apps/desktop/**'
       - '.github/workflows/mobile.yml'
   pull_request:
     paths:
       - 'apps/mobile/**'
-      - 'apps/desktop/**'
       - '.github/workflows/mobile.yml'
   workflow_dispatch:
 
@@ -70,25 +68,6 @@ jobs:
       - name: Generate launcher icons
         run: dart run flutter_launcher_icons
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
-
-      - name: Build mobile web bundle
-        working-directory: apps/desktop
-        run: |
-          set -eux
-          npm ci --no-audit --no-fund
-          npx vite build --config vite.mobile.config.ts
-          rm -rf ../mobile/assets/webapp
-          mkdir -p ../mobile/assets/webapp
-          cp -R dist-mobile/. ../mobile/assets/webapp/
-          du -sh ../mobile/assets/webapp
-          ls -la ../mobile/assets/webapp | head -30
-
       - name: flutter analyze
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
@@ -143,27 +122,8 @@ jobs:
       - name: Generate launcher icons
         run: dart run flutter_launcher_icons
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
-
-      - name: Build mobile web bundle
-        working-directory: apps/desktop
-        run: |
-          set -eux
-          npm ci --no-audit --no-fund
-          npx vite build --config vite.mobile.config.ts
-          rm -rf ../mobile/assets/webapp
-          mkdir -p ../mobile/assets/webapp
-          cp -R dist-mobile/. ../mobile/assets/webapp/
-          du -sh ../mobile/assets/webapp
-          ls -la ../mobile/assets/webapp | head -30
-
       - name: flutter build ios (no codesign)
-        # --no-codesign 已经关掉签名，但新增的插件（webview_flutter / video_player）
+        # --no-codesign 已经关掉签名，但新增的插件（video_player / photo_manager）
         # 会让 xcodebuild 重新引入签名要求，CI 上拿不到开发者证书。这里再压一层
         # 显式构建设置。--verbose 是为了失败时能在日志里看到 xcodebuild 的真实报错。
         env:

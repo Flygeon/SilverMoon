@@ -13,7 +13,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
-/// 在线音源（网易云 / 酷狗）的桥接命令。
+/// 在线音源（网易云 / 酷狗）服务。
 ///
 /// 与桌面端的差别：桌面端把登录凭据放在 Rust 侧（backend/src/netease.rs、
 /// backend/src/kugou.rs），完全不进渲染进程；移动端没有 Rust 侧，凭据只能由
@@ -23,51 +23,8 @@ import 'package:path_provider/path_provider.dart';
 /// 这是**明文**存储，强度低于桌面端。接受它的理由：移动端本来就没有可信执行
 /// 边界（同一个 Dart 进程既能读凭据也能发请求），再包一层加密等于把钥匙和锁
 /// 放一起。要真正隔离得走平台钥匙串（flutter_secure_storage），属于后续加固。
-/// 把 [OnlineMusicService] 的方法包装成桥接命令。
-///
-/// 桥接（WebView）已经不是音乐页的主路径了，这个出口暂时保留：部分在线能力
-/// 还没搬进原生 UI。两边**共用同一个 service 实例** —— 否则 cookie jar 各建
-/// 各的，原生登录了 WebView 那边看不见，反之亦然。
-Map<String, Future<Object?> Function(Map<String, dynamic>)> buildOnlineCommands([
-  OnlineMusicService? shared,
-]) {
-  final OnlineMusicService online = shared ?? OnlineMusicService();
-  return <String, Future<Object?> Function(Map<String, dynamic>)>{
-    // ---- 网易云 ----
-    'netease_song_url': online.neteaseSongUrl,
-    'netease_login_qr_key': online.neteaseLoginQrKey,
-    'netease_login_qr_check': online.neteaseLoginQrCheck,
-    'netease_account': online.neteaseAccount,
-    'netease_sms_captcha_sent': online.neteaseSmsCaptchaSent,
-    'netease_login_cellphone': online.neteaseLoginCellphone,
-    'netease_user_playlists': online.neteaseUserPlaylists,
-    'netease_playlist_detail': online.neteasePlaylistDetail,
-    'netease_cloud': online.neteaseCloud,
-    'netease_song_comments': online.neteaseSongComments,
-    'netease_set_song_liked': online.neteaseSetSongLiked,
-    'netease_likelist': online.neteaseLikelist,
-    'netease_recommend_playlists': online.neteaseRecommendPlaylists,
-    'netease_daily_recommend_songs': online.neteaseDailyRecommendSongs,
-    'netease_personal_fm': online.neteasePersonalFm,
-    'netease_logout': online.neteaseLogout,
-    // ---- 酷狗 ----
-    'kugou_search': online.kugouSearch,
-    'kugou_song_url': online.kugouSongUrl,
-    'kugou_cover': online.kugouCover,
-    'kugou_rank_list': online.kugouRankList,
-    'kugou_rank_songs': online.kugouRankSongs,
-    'kugou_playlist_detail': online.kugouPlaylistDetail,
-    'kugou_everyday_recommend': online.kugouEverydayRecommend,
-    'kugou_login_status': online.kugouLoginStatus,
-    'kugou_login_qr_key': online.kugouLoginQrKey,
-    'kugou_login_qr_check': online.kugouLoginQrCheck,
-    'kugou_captcha_sent': online.kugouCaptchaSent,
-    'kugou_login_cellphone': online.kugouLoginCellphone,
-    'kugou_sign_in': online.kugouSignIn,
-    'kugou_account': online.kugouAccount,
-    'kugou_logout': online.kugouLogout,
-  };
-}
+/// 原生在线页与原生播放器共用同一个实例（见 app.dart 的 Provider），
+/// 全进程只有一份 cookie jar。
 
 // --------------------------------------------------------------------- 工具
 
@@ -162,9 +119,8 @@ class _CookieJar {
 
 /// 在线音源（网易云 / 酷狗）的原生实现。
 ///
-/// 原先只有 buildOnlineCommands 一个出口 —— 也就是只能由 WebView 里的 Vue
-/// 前端经桥接调用。音乐模块改成原生之后 UI 需要直接用，所以这个类公开，
-/// 由 app.dart 建一个实例同时交给原生 UI 与桥接。
+/// 由 app.dart 建一个实例，经 Provider 交给原生在线页与原生播放器共用，
+/// 全进程只有一份 cookie jar。
 class OnlineMusicService {
   static const Duration _timeout = Duration(seconds: 20);
 

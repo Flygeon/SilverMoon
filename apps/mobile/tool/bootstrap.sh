@@ -68,7 +68,7 @@ if not p.exists():
     sys.exit(0)
 s = p.read_text()
 
-# 1) 部署目标。webview_flutter / video_player / photo_manager 都要 13.0 以上。
+# 1) 部署目标。取 13.0，满足当前插件依赖的最低要求。
 if re.search(r'^\s*#\s*platform :ios', s, re.M):
     s = re.sub(r'^\s*#\s*platform :ios.*$', "platform :ios, '13.0'", s, flags=re.M)
 elif not re.search(r'^\s*platform :ios', s, re.M):

@@ -13,7 +13,6 @@
     "start": "electron .",
     "build": "npm run typecheck && npm run build:renderer && npm run build:main",
     "build:renderer": "vite build",
-    "build:mobile": "vite build --config vite.mobile.config.ts",
     "build:main": "node scripts/build-electron.mjs",
     "build:backend": "cargo build --manifest-path backend/Cargo.toml",
     "build:backend:release": "cargo build --release --manifest-path backend/Cargo.toml",

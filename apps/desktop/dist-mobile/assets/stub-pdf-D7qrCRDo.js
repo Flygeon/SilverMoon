@@ -1,1 +1,0 @@
-function e(r){return r}async function n(){throw new Error("PDF 阅读在移动端 WebView 中不可用")}async function o(){throw new Error("PDF 封面在移动端 WebView 中不可用")}export{n as loadPdfjs,o as renderPdfCover,e as toArrayBuffer};
