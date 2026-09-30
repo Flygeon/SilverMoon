@@ -18,7 +18,14 @@ import 'package:just_audio_background/just_audio_background.dart';
 ///
 /// 这里刻意**不**持有队列或歌词状态：一旦两边都存一份，就会出现两个真相。
 class WebAudioHost {
-  WebAudioHost({required this.emit});
+  WebAudioHost({required this.emit}) {
+    // 必须在这里接上事件流。漏调的话 _durSub / _stateSub / _tick 全是 null，
+    // 于是 loadedmetadata、timeupdate、play、pause、ended 一个都不会回灌给
+    // 前端 —— 表现为时长恒为 0（进度条停在 0:00 / -0:00 且滑块贴最左）、
+    // 歌词和进度条都不动、播放状态不同步、放完不自动切下一首。
+    // 原生兜底播放器 player_service.dart:46 也是在构造函数里调的。
+    _wire();
+  }
 
   /// 把事件回灌给 WebView（走 bridge 的 silvermoon:native 通道）。
   final Future<void> Function(Map<String, Object?> event) emit;
