@@ -200,8 +200,10 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                   lineHeight: settings.settings.lyricLineHeight,
                   lineGap: settings.settings.lyricLineGap,
                   translationSize: settings.settings.lyricTranslationSize,
+                  translationGap: settings.settings.lyricTranslationGap,
                   subMode: settings.settings.lyricSubMode,
                   wordLyrics: settings.settings.wordLyrics,
+                  blur: settings.settings.lyricBlur,
                   onSeekLine: (LyricLine l) => _player
                       .seek(Duration(milliseconds: (l.time * 1000).round())),
                 ),
