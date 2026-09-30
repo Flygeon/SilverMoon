@@ -1,5 +1,10 @@
 # 05 · 音乐模块桥调用清点（Flutter WebView 重写用）
 
+> ⚠️ **已废弃（2026-09-30，commit 44c0a59）**：本文是为「WebView 复用桌面 Vue 前端」做的
+> 桌面端桥调用清点；移动端最终走**原生实现**，JS 桥（BridgeService）已删除。
+> 在线能力现由 apps/mobile/lib/services/bridge_online.dart 的 OnlineMusicService 提供。
+> 本文只作历史记录，**不要照做**。
+
 > 本文只做**只读静态清点**，未修改任何源码（除本文件）。
 >
 > 清点范围：以任务给定的 stores / views / components / utils 清单为起点，沿 import（含动态 import() 与 new URL(..., import.meta.url)）递归展开到 src/ipc/。

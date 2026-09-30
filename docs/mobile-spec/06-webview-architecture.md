@@ -1,5 +1,11 @@
 # 06 · WebView 复用架构
 
+> ⚠️ **已废弃（2026-09-30，commit 44c0a59）**：移动端音乐页签早已改为**原生实现**，
+> 本文描述的 WebView 复用架构（loopback 宿主 / JS 桥 / Vue 移动端产物）已随
+> web_host_service.dart、bridge_service.dart、bridge_commands.dart 与
+> apps/desktop/src/mobile/* 一并删除。
+> 本文只作历史记录，**不要照做**；当前移动端行为以 02-playback.md、04-lyrics.md 为准。
+
 > 本文记录移动端**为什么**以及**如何**复用桌面端的 Vue 前端。
 > 相关代码：`apps/mobile/lib/services/{web_host_service,bridge_service,bridge_commands}.dart`、
 > `apps/desktop/src/mobile/*`、`apps/desktop/vite.mobile.config.ts`。
