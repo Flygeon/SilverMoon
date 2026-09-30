@@ -186,6 +186,22 @@ class SettingsPage extends StatelessWidget {
             value: s.settings.enableOnlineMusic,
             onChanged: s.setEnableOnlineMusic,
           ),
+          // 这两个不只是「开关」：音乐页的平台条（切源 + 登录入口）就是按它们
+          // 推导出来的，关掉之后整个条不渲染。默认都开，登录在音乐页里做。
+          SwitchListTile(
+            secondary: const Icon(Icons.album_outlined),
+            title: const Text('网易云音乐'),
+            subtitle: const Text('扫码登录后可看我的歌单与云盘'),
+            value: s.settings.neteaseEnabled,
+            onChanged: s.setNeteaseEnabled,
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.queue_music_rounded),
+            title: const Text('酷狗音乐'),
+            subtitle: const Text('扫码 / 手机号登录，每日推荐与榜单'),
+            value: s.settings.kugouEnabled,
+            onChanged: s.setKugouEnabled,
+          ),
           ListTile(
             leading: const Icon(Icons.dns_outlined),
             title: const Text('默认音源'),

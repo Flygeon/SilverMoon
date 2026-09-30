@@ -92,6 +92,10 @@ class _SilverMoonAppState extends State<SilverMoonApp> {
         'theme': s.themeMode,
         'enableOnlineMusic': s.enableOnlineMusic,
         'musicServer': s.musicServer,
+        // Vue 侧的 enabledServers 由这两个开关推导（settings.ts:269），
+        // 它们为 false 时平台条整个不渲染 —— 也就是没有切源、没有登录入口。
+        'neteaseEnabled': s.neteaseEnabled,
+        'kugouEnabled': s.kugouEnabled,
         'playerBg': s.playerBg,
         'wordLyrics': s.wordLyrics,
         'detectInstrumental': s.detectInstrumental,

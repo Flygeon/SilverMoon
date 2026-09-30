@@ -22,6 +22,12 @@ import "./audio-shim";
 import "@/tokens/fonts.css";
 import "@/tokens/theme.css";
 
+// @m3e/web 的组件是自定义元素，必须靠这个副作用导入去 customElements.define。
+// MusicView 用了 32 个、MiniPlayer 用了 19 个（按钮 / chip / 对话框 / 滑块 /
+// 开关 / 进度条 / 卡片…），漏掉这一步它们全是「未定义元素」——不报错，
+// 但一点样式都不带，看起来就像设计令牌缺失。桌面端 main.ts:9 一直有这行。
+import "@/m3e";
+
 import "./mobile.css";
 
 import { createApp, watch } from "vue";

@@ -66,7 +66,14 @@ const showMiniPlayer = computed(() => Boolean(player.song) && !isPlayerPage.valu
 .sm-mobile-page {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: hidden;
+
+  /* 外壳才是滚动容器。桌面端这个角色由 App.vue:538 的 .main-content
+     （overflow-y:auto）担任，各页面自己只写 min-height:100% 撑满、不自己滚。
+     移动端这里原先写成 overflow:hidden，于是所有列表都滚不动 ——
+     内容再多也只显示第一屏。 */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* 路由过渡，取自 App.vue。位移走带轻微回弹的空间弹簧，透明度走不回弹的

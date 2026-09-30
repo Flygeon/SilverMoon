@@ -81,6 +81,12 @@ class SettingsController extends ChangeNotifier {
   Future<void> setEnableOnlineMusic(bool on) =>
       update((AppSettings s) => s.copyWith(enableOnlineMusic: on));
 
+  Future<void> setNeteaseEnabled(bool on) =>
+      update((AppSettings s) => s.copyWith(neteaseEnabled: on));
+
+  Future<void> setKugouEnabled(bool on) =>
+      update((AppSettings s) => s.copyWith(kugouEnabled: on));
+
   Future<void> setWordLyrics(bool on) =>
       update((AppSettings s) => s.copyWith(wordLyrics: on));
 

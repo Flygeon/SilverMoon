@@ -22,6 +22,10 @@ class AppSettings {
     this.minFileSizeMb = 0,
     this.enableOnlineMusic = true,
     this.musicServer = 'netease',
+    // 两个平台默认都开。Vue 侧这两个默认是关的，而能改它们的 Vue 设置页
+    // 在移动端没进路由 —— 只有这里开着，音乐页才会显示平台条（切源 + 登录）。
+    this.neteaseEnabled = true,
+    this.kugouEnabled = true,
     this.onlinePlaylists = const <String>[],
     this.volume = 1.0,
     this.playbackRate = 1.0,
@@ -63,6 +67,12 @@ class AppSettings {
   /// netease / kugou
   final String musicServer;
 
+  /// 是否启用网易云账号（扫码登录、我的歌单、云盘）
+  final bool neteaseEnabled;
+
+  /// 是否启用酷狗账号（扫码/手机号登录、每日推荐、榜单）
+  final bool kugouEnabled;
+
   /// `server:id` 列表
   final List<String> onlinePlaylists;
 
@@ -91,6 +101,8 @@ class AppSettings {
     double? minFileSizeMb,
     bool? enableOnlineMusic,
     String? musicServer,
+    bool? neteaseEnabled,
+    bool? kugouEnabled,
     List<String>? onlinePlaylists,
     double? volume,
     double? playbackRate,
@@ -115,6 +127,8 @@ class AppSettings {
       minFileSizeMb: minFileSizeMb ?? this.minFileSizeMb,
       enableOnlineMusic: enableOnlineMusic ?? this.enableOnlineMusic,
       musicServer: musicServer ?? this.musicServer,
+      neteaseEnabled: neteaseEnabled ?? this.neteaseEnabled,
+      kugouEnabled: kugouEnabled ?? this.kugouEnabled,
       onlinePlaylists: onlinePlaylists ?? this.onlinePlaylists,
       volume: volume ?? this.volume,
       playbackRate: playbackRate ?? this.playbackRate,
@@ -141,6 +155,8 @@ class AppSettings {
         'minFileSizeMb': minFileSizeMb,
         'enableOnlineMusic': enableOnlineMusic,
         'musicServer': musicServer,
+        'neteaseEnabled': neteaseEnabled,
+        'kugouEnabled': kugouEnabled,
         'onlinePlaylists': onlinePlaylists,
         'volume': volume,
         'playbackRate': playbackRate,
@@ -173,6 +189,10 @@ class AppSettings {
       minFileSizeMb: num2(j['minFileSizeMb'], d.minFileSizeMb),
       enableOnlineMusic: bool2(j['enableOnlineMusic'], d.enableOnlineMusic),
       musicServer: str2(j['musicServer'], d.musicServer),
+      // 用 bool2 而不是 bool2(..., true)：用户关掉之后要能存住。
+      // 值缺失时才落到 d.neteaseEnabled（默认 true）。
+      neteaseEnabled: bool2(j['neteaseEnabled'], d.neteaseEnabled),
+      kugouEnabled: bool2(j['kugouEnabled'], d.kugouEnabled),
       onlinePlaylists: list2(j['onlinePlaylists']),
       volume: num2(j['volume'], d.volume),
       playbackRate: num2(j['playbackRate'], d.playbackRate),
