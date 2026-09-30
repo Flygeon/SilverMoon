@@ -10,7 +10,11 @@ import 'widgets.dart';
 
 /// 在线音乐页：搜索 / 推荐歌单 / 排行榜 / 歌单详情
 class OnlinePage extends StatefulWidget {
-  const OnlinePage({super.key});
+  const OnlinePage({super.key, this.embedded = false});
+
+  /// 嵌进音乐页签时用 true：不套自己的 Scaffold / AppBar，交给外层。
+  /// 桌面端是在同一个 MusicView 里切「本地 / 在线」两个域，移动端照此。
+  final bool embedded;
 
   @override
   State<OnlinePage> createState() => _OnlinePageState();
@@ -50,8 +54,8 @@ class _OnlinePageState extends State<OnlinePage> {
     final SettingsController settings = context.watch<SettingsController>();
 
     if (!settings.settings.enableOnlineMusic) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('在线音乐')),
+      return _frame(
+        title: '在线音乐',
         body: SmEmptyState(
           icon: Icons.cloud_off_rounded,
           title: '在线音乐已关闭',
@@ -66,17 +70,15 @@ class _OnlinePageState extends State<OnlinePage> {
       return _buildPlaylistDetail(oc);
     }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('在线音乐'),
-        actions: <Widget>[
-          IconButton(
-            tooltip: '刷新',
-            icon: const Icon(Icons.refresh_rounded),
-            onPressed: () => oc.loadHome(),
-          ),
-        ],
-      ),
+    return _frame(
+      title: '在线音乐',
+      actions: <Widget>[
+        IconButton(
+          tooltip: '刷新',
+          icon: const Icon(Icons.refresh_rounded),
+          onPressed: () => oc.loadHome(),
+        ),
+      ],
       body: Column(
         children: <Widget>[
           Padding(
@@ -120,6 +122,19 @@ class _OnlinePageState extends State<OnlinePage> {
           ),
         ],
       ),
+    );
+  }
+
+  /// 内嵌时只返回内容，独立使用时补上 Scaffold / AppBar。
+  Widget _frame({
+    required String title,
+    List<Widget>? actions,
+    required Widget body,
+  }) {
+    if (widget.embedded) return body;
+    return Scaffold(
+      appBar: AppBar(title: Text(title), actions: actions),
+      body: body,
     );
   }
 
@@ -234,6 +249,61 @@ class _OnlinePageState extends State<OnlinePage> {
 
   Widget _buildPlaylistDetail(OnlineController oc) {
     final OnlinePlaylist p = oc.openedPlaylist!;
+    final Widget body = oc.loadingPlaylist
+          ? const Center(child: CircularProgressIndicator())
+          : oc.playlistTracks.isEmpty
+              ? const SmEmptyState(
+                  icon: Icons.music_off_rounded,
+                  title: '这个歌单暂时没有可播放的曲目',
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.only(bottom: 20),
+                  itemCount: oc.playlistTracks.length,
+                  itemBuilder: (BuildContext c, int i) => _onlineTile(
+                    oc.playlistTracks[i],
+                    oc.playlistTracks,
+                    i,
+                    oc,
+                  ),
+                );
+
+    if (widget.embedded) {
+      // 内嵌时没有 AppBar，用一条紧凑工具行代替返回与批量播放入口
+      return Column(
+        children: <Widget>[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 0, 4, 4),
+            child: Row(
+              children: <Widget>[
+                IconButton(
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  onPressed: oc.closePlaylist,
+                ),
+                Expanded(
+                  child: Text(
+                    p.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                IconButton(
+                  tooltip: '播放全部',
+                  icon: const Icon(Icons.play_arrow_rounded),
+                  onPressed: () => _playList(oc.playlistTracks),
+                ),
+                IconButton(
+                  tooltip: '随机播放',
+                  icon: const Icon(Icons.shuffle_rounded),
+                  onPressed: () => _playList(oc.playlistTracks, shuffle: true),
+                ),
+              ],
+            ),
+          ),
+          Expanded(child: body),
+        ],
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
@@ -254,23 +324,7 @@ class _OnlinePageState extends State<OnlinePage> {
           ),
         ],
       ),
-      body: oc.loadingPlaylist
-          ? const Center(child: CircularProgressIndicator())
-          : oc.playlistTracks.isEmpty
-              ? const SmEmptyState(
-                  icon: Icons.music_off_rounded,
-                  title: '这个歌单暂时没有可播放的曲目',
-                )
-              : ListView.builder(
-                  padding: const EdgeInsets.only(bottom: 20),
-                  itemCount: oc.playlistTracks.length,
-                  itemBuilder: (BuildContext c, int i) => _onlineTile(
-                    oc.playlistTracks[i],
-                    oc.playlistTracks,
-                    i,
-                    oc,
-                  ),
-                ),
+      body: body,
     );
   }
 
