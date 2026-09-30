@@ -7,7 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:fc_native_video_thumbnail/fc_native_video_thumbnail.dart';
 
-/// 本地媒体类型。音乐不走这里（音乐由 WebView 里的 Vue 前端 + 桥接管），
+/// 本地媒体类型。音乐不走这里（音乐页签是原生实现，有自己的一套扫描与索引），
 /// 图片 / 视频 / 书籍三个页签用它。
 enum MediaKind { image, video, book }
 

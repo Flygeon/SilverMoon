@@ -4,7 +4,7 @@ import '../services/media_service.dart';
 
 /// 图片 / 视频 / 书籍三个页签的扫描结果。
 ///
-/// 音乐不走这里：音乐页签由复用桌面端的 Vue 前端（WebView）承载。
+/// 音乐不走这里：音乐页签是原生实现，见 ui/music_page.dart。
 class MediaController extends ChangeNotifier {
   MediaController(this.service);
 

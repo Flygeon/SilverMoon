@@ -3,8 +3,7 @@
        1. 主 Activity 用 audio_service 的 AudioServiceActivity，后台播放/通知栏/耳机线控才能工作
        2. FOREGROUND_SERVICE_MEDIA_PLAYBACK / POST_NOTIFICATIONS：Android 13+ 通知与前台服务
        3. READ_MEDIA_{AUDIO,IMAGES,VIDEO}（33+）/ READ_EXTERNAL_STORAGE（<=32）：本地媒体库扫描
-       4. usesCleartextTraffic：部分在线音源会重定向到 http 明文地址；同时音乐页签的
-          WebView 从 Flutter 起的 127.0.0.1 loopback HTTP 服务加载页面与本地媒体文件
+       4. usesCleartextTraffic：部分在线音源会重定向到 http 明文地址
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">

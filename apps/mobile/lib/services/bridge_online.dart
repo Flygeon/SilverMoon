@@ -565,7 +565,8 @@ class OnlineMusicService {
     };
   }
 
-  /// 酷狗图床不返回 CORS 头，WebView 直连 fetch 会被拦，所以在这里转成 dataURL。
+  /// 图床要求带 UA / Referer 才给图；这里在 Dart 侧带请求头取回并转成 dataURL，
+  /// UI 直接当图片用，不必自己再凑请求头。
   Future<Object?> kugouCover(Map<String, dynamic> args) async {
     final String url = _s(args['url']);
     if (url.isEmpty) return '';

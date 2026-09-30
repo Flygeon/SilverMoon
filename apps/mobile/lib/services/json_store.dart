@@ -49,11 +49,11 @@ class JsonStore {
 
   /// 写整对象（先写临时文件再 rename，避免写一半掉电损坏）
   ///
-  /// 写前会先把磁盘上的现有内容读回来合并。settings.json 还有第二个写入者：
-  /// WebView 里 Vue 的那套设置（把整个设置对象存在单个 `settings` 键下，
-  /// 见 ipc/store.ts 与 stores/settings.ts）。两边都是整份读写、各自还有内存
-  /// 缓存，直接覆盖会把对方整个抹掉 —— 表现就是「设置改了一会儿又自己变回去」。
-  /// 两边的顶层键不重叠（扁平键 vs `settings`），所以合并即可共存。
+  /// 写前会先把磁盘上的现有内容读回来合并。settings.json 历史上还有第二个写入者：
+  /// WebView 版 Vue 前端（把整个设置对象存在单个 `settings` 键下，见 ipc/store.ts
+  /// 与 stores/settings.ts）。WebView 已在 44c0a59 移除，但老安装盘上仍留着那个键，
+  /// 直接整份覆盖会把它抹掉 —— 所以合并逻辑保留，用来兼容旧数据。
+  /// 两边的顶层键不重叠（扁平键 vs `settings`），合并即可共存。
   Future<void> write(Map<String, dynamic> data) async {
     try {
       final File f = await _resolve();
