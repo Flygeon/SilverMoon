@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import '../services/bridge_online.dart';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:provider/provider.dart';
@@ -278,6 +279,37 @@ class _OnlinePageState extends State<OnlinePage> {
       padding: const EdgeInsets.only(bottom: 24),
       children: <Widget>[
         _accountCard(context, oc),
+        if (oc.loggedIn && oc.server == MusicServer.netease) ...<Widget>[
+          const SmSectionHeader(title: '云盘'),
+          if (oc.loadingCloud)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (oc.cloud.isEmpty)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text('云盘里还没有歌曲', style: TextStyle(fontSize: 12.5)),
+            )
+          else
+            for (int i = 0; i < oc.cloud.length; i++)
+              _onlineTile(oc.cloud[i], oc.cloud, i, oc),
+          if (oc.myPlaylists.isNotEmpty) ...<Widget>[
+            const SmSectionHeader(title: '我的歌单'),
+            for (final OnlinePlaylist p in oc.myPlaylists)
+              ListTile(
+                leading: CoverArt(
+                  track: Track(id: p.id, title: p.name, coverUrl: p.coverUrl),
+                  size: 52,
+                  radius: 10,
+                ),
+                title: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text('@@{p.trackCount ?? 0} 首'),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () => oc.openPlaylist(p),
+              ),
+          ],
+        ],
         if (oc.daily.isNotEmpty) ...<Widget>[
           const SmSectionHeader(title: '每日推荐'),
           for (int i = 0; i < oc.daily.length; i++)
@@ -473,6 +505,8 @@ class _OnlinePageState extends State<OnlinePage> {
 
   void _showMenu(Track t, List<Track> list, int index) {
     final PlayerService player = context.read<PlayerService>();
+    final OnlineController oc = context.read<OnlineController>();
+    final bool canComment = t.server == MusicServer.netease;
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -504,6 +538,29 @@ class _OnlinePageState extends State<OnlinePage> {
                 player.addToQueue(t);
               },
             ),
+            // 喜欢与评论只有网易云有公开接口（酷狗没有）。
+            if (canComment && oc.loggedIn)
+              ListTile(
+                leading: Icon(
+                  oc.isLiked(t)
+                      ? Icons.favorite_rounded
+                      : Icons.favorite_border_rounded,
+                ),
+                title: Text(oc.isLiked(t) ? '取消喜欢' : '喜欢'),
+                onTap: () {
+                  Navigator.pop(c);
+                  oc.toggleLike(t);
+                },
+              ),
+            if (canComment)
+              ListTile(
+                leading: const Icon(Icons.chat_bubble_outline_rounded),
+                title: const Text('查看评论'),
+                onTap: () {
+                  Navigator.pop(c);
+                  showCommentsSheet(context, t);
+                },
+              ),
           ],
         ),
       ),
@@ -615,6 +672,178 @@ class _QrLoginSheetState extends State<_QrLoginSheet> {
           ),
         );
       },
+    );
+  }
+}
+
+/// 歌曲评论面板。只对网易云有效，酷狗没有公开的评论接口。
+Future<void> showCommentsSheet(BuildContext context, Track t) async {
+  await showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (BuildContext c) => FractionallySizedBox(
+      heightFactor: 0.85,
+      child: _CommentsSheet(track: t),
+    ),
+  );
+}
+
+class _CommentsSheet extends StatefulWidget {
+  const _CommentsSheet({required this.track});
+
+  final Track track;
+
+  @override
+  State<_CommentsSheet> createState() => _CommentsSheetState();
+}
+
+class _CommentsSheetState extends State<_CommentsSheet> {
+  List<Map<String, dynamic>> _hot = <Map<String, dynamic>>[];
+  List<Map<String, dynamic>> _all = <Map<String, dynamic>>[];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final OnlineMusicService svc = context.read<OnlineMusicService>();
+    try {
+      final Object? r = await svc.neteaseSongComments(<String, dynamic>{
+        'id': int.tryParse(widget.track.sourceKey ?? '') ?? 0,
+        'limit': 30,
+      });
+      if (!mounted) return;
+      final Map<String, Object?> m =
+          r is Map ? Map<String, Object?>.from(r) : <String, Object?>{};
+      setState(() {
+        _hot = _castList(m['hotComments']);
+        _all = _castList(m['comments']);
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = '$e';
+        _loading = false;
+      });
+    }
+  }
+
+  static List<Map<String, dynamic>> _castList(Object? v) => v is List
+      ? v
+          .whereType<Map<dynamic, dynamic>>()
+          .map((Map<dynamic, dynamic> e) => Map<String, dynamic>.from(e))
+          .toList()
+      : <Map<String, dynamic>>[];
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+          child: Text(
+            widget.track.displayTitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          ),
+        ),
+        if (_loading)
+          const Expanded(child: Center(child: CircularProgressIndicator()))
+        else if (_error != null)
+          Expanded(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(_error!, textAlign: TextAlign.center),
+              ),
+            ),
+          )
+        else if (_hot.isEmpty && _all.isEmpty)
+          const Expanded(
+            child: Center(child: Text('这首歌还没有评论')),
+          )
+        else
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.only(bottom: 24),
+              children: <Widget>[
+                if (_hot.isNotEmpty) ...<Widget>[
+                  const SmSectionHeader(title: '精彩评论'),
+                  for (final Map<String, dynamic> c in _hot) _tile(scheme, c),
+                ],
+                if (_all.isNotEmpty) ...<Widget>[
+                  const SmSectionHeader(title: '最新评论'),
+                  for (final Map<String, dynamic> c in _all) _tile(scheme, c),
+                ],
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _tile(ColorScheme scheme, Map<String, dynamic> c) {
+    final Object? u = c['user'];
+    final Map<String, dynamic> user =
+        u is Map ? Map<String, dynamic>.from(u) : <String, dynamic>{};
+    final String avatar = (user['avatarUrl'] ?? '').toString();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          ClipOval(
+            child: SizedBox(
+              width: 34,
+              height: 34,
+              child: avatar.isEmpty
+                  ? Container(color: scheme.surfaceContainerHighest)
+                  : CachedNetworkImage(imageUrl: avatar, fit: BoxFit.cover),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  (user['nickname'] ?? '匿名用户').toString(),
+                  style: TextStyle(fontSize: 12.5, color: scheme.primary),
+                ),
+                const SizedBox(height: 2),
+                Text((c['content'] ?? '').toString()),
+                const SizedBox(height: 4),
+                Row(
+                  children: <Widget>[
+                    Icon(
+                      Icons.thumb_up_alt_outlined,
+                      size: 13,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      (c['likedCount'] ?? 0).toString(),
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

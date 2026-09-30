@@ -39,6 +39,17 @@ class OnlineController extends ChangeNotifier {
   List<Track> _daily = <Track>[];
   bool _loadingDaily = false;
 
+  // ---- 我的音乐 ----
+  List<OnlinePlaylist> _myPlaylists = <OnlinePlaylist>[];
+  bool _loadingMine = false;
+  List<Track> _cloud = <Track>[];
+  bool _loadingCloud = false;
+  /// 已红心的 songId 集合。网易云只提供 id 列表，没有对应的歌曲详情接口，
+  /// 所以这里只用来标心，不做成一个可播放的歌单。
+  Set<String> _liked = <String>{};
+  /// 操作类反馈（红心失败等），与加载错误分开，免得把列表清空。
+  String? _notice;
+
   // ---- 扫码登录 ----
   String _qrKey = '';
   String? _qrContent;
@@ -64,6 +75,16 @@ class OnlineController extends ChangeNotifier {
   String? get signInMessage => _signInMessage;
   List<Track> get daily => _daily;
   bool get loadingDaily => _loadingDaily;
+  List<OnlinePlaylist> get myPlaylists => _myPlaylists;
+  bool get loadingMine => _loadingMine;
+  List<Track> get cloud => _cloud;
+  bool get loadingCloud => _loadingCloud;
+  String? get notice => _notice;
+
+  bool isLiked(Track t) {
+    final String id = t.sourceKey ?? '';
+    return id.isNotEmpty && _liked.contains(id);
+  }
   String? get qrContent => _qrContent;
   int get qrStatus => _qrStatus;
   bool get startingQr => _startingQr;
@@ -182,7 +203,12 @@ class OnlineController extends ChangeNotifier {
     }
     _accountLoaded = true;
     notifyListeners();
-    if (_account != null) unawaited(loadDaily());
+    if (_account != null) {
+      unawaited(loadDaily());
+      unawaited(loadLikes());
+      unawaited(loadMyPlaylists());
+      unawaited(loadCloud());
+    }
   }
 
   Future<void> loadDaily() async {
@@ -310,7 +336,102 @@ class OnlineController extends ChangeNotifier {
     return '请用 App 扫描二维码';
   }
 
+  // ============================================================ 我的音乐
+
+  /// 我创建/收藏的歌单。酷狗没有对应的公开接口，只做网易云。
+  Future<void> loadMyPlaylists() async {
+    if (_server != MusicServer.netease || _account == null) {
+      _myPlaylists = <OnlinePlaylist>[];
+      notifyListeners();
+      return;
+    }
+    _loadingMine = true;
+    notifyListeners();
+    try {
+      final Object? r = await online
+          .neteaseUserPlaylists(<String, dynamic>{'limit': 100});
+      _myPlaylists = r is List
+          ? r.whereType<Map<dynamic, dynamic>>().map(_playlistFromNe).toList()
+          : <OnlinePlaylist>[];
+    } catch (e) {
+      _myPlaylists = <OnlinePlaylist>[];
+    }
+    _loadingMine = false;
+    notifyListeners();
+  }
+
+  Future<void> loadCloud() async {
+    if (_server != MusicServer.netease || _account == null) {
+      _cloud = <Track>[];
+      notifyListeners();
+      return;
+    }
+    _loadingCloud = true;
+    notifyListeners();
+    try {
+      final Object? r = await online.neteaseCloud(<String, dynamic>{'limit': 100});
+      final Object? songs = r is Map ? r['songs'] : null;
+      _cloud = songs is List
+          ? songs.whereType<Map<dynamic, dynamic>>().map(_trackFromNe).toList()
+          : <Track>[];
+    } catch (e) {
+      _cloud = <Track>[];
+    }
+    _loadingCloud = false;
+    notifyListeners();
+  }
+
+  /// 拉一次红心列表。登录后调用，用于给列表里的歌标心。
+  Future<void> loadLikes() async {
+    if (_server != MusicServer.netease || _account == null) return;
+    final int uid = _int(_account?['userId'], 0);
+    if (uid == 0) return;
+    try {
+      final Object? r = await online.neteaseLikelist(<String, dynamic>{'uid': uid});
+      _liked = r is List
+          ? r.map((Object? e) => e.toString()).toSet()
+          : <String>{};
+    } catch (e) {
+      _liked = <String>{};
+    }
+    notifyListeners();
+  }
+
+  Future<void> toggleLike(Track t) async {
+    final String id = t.sourceKey ?? '';
+    if (id.isEmpty || _server != MusicServer.netease || _account == null) {
+      return;
+    }
+    final bool next = !_liked.contains(id);
+    try {
+      await online
+          .neteaseSetSongLiked(<String, dynamic>{'id': id, 'like': next});
+      if (next) {
+        _liked.add(id);
+      } else {
+        _liked.remove(id);
+      }
+      _notice = next ? '已加入我喜欢的音乐' : '已取消喜欢';
+    } catch (e) {
+      _notice = '$e';
+    }
+    notifyListeners();
+  }
+
+  void clearNotice() {
+    _notice = null;
+    notifyListeners();
+  }
+
   // ------------------------------------------------------------ 工具
+
+  OnlinePlaylist _playlistFromNe(Map<dynamic, dynamic> m) => OnlinePlaylist(
+        server: MusicServer.netease,
+        id: _str(m['id'], ''),
+        name: _str(m['name'], '未命名歌单'),
+        coverUrl: m['coverUrl']?.toString(),
+        trackCount: _int(m['trackCount'], 0),
+      );
 
   /// 桥接侧返回的网易云歌曲形态（{id,name,artist,album,picUrl}）转成 Track。
   /// id 约定与 music_api 一致：'netease:<songId>'。
