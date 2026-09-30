@@ -196,9 +196,9 @@ class _OnlinePageState extends State<OnlinePage> {
                   ),
                 ),
                 title: Text('登录${oc.serverLabel}'),
-                subtitle: const Text('扫码后可看每日推荐、我的歌单与云盘'),
+                subtitle: const Text('登录后可看每日推荐、我的歌单与云盘'),
                 trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () => showQrLoginSheet(context, oc),
+                onTap: () => showLoginSheet(context, oc),
               ),
       ),
     );
@@ -304,7 +304,7 @@ class _OnlinePageState extends State<OnlinePage> {
                   radius: 10,
                 ),
                 title: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                subtitle: Text('@@{p.trackCount ?? 0} 首'),
+                subtitle: Text('${p.trackCount ?? 0} 首'),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () => oc.openPlaylist(p),
               ),
@@ -568,51 +568,116 @@ class _OnlinePageState extends State<OnlinePage> {
   }
 }
 
-/// 扫码登录面板。
+/// 登录面板：扫码 / 手机号验证码两种方式，两个平台共用同一套界面。
 ///
-/// 两个平台的二维码内容形态不同（网易云只有 unikey，要自己拼登录链接），
-/// 差异由 OnlineController 抹平，这里只管画和轮询。
-Future<void> showQrLoginSheet(BuildContext context, OnlineController oc) async {
+/// 二维码内容形态由 OnlineController 抹平（网易云只有 unikey，要自己拼链接），
+/// 这里只管画、轮询，以及「从官方 App 切回来」时立刻补一次轮询。
+Future<void> showLoginSheet(BuildContext context, OnlineController oc) async {
+  oc.setPhone('');
+  oc.setSmsCode('');
   await oc.startQrLogin();
   if (!context.mounted) return;
   await showModalBottomSheet<void>(
     context: context,
     showDragHandle: true,
-    builder: (BuildContext c) => _QrLoginSheet(online: oc),
+    isScrollControlled: true,
+    builder: (BuildContext c) => _LoginSheet(online: oc),
   );
 }
 
-class _QrLoginSheet extends StatefulWidget {
-  const _QrLoginSheet({required this.online});
+class _LoginSheet extends StatefulWidget {
+  const _LoginSheet({required this.online});
 
   final OnlineController online;
 
   @override
-  State<_QrLoginSheet> createState() => _QrLoginSheetState();
+  State<_LoginSheet> createState() => _LoginSheetState();
 }
 
-class _QrLoginSheetState extends State<_QrLoginSheet> {
+class _LoginSheetState extends State<_LoginSheet>
+    with WidgetsBindingObserver {
   Timer? _timer;
+  /// 0 = 扫码，1 = 手机号。
+  int _mode = 0;
+  bool _busy = false;
+  late final TextEditingController _phoneCtl;
+  late final TextEditingController _codeCtl;
 
   @override
   void initState() {
     super.initState();
-    // 上游要求轮询。两秒一次足够跟上扫码节奏，再快有被限流的风险。
-    _timer = Timer.periodic(const Duration(seconds: 2), (Timer t) async {
-      final bool done = await widget.online.pollQrLogin();
-      if (!mounted) return;
-      if (done) {
-        t.cancel();
-        final NavigatorState nav = Navigator.of(context);
-        if (nav.canPop()) nav.pop();
-      }
-    });
+    WidgetsBinding.instance.addObserver(this);
+    _phoneCtl = TextEditingController(text: widget.online.phone);
+    _codeCtl = TextEditingController(text: '');
+    _startTimer();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
+    _phoneCtl.dispose();
+    _codeCtl.dispose();
     super.dispose();
+  }
+
+  /// 用户去官方 App 扫码、再切回来时立刻补一次，不等下一个 2s 周期。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed || _mode != 0) return;
+    if (_timer == null) _startTimer();
+    unawaited(_tick());
+  }
+
+  void _startTimer() {
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(seconds: 2), (Timer t) {
+      unawaited(_tick());
+    });
+  }
+
+  Future<void> _tick() async {
+    if (_busy || _mode != 0) return;
+    _busy = true;
+    try {
+      final bool done = await widget.online.pollQrLogin();
+      if (!mounted || !done) return;
+      _timer?.cancel();
+      _timer = null;
+      if (widget.online.loggedIn) {
+        final NavigatorState nav = Navigator.of(context);
+        if (nav.canPop()) nav.pop();
+        return;
+      }
+      // 过期或授权后拿不到账号：留在面板里显示原因 + 刷新按钮。
+      setState(() {});
+    } finally {
+      _busy = false;
+    }
+  }
+
+  Future<void> _restartQr() async {
+    _timer?.cancel();
+    _timer = null;
+    await widget.online.startQrLogin();
+    if (!mounted) return;
+    _startTimer();
+  }
+
+  void _setMode(int m) {
+    if (_mode == m) return;
+    setState(() => _mode = m);
+    if (m == 0) {
+      // 回到扫码页：二维码还在就继续轮询，过期了或还没取到就重新取。
+      if (widget.online.qrContent == null || widget.online.qrExpired) {
+        unawaited(_restartQr());
+      } else {
+        _startTimer();
+      }
+    } else {
+      _timer?.cancel();
+      _timer = null;
+    }
   }
 
   @override
@@ -622,57 +687,181 @@ class _QrLoginSheetState extends State<_QrLoginSheet> {
       animation: widget.online,
       builder: (BuildContext c, Widget? _) {
         final OnlineController oc = widget.online;
-        final String? content = oc.qrContent;
         return Padding(
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 32),
+          padding: EdgeInsets.fromLTRB(
+            24,
+            0,
+            24,
+            24 + MediaQuery.viewInsetsOf(context).bottom,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
               Text(
-                '扫码登录${oc.serverLabel}',
+                '登录${oc.serverLabel}',
+                textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
               ),
-              const SizedBox(height: 18),
-              if (oc.startingQr)
-                const SizedBox(
-                  height: 216,
-                  child: Center(child: CircularProgressIndicator()),
-                )
-              else if (content == null)
-                SizedBox(
-                  height: 216,
-                  child: Center(
-                    child: Text(
-                      oc.loginError ?? '二维码获取失败，请稍后重试',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: scheme.error),
-                    ),
-                  ),
-                )
-              else
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: QrImageView(
-                    data: content,
-                    size: 192,
-                    backgroundColor: Colors.white,
-                  ),
-                ),
               const SizedBox(height: 14),
-              Text(
-                oc.qrStatusText,
-                style: TextStyle(color: scheme.onSurfaceVariant),
-                textAlign: TextAlign.center,
+              Center(
+                child: SegmentedButton<int>(
+                  segments: const <ButtonSegment<int>>[
+                    ButtonSegment<int>(value: 0, label: Text('扫码登录')),
+                    ButtonSegment<int>(value: 1, label: Text('手机号登录')),
+                  ],
+                  selected: <int>{_mode},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (Set<int> s) => _setMode(s.first),
+                ),
               ),
+              const SizedBox(height: 16),
+              if (_mode == 0) ..._qrSection(oc, scheme) else ..._phoneSection(oc, scheme),
             ],
           ),
         );
       },
     );
+  }
+
+  List<Widget> _qrSection(OnlineController oc, ColorScheme scheme) {
+    final String? content = oc.qrContent;
+    return <Widget>[
+      if (oc.startingQr)
+        const SizedBox(
+          height: 216,
+          child: Center(child: CircularProgressIndicator()),
+        )
+      else if (content == null)
+        SizedBox(
+          height: 216,
+          child: Center(
+            child: Text(
+              oc.loginError ?? '二维码获取失败，请稍后重试',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: scheme.error),
+            ),
+          ),
+        )
+      else
+        Center(
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Opacity(
+              opacity: oc.qrExpired ? 0.25 : 1,
+              child: QrImageView(
+                data: content,
+                size: 192,
+                backgroundColor: Colors.white,
+              ),
+            ),
+          ),
+        ),
+      const SizedBox(height: 14),
+      Text(
+        oc.qrStatusText,
+        style: TextStyle(color: scheme.onSurfaceVariant),
+        textAlign: TextAlign.center,
+      ),
+      if (oc.loginError != null && content != null) ...<Widget>[
+        const SizedBox(height: 8),
+        Text(
+          oc.loginError!,
+          textAlign: TextAlign.center,
+          style: TextStyle(color: scheme.error, fontSize: 12.5),
+        ),
+      ],
+      if (oc.qrExpired || oc.loginError != null) ...<Widget>[
+        const SizedBox(height: 10),
+        Center(
+          child: TextButton.icon(
+            onPressed: () => unawaited(_restartQr()),
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('刷新二维码'),
+          ),
+        ),
+      ],
+    ];
+  }
+
+  List<Widget> _phoneSection(OnlineController oc, ColorScheme scheme) {
+    return <Widget>[
+      TextField(
+        controller: _phoneCtl,
+        keyboardType: TextInputType.phone,
+        maxLength: 11,
+        onChanged: oc.setPhone,
+        decoration: const InputDecoration(
+          labelText: '手机号',
+          hintText: '请输入 11 位手机号',
+          counterText: '',
+          border: OutlineInputBorder(),
+        ),
+      ),
+      const SizedBox(height: 12),
+      Row(
+        children: <Widget>[
+          Expanded(
+            child: TextField(
+              controller: _codeCtl,
+              keyboardType: TextInputType.number,
+              maxLength: 6,
+              onChanged: oc.setSmsCode,
+              decoration: const InputDecoration(
+                labelText: '验证码',
+                counterText: '',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          SizedBox(
+            height: 48,
+            child: TextButton(
+              onPressed: (oc.sendingSms || oc.smsCooldown > 0)
+                  ? null
+                  : () => unawaited(oc.sendSmsCode()),
+              child: Text(
+                oc.smsCooldown > 0
+                    ? '${oc.smsCooldown}s'
+                    : (oc.sendingSms ? '发送中…' : '获取验证码'),
+              ),
+            ),
+          ),
+        ],
+      ),
+      if (oc.phoneError != null) ...<Widget>[
+        const SizedBox(height: 8),
+        Text(
+          oc.phoneError!,
+          style: TextStyle(color: scheme.error, fontSize: 12.5),
+        ),
+      ],
+      const SizedBox(height: 16),
+      FilledButton(
+        onPressed: oc.phoneLoggingIn
+            ? null
+            : () async {
+                final bool ok = await oc.loginWithPhone();
+                if (!ok || !mounted) return;
+                final NavigatorState nav = Navigator.of(context);
+                if (nav.canPop()) nav.pop();
+              },
+        child: Text(oc.phoneLoggingIn ? '登录中…' : '登录'),
+      ),
+      const SizedBox(height: 6),
+      Text(
+        oc.server == MusicServer.netease
+            ? '需先在网易云音乐 App 绑定手机号；登录即表示同意其服务条款。'
+            : '验证码由酷狗音乐下发，若未收到请稍后再试。',
+        textAlign: TextAlign.center,
+        style: TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant),
+      ),
+    ];
   }
 }
 

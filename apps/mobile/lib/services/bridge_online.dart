@@ -320,8 +320,36 @@ class OnlineMusicService {
     return key;
   }
 
-  /// 扫码轮询。800 等待 / 801 已扫码 / 802 确认中 / 803 成功。
-  /// 803 时上游会下发 MUSIC_U，已在 _send 里吸收，这里负责落盘。
+  /// 把响应体里的 `cookie` 字段并入 cookie jar。
+  ///
+  /// _send 只吸收了 Set-Cookie 响应头（bridge_online.dart 顶部 _send 内）。
+  /// 网易云登录类接口的凭据在部分端点上**只**出现在响应体的 cookie 字段里，
+  /// 只认响应头就会出现「扫码成功但没登录」。两种形态都吸收。
+  Future<void> _absorbBodyCookie(
+    _CookieJar jar,
+    Map<String, dynamic> json,
+    String provider,
+  ) async {
+    final List<String> raws = <String>[];
+    final Object? c = json['cookie'];
+    if (c is String && c.trim().isNotEmpty) raws.add(c);
+    final Object? data = json['data'];
+    if (data is Map) {
+      final Object? c2 = data['cookie'];
+      if (c2 is String && c2.trim().isNotEmpty) raws.add(c2);
+    }
+    if (raws.isEmpty) return;
+    for (final String raw in raws) {
+      jar.absorb(provider, raw);
+    }
+    await jar.save();
+  }
+
+  /// 扫码轮询。**明文 weapi（type=1）的语义**：800 已过期 / 801 等待扫码 /
+  /// 802 已扫码待确认 / 803 登录成功。
+  ///
+  /// 别照抄桌面端注释：桌面端走 eapi（type=3），那边 800/801 的含义与
+  /// weapi 恰好相反。移动端用 _nePost 即明文 weapi，已实测 801=等待扫码。
   Future<Object?> neteaseLoginQrCheck(Map<String, dynamic> args) async {
     final String key = _s(args['key']);
     if (key.isEmpty) throw Exception('缺少二维码 key');
@@ -330,7 +358,12 @@ class OnlineMusicService {
       <String, String>{'key': key, 'type': '1'},
     );
     final int code = _i(json['code'], 800);
-    if (code == 803) await (await _cookies).save();
+    if (code == 803) {
+      // 凭据可能只在响应体里，先并入 jar 再落盘。
+      final _CookieJar jar = await _cookies;
+      await _absorbBodyCookie(jar, json, 'netease');
+      await jar.save();
+    }
     return <String, Object?>{
       'code': code,
       'nickname': json['nickname'],
@@ -355,7 +388,12 @@ class OnlineMusicService {
     final String ctcode = _s(args['ctcode'], '86');
     final Map<String, dynamic> json = await _nePost(
       '/api/sms/captcha/sent',
-      <String, String>{'cellphone': phone, 'ctcode': ctcode},
+      <String, String>{
+        'cellphone': phone,
+        'ctcode': ctcode,
+        // 桌面端同样的 weapi 调用带了这个（netease.rs:1693），缺了容易被风控。
+        'secrete': 'music_middleuser_pclogin',
+      },
     );
     if (_i(json['code']) != 200) {
       throw Exception('验证码发送失败：${_s(json['message'], '未知错误')}');
@@ -364,19 +402,30 @@ class OnlineMusicService {
   }
 
   Future<Object?> neteaseLoginCellphone(Map<String, dynamic> args) async {
+    final String phone = _s(args['phone']);
+    if (phone.isEmpty) throw Exception('缺少手机号');
+    final String captcha = _s(args['captcha']);
+    if (captcha.isEmpty) throw Exception('缺少验证码');
+    // 桌面端用的是 /api/w/login/cellphone（netease.rs:1742）。旧的
+    // /api/login/cellphone 现在直接回 401「无权限访问. ENC」——实测已废弃，
+    // 而 /api/w/login/cellphone 明文表单即可（假验证码实测回 503 验证码错误）。
     final Map<String, dynamic> json = await _nePost(
-      '/api/login/cellphone',
+      '/api/w/login/cellphone',
       <String, String>{
-        'phone': _s(args['phone']),
-        'captcha': _s(args['captcha']),
+        'type': '1',
+        'https': 'true',
+        'phone': phone,
         'countrycode': _s(args['ctcode'], '86'),
-        'rememberLogin': 'true',
+        'remember': 'true',
+        'captcha': captcha,
       },
     );
     if (_i(json['code']) != 200) {
       throw Exception('登录失败：${_s(json['message'], '未知错误')}');
     }
-    await (await _cookies).save();
+    final _CookieJar jar = await _cookies;
+    await _absorbBodyCookie(jar, json, 'netease');
+    await jar.save();
     return neteaseAccount(<String, dynamic>{});
   }
 
@@ -621,7 +670,9 @@ class OnlineMusicService {
     final http.Response res = await _send(
       'kugou',
       'GET',
-      Uri.parse('https://m.kugou.com/plist/list/$id?json=true'),
+      // 上游对没有尾斜杠的路径会 301 到 http:// 再跳回 https，Dart 侧会拿到
+      // HTML 而不是 JSON。带上尾斜杠直接命中 JSON 分支（实测 200）。
+      Uri.parse('https://m.kugou.com/plist/list/$id/?json=true'),
       referer: 'https://m.kugou.com/',
     );
     return _decode(res);
@@ -676,19 +727,26 @@ class OnlineMusicService {
     };
   }
 
-  /// 二维码 key 与内容。参数取自桌面端 vendored 的 kugou_server crate
-  /// （backend/kugou_server/src/modules/login.rs 的 handle_qr_key）。
+  /// 二维码 key 与内容。对应桌面端 kugou_server 的 handle_qr_key（web 模式，
+  /// login.rs:507）：appid 1001、type 1、plat 4。
+  ///
+  /// web 签名与默认参数缺一不可：只带 appid/type/plat/qrcode_txt/srcappid 时，
+  /// 上游固定回 error_code=20010（已实测）。补齐后同样参数即可拿到 qrcode。
   Future<Object?> kugouLoginQrKey(Map<String, dynamic> args) async {
+    final _CookieJar jar = await _cookies;
+    final Map<String, String> p = <String, String>{
+      'appid': '1001',
+      'type': '1',
+      'plat': '4',
+      'qrcode_txt': 'https://h5.kugou.com/apps/loginQRCode/html/index.html?appid=3116&',
+      'srcappid': '2919',
+      ...await _kgWebDefaults(jar),
+    };
+    p['signature'] = _kgSignWeb(p);
     final http.Response res = await _send(
       'kugou',
       'GET',
-      Uri.https('login-user.kugou.com', '/v2/qrcode', <String, String>{
-        'appid': '1001',
-        'type': '1',
-        'plat': '4',
-        'qrcode_txt': 'https://h5.kugou.com/apps/loginQRCode/html/index.html?appid=3116&',
-        'srcappid': '2919',
-      }),
+      Uri.https('login-user.kugou.com', '/v2/qrcode', p),
       referer: 'https://www.kugou.com/',
     );
     final Map<String, dynamic> json = _decodeMap(res);
@@ -703,25 +761,31 @@ class OnlineMusicService {
     };
   }
 
-  /// 扫码轮询。status: 1 等待 / 2 已扫码 / 4 成功 / 0 过期。
+  /// 扫码轮询（login.rs:438，web 模式）。status: 1 等待 / 2 已扫码 / 4 成功 /
+  /// 0 或 800 过期。
+  ///
+  /// 这里同样必须带 web 签名：缺签名时上游回 error_code=20006（已实测）。
   Future<Object?> kugouLoginQrCheck(Map<String, dynamic> args) async {
     final String key = _s(args['key']);
     if (key.isEmpty) throw Exception('缺少二维码 key');
+    final _CookieJar jar = await _cookies;
+    final Map<String, String> p = <String, String>{
+      'plat': '4',
+      'appid': '3116',
+      'srcappid': '2919',
+      'qrcode': key,
+      ...await _kgWebDefaults(jar),
+    };
+    p['signature'] = _kgSignWeb(p);
     final http.Response res = await _send(
       'kugou',
       'GET',
-      Uri.https('login-user.kugou.com', '/v2/get_userinfo_qrcode', <String, String>{
-        'plat': '4',
-        'appid': '3116',
-        'srcappid': '2919',
-        'qrcode': key,
-      }),
+      Uri.https('login-user.kugou.com', '/v2/get_userinfo_qrcode', p),
       referer: 'https://www.kugou.com/',
     );
     final Map<String, dynamic> json = _decodeMap(res);
     final Object? data = json['data'];
     final int status = data is Map ? _i(data['status']) : 0;
-    final _CookieJar jar = await _cookies;
     if (status == 4 && data is Map) {
       final Map<String, String> b = jar.bucket('kugou');
       b['token'] = _s(data['token']);
@@ -822,6 +886,48 @@ class OnlineMusicService {
   static String _kgSign(Map<String, Object?> params, String body) => md5
       .convert(utf8.encode('$_kgRoute${_kgJoinSorted(params)}$body$_kgRoute'))
       .toString();
+
+  /// helper.rs:5 酷狗 web 端盐值（与 android 的 _kgRoute 不同）。
+  static const String _kgRouteWeb = 'NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt';
+
+  /// helper.rs:63 signature_web_params：md5(ROUTE_WEB + 排序后的 "k=v" + ROUTE_WEB)。
+  ///
+  /// 与 android 签名的两处差别：盐值不同、排序粒度不同（这里排的是整个
+  /// "k=v" 串，不是 key）。缺这个签名上游会返回 error_code=20010。
+  static String _kgSignWeb(Map<String, Object?> params) {
+    final List<String> parts = <String>[];
+    params.forEach((String k, Object? v) {
+      final String vs = (v is Map || v is List) ? _kgJson(v) : '$v';
+      parts.add('$k=$vs');
+    });
+    parts.sort();
+    return md5
+        .convert(utf8.encode('$_kgRouteWeb${parts.join()}$_kgRouteWeb'))
+        .toString();
+  }
+
+  /// web 模式要求的默认参数：clientver / clienttime / dfid / mid / uuid。
+  ///
+  /// 五个都要有：缺少时上游只回一句参数错误（20010 / 20006）。mid 沿用
+  /// android 模式那份本地生成的设备身份（device.rs:49 guid → mid 不联网），
+  /// dfid 首次生成后落盘，保证冷启动之间稳定。
+  Future<Map<String, String>> _kgWebDefaults(_CookieJar jar) async {
+    final String mid = await _kgMid(jar);
+    final Map<String, String> b = jar.bucket('kugou');
+    String dfid = _s(b['dfid']);
+    if (dfid.isEmpty) {
+      dfid = _kgRandomString(24);
+      b['dfid'] = dfid;
+      await jar.save();
+    }
+    return <String, String>{
+      'clientver': '11440',
+      'clienttime': '${DateTime.now().millisecondsSinceEpoch ~/ 1000}',
+      'dfid': dfid,
+      'mid': mid,
+      'uuid': '-',
+    };
+  }
 
   /// 以 android 模式发一个酷狗网关请求。
   ///
