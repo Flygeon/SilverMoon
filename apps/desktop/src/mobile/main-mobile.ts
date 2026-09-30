@@ -12,6 +12,16 @@ import "./shim";
 // initAudio()，所以放在模块顶部即可 —— 但顺序仍保持在前，免得以后
 // 有人在模块求值期就建元素。
 import "./audio-shim";
+
+// 设计令牌层必须和桌面入口一样引入，且顺序相同（fonts 先于 theme）。
+// 漏掉的后果不是「样式差一点」，而是整层缺失：
+//   - theme.css 里的 @font-face 没了 → Material 图标退化成字面文字
+//     （界面上直接显示 search / grid_view / music_note 这些连字名）
+//   - --md-sys-* 全部未定义 → 所有 var() 落到各自 fallback，
+//     看起来「深色还能看」其实全是兜底色，不是真主题
+import "@/tokens/fonts.css";
+import "@/tokens/theme.css";
+
 import "./mobile.css";
 
 import { createApp, watch } from "vue";
@@ -20,6 +30,8 @@ import { createRouter, createWebHashHistory } from "vue-router";
 
 import MobileApp from "./MobileApp.vue";
 import { usePlayerStore } from "@/stores/player";
+import { useSettingsStore } from "@/stores/settings";
+import { invoke } from "@/ipc/invoke";
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -33,6 +45,36 @@ const router = createRouter({
 const app = createApp(MobileApp);
 app.use(createPinia());
 app.use(router);
+
+// 主题必须在 mount 之前解析。桌面端是在 App.vue 的 onMounted 里调的，
+// 移动端不走 App.vue，所以必须在这里补 —— 否则 <html> 上的 data-theme
+// 永远不设置，theme.css 的浅色 :root 令牌就成了实际生效的那一套。
+//
+// 先用默认值同步解析一次（默认 system，跟随系统深浅色），避免挂载后
+// 再切主题导致闪一下浅色；落盘的偏好读回来之后再解析一次覆盖它。
+const settings = useSettingsStore();
+settings.applyTheme(settings.theme);
+void settings.load().then(() => settings.applyTheme(settings.theme));
+void alignScanDirs();
+
+// 桌面端的扫描根是用户在设置里一个个加的；移动端没有那个目录选择器，
+// 路径由原生按平台给（Android 是 Music/Download/网易云/QQ/酷狗，
+// iOS 是 App 文档目录，见 bridge_commands.dart 的 _defaultDirs）。
+//
+// 这里**每次启动都对齐**，而不是「空了才填」：iOS 的容器路径里带 UUID，
+// 重装或升级 App 之后文档目录会换一个，持久化下来的旧绝对路径就永久失效了，
+// 表现为「明明配了目录却扫不到东西」这种很难查的问题。
+async function alignScanDirs(): Promise<void> {
+  try {
+    const dirs = await invoke<string[]>("library_default_dirs");
+    if (!Array.isArray(dirs) || dirs.length === 0) return;
+    if (dirs.join('\n') === settings.scanDirs.join('\n')) return;
+    settings.scanDirs = dirs;
+  } catch (e) {
+    console.warn("[sm] 获取默认扫描目录失败", e);
+  }
+}
+
 app.mount("#app");
 
 // ── 与 Flutter 原生的双向通道 ────────────────────────────────────────

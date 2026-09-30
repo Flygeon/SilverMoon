@@ -41,6 +41,11 @@ Map<String, Future<Object?> Function(Map<String, dynamic>)> buildBridgeCommands(
     'scan_start': lib.scanStart,
     'scan_status': lib.scanStatus,
     'scan_cancel': lib.scanCancel,
+    // 移动端没有桌面端的「添加文件夹」目录选择器，扫描根由原生按平台给默认值。
+    // Web 端拿它填 settings.scanDirs —— 否则 MusicView 的 hasScanDirs 恒为
+    // false，不只是列表空，连「开始扫描」按钮都不渲染（action-label 传空串），
+    // 用户没有任何入口。
+    'library_default_dirs': lib.defaultDirs,
 
     // ---- 曲库 ----
     'list_files': lib.listFiles,
@@ -434,6 +439,10 @@ class _Library {
     final String s = v.toString().trim();
     return s.isEmpty ? null : s;
   }
+
+  /// 把默认扫描根目录暴露给 Web 端。与 _runScan 的兜底共用同一份实现，
+  /// 避免 Web 端自己再拼一套平台路径、两边悄悄分叉。
+  Future<Object?> defaultDirs(Map<String, dynamic> args) => _defaultDirs();
 
   Future<List<String>> _defaultDirs() async {
     final List<String> out = <String>[];
