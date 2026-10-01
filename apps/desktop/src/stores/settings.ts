@@ -124,6 +124,8 @@ const DEFAULTS = {
   bqgNovelEnabled: false,
   /** 实验性：在线番剧（Kazumi 规则采集，仅桌面端） */
   onlineAnimeEnabled: false,
+  /** 实验性：B 站视频（推荐流 / 搜索 / 扫码登录 / 解析播放，仅桌面端） */
+  bilibiliEnabled: false,
   /** 实验性：在线图片（Pixiv，移植自 Pixez） */
   onlinePixivEnabled: false,
   /** Pixiv refresh token（仅在本地磁盘与设置中保存，用于恢复会话） */
@@ -226,6 +228,7 @@ export const useSettingsStore = defineStore("settings", () => {
   const onlineNovelEnabled = ref(DEFAULTS.onlineNovelEnabled);
   const bqgNovelEnabled = ref(DEFAULTS.bqgNovelEnabled);
   const onlineAnimeEnabled = ref(DEFAULTS.onlineAnimeEnabled);
+  const bilibiliEnabled = ref(DEFAULTS.bilibiliEnabled);
   const onlinePixivEnabled = ref(DEFAULTS.onlinePixivEnabled);
   const pixivRefreshToken = ref(DEFAULTS.pixivRefreshToken);
   const pixivImageQuality = ref(DEFAULTS.pixivImageQuality);
@@ -317,6 +320,7 @@ export const useSettingsStore = defineStore("settings", () => {
     onlineNovelEnabled,
     bqgNovelEnabled,
     onlineAnimeEnabled,
+    bilibiliEnabled,
     onlinePixivEnabled,
     pixivRefreshToken,
     pixivImageQuality,

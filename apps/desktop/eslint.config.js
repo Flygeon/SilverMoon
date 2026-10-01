@@ -92,6 +92,9 @@ export default [
       "src/components/AnimeOnlineView.vue",
       "src/components/AnimePlayer.vue",
       "src/components/AnimeRuleManager.vue",
+      // B 站子选项卡：m3e-button / m3e-form-field 的 icon 槽
+      "src/components/BilibiliOnlineView.vue",
+      "src/components/BilibiliVideoView.vue",
       "src/components/AudioEffectsPanel.vue",
       "src/components/LibraryToolbar.vue",
       "src/components/NovelBqgView.vue",

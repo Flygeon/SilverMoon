@@ -324,6 +324,7 @@ type BoolSettingKey =
   | "onlineNovelEnabled"
   | "bqgNovelEnabled"
   | "onlineAnimeEnabled"
+  | "bilibiliEnabled"
   | "onlinePixivEnabled"
   | "danmakuEnabled"
   | "danmakuAntiOverlap"
@@ -1115,6 +1116,24 @@ function selectSection(id: string) {
           </div>
           <SegmentedTabs v-model="settings.novelCharset" bare :tabs="novelCharsetTabs" />
         </div>
+      </div>
+    </m3e-card>
+
+    <!-- 在线 B 站视频 -->
+    <m3e-card v-if="activeSection === 'settings-online'" class="card" variant="outlined">
+      <div slot="content">
+        <h3>{{ t("settings.bilibili") }}</h3>
+        <p class="hint">{{ t("settings.bilibiliHint") }}</p>
+        <label class="row switch-row">
+          <span class="row-label">{{ t("settings.bilibiliEnable") }}</span>
+          <m3e-switch
+            :checked="settings.bilibiliEnabled"
+            @change="setSwitch('bilibiliEnabled', $event)"
+          />
+        </label>
+        <p v-if="settings.bilibiliEnabled" class="hint">
+          {{ t("settings.bilibiliLoginHint") }}
+        </p>
       </div>
     </m3e-card>
 

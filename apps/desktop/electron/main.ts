@@ -27,6 +27,7 @@ import {
   handleCoverProtocol,
   registerSchemes,
 } from "./protocols";
+import { installBiliMediaHeaders } from "./net-headers";
 import { Sidecar, type EventFrame } from "./sidecar";
 import { setSidecar, getSidecar } from "./main-bridge";
 import { registerIpc, setDataDirs, setQuitHandler } from "./ipc";
@@ -113,6 +114,8 @@ async function bootstrap(): Promise<void> {
   handleAppProtocol();
   handleAssetProtocol();
   handleCoverProtocol(path.join(CACHE_DIR, "covers"));
+  // B 站视频 CDN 防盗链：为 <video> 请求自动补 Referer（仅限 B 站域名）
+  installBiliMediaHeaders();
 
   hostServer = await startHostServer();
   mark("宿主服务器就绪");

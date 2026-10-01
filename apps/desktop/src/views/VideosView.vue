@@ -6,6 +6,7 @@ import LibraryToolbar from "@/components/LibraryToolbar.vue";
 import MediaGrid from "@/components/MediaGrid.vue";
 import MediaViewer from "@/components/MediaViewer.vue";
 import AnimeOnlineView from "@/components/AnimeOnlineView.vue";
+import BilibiliOnlineView from "@/components/BilibiliOnlineView.vue";
 import SegmentedTabs from "@/components/SegmentedTabs.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import { useLibraryStore } from "@/stores/library";
@@ -24,13 +25,32 @@ const ffmpeg = ref<FfmpegStatus | null>(null);
 const bannerDismissed = ref(false);
 /** 详情查看器当前索引；-1 表示未打开 */
 const viewerIndex = ref(-1);
-/** 本地 / 动漫 分段（在线番剧开关开启时显示） */
-const videosTab = ref<"local" | "anime">("local");
-/** 在线番剧未启用时不传 tab，组件会只渲染内容、不显示分段条 */
-const videoTabs = computed(() => [
-  { value: "local", label: t("videos.local"), icon: "movie" },
-  { value: "anime", label: t("videos.online"), icon: "public" },
-]);
+/**
+ * 本地 / 动漫 / B站 分段。
+ *
+ * 对齐 ImagesView 的动态多 tab 范式：本地常驻，动漫与 B站 各自随设置开关出现；
+ * 开关关掉时若还停在该页，`activeTab` 回落到本地（否则内容区会空白）。
+ */
+type VideoTab = "local" | "anime" | "bilibili";
+const videosTab = ref<VideoTab>("local");
+const videoTabs = computed<{ value: VideoTab; label: string; icon: string }[]>(() => {
+  const tabs: { value: VideoTab; label: string; icon: string }[] = [
+    { value: "local", label: t("videos.local"), icon: "movie" },
+  ];
+  if (settings.onlineAnimeEnabled) {
+    tabs.push({ value: "anime", label: t("videos.online"), icon: "public" });
+  }
+  if (settings.bilibiliEnabled) {
+    tabs.push({ value: "bilibili", label: t("videos.bilibili"), icon: "smart_display" });
+  }
+  return tabs;
+});
+/** 开关关掉时回落到本地 */
+const activeTab = computed<VideoTab>(() => {
+  if (videosTab.value === "anime" && !settings.onlineAnimeEnabled) return "local";
+  if (videosTab.value === "bilibili" && !settings.bilibiliEnabled) return "local";
+  return videosTab.value;
+});
 
 function t(key: string) {
   return translate(settings.lang, key);
@@ -68,10 +88,10 @@ function clearSearch() {
   <div class="view">
     <PageHeader :title="t('nav.videos')" :description="t('navDesc.videos')" />
 
-    <!-- 本地 / 动漫 分段 -->
-    <SegmentedTabs v-model="videosTab" :tabs="settings.onlineAnimeEnabled ? videoTabs : []">
+    <!-- 本地 / 动漫 / B站 分段（在线开关全关时不渲染分段条） -->
+    <SegmentedTabs v-model="videosTab" :tabs="videoTabs.length > 1 ? videoTabs : []">
       <!-- 本地视频 -->
-      <template v-if="videosTab === 'local' || !settings.onlineAnimeEnabled">
+      <template v-if="activeTab === 'local'">
         <LibraryToolbar :count="library.totalFor('video')" @changed="load" />
 
         <div v-if="ffmpeg && !ffmpeg.available && !bannerDismissed" class="ffmpeg-banner">
@@ -127,8 +147,13 @@ function clearSearch() {
       <!-- 在线番剧：用 KeepAlive 缓存实例。
            此前切到「本地」再切回「动漫」会整棵重建：重放全部卡片入场动画 +
            重新解码封面图 + 重跑 loadRules/loadHistory，观感就是"刷新卡卡的"。 -->
-      <KeepAlive v-else>
+      <KeepAlive v-else-if="activeTab === 'anime'">
         <AnimeOnlineView />
+      </KeepAlive>
+
+      <!-- 在线 B 站：同样 KeepAlive，配合 pinia store 保住推荐流/搜索/登录态 -->
+      <KeepAlive v-else>
+        <BilibiliOnlineView />
       </KeepAlive>
     </SegmentedTabs>
 
