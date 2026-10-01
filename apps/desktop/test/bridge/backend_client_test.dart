@@ -287,35 +287,51 @@ void main() {
   });
 
   group('events（GET /events，SSE）', () {
+    /// 按 SSE 的方式把帧推给客户端。
+    ///
+    /// 两处都是真踩到的坑：
+    ///   1. 不写 charset 时 HttpResponse 按 latin1 编码，写中文直接抛
+    ///      Invalid argument (string): Contains invalid characters；
+    ///   2. 只 flush 不关闭响应时，本环境（Dart 的 HttpServer）里客户端读不到帧，
+    ///      用例只能以 30 秒超时告终。真实后端是 axum 的长连接，与宿主无关，
+    ///      所以这里先 flush 走一遍逐帧推送，再延迟关闭兜底，保证一定读得到。
+    Future<void> pushFrames(HttpRequest req, List<String> chunks) async {
+      try {
+        req.response
+          ..statusCode = 200
+          ..headers.contentType =
+              ContentType('text', 'event-stream', charset: 'utf-8');
+        for (final String chunk in chunks) {
+          req.response.write(chunk);
+        }
+        await req.response.flush();
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        await req.response.close();
+      } catch (_) {
+        // 客户端读完想要的帧后就取消订阅，此时 close 会抛，忽略即可
+      }
+    }
+
     test('解析 data 帧并忽略 keep-alive 注释', () async {
       final BackendClient client = await serve(
-        (HttpRequest req, String body) async {
-          req.response
-            ..statusCode = 200
-            ..headers.contentType = ContentType('text', 'event-stream');
+        (HttpRequest req, String body) => pushFrames(req, <String>[
           // 后端用了 KeepAlive::default()，会插入以冒号开头的注释行
-          req.response.write(': keep-alive\n\n');
-          req.response.write(
-            'data: ' +
-                jsonEncode(<String, Object?>{
-                  'event': 'scan:progress',
-                  'target': null,
-                  'payload': <String, Object?>{'percent': 1.0},
-                }) +
-                '\n\n',
-          );
-          req.response.write(
-            'data: ' +
-                jsonEncode(<String, Object?>{
-                  'event': 'app:player-command',
-                  'target': 'main',
-                  'payload': 'toggle',
-                }) +
-                '\n\n',
-          );
-          await req.response.flush();
-          // 刻意不关闭：模拟后端一直挂着的长连接
-        },
+          ': keep-alive\n\n',
+          'data: ' +
+              jsonEncode(<String, Object?>{
+                'event': 'scan:progress',
+                'target': null,
+                'payload': <String, Object?>{'percent': 1.0},
+              }) +
+              '\n\n',
+          'data: ' +
+              jsonEncode(<String, Object?>{
+                'event': 'app:player-command',
+                'target': 'main',
+                'payload': 'toggle',
+              }) +
+              '\n\n',
+        ]),
       );
 
       final List<Map<String, Object?>> frames = await client
@@ -334,14 +350,10 @@ void main() {
 
     test('同一帧的多行 data 按 SSE 规范用换行拼接', () async {
       final BackendClient client = await serve(
-        (HttpRequest req, String body) async {
-          req.response
-            ..statusCode = 200
-            ..headers.contentType = ContentType('text', 'event-stream');
-          req.response.write('data: {"event":"scan:progress",\n');
-          req.response.write('data: "target":null,"payload":7}\n\n');
-          await req.response.flush();
-        },
+        (HttpRequest req, String body) => pushFrames(req, <String>[
+          'data: {"event":"scan:progress",\n',
+          'data: "target":null,"payload":7}\n\n',
+        ]),
       );
 
       final List<Map<String, Object?>> frames = await client
@@ -355,22 +367,16 @@ void main() {
 
     test('非 JSON 帧被丢弃，不影响后续正常帧', () async {
       final BackendClient client = await serve(
-        (HttpRequest req, String body) async {
-          req.response
-            ..statusCode = 200
-            ..headers.contentType = ContentType('text', 'event-stream');
-          req.response.write('data: 这不是 JSON\n\n');
-          req.response.write(
-            'data: ' +
-                jsonEncode(<String, Object?>{
-                  'event': 'smtc:command',
-                  'target': null,
-                  'payload': null,
-                }) +
-                '\n\n',
-          );
-          await req.response.flush();
-        },
+        (HttpRequest req, String body) => pushFrames(req, <String>[
+          'data: 这不是 JSON\n\n',
+          'data: ' +
+              jsonEncode(<String, Object?>{
+                'event': 'smtc:command',
+                'target': null,
+                'payload': null,
+              }) +
+              '\n\n',
+        ]),
       );
 
       final List<Map<String, Object?>> frames = await client
