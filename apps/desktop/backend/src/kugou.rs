@@ -938,7 +938,10 @@ pub async fn kugou_search(
 /// 模块层读的是 `ids` 而非 `id`（见 `kugou_server::modules::playlist::handle_detail`）；
 /// 早期这里传 `id`，上游拿到空 gcid 恒返回空结果，前端也因此没有调用方。
 #[silvermoon_ipc::command]
-pub async fn kugou_playlist_detail(app: silvermoon_ipc::Host, ids: String) -> Result<Value, String> {
+pub async fn kugou_playlist_detail(
+    app: silvermoon_ipc::Host,
+    ids: String,
+) -> Result<Value, String> {
     silvermoon_ipc::rt::spawn_blocking(move || {
         ensure_loaded(&app);
         call_json("/playlist/detail", json!({ "ids": ids }))
