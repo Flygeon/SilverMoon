@@ -128,6 +128,12 @@ export interface BiliStream {
   width: number;
   height: number;
   bandwidth: number;
+  /** DASH SegmentBase 初始化段（字节区间 `start-end`），MSE 首个 append 必需 */
+  initRange: string;
+  /** DASH SegmentBase 索引段（sidx），用来枚举分片；为空时退回 HTTP Range 直读 */
+  indexRange: string;
+  /** MIME（`video/mp4` / `audio/mp4`），直接作为 MSE 的 `SourceBuffer` 类型 */
+  mimeType: string;
 }
 
 export interface BiliFormat {
@@ -137,14 +143,24 @@ export interface BiliFormat {
 
 export interface BiliPlayUrl {
   quality: number;
+  /** 音频清晰度码（DASH 下由上游单独给出，如 30232） */
+  audioQuality: number;
   /** 可选清晰度（降序） */
   qualities: number[];
   formats: BiliFormat[];
-  /** 整段 MP4（fnval=1 的 durl）；ArtPlayer 直接消费 */
+  /**
+   * 整段 MP4（`fnval=1` 的 durl）。
+   *
+   * **注意**：上游只在「渐进式 MP4」通道下返回 durl，该通道最高只给到 720P
+   * （实测 1080P 及以上的 durl 一律被服务端钳回 64）。1080P+ 只能走 DASH。
+   */
   durl: string[];
-  /** DASH 分流（仅在 durl 缺失时作为信息保留） */
+  /** DASH 视频分流（按码率降序，同清晰度可能含 avc/hevc/av1 多种编码） */
   dashVideo: BiliStream[];
+  /** DASH 音频分流（按码率降序） */
   dashAudio: BiliStream[];
+  /** 本次取流是否走了「未登录预览高清」（`try_look=1`） */
+  tryLook: boolean;
 }
 
 export interface BiliQrStatus {
@@ -433,6 +449,27 @@ function baseHeaders(): Record<string, string> {
   };
 }
 
+/**
+ * 带 Referer / Origin 的请求头。
+ *
+ * 个人空间类接口（x/space/*、历史、收藏夹）有 **Referer 白名单校验**：缺 Referer
+ * 时上游直接回 -352（风控校验失败）或 -799（请求过于频繁），而这两个码看起来都像
+ * 「被限流」，极易误判成需要重试 —— 实测补上 Referer 后立即 200（见 utils 顶部说明）。
+ *
+ * 注意 Origin 也要一起给：x/space/wbi/acc/info 只认 Origin=space.bilibili.com，
+ * Referer 单独给仍会 -352。
+ */
+function spaceHeaders(mid: number | string = ""): Record<string, string> {
+  const origin = "https://space.bilibili.com";
+  return {
+    Referer: mid ? origin + "/" + String(mid) : origin + "/",
+    Origin: origin,
+  };
+}
+
+/** 视频站（历史 / 收藏 / 点赞）用的 Referer，与个人空间不同。 */
+const VIDEO_REFERER = "https://www.bilibili.com";
+
 function decodeJson(text: string): unknown {
   try {
     return JSON.parse(text);
@@ -458,6 +495,17 @@ function assertOk(json: Record<string, unknown>, what: string): void {
   if (code === 0) return;
   const msg = str(json.message, "未知错误");
   if (code === -101) throw new Error("需要先登录 B 站账号");
+  // 这三个码看起来都像「数据出错」，实际都是触发了风控 / 频控。
+  // 把它们讲成人话，否则用户只会看到「失败：风控校验失败」，无从下手。
+  if (code === -412) {
+    throw new Error(`${what}失败：B 站风控拦截了这次请求，请稍后再试`);
+  }
+  if (code === -352) {
+    throw new Error(`${what}失败：B 站风控校验失败，请稍后再试（或重新登录）`);
+  }
+  if (code === -799) {
+    throw new Error(`${what}失败：请求过于频繁，请稍后再试`);
+  }
   throw new Error(`${what}失败：${msg}（code=${code}）`);
 }
 
@@ -515,9 +563,10 @@ async function signedQuery(params: Record<string, string | number>): Promise<str
 async function wbiGet(
   path: string,
   params: Record<string, string | number>,
+  headers?: Record<string, string>,
 ): Promise<Record<string, unknown>> {
   const qs = await signedQuery(params);
-  return getJson(`${API}${path}?${qs}`);
+  return getJson(`${API}${path}?${qs}`, headers);
 }
 
 /** 匿名会话也要有 `buvid3`，否则推荐/取流会回 -352 风控。 */
@@ -948,6 +997,22 @@ export async function biliFavorite(
   );
 }
 
+/**
+ * 当前账号与某个 UP 主的关注关系（`/x/relation?fid=`）。
+ *
+ * 与 `biliRelation` 不同：后者按 **aid** 查视频互动，只有打开视频详情时才知道有没有
+ * 关注；UP 主主页需要按 **mid** 单独问一次，否则关注按钮会一直显示「关注」。
+ * `attribute`：0 未关注 / 2 已关注 / 6 互相关注 / 128 已拉黑。
+ */
+export async function biliUserRelation(mid: number): Promise<boolean> {
+  if (!biliIsLoggedIn()) return false;
+  const json = await getJson(`${API}/x/relation?fid=${mid}`, spaceHeaders(mid));
+  assertOk(json, "查询关注状态");
+  const d = json.data as Record<string, unknown> | undefined;
+  const attribute = num(d?.attribute);
+  return attribute === 2 || attribute === 6;
+}
+
 /** 关注 / 取关 UP 主（`act` 1 关注、2 取关）。 */
 export async function biliFollow(mid: number, follow: boolean): Promise<void> {
   await biliPost(
@@ -1100,17 +1165,44 @@ export async function biliVideoDetail(bvid: string): Promise<BiliDetail> {
  * 的 `edl://` 合并 DASH，而浏览器做不到，故这里取 durl 路线）。
  * 未登录时最高 720P，登录后可达 1080P。
  */
+/**
+ * 播放地址（**DASH 通道**）。
+ *
+ * ## 为什么必须用 fnval=4048 而不是 fnval=1
+ *
+ * `fnval=1` 只要「渐进式 MP4」（durl），对 `<video src>` 最省事，但上游在这条
+ * 通道上**只肯给到 720P**：请求 `qn=80/112/116` 一律被钳回 `quality=64`，且
+ * `accept_quality` 只剩 `[64,16]` —— 界面表现就是「登录后也只有 720P 和 480P
+ * 两个选项」。实测同样参数换成 `fnval=16/4048` 后 `accept_quality` 立刻变成
+ * `[112,80,64,32,16]`，服务端也真的返回对应码率的 DASH 分片。故 1080P+ 只能走
+ * DASH（本项目用 MSE 在渲染端自行合流，见 `utils/biliDash.ts`）。
+ *
+ * ## try_look
+ *
+ * `try_look=1` 是 web 端的「未登录预览」开关：即便 `SESSDATA` 缺失，1080P 也会
+ * 随 DASH 一起下发（720P 及以上需要登录的常规限制因此被绕过）。是否真的拿到仍以
+ * 返回的 `accept_quality` 为准，不额外假设。
+ *
+ * `4048 = 16(DASH) | 64(HDR) | 128(4K) | 256(杜比) | 512(8K) | 1024(AV1) | 2048(?)…`
+ */
 export async function biliPlayUrl(bvid: string, cid: string, qn = 80): Promise<BiliPlayUrl> {
   await biliEnsureDevice();
-  const json = await wbiGet("/x/player/wbi/playurl", {
+  // 刻意用 **非 WBI** 的 playurl：实测 WBI 变体（/x/player/wbi/playurl）即便
+  // accept_quality 声明了 [112,80,64,32,16]，返回的 dash.video 也只有 32/16
+  // 两档，等于把清晰度又钳回 480P；同参数的普通 playurl 才给全量轨道。
+  const qs = new URLSearchParams({
     bvid,
     cid,
-    qn,
-    fnval: 1,
-    fnver: 0,
-    fourk: 1,
-    high_quality: 1,
+    qn: String(qn),
+    fnval: "4048",
+    fnver: "0",
+    fourk: "1",
+    high_quality: "1",
     platform: "pc",
+    try_look: "1",
+  });
+  const json = await getJson(`${API}/x/player/playurl?${qs.toString()}`, {
+    Referer: `${VIDEO_REFERER}/video/${bvid}`,
   });
   assertOk(json, "解析播放地址");
   const d = json.data as Record<string, unknown> | undefined;
@@ -1122,20 +1214,49 @@ export async function biliPlayUrl(bvid: string, cid: string, qn = 80): Promise<B
     .filter(Boolean);
 
   const dash = d.dash as Record<string, unknown> | undefined;
+
+  /**
+   * 归一化一路 DASH 流。
+   *
+   * 上游的 SegmentBase 字段名有 `segment_base` / `SegmentBase` 与
+   * `initialization`/`Initialization` 两套大小写（不同端点、不同时间点上不一致），
+   * 两套都读一遍，避免只有某一种 CDN 上能播。
+   */
   const pickStreams = (raw: unknown): BiliStream[] =>
     ((raw as unknown[]) ?? [])
       .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
-      .map((x) => ({
-        id: num(x.id),
-        url: biliMediaUrl(str(x.base_url ?? x.baseUrl)),
-        backupUrls: (((x.backup_url ?? x.backupUrl) as unknown[] | undefined) ?? [])
-          .map((u) => biliMediaUrl(str(u)))
-          .filter(Boolean),
-        codecs: str(x.codecs),
-        width: num(x.width),
-        height: num(x.height),
-        bandwidth: num(x.bandwidth),
-      }));
+      .map((x) => {
+        const seg = (x.segment_base ?? x.segmentBase ?? x.SegmentBase) as
+          Record<string, unknown> | undefined;
+        return {
+          id: num(x.id),
+          url: biliMediaUrl(str(x.base_url ?? x.baseUrl ?? x.baseUrl)),
+          backupUrls: (((x.backup_url ?? x.backupUrl) as unknown[] | undefined) ?? [])
+            .map((u) => biliMediaUrl(str(u)))
+            .filter(Boolean),
+          codecs: str(x.codecs),
+          width: num(x.width),
+          height: num(x.height),
+          bandwidth: num(x.bandwidth),
+          initRange: str(seg?.initialization ?? seg?.Initialization),
+          indexRange: str(seg?.index_range ?? seg?.indexRange ?? seg?.IndexRange),
+          mimeType: str(x.mime_type ?? x.mimeType, "video/mp4"),
+        };
+      })
+      .filter((s) => !!s.url);
+
+  // 同清晰度可能同时有 avc1 / hev1 / av01 三份。MSE 里优先 avc1（Chromium 兼容性
+  // 最好，硬解最稳），把其它编码排到后面而不是丢掉 —— 某些 4K/8K 稿件只有 hev1/av01。
+  const codecRank = (codecs: string): number => {
+    if (codecs.startsWith("avc1")) return 0;
+    if (codecs.startsWith("hev1") || codecs.startsWith("hvc1")) return 1;
+    if (codecs.startsWith("av01")) return 2;
+    return 3;
+  };
+  const dashVideo = pickStreams(dash?.video).sort(
+    (a, b) => b.id - a.id || b.bandwidth - a.bandwidth || codecRank(a.codecs) - codecRank(b.codecs),
+  );
+  const dashAudio = pickStreams(dash?.audio).sort((a, b) => b.bandwidth - a.bandwidth);
 
   const acceptQuality = ((d.accept_quality as unknown[]) ?? []).map((q) => num(q));
   const acceptDescription = ((d.accept_description as unknown[]) ?? []).map((s) => str(s));
@@ -1143,16 +1264,25 @@ export async function biliPlayUrl(bvid: string, cid: string, qn = 80): Promise<B
     quality: q,
     label: acceptDescription[i] || biliQualityLabel(q),
   }));
-  const qualities = Array.from(new Set(acceptQuality)).sort((a, b) => b - a);
+  // accept_quality 偶发缺失（例如只回 DASH 的少数稿件），此时用实际拿到的视频轨道兜底
+  for (const s of dashVideo) {
+    if (!formats.some((f) => f.quality === s.id)) {
+      formats.push({ quality: s.id, label: biliQualityLabel(s.id) });
+    }
+  }
+  const qualities = Array.from(new Set(formats.map((f) => f.quality))).sort((a, b) => b - a);
   if (!qualities.length && d.quality) qualities.push(num(d.quality));
 
   return {
     quality: num(d.quality),
+    audioQuality: dashAudio.length ? dashAudio[0].id : 0,
     qualities,
     formats,
     durl,
-    dashVideo: dash ? pickStreams(dash.video) : [],
-    dashAudio: dash ? pickStreams(dash.audio) : [],
+    dashVideo,
+    dashAudio,
+    // 只要拿到 DASH 视频轨就说明预览通道生效（未登录也能播高清）
+    tryLook: dashVideo.length > 0,
   };
 }
 
@@ -1237,4 +1367,295 @@ function decodeXmlEntities(s: string): string {
     .replace(/&#39;/g, "'")
     .replace(/&apos;/g, "'")
     .replace(/&amp;/g, "&");
+}
+
+// ------------------------------------------------------------------ 用户空间
+
+/** UP 主名片（`x/web-interface/card`：无需 WBI、无需登录，最稳的一条）。 */
+export interface BiliUserCard {
+  mid: number;
+  name: string;
+  face: string;
+  sign: string;
+  level: number;
+  /** 粉丝数 */
+  fans: number;
+  /** 关注数 */
+  attention: number;
+  /** 投稿数 */
+  archives: number;
+  likes: number;
+  vip: boolean;
+  official: string;
+}
+
+export async function biliUserCard(mid: number): Promise<BiliUserCard> {
+  await biliEnsureDevice();
+  const json = await getJson(
+    `${API}/x/web-interface/card?mid=${mid}&photo=false`,
+    spaceHeaders(mid),
+  );
+  assertOk(json, "获取 UP 主信息");
+  const d = json.data as Record<string, unknown> | undefined;
+  const card = d?.card as Record<string, unknown> | undefined;
+  const level = card?.level_info as Record<string, unknown> | undefined;
+  const vip = card?.vip as Record<string, unknown> | undefined;
+  const official = card?.Official as Record<string, unknown> | undefined;
+  if (!card) throw new Error("UP 主信息为空");
+  return {
+    mid: num(card.mid),
+    name: str(card.name),
+    face: biliImage(card.face),
+    sign: str(card.sign),
+    level: num(level?.current_level),
+    // 粉丝数在 card 与 follower 两处，取非空的那个
+    fans: num(card.fans) || num(d?.follower),
+    attention: num(card.attention),
+    archives: num(card.archive_count),
+    likes: num(card.like_num),
+    vip: num(vip?.vipStatus) === 1,
+    official: str(official?.title),
+  };
+}
+
+/** UP 主投稿列表（`x/space/wbi/arc/search`）。 */
+export async function biliUserVideos(
+  mid: number,
+  page = 1,
+  pageSize = 30,
+): Promise<{ videos: BiliVideo[]; total: number; isEnd: boolean }> {
+  await biliEnsureDevice();
+  const json = await wbiGet(
+    "/x/space/wbi/arc/search",
+    {
+      mid,
+      ps: pageSize,
+      tid: 0,
+      pn: page,
+      keyword: "",
+      order: "pubdate",
+      platform: "web",
+      web_location: 1550101,
+      order_avoided: "true",
+    },
+    spaceHeaders(mid),
+  );
+  assertOk(json, "加载 UP 主投稿");
+  const d = json.data as Record<string, unknown> | undefined;
+  const list = d?.list as Record<string, unknown> | undefined;
+  const vlist = (list?.vlist as unknown[]) ?? [];
+  const pageInfo = d?.page as Record<string, unknown> | undefined;
+  const total = num(pageInfo?.count);
+  const videos = vlist
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+    .map((x) => {
+      // 投稿列表的字段名与 feed 不同：pic 可能是 pic 或 cover，stat 在 stat 里
+      const stat = x.stat as Record<string, unknown> | undefined;
+      return {
+        aid: str(x.aid),
+        bvid: str(x.bvid),
+        cid: str(x.cid),
+        title: biliStripHtml(str(x.title)),
+        cover: biliImage(x.pic ?? x.cover),
+        duration: num(x.length ?? x.duration),
+        ownerName: str(x.author),
+        ownerFace: "",
+        ownerMid: num(x.mid) || mid,
+        view: num(stat?.view ?? x.play),
+        danmaku: num(stat?.danmaku ?? x.video_review),
+        like: num(stat?.like),
+        pubdate: num(x.created ?? x.pubdate),
+        reason: "",
+        goto: "av",
+      } satisfies BiliVideo;
+    })
+    .filter((v) => !!v.bvid);
+  return {
+    videos,
+    total: total || videos.length,
+    isEnd: page * pageSize >= (total || videos.length),
+  };
+}
+
+// ------------------------------------------------------------------ 历史 / 收藏
+
+/**
+ * 观看历史（`x/web-interface/history/cursor`，游标分页：`max` + `view_at`）。
+ *
+ * 必须带视频站 Referer + 登录凭据；未登录回 -101，由 `assertOk` 翻成明确提示。
+ */
+export async function biliHistory(
+  ps = 20,
+  max = 0,
+  viewAt = 0,
+): Promise<{ videos: BiliVideo[]; cursor: { max: number; viewAt: number }; isEnd: boolean }> {
+  await biliEnsureDevice();
+  const qs = new URLSearchParams({
+    ps: String(ps),
+    max: String(max),
+    view_at: String(viewAt),
+    business: "",
+  });
+  const json = await getJson(`${API}/x/web-interface/history/cursor?${qs.toString()}`, {
+    Referer: `${VIDEO_REFERER}/account/history`,
+  });
+  assertOk(json, "加载观看历史");
+  const d = json.data as Record<string, unknown> | undefined;
+  const list = (d?.list as unknown[]) ?? [];
+  const videos = list
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+    .map((x) => {
+      // 历史条目可能是视频 / 直播 / 专栏：只有带 history.bvid 的才是可播视频
+      const history = x.history as Record<string, unknown> | undefined;
+      const stat = x.stat as Record<string, unknown> | undefined;
+      const author = x.author_name as string | undefined;
+      return {
+        aid: str(history?.oid ?? x.aid),
+        bvid: str(history?.bvid ?? x.bvid),
+        cid: str(history?.cid ?? x.cid),
+        title: biliStripHtml(str(x.title)),
+        cover: biliImage(x.cover),
+        duration: num(x.duration),
+        ownerName: str(author),
+        ownerFace: "",
+        ownerMid: num(x.author_mid),
+        view: num(stat?.view),
+        danmaku: num(stat?.danmaku),
+        like: num(stat?.like),
+        pubdate: num(x.view_at),
+        reason: "",
+        goto: "av",
+      } satisfies BiliVideo;
+    })
+    // 直播 / 专栏 / 番剧没有 bvid，混进视频网格会点开即失败，直接滤掉
+    .filter((v) => !!v.bvid);
+  const cursor = d?.cursor as Record<string, unknown> | undefined;
+  const nextMax = num(cursor?.max);
+  const nextViewAt = num(cursor?.view_at);
+  return {
+    videos,
+    cursor: { max: nextMax, viewAt: nextViewAt },
+    // max 归零即到底（上游用 max=0 表示没有更早的了）
+    isEnd: !nextMax,
+  };
+}
+
+/** 我的收藏夹（含默认收藏夹与「全部」聚合视图）。 */
+export async function biliFavFoldersAll(
+  mid: number,
+): Promise<{ id: number; title: string; mediaCount: number }[]> {
+  await biliEnsureDevice();
+  const json = await getJson(
+    `${API}/x/v3/fav/folder/created/list-all?up_mid=${mid}`,
+    spaceHeaders(mid),
+  );
+  assertOk(json, "获取收藏夹");
+  const d = json.data as Record<string, unknown> | undefined;
+  const list = (d?.list as unknown[]) ?? [];
+  return list
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+    .map((x) => ({
+      id: num(x.id),
+      title: str(x.title),
+      mediaCount: num(x.media_count),
+    }))
+    .filter((x) => x.id > 0);
+}
+
+/**
+ * 收藏夹内容（`x/v3/fav/resource/list`）。
+ *
+ * `mediaId=0` 无意义；「全部收藏」要用默认收藏夹 id 且 `type=1`（聚合），
+ * 这里把 type 暴露出去由调用方决定。
+ */
+export async function biliFavResources(
+  mediaId: number,
+  page = 1,
+  pageSize = 20,
+  mid = 0,
+): Promise<{ videos: BiliVideo[]; total: number; isEnd: boolean }> {
+  await biliEnsureDevice();
+  const qs = new URLSearchParams({
+    media_id: String(mediaId),
+    pn: String(page),
+    ps: String(pageSize),
+    keyword: "",
+    order: "mtime",
+    type: "0",
+    tid: "0",
+    platform: "web",
+  });
+  const json = await getJson(`${API}/x/v3/fav/resource/list?${qs.toString()}`, spaceHeaders(mid));
+  assertOk(json, "加载收藏");
+  const d = json.data as Record<string, unknown> | undefined;
+  const medias = (d?.medias as unknown[]) ?? [];
+  const videos = medias
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+    // 失效稿件（title 为「已失效」且 attr 标记）没有可用地址，跳过
+    .filter((x) => num(x.attr) === 0 || num(x.attr) === 4)
+    .map((x) => {
+      const upper = x.upper as Record<string, unknown> | undefined;
+      const cnt = x.cnt_info as Record<string, unknown> | undefined;
+      return {
+        aid: str(x.id),
+        bvid: str(x.bvid),
+        cid: str(x.cid),
+        title: biliStripHtml(str(x.title)),
+        cover: biliImage(x.cover),
+        duration: num(x.duration),
+        ownerName: str(upper?.name),
+        ownerFace: biliImage(upper?.face),
+        ownerMid: num(upper?.mid),
+        view: num(cnt?.play),
+        danmaku: num(cnt?.danmaku),
+        like: num(cnt?.thumb_up),
+        pubdate: num(x.pubtime),
+        reason: "",
+        goto: "av",
+      } satisfies BiliVideo;
+    })
+    .filter((v) => !!v.bvid);
+  const info = d?.info as Record<string, unknown> | undefined;
+  const total = num(info?.media_count);
+  return {
+    videos,
+    total: total || videos.length,
+    isEnd: page * pageSize >= (total || videos.length),
+  };
+}
+
+// ------------------------------------------------------------------ 发表评论
+
+/**
+ * 发表评论 / 回复。
+ *
+ * - 一级评论：只给 `oid` + `message`；
+ * - 回复某条评论：`root` 是所在楼的一级 rpid，`parent` 是被回复的 rpid
+ *   （回复一级评论时两者相同）。
+ *
+ * 返回新评论的 rpid，调用方用它做本地插入，避免整页重拉。
+ */
+export async function biliAddReply(
+  aid: string,
+  message: string,
+  root = "",
+  parent = "",
+): Promise<string> {
+  const text = message.trim();
+  if (!text) throw new Error("评论内容不能为空");
+  const json = await biliPost(
+    "/x/v2/reply/add",
+    {
+      type: "1",
+      oid: aid,
+      message: text,
+      ...(root && root !== "0" ? { root } : {}),
+      ...(parent && parent !== "0" ? { parent } : {}),
+      plat: "1",
+    },
+    "发表评论",
+  );
+  const d = json.data as Record<string, unknown> | undefined;
+  const reply = d?.reply as Record<string, unknown> | undefined;
+  return str(reply?.rpid);
 }

@@ -18,13 +18,18 @@ import {
   type BiliRelation,
   type BiliReply,
   type BiliReplySort,
+  type BiliUserCard,
   type BiliVideo,
+  biliAddReply,
   biliApplyCookies,
   biliCoin,
   biliDanmaku,
   biliFavFolders,
+  biliFavFoldersAll,
+  biliFavResources,
   biliFavorite,
   biliFollow,
+  biliHistory,
   biliIsLoggedIn,
   biliLike,
   biliLogout,
@@ -38,8 +43,12 @@ import {
   biliReplies,
   biliReplyReplies,
   biliSearch,
+  biliUserCard,
+  biliUserRelation,
+  biliUserVideos,
   biliVideoDetail,
 } from "@/utils/bilibili";
+import { JsonStore } from "@/ipc/store";
 import type { ArtDanmu } from "@/utils/danmaku";
 
 export type BiliStatus = "idle" | "loading" | "ready" | "error";
@@ -133,6 +142,54 @@ export const useBiliStore = defineStore("bilibili", () => {
   const searchEnd = ref(false);
   let searchToken = 0;
 
+  // ---- 搜索历史（本地持久化，与「B站」同一个 JSON 存储但独立键）----
+  const historyStore = new JsonStore("bilibili.json");
+  const SEARCH_HISTORY_KEY = "searchHistory";
+  const SEARCH_HISTORY_MAX = 30;
+  const searchHistory = ref<string[]>([]);
+  let searchHistoryLoaded = false;
+
+  async function loadSearchHistory(): Promise<void> {
+    if (searchHistoryLoaded) return;
+    searchHistoryLoaded = true;
+    try {
+      const saved = await historyStore.get<string[]>(SEARCH_HISTORY_KEY);
+      if (Array.isArray(saved)) searchHistory.value = saved.filter((s) => !!s && !!s.trim());
+    } catch {
+      searchHistory.value = [];
+    }
+  }
+
+  async function persistSearchHistory(): Promise<void> {
+    try {
+      await historyStore.set(SEARCH_HISTORY_KEY, searchHistory.value);
+      await historyStore.save();
+    } catch {
+      // 存储不可用时静默：本次会话仍可用
+    }
+  }
+
+  /** 记一条搜索词（去重后置顶，超出上限截断）。 */
+  async function rememberSearch(word: string): Promise<void> {
+    const w = word.trim();
+    if (!w) return;
+    searchHistory.value = [w, ...searchHistory.value.filter((x) => x !== w)].slice(
+      0,
+      SEARCH_HISTORY_MAX,
+    );
+    await persistSearchHistory();
+  }
+
+  async function removeSearchHistory(word: string): Promise<void> {
+    searchHistory.value = searchHistory.value.filter((x) => x !== word);
+    await persistSearchHistory();
+  }
+
+  async function clearSearchHistory(): Promise<void> {
+    searchHistory.value = [];
+    await persistSearchHistory();
+  }
+
   async function search(kw: string): Promise<void> {
     const word = kw.trim();
     keyword.value = word;
@@ -155,6 +212,8 @@ export const useBiliStore = defineStore("bilibili", () => {
       searchEnd.value = list.length === 0;
       searchStatus.value = "ready";
       if (!list.length) searchError.value = "没有找到相关视频";
+      // 只在真的有结果时记历史：搜空的词留在历史里没有回访价值
+      if (list.length) void rememberSearch(word);
     } catch (e) {
       if (token !== searchToken) return;
       results.value = [];
@@ -674,6 +733,300 @@ export const useBiliStore = defineStore("bilibili", () => {
     return task;
   }
 
+  // -------------------------------------------------------- 发表评论
+  const replySending = ref(false);
+
+  /**
+   * 发表评论 / 回复。
+   *
+   * 成功后只把新评论插到本地列表头部（并就地 +1 总数），不整页重拉：重拉会把用户
+   * 刚打的东西「闪一下」，在长评论区还会丢掉滚动位置。
+   */
+  async function postReply(message: string, root = "", parent = ""): Promise<boolean> {
+    const aid = commentAid();
+    if (!aid) return false;
+    const text = message.trim();
+    if (!text || replySending.value) return false;
+    replySending.value = true;
+    try {
+      await biliAddReply(aid, text, root, parent);
+      notice.value = root ? "回复已发送" : "评论已发送";
+      // 回复直接刷新当前楼，一级评论只做本地插入
+      if (root) {
+        // 展开态才有楼中楼列表；未展开时上游预览也不含新回复，统一重拉该楼第一页
+        const next = { ...subReplies.value };
+        delete next[root];
+        subReplies.value = next;
+        await loadSubReplies(root);
+      } else {
+        await loadReplies(true);
+      }
+      return true;
+    } catch (e) {
+      notice.value = cleanError(e);
+      return false;
+    } finally {
+      replySending.value = false;
+    }
+  }
+
+  // -------------------------------------------------------- 我的：历史 / 收藏 / 投稿
+
+  // ---- 历史 ----
+  const history = ref<BiliVideo[]>([]);
+  const historyStatus = ref<BiliStatus>("idle");
+  const historyError = ref("");
+  const historyEnd = ref(false);
+  const historyLoadingMore = ref(false);
+  const historyCursor = ref({ max: 0, viewAt: 0 });
+  let historyToken = 0;
+
+  async function loadHistory(refresh = true): Promise<void> {
+    const token = refresh ? ++historyToken : historyToken;
+    if (refresh) {
+      historyStatus.value = "loading";
+      historyError.value = "";
+      historyEnd.value = false;
+      historyCursor.value = { max: 0, viewAt: 0 };
+    }
+    try {
+      const cursor = refresh ? { max: 0, viewAt: 0 } : historyCursor.value;
+      const page = await biliHistory(20, cursor.max, cursor.viewAt);
+      if (token !== historyToken) return;
+      history.value = refresh ? page.videos : [...history.value, ...page.videos];
+      historyCursor.value = page.cursor;
+      historyEnd.value = page.isEnd;
+      historyStatus.value = "ready";
+    } catch (e) {
+      if (token !== historyToken) return;
+      historyError.value = cleanError(e);
+      historyStatus.value = history.value.length ? "ready" : "error";
+    }
+  }
+
+  async function loadMoreHistory(): Promise<void> {
+    if (historyStatus.value === "loading" || historyLoadingMore.value || historyEnd.value) return;
+    historyLoadingMore.value = true;
+    try {
+      await loadHistory(false);
+    } finally {
+      historyLoadingMore.value = false;
+    }
+  }
+
+  // ---- 收藏 ----
+  const favFolders = ref<{ id: number; title: string; mediaCount: number }[]>([]);
+  const favMediaId = ref(0);
+  const favVideos = ref<BiliVideo[]>([]);
+  const favStatus = ref<BiliStatus>("idle");
+  const favError = ref("");
+  const favEnd = ref(false);
+  const favLoadingMore = ref(false);
+  const favPage = ref(1);
+  let favToken = 0;
+
+  /** 拉收藏夹列表；首次进入「我的」时调用。 */
+  async function loadFavFolders(): Promise<void> {
+    if (!account.value.mid) return;
+    try {
+      favFolders.value = await biliFavFoldersAll(account.value.mid);
+      if (!favMediaId.value && favFolders.value.length) {
+        favMediaId.value = favFolders.value[0].id;
+      }
+    } catch (e) {
+      favError.value = cleanError(e);
+    }
+  }
+
+  async function loadFavorites(refresh = true, mediaId?: number): Promise<void> {
+    if (mediaId !== undefined && mediaId !== favMediaId.value) {
+      favMediaId.value = mediaId;
+      refresh = true;
+    }
+    if (!favMediaId.value) return;
+    const token = refresh ? ++favToken : favToken;
+    if (refresh) {
+      favStatus.value = "loading";
+      favError.value = "";
+      favEnd.value = false;
+      favPage.value = 1;
+    }
+    try {
+      const page = refresh ? 1 : favPage.value;
+      const res = await biliFavResources(favMediaId.value, page, 20, account.value.mid);
+      if (token !== favToken) return;
+      favVideos.value = refresh ? res.videos : [...favVideos.value, ...res.videos];
+      favPage.value = page + 1;
+      favEnd.value = res.isEnd || res.videos.length === 0;
+      favStatus.value = "ready";
+    } catch (e) {
+      if (token !== favToken) return;
+      favError.value = cleanError(e);
+      favStatus.value = favVideos.value.length ? "ready" : "error";
+    }
+  }
+
+  async function loadMoreFavorites(): Promise<void> {
+    if (favStatus.value === "loading" || favLoadingMore.value || favEnd.value) return;
+    favLoadingMore.value = true;
+    try {
+      await loadFavorites(false);
+    } finally {
+      favLoadingMore.value = false;
+    }
+  }
+
+  // ---- 我的投稿 ----
+  const myVideos = ref<BiliVideo[]>([]);
+  const myStatus = ref<BiliStatus>("idle");
+  const myError = ref("");
+  const myEnd = ref(false);
+  const myLoadingMore = ref(false);
+  const myPage = ref(1);
+  const myTotal = ref(0);
+  let myToken = 0;
+
+  async function loadMyVideos(refresh = true): Promise<void> {
+    if (!account.value.mid) return;
+    const token = refresh ? ++myToken : myToken;
+    if (refresh) {
+      myStatus.value = "loading";
+      myError.value = "";
+      myEnd.value = false;
+      myPage.value = 1;
+    }
+    try {
+      const page = refresh ? 1 : myPage.value;
+      const res = await biliUserVideos(account.value.mid, page, 30);
+      if (token !== myToken) return;
+      myVideos.value = refresh ? res.videos : [...myVideos.value, ...res.videos];
+      myTotal.value = res.total;
+      myPage.value = page + 1;
+      myEnd.value = res.isEnd || res.videos.length === 0;
+      myStatus.value = "ready";
+    } catch (e) {
+      if (token !== myToken) return;
+      myError.value = cleanError(e);
+      myStatus.value = myVideos.value.length ? "ready" : "error";
+    }
+  }
+
+  async function loadMoreMyVideos(): Promise<void> {
+    if (myStatus.value === "loading" || myLoadingMore.value || myEnd.value) return;
+    myLoadingMore.value = true;
+    try {
+      await loadMyVideos(false);
+    } finally {
+      myLoadingMore.value = false;
+    }
+  }
+
+  /** 「我的」页首屏：账号信息 + 投稿 + 收藏夹（历史按需加载）。 */
+  async function loadMine(): Promise<void> {
+    if (!account.value.isLogin) return;
+    await Promise.all([loadMyVideos(true), loadFavFolders()]);
+  }
+
+  // -------------------------------------------------------- UP 主主页
+  const userMid = ref(0);
+  const userCard = ref<BiliUserCard | null>(null);
+  const userVideos = ref<BiliVideo[]>([]);
+  const userStatus = ref<BiliStatus>("idle");
+  const userError = ref("");
+  const userEnd = ref(false);
+  const userLoadingMore = ref(false);
+  const userPage = ref(1);
+  const userTotal = ref(0);
+  let userToken = 0;
+
+  /** 打开 UP 主主页（同时拉名片与首页投稿）。 */
+  async function openUser(mid: number): Promise<void> {
+    if (!mid) return;
+    const token = ++userToken;
+    userMid.value = mid;
+    userCard.value = null;
+    userVideos.value = [];
+    userStatus.value = "loading";
+    userError.value = "";
+    userEnd.value = false;
+    userPage.value = 1;
+    try {
+      const [card, list, followed] = await Promise.all([
+        biliUserCard(mid),
+        biliUserVideos(mid, 1, 30),
+        // 关注状态失败不该拖垮整页：单独 catch 成未关注即可
+        biliUserRelation(mid).catch(() => false),
+      ]);
+      if (token !== userToken) return;
+      userCard.value = card;
+      userVideos.value = list.videos;
+      userTotal.value = list.total;
+      userPage.value = 2;
+      userEnd.value = list.isEnd;
+      userFollowed.value = followed;
+      userStatus.value = "ready";
+    } catch (e) {
+      if (token !== userToken) return;
+      userError.value = cleanError(e);
+      userStatus.value = "error";
+    }
+  }
+
+  async function loadMoreUserVideos(): Promise<void> {
+    if (!userMid.value || userStatus.value === "loading" || userLoadingMore.value) return;
+    if (userEnd.value) return;
+    userLoadingMore.value = true;
+    const token = userToken;
+    try {
+      const res = await biliUserVideos(userMid.value, userPage.value, 30);
+      if (token !== userToken) return;
+      userVideos.value = [...userVideos.value, ...res.videos];
+      userPage.value += 1;
+      userEnd.value = res.videos.length === 0 || res.isEnd;
+    } catch (e) {
+      if (token !== userToken) return;
+      userError.value = cleanError(e);
+      userEnd.value = true;
+    } finally {
+      userLoadingMore.value = false;
+    }
+  }
+
+  function closeUser(): void {
+    userToken += 1;
+    userMid.value = 0;
+    userCard.value = null;
+    userVideos.value = [];
+    userStatus.value = "idle";
+    userError.value = "";
+  }
+
+  /** UP 主是否已被关注（当前详情页的 relation 只对当前视频的 UP 有效）。 */
+  const userFollowed = ref(false);
+  const userFollowBusy = ref(false);
+
+  async function toggleUserFollow(): Promise<void> {
+    const mid = userMid.value;
+    if (!mid || userFollowBusy.value) return;
+    userFollowBusy.value = true;
+    try {
+      const next = !userFollowed.value;
+      await biliFollow(mid, next);
+      userFollowed.value = next;
+      notice.value = next ? "已关注" : "已取消关注";
+    } catch (e) {
+      notice.value = cleanError(e);
+    } finally {
+      userFollowBusy.value = false;
+    }
+  }
+
+  /** 从视频详情里点 UP 头像 / 名字进主页。 */
+  function openCurrentUp(): void {
+    const mid = detail.value?.owner.mid || current.value?.ownerMid || 0;
+    if (mid) void openUser(mid);
+  }
+
   return {
     notice,
     clearNotice,
@@ -739,8 +1092,59 @@ export const useBiliStore = defineStore("bilibili", () => {
     loadMoreReplies,
     setReplySort,
     loadSubReplies,
+    postReply,
+    replySending,
     related,
     relatedStatus,
+    // 搜索历史
+    searchHistory,
+    loadSearchHistory,
+    rememberSearch,
+    removeSearchHistory,
+    clearSearchHistory,
+    // 我的：历史 / 收藏 / 投稿
+    history,
+    historyStatus,
+    historyError,
+    historyEnd,
+    historyLoadingMore,
+    loadHistory,
+    loadMoreHistory,
+    favFolders,
+    favMediaId,
+    favVideos,
+    favStatus,
+    favError,
+    favEnd,
+    favLoadingMore,
+    loadFavFolders,
+    loadFavorites,
+    loadMoreFavorites,
+    myVideos,
+    myStatus,
+    myError,
+    myEnd,
+    myLoadingMore,
+    myTotal,
+    loadMyVideos,
+    loadMoreMyVideos,
+    loadMine,
+    // UP 主主页
+    userMid,
+    userCard,
+    userVideos,
+    userStatus,
+    userError,
+    userEnd,
+    userLoadingMore,
+    userTotal,
+    userFollowed,
+    userFollowBusy,
+    openUser,
+    loadMoreUserVideos,
+    closeUser,
+    toggleUserFollow,
+    openCurrentUp,
     // 互动
     relation,
     acting,
