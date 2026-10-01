@@ -38,6 +38,31 @@ flutter:
     # 应用元信息唯一真源：Rust 编译期、Electron 运行期、Flutter 宿主运行期共读同一份
     - backend/silvermoon.config.json
 
+  # 字族与 Electron 版对齐（archive/electron-desktop/src/tokens/theme.css 的 body 字族栈）：
+  #   Roboto（拉丁）→ SarasaGothicSC-Regular（中日韩）→ 系统兜底
+  #
+  # Roboto 用的是 Google 官方【静态实例】（v51 / Version 3.015），与归档同源同版本。
+  # 归档里的 latin-400/500/700.woff2 其实是同一份可变字体分片（三个文件 sha 完全相同、
+  # 都带 fvar 表）：浏览器靠 font-weight 声明自动实例化，Flutter 不会按 FontWeight
+  # 驱动可变字体轴，照搬会导致【粗体不变粗】，所以换成静态实例。
+  # SarasaGothicSC-Regular.ttf 由归档里的 .woff 解出，逐表校验和与 WOFF 目录记录一致。
+  fonts:
+    - family: Roboto
+      fonts:
+        - asset: assets/fonts/Roboto-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Roboto-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Roboto-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Roboto-Italic.ttf
+          weight: 400
+          style: italic
+    - family: SarasaGothicSC-Regular
+      fonts:
+        - asset: assets/fonts/SarasaGothicSC-Regular.ttf
+          weight: 400
+
 flutter_launcher_icons:
   windows:
     generate: true

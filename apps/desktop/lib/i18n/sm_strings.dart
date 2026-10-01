@@ -1,9 +1,13 @@
-/// 桌面端外壳文案表（zh / en）。
+import 'generated/archive_messages.dart';
+
+/// 桌面端文案表（zh / en）。
 ///
-/// 阶段说明：这是 **P0 界面框架** 的最小词条集，只覆盖外壳、标题栏、导航与
-/// 占位页。Electron 版的约 500 条词条在
-/// `archive/electron-desktop/shared/i18n.ts` 里，P4 阶段按方案 §7.4 用脚本
-/// 生成 Dart 字典后本文件会被整体替换（不要手抄那 500 条）。
+/// 词条来自两处，合并顺序即优先级（后者覆盖前者）：
+///  1. `generated/archive_messages.dart` —— 由 `tool/gen_archive_messages.mjs` 从
+///     `archive/electron-desktop/shared/i18n.ts` 生成，715 条，键名与 Electron 版
+///     的 `translate()` 完全一致（点号路径）。**不要手抄这些词条**，改动归档后重新生成。
+///  2. 下面的 `_hostOwned` —— Flutter 宿主自有、归档里没有的词条（自定义标题栏、
+///     迷你播放条、占位页）。同名时以宿主表为准。
 class SmStrings {
   const SmStrings(this.lang);
 
@@ -13,7 +17,8 @@ class SmStrings {
 
   static const String _fallbackLang = 'zh';
 
-  static const Map<String, Map<String, String>> _data = <String, Map<String, String>>{
+  /// 宿主自有词条（归档里没有的，见类文档）。
+  static const Map<String, Map<String, String>> _hostOwned = <String, Map<String, String>>{
     'zh': <String, String>{
       'app.name': 'SilverMoon',
       'app.tagline': '光影 · 媒体库',
@@ -105,6 +110,29 @@ class SmStrings {
       'page.extensions.desc': '扩展管理与守护进程',
       'page.extensionHost.title': '扩展宿主',
       'page.extensionHost.desc': '第三方扩展 UI 的 WebView 宿主',
+      'settings.gridColumns': '网格列数',
+      'settings.gridColumnsHint': '图片墙每行显示的列数，影响图片页与视频页。',
+      'settings.wordLyrics': '逐字歌词',
+      'settings.lyricSubMode': '歌词副行',
+      'settings.readerTheme': '阅读背景',
+      'settings.readerTheme_sepia': '羊皮纸',
+      'settings.readerTheme_green': '护眼绿',
+      'settings.readerFont': '正文字体',
+      'settings.readerFontPct': '正文字号',
+      'settings.readerLineHeight': '正文行距',
+      'settings.readerParaSpacing': '段落间距',
+      'settings.readerParaSpacingHint': '0 表示跟随原书排版。',
+      'settings.bqgNovelEnable': '笔趣阁小说',
+      'settings.wenku8Node': 'Wenku8 节点',
+      'settings.wenku8Node_cc': '主站 (cc)',
+      'settings.wenku8Node_net': '备用 (net)',
+      'settings.danmakuTimeOffsetMs': '时间轴偏移（毫秒）',
+      'settings.bangumiSyncedAt': '上次同步',
+      'settings.unknown': '未设置',
+      'settings.audioEffectsPending': '音效参数存在 audio-effects.json；编辑界面依赖播放器层（复用 Vue 播放器的 WebView2 宿主）。播放器层接入前，这里只提供预设市场入口。',
+      'videos.total': '个视频',
+      'videos.empty': '媒体库还没有视频',
+      'videos.emptyHint': '添加文件夹并扫描，视频会出现在这里',
     },
     'en': <String, String>{
       'app.name': 'SilverMoon',
@@ -199,8 +227,45 @@ class SmStrings {
       'page.extensions.desc': 'Extension management and hosting',
       'page.extensionHost.title': 'Extension host',
       'page.extensionHost.desc': 'WebView host for third-party extension UI',
+      'settings.gridColumns': 'Grid columns',
+      'settings.gridColumnsHint': 'Columns per row on the image wall (images and videos pages).',
+      'settings.wordLyrics': 'Word-by-word lyrics',
+      'settings.lyricSubMode': 'Secondary lyric line',
+      'settings.readerTheme': 'Reading background',
+      'settings.readerTheme_sepia': 'Sepia',
+      'settings.readerTheme_green': 'Eye-care green',
+      'settings.readerFont': 'Body font',
+      'settings.readerFontPct': 'Body font size',
+      'settings.readerLineHeight': 'Body line height',
+      'settings.readerParaSpacing': 'Paragraph spacing',
+      'settings.readerParaSpacingHint': '0 follows the layout of the book.',
+      'settings.bqgNovelEnable': 'Bqg novels',
+      'settings.wenku8Node': 'Wenku8 node',
+      'settings.wenku8Node_cc': 'Primary (cc)',
+      'settings.wenku8Node_net': 'Backup (net)',
+      'settings.danmakuTimeOffsetMs': 'Timeline offset (ms)',
+      'settings.bangumiSyncedAt': 'Last synced',
+      'settings.unknown': 'Not set',
+      'settings.audioEffectsPending': 'Audio effect parameters live in audio-effects.json; the editor depends on the player layer (WebView2 hosting the Vue player). Until that layer lands, this only links to the preset market.',
+      'videos.total': 'videos',
+      'videos.empty': 'No videos in the library yet',
+      'videos.emptyHint': 'Add a folder and scan it — videos will show up here',
     },
   };
+
+  /// 归档词条 + 宿主自有词条（宿主表后合并，同名时以宿主为准）。
+  static final Map<String, Map<String, String>> _data = _merge();
+
+  static Map<String, Map<String, String>> _merge() {
+    final Map<String, Map<String, String>> merged = <String, Map<String, String>>{};
+    for (final String lang in supportedLangs) {
+      merged[lang] = <String, String>{
+        ...?kArchiveMessages[lang],
+        ...?_hostOwned[lang],
+      };
+    }
+    return merged;
+  }
 
   /// 基准语言（zh）的全部词条 key。
   static Set<String> get allKeys => _data[_fallbackLang]!.keys.toSet();

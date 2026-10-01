@@ -10,16 +10,19 @@ import 'theme/app_theme.dart';
 /// 应用根：主题（浅色 / 深色 / 跟随系统）与语言由 [AppState] 驱动，
 /// 后端生命周期由 [HostController] 驱动（进程级单例，由 main 创建后传入）。
 class SilverMoonApp extends StatelessWidget {
-  const SilverMoonApp({super.key, required this.host});
+  const SilverMoonApp({super.key, required this.host, required this.appState});
 
   final HostController host;
+
+  /// 全局 UI 状态由 main.dart 创建：它要在宿主就绪后接入 settings.json 的读写回路。
+  final AppState appState;
 
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider<HostController>.value(value: host),
-        ChangeNotifierProvider<AppState>(create: (BuildContext context) => AppState()),
+        ChangeNotifierProvider<AppState>.value(value: appState),
       ],
       child: Consumer<AppState>(
         builder: (BuildContext context, AppState state, Widget? child) {

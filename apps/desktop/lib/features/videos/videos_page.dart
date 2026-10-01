@@ -1,21 +1,24 @@
 import 'package:flutter/material.dart';
 
-import '../../shell/placeholder_page.dart';
+import '../library/media_grid_page.dart';
 
-/// /videos —— P0 阶段的占位页。
+/// /videos —— 视频库（P0 验收页：列出媒体库视频与缩略图）。
 ///
-/// 真实实现在界面框架确认后填入；届时本文件整体替换为实际视图，
-/// 路由表与外壳无需改动。
+/// 与图片页共用 [MediaGridPage]：视频缩略图同样由后端 `get_thumbnails` 生成
+/// （Rust 侧走 ffmpeg），前端批量补齐的逻辑一字未改。
 class VideosPage extends StatelessWidget {
   const VideosPage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return const PlaceholderPage(
-      routePath: '/videos',
-      icon: Icons.movie_outlined,
-      titleKey: 'page.videos.title',
-      descKey: 'page.videos.desc',
+    return const MediaGridPage(
+      mediaType: 'video',
+      titleKey: 'nav.videos',
+      descKey: 'navDesc.videos',
+      // 网格页默认用图片页文案，这里必须换成视频的，否则会显示「张图片」。
+      totalKey: 'videos.total',
+      emptyKey: 'videos.empty',
+      emptyHintKey: 'videos.emptyHint',
     );
   }
 }

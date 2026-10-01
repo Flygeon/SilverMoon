@@ -1,21 +1,22 @@
 import 'package:flutter/material.dart';
 
-import '../../shell/placeholder_page.dart';
+import '../library/song_list_page.dart';
 
-/// /history —— P0 阶段的占位页。
+/// /history —— 最近播放记录。
 ///
-/// 真实实现在界面框架确认后填入；届时本文件整体替换为实际视图，
-/// 路由表与外壳无需改动。
+/// 数据来自 Rust `commands::song::list_history`，
+/// 与收藏 / 历史 / 回收站共用同一个列表实现（见 library/song_list_page.dart）。
 class HistoryPage extends StatelessWidget {
   const HistoryPage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return const PlaceholderPage(
-      routePath: '/history',
+    return const SongListPage(
+      source: SongListSource.history,
+      titleKey: 'nav.history',
+      descKey: 'navDesc.history',
       icon: Icons.history,
-      titleKey: 'page.history.title',
-      descKey: 'page.history.desc',
+
     );
   }
 }

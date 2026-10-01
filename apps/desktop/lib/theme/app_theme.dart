@@ -20,6 +20,8 @@ class AppTheme {
 
     return ThemeData(
       colorScheme: scheme,
+      fontFamily: kSmFontFamily,
+      fontFamilyFallback: kSmFontFamilyFallback,
       scaffoldBackgroundColor: scheme.surface,
       splashFactory: InkSparkle.splashFactory,
       visualDensity: VisualDensity.standard,

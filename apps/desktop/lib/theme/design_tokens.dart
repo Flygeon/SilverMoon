@@ -72,19 +72,39 @@ class SM {
   static const double surfaceBlur = 28;
 }
 
+/// 全局字族：与 Electron 版 `body` 的字族栈首项一致
+/// （archive/electron-desktop/src/tokens/theme.css 第 285 行）。
+const String kSmFontFamily = 'Roboto';
+
+/// 逐字回退顺序，勿改：Roboto 负责拉丁，中日韩交给更纱黑体 SC，再退系统字体。
+///
+/// Flutter 不支持按 unicode-range 分片，中日韩字形只能靠这条链逐字回退；
+/// SarasaGothicSC-Regular.ttf 就是从归档里那份 .woff 解出来的同一份字库。
+const List<String> kSmFontFamilyFallback = <String>[
+  'SarasaGothicSC-Regular',
+  'Microsoft YaHei',
+  'Segoe UI',
+];
+
 /// M3 字阶（与 theme.css 的 --md-sys-typescale-* 同值）。
 ///
 /// 只提供桌面端外壳真正用到的那几档，避免一上来堆一堆没人用的常量。
+/// 每档都显式带字族：AppBar / Tooltip / SnackBar 这类直接吃 `*Theme.textStyle`
+/// 而不与 TextTheme 合并的组件，只挂 ThemeData.fontFamily 是罩不住的。
 class SmText {
   SmText._();
 
   static const TextStyle titleLarge = TextStyle(
+    fontFamily: kSmFontFamily,
+    fontFamilyFallback: kSmFontFamilyFallback,
     fontSize: 22,
     fontWeight: FontWeight.w500,
     height: 28 / 22,
   );
 
   static const TextStyle titleMedium = TextStyle(
+    fontFamily: kSmFontFamily,
+    fontFamilyFallback: kSmFontFamilyFallback,
     fontSize: 16,
     fontWeight: FontWeight.w500,
     height: 24 / 16,
@@ -92,6 +112,8 @@ class SmText {
   );
 
   static const TextStyle titleSmall = TextStyle(
+    fontFamily: kSmFontFamily,
+    fontFamilyFallback: kSmFontFamilyFallback,
     fontSize: 14,
     fontWeight: FontWeight.w500,
     height: 20 / 14,
@@ -99,6 +121,8 @@ class SmText {
   );
 
   static const TextStyle bodyMedium = TextStyle(
+    fontFamily: kSmFontFamily,
+    fontFamilyFallback: kSmFontFamilyFallback,
     fontSize: 14,
     fontWeight: FontWeight.w400,
     height: 20 / 14,
@@ -106,6 +130,8 @@ class SmText {
   );
 
   static const TextStyle bodySmall = TextStyle(
+    fontFamily: kSmFontFamily,
+    fontFamilyFallback: kSmFontFamilyFallback,
     fontSize: 12,
     fontWeight: FontWeight.w400,
     height: 16 / 12,
@@ -113,6 +139,8 @@ class SmText {
   );
 
   static const TextStyle labelMedium = TextStyle(
+    fontFamily: kSmFontFamily,
+    fontFamilyFallback: kSmFontFamilyFallback,
     fontSize: 12,
     fontWeight: FontWeight.w500,
     height: 16 / 12,
@@ -120,6 +148,8 @@ class SmText {
   );
 
   static const TextStyle labelSmall = TextStyle(
+    fontFamily: kSmFontFamily,
+    fontFamilyFallback: kSmFontFamilyFallback,
     fontSize: 11,
     fontWeight: FontWeight.w500,
     height: 16 / 11,

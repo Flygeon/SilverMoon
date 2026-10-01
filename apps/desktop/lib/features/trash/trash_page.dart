@@ -1,21 +1,23 @@
 import 'package:flutter/material.dart';
 
-import '../../shell/placeholder_page.dart';
+import '../library/song_list_page.dart';
 
-/// /trash —— P0 阶段的占位页。
+/// /trash —— 已删除的媒体。
 ///
-/// 真实实现在界面框架确认后填入；届时本文件整体替换为实际视图，
-/// 路由表与外壳无需改动。
+/// 数据来自 Rust `commands::song::list_trash`，
+/// 与收藏 / 历史 / 回收站共用同一个列表实现（见 library/song_list_page.dart）。
 class TrashPage extends StatelessWidget {
   const TrashPage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return const PlaceholderPage(
-      routePath: '/trash',
+    return const SongListPage(
+      source: SongListSource.trash,
+      titleKey: 'nav.trash',
+      descKey: 'navDesc.trash',
       icon: Icons.delete_outline,
-      titleKey: 'page.trash.title',
-      descKey: 'page.trash.desc',
+      canEmpty: true,
+
     );
   }
 }
