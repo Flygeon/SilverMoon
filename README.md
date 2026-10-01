@@ -6,7 +6,7 @@
 
 [简体中文](README.md) ｜ [English](README_en.md)
 
-当前版本 **v0.0.1**
+当前版本 **v0.0.2**
 
 </div>
 
