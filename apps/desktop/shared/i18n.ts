@@ -325,10 +325,10 @@ export const messages = {
       pixivRefreshTokenLabel: "Refresh Token",
       pixivRefreshTokenHint:
         "可选。填入手动登录后获取的 Refresh Token 可恢复会话，无需每次扫码 / WebView 登录。仅在本地保存。",
-      danmaku: "DanDanPlay 弹幕",
+      danmaku: "弹幕",
       danmakuHint:
-        "为在线番剧接入 DanDanPlay 开放 API 的弹幕库。需要在 api.dandanplay.net 申请 AppId 与 AppSecret（无凭证也能用，但高频会触发频率限制）。",
-      danmakuEnable: "启用弹幕",
+        "总开关，同时作用于在线番剧与 B 站视频（B 站用站内弹幕，无需任何凭证）。番剧弹幕来自 DanDanPlay 开放 API，可选填 api.dandanplay.net 申请的 AppId 与 AppSecret（不填也能用，但高频会触发频率限制）。",
+      danmakuEnable: "显示弹幕",
       danmakuAppId: "AppId",
       danmakuAppSecret: "AppSecret",
       danmakuOpacity: "不透明度",
@@ -1239,10 +1239,10 @@ export const messages = {
       pixivRefreshTokenLabel: "Refresh Token",
       pixivRefreshTokenHint:
         "Optional. Paste a Refresh Token obtained after a manual login to restore the session without re-logging in each time. Stored locally only.",
-      danmaku: "DanDanPlay Danmaku",
+      danmaku: "Danmaku",
       danmakuHint:
-        "Pulls comments from the DanDanPlay open API for the online anime player. Apply for AppId and AppSecret at api.dandanplay.net (works without credentials but rate-limited).",
-      danmakuEnable: "Enable danmaku",
+        "Master switch for both online anime and Bilibili videos (Bilibili uses its own danmaku and needs no credentials). Anime danmaku comes from the DanDanPlay open API; AppId/AppSecret from api.dandanplay.net are optional (works without them, but rate-limited).",
+      danmakuEnable: "Show danmaku",
       danmakuAppId: "AppId",
       danmakuAppSecret: "AppSecret",
       danmakuOpacity: "Opacity",

@@ -94,7 +94,12 @@ function danmakuPlugin(): DanmakuPlugin | undefined {
 
 async function reloadDanmaku(): Promise<void> {
   const plugin = danmakuPlugin();
-  if (!plugin || !settings.danmakuEnabled) return;
+  if (!plugin) return;
+  // 关掉弹幕时清空已载入的列表，避免下次开启还留着上一条视频的弹幕
+  if (!settings.danmakuEnabled) {
+    void plugin.load([]);
+    return;
+  }
   const items = await loadDanmaku();
   if (art && danmakuPlugin() === plugin) void plugin.load(items);
 }
@@ -117,7 +122,17 @@ async function createPlayer(url: string | null): Promise<void> {
     mode: 0 as const,
     modes: [0, 1, 2] as const,
     antiOverlap: settings.danmakuAntiOverlap,
-    visible: settings.danmakuEnabled,
+    /**
+     * **必须恒为 true**。
+     *
+     * 这个字段是插件的「初始可见性」，插件构造时只读一次：传 false 会让容器
+     * 透明度为 0 且 isHide=true，而 load() **不会**把它改回来（实测：无论随后
+     * load 多少条，option.visible 始终是 false，弹幕永远不显示）。
+     *
+     * 默认设置里 danmakuEnabled 就是 false，所以照着它传值 = 弹幕功能一上来就是
+     * 坏的。这里改成恒定可见，由 syncDanmakuVisibility() 用 show()/hide() 表达意图。
+     */
+    visible: true,
     emitter: false,
   };
 
@@ -142,6 +157,9 @@ async function createPlayer(url: string | null): Promise<void> {
     theme: readThemeColor(),
     plugins: [artplayerPluginDanmuku(danmukuOpts)],
   });
+
+  // 按设置把弹幕显示 / 隐藏落到实处（构造时的 visible 只决定初始态）
+  syncDanmakuVisibility();
 
   // 媒体错误（多为 CDN 防盗链 403/503）——ArtPlayer 会自己重连几轮，
   // 但界面上一片「重新连接」看不出原因，这里显式提示并提供重试。
@@ -298,16 +316,25 @@ onBeforeUnmount(() => {
   art = null;
 });
 
-async function toggleDanmaku(): Promise<void> {
+/**
+ * 把「设置里的弹幕开关」同步到插件。
+ *
+ * 插件的 visible 选项只在构造时生效，此后的显隐必须走 show()/hide()。
+ */
+function syncDanmakuVisibility(): void {
   const plugin = danmakuPlugin();
   if (!plugin?.show || !plugin?.hide) return;
-  if (plugin.isHide) {
-    plugin.show();
-    danmakuOn.value = true;
-  } else {
-    plugin.hide();
-    danmakuOn.value = false;
-  }
+  if (settings.danmakuEnabled) plugin.show();
+  else plugin.hide();
+  danmakuOn.value = settings.danmakuEnabled;
+}
+
+async function toggleDanmaku(): Promise<void> {
+  const next = !settings.danmakuEnabled;
+  // 写回设置：这样设置页的「弹幕」开关与顶栏按钮始终一致，而且能持久化
+  settings.danmakuEnabled = next;
+  syncDanmakuVisibility();
+  if (next) await reloadDanmaku();
 }
 
 function openInBrowser(): void {

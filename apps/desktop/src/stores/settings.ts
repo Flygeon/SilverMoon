@@ -155,8 +155,18 @@ const DEFAULTS = {
   closeToTray: true,
   /** 本地音乐库展示模式：网格 / 列表 */
   musicViewMode: "grid" as MusicViewMode,
-  /** 实验性：在线番剧启用 DanDanPlay 弹幕（参考项目 Kazumi 的弹幕来源） */
-  danmakuEnabled: false,
+  /**
+   * 弹幕总开关：在线番剧（DanDanPlay）与 B 站视频（站内弹幕）共用。
+   *
+   * 默认开启。B 站弹幕无需任何凭证即可用；番剧那一侧的 DanDanPlay 无凭证时会降级
+   * （频率受限但可用）。不想看弹幕的用户可以在视频详情页顶栏一键关闭，或在设置里
+   * 关掉——两个入口写的是同一个设置项，会持久化。
+   *
+   * 注：此前默认为 false，叠加 danmaku 插件的 `visible` 只在构造时读一次，
+   * 导致弹幕「完全不生效」；插件侧已改为恒定可见 + show()/hide()，见
+   * BilibiliVideoView.syncDanmakuVisibility()。
+   */
+  danmakuEnabled: true,
   /** DanDanPlay AppId（无凭证时降级为无签名模式，频率受限） */
   dandanAppId: "",
   /** DanDanPlay AppSecret（与 AppId 配套；缺失时视为无凭证） */

@@ -1241,9 +1241,12 @@ function selectSection(id: string) {
       </div>
     </m3e-card>
 
-    <!-- DanDanPlay 弹幕 -->
+    <!-- 弹幕：番剧走 DanDanPlay，B 站走站内弹幕，但「是否显示弹幕」是同一个开关 -->
     <m3e-card
-      v-if="activeSection === 'settings-online' && settings.onlineAnimeEnabled"
+      v-if="
+        activeSection === 'settings-online' &&
+        (settings.onlineAnimeEnabled || settings.bilibiliEnabled)
+      "
       class="card"
       variant="outlined"
     >
