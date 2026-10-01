@@ -37,6 +37,9 @@ flutter:
   assets:
     # 应用元信息唯一真源：Rust 编译期、Electron 运行期、Flutter 宿主运行期共读同一份
     - backend/silvermoon.config.json
+    # 播放层产物（由归档的 Vue 源码单独构建，vite.player.config.ts → player-dist）。
+    # 目录整体声明：产物文件多且会随构建变化，逐个列举既易漏又难维护。
+    - assets/player/
 
   # 字族与 Electron 版对齐（archive/electron-desktop/src/tokens/theme.css 的 body 字族栈）：
   #   Roboto（拉丁）→ SarasaGothicSC-Regular（中日韩）→ 系统兜底
