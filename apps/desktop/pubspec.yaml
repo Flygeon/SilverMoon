@@ -1,5 +1,5 @@
 name: silvermoon
-description: "SilverMoon（银月）桌面端 — Flutter 宿主（P0 界面框架阶段）"
+description: "SilverMoon（银月）桌面端 — Flutter 宿主"
 publish_to: 'none'
 version: 0.0.1+1
 
@@ -22,6 +22,8 @@ dependencies:
   window_manager: ^0.5.2
   # 打开 GitHub 仓库等外部链接
   url_launcher: ^6.3.2
+  # 目录/文件选择：添加媒体库扫描目录（方案 §5.6 指定）
+  file_selector: ^1.1.0
 
 dev_dependencies:
   flutter_test:
@@ -32,6 +34,9 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    # 应用元信息唯一真源：Rust 编译期、Electron 运行期、Flutter 宿主运行期共读同一份
+    - backend/silvermoon.config.json
 
 flutter_launcher_icons:
   windows:

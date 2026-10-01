@@ -25,8 +25,7 @@ jobs:
   # 静态门禁：pub 解析 + analyze + 单元测试。
   #
   # 刻意放在便宜得多的 ubuntu 上、并让 windows 作业 needs 它：Dart 侧的错误在
-  # 分钟级反馈，不必等 5~10 分钟的 Windows 构建才知道写错了。（Electron 版当年
-  # 反过来做是因为 Windows 侧还有 12 分钟的 Rust release 编译。）
+  # 分钟级反馈，不必等 5~10 分钟的 Windows 构建才知道写错了。
   # ---------------------------------------------------------------------------
   analyze:
     name: Analyze & test (Dart)
@@ -59,7 +58,48 @@ jobs:
         run: flutter test
 
   # ---------------------------------------------------------------------------
-  # Windows x64 构建
+  # Rust 后端静态门禁。
+  #
+  # 后端（161 条命令 / SQLite / 缩略图 / 采集）是本次重构**不动**的部分，
+  # 但 Electron 工作流归档后它一度失去全部 CI 覆盖。这里补回 fmt + clippy。
+  # 刻意**不**进入 windows 的 needs：lint 红要看得见，但不该拦住建得出产物。
+  # ---------------------------------------------------------------------------
+  rust:
+    name: Lint (Rust backend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/backend -> target
+          prefix-key: desktop-backend-lint
+
+      - name: Rustfmt check (backend)
+        working-directory: apps/desktop/backend
+        run: cargo fmt --check
+
+      # cargo fmt 不会顺带检查 path 依赖的 ipc 层，这里显式各查一次
+      - name: Rustfmt check (ipc layer)
+        working-directory: apps/desktop/backend
+        run: |
+          cargo fmt --check --manifest-path crates/silvermoon-ipc/Cargo.toml
+          cargo fmt --check --manifest-path crates/silvermoon-ipc-macros/Cargo.toml
+
+      - name: Clippy
+        working-directory: apps/desktop/backend
+        run: cargo clippy --all-targets -- -D warnings
+
+  # ---------------------------------------------------------------------------
+  # Windows x64 构建：Flutter 宿主 + Rust 侧车，两者放进同一个目录后打包。
   # ---------------------------------------------------------------------------
   windows:
     name: Windows x64 build
@@ -83,6 +123,19 @@ jobs:
       - name: Toolchain versions
         run: flutter --version
 
+      # 侧车先编译：它比 Flutter 构建慢，且失败原因更值得更早暴露。
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/backend -> target
+          prefix-key: desktop-backend-release
+
+      - name: Build Rust backend (release)
+        run: cargo build --release --manifest-path backend/Cargo.toml
+
       # windows/ 不入库，由当前 Flutter 模板现场生成（见 tool/bootstrap.ps1 顶部注释）
       - name: Bootstrap Windows platform folder
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tool/bootstrap.ps1
@@ -96,7 +149,7 @@ jobs:
       - name: flutter build windows
         run: flutter build windows --release
 
-      - name: Package portable zip
+      - name: Stage sidecar and package portable zip
         shell: pwsh
         run: |
           $candidates = @(
@@ -113,6 +166,18 @@ jobs:
             throw 'Release directory not found (silvermoon.exe is missing)'
           }
           Write-Host "packaging: $release"
+
+          # Rust 侧车必须与主程序同级，并按 sidecar.binary 重命名成
+          # silvermoon-server.exe —— 宿主的解析顺序就是照这个名字写的
+          # （apps/desktop/lib/host/sidecar.dart）。
+          $sidecar = 'backend/target/release/silvermoon.exe'
+          if (-not (Test-Path $sidecar)) {
+            throw "sidecar binary not found: $sidecar"
+          }
+          Copy-Item $sidecar (Join-Path $release 'silvermoon-server.exe') -Force
+          Get-ChildItem (Join-Path $release 'silvermoon*') |
+            Select-Object Name, Length
+
           $zip = 'SilverMoon-windows-x64.zip'
           if (Test-Path $zip) { Remove-Item $zip -Force }
           Compress-Archive -Path $release -DestinationPath $zip -Force
@@ -153,15 +218,18 @@ jobs:
           name: SilverMoon Desktop build ${{ github.run_number }}
           prerelease: true
           body: |
-            Flutter 桌面端（Windows x64）自动构建产物。
+            Flutter 桌面端（Windows x64）自动构建产物。**本包已内置 Rust 后端**
+            （\`silvermoon-server.exe\`，与主程序同级）。
 
-            **本版本是 P0「界面框架」阶段产物**：只提供无边框窗口、自定义标题栏、
-            左侧导航 Rail、迷你播放条占位、M3 主题（浅色 / 深色 / 跟随系统）、
-            中英文切换，以及 19 条路由的占位页。
+            **P0.1 阶段**：在 P0 界面框架之上接通后端 —— 数据目录 / 旧数据迁移 /
+            JsonStore / sidecar 拉起与 15s 就绪握手 / `POST /cmd` 命令通道 /
+            `GET /events` SSE 事件总线，并把 /images 换成真实图片库
+            （\`list_files\` + \`get_thumbnails\` 批量取缩略图，可添加文件夹并扫描）。
 
-            命令通道、事件总线、Rust sidecar、WebView 播放层与持久化设置**尚未接入**。
+            其余 18 条路由仍是占位页；WebView 播放层、托盘 / 热键 / 反向 `/rpc`
+            通道、设置持久化界面尚未接入。
 
-            解压后运行 `silvermoon.exe`（Windows 10/11 x64）。
+            解压后运行 \`silvermoon.exe\`（Windows 10/11 x64）。
           files: dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
