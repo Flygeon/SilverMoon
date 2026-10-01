@@ -963,10 +963,21 @@ export const useBiliStore = defineStore("bilibili", () => {
     }
   }
 
-  /** 「我的」页首屏：账号信息 + 投稿 + 收藏夹（历史按需加载）。 */
-  async function loadMine(): Promise<void> {
+  /**
+   * 「我的」页首屏：投稿 + 收藏夹（历史按需加载）。
+   *
+   * 默认**幂等**：投稿已经有数据就不再重拉。这个页面在子选项卡里被反复挂载
+   * （SegmentedTabs 会按 key 重建面板），不守卫的话每次切回来都要发一轮请求，
+   * 既慢又容易触发上游风控。需要强制刷新时传 `force`。
+   */
+  async function loadMine(force = false): Promise<void> {
     if (!account.value.isLogin) return;
-    await Promise.all([loadMyVideos(true), loadFavFolders()]);
+    const needMine = force || myStatus.value === "idle" || myStatus.value === "error";
+    const needFav = force || (favStatus.value === "idle" && favFolders.value.length === 0);
+    await Promise.all([
+      needMine ? loadMyVideos(true) : Promise.resolve(),
+      needFav ? loadFavFolders() : Promise.resolve(),
+    ]);
   }
 
   // -------------------------------------------------------- UP 主主页

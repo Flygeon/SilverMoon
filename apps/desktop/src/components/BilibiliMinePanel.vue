@@ -40,12 +40,12 @@ const mySubtitle = computed(() =>
 const historySubtitle = computed(() =>
   bili.history.length
     ? t("bili.historyHint").replace("{n}", biliCount(bili.history.length))
-    : t("bili.emptyHintShort"),
+    : t("bili.myHistoryHint"),
 );
 const favSubtitle = computed(() =>
   bili.favVideos.length
     ? t("bili.favoritesHint").replace("{n}", biliCount(bili.favVideos.length))
-    : t("bili.emptyHintShort"),
+    : t("bili.myFavoritesHint"),
 );
 
 function openView(target: "history" | "favorites"): void {
