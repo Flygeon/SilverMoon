@@ -17,7 +17,6 @@
  */
 import { isDesktop } from "@/capabilities";
 import { JsonStore } from "@/ipc/store";
-import { biliLog, cookieDigest, cookieFingerprint, cookieNames } from "@/utils/biliLog";
 import { mergeDuplicates, type ArtDanmu } from "@/utils/danmaku";
 import { md5 } from "@/utils/md5";
 
@@ -521,26 +520,10 @@ async function wbiGet(
   return getJson(`${API}${path}?${qs}`);
 }
 
-/** url 的 host（日志用；非法 url 不抛） */
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return "（非法 url）";
-  }
-}
-
-/** 打日志用：只看鉴权相关的几个 cookie 的指纹（值一律脱敏） */
-function authCookieDigest(): string {
-  const keys = ["SESSDATA", "bili_jct", "DedeUserID"].filter((k) => cookies[k]);
-  return cookieDigest(keys.map((k) => [k, cookies[k]] as [string, string]));
-}
-
 /** 匿名会话也要有 `buvid3`，否则推荐/取流会回 -352 风控。 */
 export async function biliEnsureDevice(): Promise<void> {
   await ensureCookies();
   if (cookies.buvid3) return;
-  biliLog("设备指纹：本地无 buvid3，向 finger/spi 申请");
   try {
     const json = await getJson(`${API}/x/frontend/finger/spi`);
     const data = json.data as Record<string, unknown> | undefined;
@@ -549,9 +532,7 @@ export async function biliEnsureDevice(): Promise<void> {
     if (b3) cookies.buvid3 = b3;
     if (b4) cookies.buvid4 = b4;
     await persistCookies();
-    biliLog(`设备指纹：buvid3=${b3 ? "有" : "无"} buvid4=${b4 ? "有" : "无"}`);
   } catch (e) {
-    biliLog(`设备指纹：申请失败 ${e instanceof Error ? e.message : String(e)}`);
     console.warn("[bilibili] buvid 初始化失败：", e);
   }
 }
@@ -560,13 +541,11 @@ export async function biliEnsureDevice(): Promise<void> {
 
 export async function biliNav(): Promise<BiliAccount> {
   await biliEnsureDevice();
-  biliLog(`nav 请求：Cookie 名字=${cookieNames(cookies)}；鉴权凭据 ${authCookieDigest()}`);
   const json = await navRaw();
   const data = json.data as Record<string, unknown> | undefined;
   // `data` 缺失只出现在业务失败时（-101 未登录 / -352 风控…）。把上游原话抛出去，
   // 否则界面只能笼统报「账号信息获取失败」，无法区分是凭据没生效还是被风控拦了。
   if (!data) {
-    biliLog(`nav 失败：code=${num(json.code)} message=${str(json.message, "（无）")}`);
     throw new Error(
       `账号信息查询失败：${str(json.message, "上游未返回数据")}（code=${num(json.code)}）`,
     );
@@ -590,11 +569,6 @@ export async function biliNav(): Promise<BiliAccount> {
     level: num(level?.current_level),
     vip: num(data.vipStatus) === 1,
   };
-  biliLog(
-    `nav 返回：isLogin=${account.isLogin} code=${num(json.code)} mid=${account.mid} uname=${
-      account.name || "（空）"
-    }`,
-  );
   return account;
 }
 
@@ -602,18 +576,12 @@ export async function biliNav(): Promise<BiliAccount> {
 
 export async function biliQrGenerate(): Promise<{ key: string; url: string }> {
   await ensureCookies();
-  biliLog("申请二维码：GET /x/passport-login/web/qrcode/generate");
   const json = await getJson(`${PASSPORT}/x/passport-login/web/qrcode/generate`);
   assertOk(json, "获取二维码");
   const data = json.data as Record<string, unknown> | undefined;
   const key = str(data?.qrcode_key);
   const url = str(data?.url);
-  if (!key || !url) {
-    biliLog("申请二维码：上游未返回 qrcode_key / url");
-    throw new Error("上游未返回二维码");
-  }
-  // 二维码内容本身不是凭据（就是个未确认的登录链接），记 host 足够定位问题
-  biliLog(`申请二维码：成功 key=${cookieFingerprint(key)} 扫码跳转 host=${hostOf(url)}`);
+  if (!key || !url) throw new Error("上游未返回二维码");
   return { key, url };
 }
 
@@ -633,30 +601,17 @@ export async function biliQrPoll(key: string): Promise<BiliQrStatus> {
   // 扫码状态码在 data.code，外层 code 恒为 0
   const code = data ? num(data.code, 86101) : 86101;
   const message = data ? str(data.message) : str(json.message);
-  biliLog(`轮询：HTTP=${res.status} code=${code} message=${message || "（无）"}`);
   if (code === 0 && data) {
     // 兜底：跳转链里也带着同一批凭据，值是 urlencoded 形态，先按 cookie 形态落罐
     // （见 cookieValueFromLoginUrl）；原始形态一并返回，验不过时换它再试。
     const pairs = Object.entries(parseRawQuery(str(data.url))).filter(([k]) =>
       URL_COOKIE_NAMES.has(k),
     );
-    // 两条来源各自的形态都记下来：这是「服务端到底认哪种形态」唯一的现场证据
-    biliLog(`轮询·凭据来源①响应头：名字=${cookieNames(headerPairs)}`);
-    if (headerPairs.length) biliLog(`轮询·凭据来源①响应头：${cookieDigest(headerPairs)}`);
-    biliLog(`轮询·凭据来源②跳转链：host=${hostOf(str(data.url))} 名字=${cookieNames(pairs)}`);
-    if (pairs.length) biliLog(`轮询·凭据来源②跳转链原值：${cookieDigest(pairs)}`);
-    const written: [string, string][] = [];
     for (const [k, v] of pairs) {
       if (fromHeader.has(k)) continue;
       cookies[k] = cookieValueFromLoginUrl(v);
-      written.push([k, cookies[k]]);
     }
     await persistCookies();
-    biliLog(
-      `轮询·落罐（cookie 形态）：${
-        written.length ? cookieDigest(written) : "未改动（全部取自响应头）"
-      }`,
-    );
     if (pairs.length) alt = Object.fromEntries(pairs);
   }
   return { code, message, alt };
@@ -671,19 +626,13 @@ export async function biliQrPoll(key: string): Promise<BiliQrStatus> {
  */
 export async function biliApplyCookies(pairs: Record<string, string>): Promise<void> {
   await ensureCookies();
-  const applied: [string, string][] = [];
   for (const [name, value] of Object.entries(pairs)) {
-    if (value) {
-      cookies[name] = value;
-      applied.push([name, value]);
-    }
+    if (value) cookies[name] = value;
   }
   await persistCookies();
-  biliLog(`换上备选形态落罐：${cookieDigest(applied)}`);
 }
 
 export async function biliLogout(): Promise<void> {
-  biliLog("登出：请求 /login/exit/v2 并清空本地凭据");
   try {
     const csrf = biliCsrf();
     if (csrf) {
@@ -697,11 +646,197 @@ export async function biliLogout(): Promise<void> {
       });
     }
   } catch (e) {
-    biliLog(`登出：请求失败（本地凭据照样清空）${e instanceof Error ? e.message : String(e)}`);
     console.warn("[bilibili] 登出请求失败：", e);
   }
   cookies = {};
   await persistCookies();
+}
+
+// ------------------------------------------------------------------ 评论
+
+export interface BiliReplyAuthor {
+  mid: number;
+  name: string;
+  avatar: string;
+  level: number;
+  vip: boolean;
+}
+
+export interface BiliReply {
+  rpid: string;
+  author: BiliReplyAuthor;
+  message: string;
+  like: number;
+  /** 上游给好的中文相对时间（如「7小时前发布」），省一层格式化 */
+  timeDesc: string;
+  location: string;
+  /** 直接子回复数（楼中楼） */
+  replyCount: number;
+  /** UP 主点过赞 */
+  upLiked: boolean;
+  /** 是否 UP 主本人发的 */
+  isUp: boolean;
+  /** 置顶（整体置顶 / UP 置顶） */
+  isTop: boolean;
+  /** 楼中楼预览（上游一般给 3 条） */
+  replies: BiliReply[];
+}
+
+export interface BiliReplyPage {
+  replies: BiliReply[];
+  /** 置顶评论（可能同时存在整体置顶与 UP 置顶，已按 rpid 去重） */
+  top: BiliReply[];
+  total: number;
+  isEnd: boolean;
+  /** 下一页游标；已到底时为空串 */
+  nextOffset: string;
+}
+
+/** 评论排序，取值与上游 `mode` 一致：2 按时间 / 3 按热度 */
+export type BiliReplySort = 2 | 3;
+
+export const BILI_REPLY_HOT: BiliReplySort = 3;
+export const BILI_REPLY_TIME: BiliReplySort = 2;
+
+function replyAuthor(m: Record<string, unknown> | undefined): BiliReplyAuthor {
+  if (!m) return { mid: 0, name: "", avatar: "", level: 0, vip: false };
+  const level = m.level_info as Record<string, unknown> | undefined;
+  const vip = m.vip as Record<string, unknown> | undefined;
+  return {
+    mid: num(m.mid),
+    name: str(m.uname),
+    avatar: biliImage(m.avatar),
+    level: num(level?.current_level),
+    vip: num(vip?.vipStatus) === 1,
+  };
+}
+
+/** 单条评论归一化（一级与楼中楼同构）。`upMid` 用来标「UP 主本人」。 */
+function replyFromJson(raw: Record<string, unknown>, upMid: number): BiliReply {
+  const control = raw.reply_control as Record<string, unknown> | undefined;
+  const content = raw.content as Record<string, unknown> | undefined;
+  const upAction = raw.up_action as Record<string, unknown> | undefined;
+  const subs = (raw.replies as unknown[]) ?? [];
+  return {
+    rpid: str(raw.rpid),
+    author: replyAuthor(raw.member as Record<string, unknown> | undefined),
+    message: str(content?.message),
+    like: num(raw.like),
+    timeDesc: str(control?.time_desc),
+    location: str(control?.location),
+    // 一级评论的「回复数」在 rcount，count 是含楼中楼的总数
+    replyCount: num(raw.rcount ?? raw.count),
+    upLiked: upAction?.like === true,
+    isUp: upMid > 0 && num(raw.mid) === upMid,
+    isTop: false,
+    replies: subs
+      .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+      .map((x) => replyFromJson(x, upMid)),
+  };
+}
+
+function replyList(raw: unknown, upMid: number): BiliReply[] {
+  return ((raw as unknown[]) ?? [])
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+    .map((x) => replyFromJson(x, upMid));
+}
+
+/** 置顶评论：整体置顶 `top` 与 UP 置顶 `upper` 可能都存在，按 rpid 去重。 */
+function pinnedReplyList(data: Record<string, unknown> | undefined, upMid: number): BiliReply[] {
+  const out: BiliReply[] = [];
+  for (const key of ["top", "upper"]) {
+    const raw = data?.[key] as Record<string, unknown> | undefined;
+    if (!raw || !raw.rpid) continue;
+    const item = replyFromJson(raw, upMid);
+    if (!out.some((x) => x.rpid === item.rpid)) out.push({ ...item, isTop: true });
+  }
+  return out;
+}
+
+/**
+ * 拉一页评论。
+ *
+ * 用 `/x/v2/reply/main`（游标分页）：实测**无需 WBI、无需登录**即可返回，且只有它
+ * 给得出「总数 + 是否到底」——`/x/v2/reply` 的 `page` 字段全是 0，根本翻不了页。
+ */
+export async function biliReplies(
+  aid: string,
+  sort: BiliReplySort,
+  offset = "",
+  upMid = 0,
+): Promise<BiliReplyPage> {
+  await biliEnsureDevice();
+  const qs = new URLSearchParams({
+    oid: aid,
+    type: "1",
+    mode: String(sort),
+    plat: "1",
+    // 上游要求 JSON 串，空 offset 表示第一页
+    pagination_str: JSON.stringify({ offset }),
+  });
+  const json = await getJson(`${API}/x/v2/reply/main?${qs.toString()}`);
+  assertOk(json, "加载评论");
+  const data = json.data as Record<string, unknown> | undefined;
+  const cursor = data?.cursor as Record<string, unknown> | undefined;
+  const pagination = cursor?.pagination_reply as Record<string, unknown> | undefined;
+  const isEnd = cursor?.is_end === true;
+  const top = pinnedReplyList(data, upMid);
+  const topIds = new Set(top.map((x) => x.rpid));
+  return {
+    top,
+    // 置顶也会出现在正常列表里，去重避免屏幕上出现两条一样的
+    replies: replyList(data?.replies, upMid).filter((x) => !topIds.has(x.rpid)),
+    total: num(cursor?.all_count),
+    isEnd,
+    nextOffset: isEnd ? "" : str(pagination?.next_offset),
+  };
+}
+
+/** 楼中楼：某条评论下的子回复（页码分页，`page.num * page.size >= count` 即到底）。 */
+export async function biliReplyReplies(
+  aid: string,
+  root: string,
+  page = 1,
+  upMid = 0,
+): Promise<{ replies: BiliReply[]; total: number; isEnd: boolean }> {
+  await biliEnsureDevice();
+  const qs = new URLSearchParams({
+    oid: aid,
+    type: "1",
+    root,
+    pn: String(page),
+    ps: "20",
+    sort: "1",
+  });
+  const json = await getJson(`${API}/x/v2/reply/reply?${qs.toString()}`);
+  assertOk(json, "加载回复");
+  const data = json.data as Record<string, unknown> | undefined;
+  const info = data?.page as Record<string, unknown> | undefined;
+  const count = num(info?.count);
+  const size = num(info?.size, 20);
+  const current = num(info?.num, page);
+  return {
+    replies: replyList(data?.replies, upMid),
+    total: count,
+    isEnd: current * size >= count,
+  };
+}
+
+// ------------------------------------------------------------------ 相关推荐
+
+/** 详情页右侧「相关推荐」：`data` 直接是数组，字段与推荐流同构（故复用同一个归一化）。 */
+export async function biliRelated(bvid: string): Promise<BiliVideo[]> {
+  await biliEnsureDevice();
+  const json = await getJson(
+    `${API}/x/web-interface/archive/related?bvid=${encodeURIComponent(bvid)}`,
+  );
+  assertOk(json, "加载相关视频");
+  const data = json.data as unknown;
+  if (!Array.isArray(data)) return [];
+  return data
+    .filter((it): it is Record<string, unknown> => !!it && typeof it === "object")
+    .map(videoFromFeed)
+    .filter((v) => !!v.bvid);
 }
 
 // ------------------------------------------------------------------ 推荐 / 搜索
@@ -750,7 +885,8 @@ function videoFromFeed(m: Record<string, unknown>): BiliVideo {
   const stat = m.stat as Record<string, unknown> | undefined;
   const reason = m.rcmd_reason as Record<string, unknown> | undefined;
   return {
-    aid: str(m.id),
+    // 推荐流给的是 `id`，相关推荐给的是 `aid`，两者同义
+    aid: str(m.aid ?? m.id),
     bvid: str(m.bvid),
     cid: str(m.cid),
     title: biliStripHtml(str(m.title)),

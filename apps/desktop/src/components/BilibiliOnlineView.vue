@@ -14,7 +14,6 @@ import BilibiliVideoView from "@/components/BilibiliVideoView.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
-import { biliLoginLogText } from "@/utils/biliLog";
 import { biliCount, type BiliVideo } from "@/utils/bilibili";
 import { translate } from "@shared/i18n";
 
@@ -135,26 +134,6 @@ function closeLogin(): void {
   stopPolling();
   loginOpen.value = false;
   bili.resetQr();
-}
-
-/**
- * 复制整条登录链路日志。
- *
- * 日志本身落在系统临时目录的 `lumiluna_login_debug.log` 里，但让用户去翻临时目录
- * 不现实 —— 这里直接把本次会话的内存副本塞进剪贴板，出问题一贴即可定位。
- */
-async function copyLoginLog(): Promise<void> {
-  const text = biliLoginLogText();
-  if (!text) {
-    bili.notice = t("bili.logEmpty");
-    return;
-  }
-  try {
-    await navigator.clipboard.writeText(text);
-    bili.notice = t("bili.logCopied");
-  } catch {
-    bili.notice = t("bili.logCopyFailed");
-  }
 }
 
 // ---------------------------------------------------------------- 生命周期
@@ -367,10 +346,6 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
           <p class="qr-status">{{ bili.qrStatusText }}</p>
           <p v-if="bili.loginError" class="qr-error">{{ bili.loginError }}</p>
           <div class="modal-actions">
-            <m3e-button variant="text" size="small" @click="copyLoginLog">
-              <span slot="icon" class="material-symbols-outlined">content_copy</span>
-              {{ t("bili.copyLog") }}
-            </m3e-button>
             <m3e-button variant="text" size="small" @click="refreshQr">
               <span slot="icon" class="material-symbols-outlined">refresh</span>
               {{ t("bili.refreshQr") }}
@@ -379,8 +354,6 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
               {{ t("bili.done") }}
             </m3e-button>
           </div>
-          <!-- 链路日志若不能一键带走，排障就得让人去翻临时目录，等于没有日志 -->
-          <p class="log-hint">{{ t("bili.logFileHint") }}</p>
         </div>
       </div>
     </Transition>
@@ -620,13 +593,6 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-}
-.log-hint {
-  margin: 12px 0 0;
-  font-size: var(--md-sys-typescale-body-small-size);
-  line-height: 1.6;
-  color: var(--md-sys-color-on-surface-variant);
-  opacity: 0.8;
 }
 .bili-modal-enter-active,
 .bili-modal-leave-active {

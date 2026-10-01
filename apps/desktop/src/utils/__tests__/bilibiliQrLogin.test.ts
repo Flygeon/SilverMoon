@@ -1,7 +1,7 @@
 /**
- * B 站扫码登录的凭据归一化与链路日志回归测试。
+ * B 站扫码登录的凭据归一化回归测试。
  *
- * 钉的是本次修掉的两个坑 + 一条硬保证：
+ * 钉的是这条链路上最容易踩的两个坑：
  *
  * 1. 跳转链（`crossDomain?...`）的 query 是 urlencoded 形态 —— 实测
  *    `SESSDATA=35f5d9fc,1667303493,e6e01*51` 是**字面逗号**，而同串里 `gourl` 的
@@ -11,15 +11,11 @@
  * 2. 渲染进程读不到 `Set-Cookie`（Fetch 规范把它列为禁止响应头），所以凭据只能来自
  *    跳转链；一旦宿主通道把它挂回来了（见 `src/ipc/http.ts`），响应头就是更权威的
  *    来源，不能再被跳转链覆盖。
- * 3. 链路日志要能定位问题，但**绝不能把可登录的凭据原值写进去**（落盘 + 一键复制
- *    都会外流），只记长度 / 形态 / md5 指纹。
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /** 被打桩的 JsonStore 落盘内容（键 → 值） */
 const persisted: Record<string, Record<string, string>> = {};
-/** 落文件的日志（走 capabilities.appLog 的整串） */
-const appLog = vi.fn();
 
 vi.mock("@/ipc/store", () => ({
   JsonStore: class {
@@ -37,15 +33,7 @@ vi.mock("@/ipc/store", () => ({
   },
 }));
 
-vi.mock("@/capabilities", () => ({
-  isDesktop: false,
-  capabilities: {
-    appLog: (...args: unknown[]) => {
-      appLog(...args);
-      return Promise.resolve();
-    },
-  },
-}));
+vi.mock("@/capabilities", () => ({ isDesktop: false, capabilities: {} }));
 
 /** 造「宿主通道」形态的响应：真 Response + 挂回的 getSetCookie（与 ipc/http.ts 同款）。 */
 function hostResponse(body: unknown, setCookie: string[] = []): Response {
@@ -78,7 +66,7 @@ const POLL_BODY = {
   data: { code: 0, message: "", url: LOGIN_URL, refresh_token: "rt" },
 };
 
-/** 每个用例都用全新的模块实例（cookie 罐与日志缓冲都是模块级状态） */
+/** 每个用例都用全新的模块实例（cookie 罐是模块级状态） */
 async function freshBili() {
   vi.resetModules();
   return await import("@/utils/bilibili");
@@ -91,14 +79,8 @@ function stubPoll(setCookie: string[] = []) {
   );
 }
 
-/** 本次调用产生的日志全文 */
-function logText(): string {
-  return appLog.mock.calls.map((c) => String(c[0])).join("\n");
-}
-
 beforeEach(() => {
   delete persisted["cookies"];
-  appLog.mockReset();
   vi.unstubAllGlobals();
 });
 
@@ -140,75 +122,5 @@ describe("biliQrPoll 凭据归一化", () => {
     expect(s.code).toBe(86101);
     expect(persisted["cookies"]).toBeUndefined();
     expect(s.alt).toBeUndefined();
-  });
-});
-
-describe("登录链路日志", () => {
-  it("两条来源与落罐形态都记全（长度/逗号/尾标）", async () => {
-    stubPoll();
-    const bili = await freshBili();
-    await bili.biliQrPoll("qrcode-key");
-    const text = logText();
-
-    expect(text).toContain("[bili-login]");
-    // 来源②：跳转链原值 —— 字面逗号形态
-    expect(text).toContain("len=28 %2C=0 逗号=1 *=*51");
-    // 落罐：cookie 形态 —— %2C，且不含字面逗号
-    expect(text).toContain("len=32 %2C=1 逗号=0 *=*51");
-    expect(text).toContain("轮询·落罐（cookie 形态）");
-  });
-
-  it("凭据只记指纹，任何形态的原值都不进日志", async () => {
-    stubPoll();
-    const bili = await freshBili();
-    await bili.biliQrPoll("qrcode-key");
-    const text = logText();
-
-    // 两种形态、以及其它凭据的原值，都不允许出现
-    expect(text).not.toContain(RAW_SESSDATA);
-    expect(text).not.toContain(COOKIE_SESSDATA);
-    expect(text).not.toContain(RAW_JCT);
-    expect(text).not.toContain("DedeUserID=28970049");
-    // 但「拿到了什么名字、什么形态」必须看得到
-    expect(text).toContain("SESSDATA");
-    expect(text).toContain("bili_jct");
-  });
-
-  it("响应头已提供的凭据不会出现在落罐行里（避免误判被覆盖）", async () => {
-    stubPoll(["SESSDATA=from-header%2C1%2Cx*31; Path=/; Domain=.bilibili.com"]);
-    const bili = await freshBili();
-    await bili.biliQrPoll("qrcode-key");
-
-    const written = appLog.mock.calls
-      .map((c) => String(c[0]))
-      .filter((l) => l.includes("落罐（cookie 形态）"));
-    expect(written).toHaveLength(1);
-    expect(written[0]).not.toContain("SESSDATA");
-    expect(written[0]).toContain("bili_jct");
-  });
-
-  it("缓冲：新会话清空、文本可整条取走", async () => {
-    vi.resetModules();
-    const log = await import("@/utils/biliLog");
-    log.biliLoginLogReset();
-    log.biliLog("第一条");
-    log.biliLog("第二条");
-    expect(log.biliLoginLogText()).toContain("第一条");
-    expect(log.biliLoginLogText()).toContain("第二条");
-
-    log.biliLoginLogReset();
-    expect(log.biliLoginLogText()).toBe("");
-  });
-
-  it("指纹本身不含凭据字符（长度 + 形态 + md5）", async () => {
-    vi.resetModules();
-    const { cookieFingerprint } = await import("@/utils/biliLog");
-    const fp = cookieFingerprint(RAW_SESSDATA);
-
-    expect(fp).toContain("len=28");
-    expect(fp).toContain("逗号=1");
-    expect(fp).toContain("*=*51");
-    expect(fp).not.toContain("35f5d9fc");
-    expect(fp).not.toContain("1667303493");
   });
 });

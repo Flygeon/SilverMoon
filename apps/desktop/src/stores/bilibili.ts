@@ -7,14 +7,15 @@
  */
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { isDesktop } from "@/capabilities";
-import { biliLog, biliLoginLogReset, biliLogSection } from "@/utils/biliLog";
 import {
   BILI_ANONYMOUS,
+  BILI_REPLY_HOT,
   type BiliAccount,
   type BiliDetail,
   type BiliPlayUrl,
   type BiliQrStatus,
+  type BiliReply,
+  type BiliReplySort,
   type BiliVideo,
   biliApplyCookies,
   biliDanmaku,
@@ -25,6 +26,9 @@ import {
   biliQrGenerate,
   biliQrPoll,
   biliRecommend,
+  biliRelated,
+  biliReplies,
+  biliReplyReplies,
   biliSearch,
   biliVideoDetail,
 } from "@/utils/bilibili";
@@ -56,11 +60,9 @@ export const useBiliStore = defineStore("bilibili", () => {
     try {
       account.value = await biliNav();
       accountError.value = "";
-      biliLog(`账号校验通过：${account.value.name || "（无昵称）"} mid=${account.value.mid}`);
     } catch (e) {
       account.value = { ...BILI_ANONYMOUS };
       accountError.value = cleanError(e);
-      biliLog(`账号校验失败：${accountError.value}`);
       console.warn("[bilibili] 账号获取失败：", e);
     }
     accountLoaded.value = true;
@@ -202,21 +204,12 @@ export const useBiliStore = defineStore("bilibili", () => {
     qrStatus.value = null;
     qrExpired.value = false;
     pollFailures = 0;
-    // 每开一次二维码就重开一份日志，复制/落盘拿到的正好是一条完整会话
-    biliLoginLogReset();
-    biliLogSection("B 站扫码登录 · 开始");
-    biliLog(
-      `环境：isDesktop=${isDesktop} lang=${navigator.language} 起始登录态=${
-        account.value.isLogin ? "已登录" : "未登录"
-      } UA=${navigator.userAgent}`,
-    );
     try {
       const r = await biliQrGenerate();
       qrContent.value = r.url;
       qrKey = r.key;
     } catch (e) {
       loginError.value = `获取二维码失败：${cleanError(e)}`;
-      biliLog(`申请二维码失败：${loginError.value}`);
     }
     startingQr.value = false;
   }
@@ -231,49 +224,38 @@ export const useBiliStore = defineStore("bilibili", () => {
       qrExpired.value = s.code === 86038;
       if (s.code === 0) {
         qrStatusText.value = "登录成功";
-        biliLogSection("服务端已确认扫码 · 开始校验登录态");
         await loadAccount();
-        biliLog(`校验条①立即验：isLogin=${account.value.isLogin}`);
         if (!account.value.isLogin) {
           // 上游偶尔延迟下发凭据，再给一次机会
           await new Promise((r) => setTimeout(r, 600));
           await loadAccount();
-          biliLog(`校验条②延迟 600ms 再验：isLogin=${account.value.isLogin}`);
         }
         if (!account.value.isLogin && s.alt) {
           // 凭据还有另一种编码形态（跳转链的 `,` ↔ cookie 的 `%2C`），哪种才是服务端
           // 认的形态只有 nav 说了算 —— 换上另一种再验一次，避免把可用会话判成失败。
           await biliApplyCookies(s.alt);
           await loadAccount();
-          biliLog(`校验条③换成跳转链原形态再验：isLogin=${account.value.isLogin}`);
         }
         if (!account.value.isLogin) {
           // 带上上游原话（-101 / -352 …），否则这一条永远只有「获取失败」，无从下手
           loginError.value = accountError.value
             ? `已授权，但账号信息获取失败：${accountError.value}`
             : "已授权，但账号信息获取失败，请重新登录";
-          biliLogSection(`登录失败 · ${loginError.value}`);
           return true;
         }
         notice.value = `欢迎回来，${account.value.name || "B 站用户"}`;
-        biliLogSection(
-          `登录成功 · ${account.value.name || "（无昵称）"} mid=${account.value.mid} Lv${account.value.level}`,
-        );
         return true;
       }
       if (s.code === 86038) {
         qrStatusText.value = "二维码已过期，请点击刷新";
-        biliLog("二维码已过期（86038），停止轮询");
         return true;
       }
       qrStatusText.value =
         s.code === 86090 ? "已扫码，请在手机上确认" : "请使用「哔哩哔哩」App 扫描二维码";
     } catch (e) {
       pollFailures += 1;
-      biliLog(`轮询异常（第 ${pollFailures} 次）：${cleanError(e)}`);
       if (pollFailures >= 4) {
         loginError.value = `网络异常：${cleanError(e)}`;
-        biliLogSection(`登录中断 · ${loginError.value}`);
         return true;
       }
     }
@@ -331,12 +313,17 @@ export const useBiliStore = defineStore("bilibili", () => {
     detailStatus.value = "loading";
     playStatus.value = "idle";
     activeQn.value = 80;
+    resetDiscussions();
+    // 相关推荐只依赖 bvid，和详情/取流并行，别让它排在后面等
+    void loadRelated(video.bvid);
     try {
       const d = await biliVideoDetail(video.bvid);
       if (token !== openToken) return;
       detail.value = d;
       activeCid.value = d.parts.length ? d.parts[0].cid : d.cid || video.cid;
       detailStatus.value = "ready";
+      // 评论要拿 UP mid 标「UP 主」标记，所以等详情回来再拉
+      void loadReplies(true);
       await resolvePlay(token);
     } catch (e) {
       if (token !== openToken) return;
@@ -366,6 +353,155 @@ export const useBiliStore = defineStore("bilibili", () => {
     playStatus.value = "idle";
     detailStatus.value = "idle";
     playError.value = "";
+    resetDiscussions();
+  }
+
+  // -------------------------------------------------------- 评论 / 相关推荐
+  const replies = ref<BiliReply[]>([]);
+  const replyTotal = ref(0);
+  const replySort = ref<BiliReplySort>(BILI_REPLY_HOT);
+  const replyStatus = ref<BiliStatus>("idle");
+  const replyError = ref("");
+  const replyLoadingMore = ref(false);
+  const replyEnd = ref(false);
+  /** 已展开的楼中楼：rpid → 子回复（有值即展开，不必再维护一套开关） */
+  const subReplies = ref<Record<string, BiliReply[]>>({});
+  const subBusy = ref<Record<string, boolean>>({});
+  const subEnds = ref<Record<string, boolean>>({});
+  let replyOffset = "";
+  let replyToken = 0;
+
+  const related = ref<BiliVideo[]>([]);
+  const relatedStatus = ref<BiliStatus>("idle");
+  let relatedToken = 0;
+
+  /** 评论挂在 aid 上：优先取当前推荐条目，其次详情（两者到达顺序不定） */
+  function commentAid(): string {
+    return current.value?.aid || detail.value?.aid || "";
+  }
+
+  /** 标「UP 主」用的 UP mid；详情没回来时先按 0（不标） */
+  function upMidOf(): number {
+    return detail.value?.owner.mid ?? 0;
+  }
+
+  /** 离开/切换视频时清空评论与相关推荐，避免下一条视频先闪一眼上一条的内容 */
+  function resetDiscussions(): void {
+    replies.value = [];
+    replyTotal.value = 0;
+    replyStatus.value = "idle";
+    replyError.value = "";
+    replyLoadingMore.value = false;
+    replyEnd.value = false;
+    subReplies.value = {};
+    subBusy.value = {};
+    subEnds.value = {};
+    replyOffset = "";
+    related.value = [];
+    relatedStatus.value = "idle";
+  }
+
+  /**
+   * 拉评论。`reset` 为真表示重开一轮（首次进入 / 切排序）。
+   *
+   * 两个细节：置顶评论也会出现在正常列表里，要按 rpid 去重；分页游标是
+   * `cursor.pagination_reply.next_offset`，`is_end` 才是权威的到底标志。
+   */
+  async function loadReplies(reset = true): Promise<void> {
+    const aid = commentAid();
+    if (!aid) return;
+    const token = reset ? ++replyToken : replyToken;
+    if (reset) {
+      replyStatus.value = "loading";
+      replyError.value = "";
+      replyEnd.value = false;
+      replyOffset = "";
+      subReplies.value = {};
+      subEnds.value = {};
+    }
+    try {
+      const page = await biliReplies(aid, replySort.value, reset ? "" : replyOffset, upMidOf());
+      if (token !== replyToken) return;
+      const merged = reset ? [...page.top, ...page.replies] : [...replies.value, ...page.replies];
+      const seen = new Set<string>();
+      const unique: BiliReply[] = [];
+      for (const r of merged) {
+        if (seen.has(r.rpid)) continue;
+        seen.add(r.rpid);
+        unique.push(r);
+      }
+      replies.value = unique;
+      replyTotal.value = page.total || unique.length;
+      replyOffset = page.nextOffset;
+      replyEnd.value = page.isEnd || !page.nextOffset;
+      replyStatus.value = "ready";
+    } catch (e) {
+      if (token !== replyToken) return;
+      replyError.value = cleanError(e);
+      replyStatus.value = "error";
+    }
+  }
+
+  async function loadMoreReplies(): Promise<void> {
+    if (replyStatus.value === "loading" || replyLoadingMore.value || replyEnd.value) return;
+    replyLoadingMore.value = true;
+    try {
+      await loadReplies(false);
+    } finally {
+      replyLoadingMore.value = false;
+    }
+  }
+
+  async function setReplySort(sort: BiliReplySort): Promise<void> {
+    if (sort === replySort.value) return;
+    replySort.value = sort;
+    replies.value = [];
+    await loadReplies(true);
+  }
+
+  /** 楼中楼：未展开 → 拉第一页；已展开 → 收起；`more` 为真 → 追加下一页。 */
+  async function loadSubReplies(rpid: string, more = false): Promise<void> {
+    const aid = commentAid();
+    if (!aid || subBusy.value[rpid]) return;
+    if (subReplies.value[rpid] && !more) {
+      const next = { ...subReplies.value };
+      delete next[rpid];
+      subReplies.value = next;
+      return;
+    }
+    // 每页 20 条（见 utils 里的 ps），据此推算下一页页码
+    const page = more ? Math.floor((subReplies.value[rpid]?.length ?? 0) / 20) + 1 : 1;
+    subBusy.value = { ...subBusy.value, [rpid]: true };
+    try {
+      const r = await biliReplyReplies(aid, rpid, page, upMidOf());
+      subReplies.value = {
+        ...subReplies.value,
+        [rpid]: more ? [...(subReplies.value[rpid] ?? []), ...r.replies] : r.replies,
+      };
+      subEnds.value = { ...subEnds.value, [rpid]: r.isEnd };
+    } catch (e) {
+      notice.value = `加载回复失败：${cleanError(e)}`;
+    } finally {
+      const busy = { ...subBusy.value };
+      delete busy[rpid];
+      subBusy.value = busy;
+    }
+  }
+
+  /** 相关推荐（右栏）。失败就静默成空列表：它只是辅助内容，不该挡住播放。 */
+  async function loadRelated(bvid: string): Promise<void> {
+    const token = ++relatedToken;
+    relatedStatus.value = "loading";
+    try {
+      const list = await biliRelated(bvid);
+      if (token !== relatedToken) return;
+      related.value = list;
+      relatedStatus.value = "ready";
+    } catch {
+      if (token !== relatedToken) return;
+      related.value = [];
+      relatedStatus.value = "error";
+    }
   }
 
   // ---- 弹幕（按 cid 缓存）----
@@ -438,5 +574,22 @@ export const useBiliStore = defineStore("bilibili", () => {
     selectPart,
     closeVideo,
     loadDanmaku,
+    // 评论 / 相关推荐
+    replies,
+    replyTotal,
+    replySort,
+    replyStatus,
+    replyError,
+    replyLoadingMore,
+    replyEnd,
+    subReplies,
+    subBusy,
+    subEnds,
+    loadReplies,
+    loadMoreReplies,
+    setReplySort,
+    loadSubReplies,
+    related,
+    relatedStatus,
   };
 });

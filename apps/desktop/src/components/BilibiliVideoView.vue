@@ -11,9 +11,11 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type Artplayer from "artplayer";
 import type { Option as DanmukuOption } from "artplayer-plugin-danmuku";
+import BilibiliComments from "@/components/BilibiliComments.vue";
+import BilibiliRelatedList from "@/components/BilibiliRelatedList.vue";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
-import { capabilities, isDesktop } from "@/capabilities";
+import { capabilities } from "@/capabilities";
 import { biliCount, biliDuration, biliFormatLabel, biliPubdate } from "@/utils/bilibili";
 import type { ArtDanmu } from "@/utils/danmaku";
 import { translate } from "@shared/i18n";
@@ -232,7 +234,7 @@ const metaItems = computed(() => {
 </script>
 
 <template>
-  <div class="bili-view" :class="{ 'below-titlebar': isDesktop }">
+  <div class="bili-view">
     <!-- 顶栏（用原生 button：浮层里的操作必须 100% 可点，不依赖自定义元素的事件转发） -->
     <header class="head lm-glass">
       <button class="head-btn" type="button" :title="t('bili.close')" @click="close">
@@ -254,119 +256,134 @@ const metaItems = computed(() => {
       </button>
     </header>
 
-    <!-- 播放器 -->
-    <div class="player-area">
-      <div ref="container" class="art-container" />
-      <div v-if="bili.playStatus === 'loading'" class="player-overlay">
-        <m3e-loading-indicator class="lm-loading" />
-        <span>{{ t("bili.resolving") }}</span>
-      </div>
-      <div v-else-if="bili.playStatus === 'error' && !videoUrl" class="player-overlay error">
-        <span class="material-symbols-outlined">error</span>
-        <span class="err-text">{{ bili.playError || t("bili.resolveFailed") }}</span>
-        <m3e-button variant="filled" size="small" @click="bili.selectQuality(bili.activeQn)">
-          <span slot="icon" class="material-symbols-outlined">refresh</span>
-          {{ t("bili.retry") }}
-        </m3e-button>
-      </div>
-      <div v-else-if="playerError" class="player-overlay error">
-        <span class="material-symbols-outlined">error</span>
-        <span class="err-text">{{ playerError }}</span>
-        <span class="err-hint">{{ t("bili.playbackHint") }}</span>
-        <m3e-button variant="filled" size="small" @click="retryPlayback">
-          <span slot="icon" class="material-symbols-outlined">refresh</span>
-          {{ t("bili.retry") }}
-        </m3e-button>
-      </div>
-    </div>
-
-    <!-- 信息区 -->
-    <div class="detail-body">
-      <div v-if="bili.detailStatus === 'loading' && !detail" class="detail-loading">
-        <m3e-loading-indicator class="lm-loading" />
-        {{ t("bili.loadingDetail") }}
-      </div>
-
-      <template v-else-if="detail">
-        <h2 class="title">{{ detail.title }}</h2>
-        <div class="submeta">
-          <span v-for="(m, i) in metaItems" :key="i">{{ i > 0 ? "· " : "" }}{{ m }}</span>
-        </div>
-
-        <div class="owner-row">
-          <span class="avatar">
-            <img
-              v-if="detail.owner.face"
-              :src="detail.owner.face"
-              alt=""
-              referrerpolicy="no-referrer"
-            />
-            <span v-else class="material-symbols-outlined">person</span>
-          </span>
-          <span class="owner-name" :title="detail.owner.name">{{
-            detail.owner.name || t("bili.unknownUp")
-          }}</span>
-        </div>
-
-        <div v-if="qualities.length" class="block">
-          <div class="block-label">{{ t("bili.quality") }}</div>
-          <div class="chips">
-            <m3e-filter-chip
-              v-for="q in qualities"
-              :key="q"
-              class="chip"
-              :selected="q === bili.activeQn"
-              @click="bili.selectQuality(q)"
-            >
-              {{ biliFormatLabel(play!, q) }}
-            </m3e-filter-chip>
+    <!-- 左栏（播放器 / 信息 / 评论） + 右栏（相关推荐）；窗口放不下时自动折成一栏 -->
+    <div class="content">
+      <div class="main">
+        <!-- 播放器 -->
+        <div class="player-area">
+          <div ref="container" class="art-container" />
+          <div v-if="bili.playStatus === 'loading'" class="player-overlay">
+            <m3e-loading-indicator class="lm-loading" />
+            <span>{{ t("bili.resolving") }}</span>
+          </div>
+          <div v-else-if="bili.playStatus === 'error' && !videoUrl" class="player-overlay error">
+            <span class="material-symbols-outlined">error</span>
+            <span class="err-text">{{ bili.playError || t("bili.resolveFailed") }}</span>
+            <m3e-button variant="filled" size="small" @click="bili.selectQuality(bili.activeQn)">
+              <span slot="icon" class="material-symbols-outlined">refresh</span>
+              {{ t("bili.retry") }}
+            </m3e-button>
+          </div>
+          <div v-else-if="playerError" class="player-overlay error">
+            <span class="material-symbols-outlined">error</span>
+            <span class="err-text">{{ playerError }}</span>
+            <span class="err-hint">{{ t("bili.playbackHint") }}</span>
+            <m3e-button variant="filled" size="small" @click="retryPlayback">
+              <span slot="icon" class="material-symbols-outlined">refresh</span>
+              {{ t("bili.retry") }}
+            </m3e-button>
           </div>
         </div>
 
-        <div v-if="showParts" class="block">
-          <div class="block-label">{{ t("bili.parts") }}（{{ parts.length }}）</div>
-          <div class="parts-grid">
-            <button
-              v-for="(p, i) in parts"
-              :key="p.cid"
-              class="part"
-              :class="{ active: p.cid === bili.activeCid }"
-              :title="partLabel(i, p.part)"
-              @click="bili.selectPart(p.cid)"
-            >
-              <span class="part-name">{{ partLabel(i, p.part) }}</span>
-              <span class="part-time tabular-nums">{{ biliDuration(p.duration) }}</span>
-            </button>
+        <!-- 信息区 -->
+        <div class="detail-body">
+          <div v-if="bili.detailStatus === 'loading' && !detail" class="detail-loading">
+            <m3e-loading-indicator class="lm-loading" />
+            {{ t("bili.loadingDetail") }}
+          </div>
+
+          <template v-else-if="detail">
+            <h2 class="title">{{ detail.title }}</h2>
+            <div class="submeta">
+              <span v-for="(m, i) in metaItems" :key="i">{{ i > 0 ? "· " : "" }}{{ m }}</span>
+            </div>
+
+            <div class="owner-row">
+              <span class="avatar">
+                <img
+                  v-if="detail.owner.face"
+                  :src="detail.owner.face"
+                  alt=""
+                  referrerpolicy="no-referrer"
+                />
+                <span v-else class="material-symbols-outlined">person</span>
+              </span>
+              <span class="owner-name" :title="detail.owner.name">{{
+                detail.owner.name || t("bili.unknownUp")
+              }}</span>
+            </div>
+
+            <div v-if="qualities.length" class="block">
+              <div class="block-label">{{ t("bili.quality") }}</div>
+              <div class="chips">
+                <m3e-filter-chip
+                  v-for="q in qualities"
+                  :key="q"
+                  class="chip"
+                  :selected="q === bili.activeQn"
+                  @click="bili.selectQuality(q)"
+                >
+                  {{ biliFormatLabel(play!, q) }}
+                </m3e-filter-chip>
+              </div>
+            </div>
+
+            <div v-if="showParts" class="block">
+              <div class="block-label">{{ t("bili.parts") }}（{{ parts.length }}）</div>
+              <div class="parts-grid">
+                <button
+                  v-for="(p, i) in parts"
+                  :key="p.cid"
+                  class="part"
+                  :class="{ active: p.cid === bili.activeCid }"
+                  :title="partLabel(i, p.part)"
+                  @click="bili.selectPart(p.cid)"
+                >
+                  <span class="part-name">{{ partLabel(i, p.part) }}</span>
+                  <span class="part-time tabular-nums">{{ biliDuration(p.duration) }}</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="block">
+              <div class="block-label">{{ t("bili.desc") }}</div>
+              <p class="desc" :class="{ expanded: descExpanded }">
+                {{ detail.desc || t("bili.noDesc") }}
+              </p>
+              <m3e-button
+                v-if="(detail.desc || '').length > 120"
+                variant="text"
+                size="small"
+                @click="descExpanded = !descExpanded"
+              >
+                {{ descExpanded ? t("bili.collapse") : t("bili.expand") }}
+              </m3e-button>
+            </div>
+
+            <div class="stat-row tabular-nums">
+              <span v-for="s in statItems" :key="s.icon" class="stat">
+                <span class="material-symbols-outlined">{{ s.icon }}</span
+                >{{ biliCount(s.value) }}
+              </span>
+            </div>
+          </template>
+
+          <div v-else-if="bili.playError" class="detail-error">
+            <span class="material-symbols-outlined">error</span>
+            <span>{{ bili.playError }}</span>
           </div>
         </div>
-
-        <div class="block">
-          <div class="block-label">{{ t("bili.desc") }}</div>
-          <p class="desc" :class="{ expanded: descExpanded }">
-            {{ detail.desc || t("bili.noDesc") }}
-          </p>
-          <m3e-button
-            v-if="(detail.desc || '').length > 120"
-            variant="text"
-            size="small"
-            @click="descExpanded = !descExpanded"
-          >
-            {{ descExpanded ? t("bili.collapse") : t("bili.expand") }}
-          </m3e-button>
-        </div>
-
-        <div class="stat-row tabular-nums">
-          <span v-for="s in statItems" :key="s.icon" class="stat">
-            <span class="material-symbols-outlined">{{ s.icon }}</span
-            >{{ biliCount(s.value) }}
-          </span>
-        </div>
-      </template>
-
-      <div v-else-if="bili.playError" class="detail-error">
-        <span class="material-symbols-outlined">error</span>
-        <span>{{ bili.playError }}</span>
+        <BilibiliComments />
       </div>
+
+      <!-- 右栏：相关推荐（sticky，长评论区滚动时始终可见） -->
+      <aside class="side">
+        <BilibiliRelatedList
+          :videos="bili.related"
+          :status="bili.relatedStatus"
+          @open="bili.openVideo"
+        />
+      </aside>
     </div>
   </div>
 </template>
@@ -379,23 +396,7 @@ const metaItems = computed(() => {
   display: flex;
   flex-direction: column;
   background: var(--md-sys-color-surface);
-  /* 浮层内部不参与窗口拖拽。根因见 .below-titlebar：标题栏是系统拖拽区，
-     盖在它上面的元素收不到点击；这里再声明一次，防以后又改回整窗铺满。 */
-  -webkit-app-region: no-drag;
   animation: bili-fade-in 200ms var(--md-sys-motion-spring-effects-fast);
-}
-
-/**
- * 桌面端必须从标题栏**下面**开始。
- *
- * 标题栏 `.tb-drag` 是 `-webkit-app-region: drag`（系统原生拖拽区），它按
- * 布局树生效，**不会**因为浮层 z-index 更高就被让开：浮层顶栏的返回 / 弹幕 /
- * 站内打开三个按钮正好落在这一条里，按下去只会被当成拖窗口 —— 表现就是
- * 「点了没反应」。让开这一条后按钮落在零拖拽区里，100% 可点，同时窗口
- * 控制按钮（最小化/关闭）也不会被浮层遮住。
- */
-.bili-view.below-titlebar {
-  top: var(--lm-titlebar-height);
 }
 @keyframes bili-fade-in {
   from {
@@ -413,6 +414,9 @@ const metaItems = computed(() => {
   gap: 10px;
   padding: 8px 14px;
   border-bottom: 1px solid var(--lm-hairline);
+  /* 与 WindowTitleBar 同一套做法：留白处即窗口拖拽区（浮层盖在标题栏上，
+     顶层那条 drag 区域仍在生效），可点元素必须显式 no-drag —— 见下 */
+  -webkit-app-region: drag;
 }
 .head-title {
   min-width: 0;
@@ -437,6 +441,9 @@ const metaItems = computed(() => {
   background: transparent;
   color: var(--md-sys-color-on-surface-variant);
   cursor: pointer;
+  /* 关键：不排除拖拽的话，按钮落在标题栏那条 drag 区域里，点击会被当成拖窗口
+     （表现就是「点了没反应」）。WindowTitleBar 的 .tb-actions 同理。 */
+  -webkit-app-region: no-drag;
   transition: background 160ms var(--md-sys-motion-spring-effects-fast);
 }
 .head-btn:hover {
@@ -453,12 +460,42 @@ const metaItems = computed(() => {
   opacity: 0.45;
 }
 
+/* 左栏（播放器 / 信息 / 评论） + 右栏（相关推荐）：一栏放不下就折成上下 */
+.content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 22px;
+  padding: 18px 22px 40px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.main {
+  flex: 1 1 560px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.side {
+  flex: 0 1 336px;
+  min-width: 264px;
+  /* 评论区很长，右栏跟着滚就没法边看边选了 */
+  position: sticky;
+  top: 0;
+  padding: 10px;
+  border-radius: var(--lm-shape-card);
+  background: var(--md-sys-color-surface-container-low);
+  box-shadow: inset 0 0 0 1px var(--lm-hairline);
+}
+
 .player-area {
   position: relative;
-  flex: none;
   width: 100%;
-  /* 保持 16:9 的同时不挤掉信息区 */
-  height: min(58vh, 56.25vw);
+  /* 宽度由左栏决定，高度按 16:9 跟随；窗口很矮时限制一下不撑破视口 */
+  aspect-ratio: 16 / 9;
+  max-height: 62vh;
   background: #000;
 }
 .art-container {
@@ -496,12 +533,9 @@ const metaItems = computed(() => {
   color: rgba(255, 255, 255, 0.75);
 }
 
+/* 滚动交给 .content（整页一起滚），这里只负责信息区的排版 */
 .detail-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 18px 22px 40px;
-  scrollbar-gutter: stable;
+  padding: 16px 0 0;
 }
 .detail-loading {
   display: flex;
