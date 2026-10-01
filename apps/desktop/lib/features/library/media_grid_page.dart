@@ -400,7 +400,9 @@ class _ThumbTile extends StatelessWidget {
           color: scheme.surfaceContainerHigh,
           child: path == null
               ? Center(
-                  child: Icon(_placeholderIcon, size: 28, color: scheme.outline),
+                  // _ThumbTile 是独立 widget，拿不到 State 上的类型化 getter，
+                  // 缩略图缺失时统一用通用占位图标（空态图标才按媒体类型区分）。
+                  child: Icon(Icons.image_outlined, size: 28, color: scheme.outline),
                 )
               : Image.file(
                   File(path),

@@ -549,7 +549,7 @@ class _SeedField extends StatefulWidget {
 class _SeedFieldState extends State<_SeedField> {
   late final TextEditingController _hex =
       TextEditingController(text: widget.controller.stringOf(widget.field));
-  static const RegExp _hexPattern = RegExp(r'^#[0-9a-fA-F]{6}$');
+  static final RegExp _hexPattern = RegExp(r'^#[0-9a-fA-F]{6}$');
 
   @override
   void dispose() {

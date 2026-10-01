@@ -92,12 +92,11 @@ class _ExtensionsPageState extends State<ExtensionsPage> {
     if (client == null || _busy.contains(info.id)) return;
     _setBusy(info.id, true);
     try {
-      await client
-          .invoke(
-            'ext_set_enabled',
-            <String, Object?>{'id': info.id, 'enabled': enabled},
-          )
-          .unwrap();
+      final BackendReply reply = await client.invoke(
+        'ext_set_enabled',
+        <String, Object?>{'id': info.id, 'enabled': enabled},
+      );
+      reply.unwrap();
       if (mounted) await _load();
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
@@ -131,7 +130,11 @@ class _ExtensionsPageState extends State<ExtensionsPage> {
     if (confirmed != true || !mounted) return;
     _setBusy(info.id, true);
     try {
-      await client.invoke('ext_uninstall', <String, Object?>{'id': info.id}).unwrap();
+      final BackendReply reply = await client.invoke(
+        'ext_uninstall',
+        <String, Object?>{'id': info.id},
+      );
+      reply.unwrap();
       if (mounted) await _load();
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
