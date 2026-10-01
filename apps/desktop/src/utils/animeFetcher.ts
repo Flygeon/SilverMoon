@@ -12,6 +12,7 @@
 import type { AnimeFetchResult, AnimeFetchSpec } from "@shared/types";
 import { capabilities } from "@/capabilities";
 import { animeLog } from "./animeLog";
+import { TtlCache } from "./ttlCache";
 
 export class AnimeFetchError extends Error {
   constructor(
@@ -30,13 +31,11 @@ const CACHE_MAX_ENTRIES = 96;
 /** 同时在途抓取上限（Rust 侧已真并发，这里只做节流） */
 const MAX_CONCURRENT = 8;
 
-interface CacheEntry {
-  at: number;
-  value: AnimeFetchResult;
-}
-
-const cache = new Map<string, CacheEntry>();
-const inFlight = new Map<string, Promise<AnimeFetchResult>>();
+/** TTL + 容量上限 + 在途去重，复用统一实现（原为手写 Map） */
+const cache = new TtlCache<AnimeFetchResult>("anime-fetch", {
+  ttlMs: CACHE_TTL_MS,
+  maxEntries: CACHE_MAX_ENTRIES,
+});
 
 // ---- 并发闸门 ----
 let active = 0;
@@ -67,15 +66,6 @@ function specKey(ruleName: string, spec: AnimeFetchSpec): string {
   );
 }
 
-function putCache(key: string, value: AnimeFetchResult): void {
-  // Map 迭代序即插入序：超限时删最老的一条
-  if (cache.size >= CACHE_MAX_ENTRIES) {
-    const oldest = cache.keys().next();
-    if (!oldest.done) cache.delete(oldest.value);
-  }
-  cache.set(key, { at: Date.now(), value });
-}
-
 export interface FetchAnimeHtmlOptions {
   /** 覆盖本次请求超时（毫秒） */
   timeoutMs?: number;
@@ -91,21 +81,13 @@ export async function fetchAnimeHtml(
   const key = specKey(ruleName, spec);
   if (!opts.skipCache) {
     const hit = cache.get(key);
-    if (hit && Date.now() - hit.at < CACHE_TTL_MS) {
-      void animeLog(`缓存命中 ${ruleName} ${spec.url}（age=${Date.now() - hit.at}ms）`);
-      return hit.value;
+    if (hit) {
+      void animeLog(`缓存命中 ${ruleName} ${spec.url}`);
+      return hit;
     }
   }
-  const pending = inFlight.get(key);
-  if (pending) return pending;
-  const promise = doFetch(ruleName, spec, opts)
-    .then((res) => {
-      putCache(key, res);
-      return res;
-    })
-    .finally(() => inFlight.delete(key));
-  inFlight.set(key, promise);
-  return promise;
+  // skipCache 必须继续透传给 wrap：它会再读一次缓存，不透传就等于没跳过
+  return cache.wrap(key, () => doFetch(ruleName, spec, opts), { skipCache: opts.skipCache });
 }
 
 async function doFetch(

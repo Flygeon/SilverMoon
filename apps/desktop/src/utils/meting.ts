@@ -12,8 +12,32 @@
  * 注意：不同实例字段名有出入（name/artist 或 title/author），这里统一归一化。
  */
 import type { MusicServer, OnlineSong } from "@shared/types";
+import { TtlCache } from "./ttlCache";
 
 const API_BASE = "https://meting.mikus.ink/api";
+
+/**
+ * 歌单 / 搜索结果缓存。
+ *
+ * 此前 `request()` 是纯 fetch——每次进歌单、切 tab、重开都重新打网络。
+ * 榜单/歌单内容本身变化不频繁，加一层 TTL 即可显著减少往返（M8）。
+ *
+ * TTL 取 15 分钟：歌单会变（日更榜单），但不至于分钟级变化；
+ * 手动刷新可用 `metingClearCache()` 或 `request(..., { skipCache: true })` 绕过。
+ */
+const LIST_TTL_MS = 15 * 60 * 1000;
+/** 条目上限：歌单单条可能几百首，不能无限堆 */
+const LIST_MAX_ENTRIES = 64;
+
+const listCache = new TtlCache<OnlineSong[]>("meting-list", {
+  ttlMs: LIST_TTL_MS,
+  maxEntries: LIST_MAX_ENTRIES,
+});
+
+/** 清空歌单/搜索缓存（强制刷新用）。 */
+export function metingClearCache(): void {
+  listCache.clear();
+}
 
 /** 预设歌单（平台歌单 ID，可能随时间失效，作为默认展示项） */
 export interface CuratedPlaylist {
@@ -60,7 +84,21 @@ function normalizeSong(raw: RawSong): OnlineSong {
   };
 }
 
-async function request(server: MusicServer, type: string, id: string): Promise<OnlineSong[]> {
+async function request(
+  server: MusicServer,
+  type: string,
+  id: string,
+  opts?: { skipCache?: boolean },
+): Promise<OnlineSong[]> {
+  const cacheKey = `${server}:${type}:${id}`;
+  return listCache.wrap(
+    cacheKey,
+    () => fetchList(server, type, id),
+    opts?.skipCache ? { skipCache: true } : undefined,
+  );
+}
+
+async function fetchList(server: MusicServer, type: string, id: string): Promise<OnlineSong[]> {
   const url = `${API_BASE}?server=${server}&type=${type}&id=${encodeURIComponent(id)}`;
   const res = await fetch(url);
   if (!res.ok) {

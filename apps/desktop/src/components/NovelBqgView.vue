@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { capabilities } from "@/capabilities";
+import { bqgCatalogueCached } from "@/utils/novelCache";
 import NovelCard from "@/components/NovelCard.vue";
 import BookReader from "@/components/BookReader.vue";
 import type { NovelCover, NovelDetail, NovelVolume } from "@shared/types";
@@ -86,7 +87,7 @@ async function openDetail() {
   try {
     const [d, vols] = await Promise.all([
       capabilities.bqgDetail(selected.value.aid),
-      capabilities.bqgCatalogue(selected.value.aid),
+      bqgCatalogueCached(selected.value.aid),
     ]);
     detail.value = d;
     volumes.value = vols;

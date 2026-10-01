@@ -8,6 +8,7 @@ import QRCode from "qrcode";
 import { capabilities } from "@/capabilities";
 import { useSettingsStore } from "@/stores/settings";
 import { clearSongUrlCache } from "@/utils/netease";
+import { TtlCache } from "@/utils/ttlCache";
 import type { NeteasePlaylist, NeteaseProfile, NeteaseSong } from "@shared/types";
 
 /** 扫码轮询间隔：等待/已扫码 2s，确认中 1s */
@@ -15,6 +16,18 @@ const POLL_INTERVAL = 2000;
 const POLL_CONFIRMED_INTERVAL = 1000;
 
 export type QrState = "wait" | "scanned" | "confirmed" | "success" | "timeout" | "error";
+
+/**
+ * 我的歌单缓存（M8）。
+ *
+ * 此前每次进页面/校验登录都重拉一次 `neteaseUserPlaylists`。歌单元数据变化不频繁，
+ * 加 TTL 后重复进入直接命中。登出时随其它状态一起清（见 `logout`）。
+ */
+const PLAYLIST_TTL_MS = 10 * 60 * 1000;
+const playlistCache = new TtlCache<NeteasePlaylist[]>("netease-playlists", {
+  ttlMs: PLAYLIST_TTL_MS,
+  maxEntries: 8,
+});
 
 export const useNeteaseStore = defineStore("netease", () => {
   const loggedIn = ref(false);
@@ -112,7 +125,8 @@ export const useNeteaseStore = defineStore("netease", () => {
               /* 保留扫码返回的昵称 */
             }
             closeQr();
-            void refreshPlaylists();
+            // 刚登录成功，歌单必须取最新——绕过缓存
+            void refreshPlaylists(true);
             void refreshCloudCount();
             void refreshLikedSongs();
             return;
@@ -200,7 +214,8 @@ export const useNeteaseStore = defineStore("netease", () => {
       loggedIn.value = true;
       profile.value = account;
       closeQr();
-      void refreshPlaylists();
+      // 刚登录成功，歌单必须取最新——绕过缓存
+      void refreshPlaylists(true);
       void refreshCloudCount();
       void refreshLikedSongs();
     } catch (e) {
@@ -224,11 +239,23 @@ export const useNeteaseStore = defineStore("netease", () => {
     cloudHasMore.value = false;
     likedSongIds.value = new Set();
     clearSongUrlCache();
+    playlistCache.clear();
   }
 
-  async function refreshPlaylists() {
+  /** 拉取我的歌单；`force` 为 true 时绕过缓存（手动刷新用） */
+  async function refreshPlaylists(force = false) {
+    // 先命中缓存直接返回，避免重复往返
+    if (!force) {
+      const cached = playlistCache.get("mine");
+      if (cached) {
+        playlists.value = cached;
+        return;
+      }
+    }
     try {
-      playlists.value = await capabilities.neteaseUserPlaylists(0, 100);
+      const list = await capabilities.neteaseUserPlaylists(0, 100);
+      playlistCache.set("mine", list);
+      playlists.value = list;
     } catch (e) {
       console.warn("[网易云] 歌单拉取失败:", e);
     }

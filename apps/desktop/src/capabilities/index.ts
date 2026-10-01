@@ -8,6 +8,7 @@ import { listen, type UnlistenFn } from "@/ipc/events";
 import { openPath, openUrl, revealItemInDir } from "@/ipc/opener";
 import { open as dialogOpen, save as dialogSave } from "@/ipc/dialog";
 import { writeFile } from "@/ipc/fs";
+import { clearCoverCache as clearCoverCacheIpc } from "@/ipc/app";
 import type {
   BookProgress,
   FfmpegStatus,
@@ -227,6 +228,10 @@ export const capabilities = {
   },
   clearThumbnailCache(): Promise<number> {
     return safeInvoke("clear_thumbnail_cache");
+  },
+  /** M6：清空在线封面磁盘缓存（主进程 covers/），返回释放字节数 */
+  clearCoverCache(): Promise<number> {
+    return isDesktop ? clearCoverCacheIpc() : Promise.resolve(0);
   },
   /** 查询缓存中是否已有缩略图（PDF 封面按需生成前先探测） */
   async thumbnailCachePath(fileId: string, size = 320): Promise<string | null> {

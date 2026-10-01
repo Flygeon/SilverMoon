@@ -25,3 +25,12 @@ export async function getHostVersion(): Promise<string> {
 export async function exit(code = 0): Promise<void> {
   await callBridge("app", { op: "exit", code });
 }
+
+/**
+ * 清空在线封面磁盘缓存（主进程 `<cache>/covers`），返回释放的字节数。
+ * 非桌面环境（浏览器预览）下返回 0。
+ */
+export async function clearCoverCache(): Promise<number> {
+  const freed = await callBridge<number | null>("app", { op: "clearCoverCache" });
+  return freed ?? 0;
+}

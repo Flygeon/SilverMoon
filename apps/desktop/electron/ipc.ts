@@ -22,6 +22,7 @@ import {
   watchClose,
 } from "./windows";
 import { handleStore } from "./store";
+import { clearCoverCache } from "./protocols";
 import { log } from "./log";
 import { callSidecar, callSidecarBatch } from "./main-bridge";
 
@@ -370,6 +371,9 @@ const handlers: Record<string, Handler> = {
         return config.productName;
       case "iconPath":
         return iconPath() ?? null;
+      /** M6：清空在线封面磁盘缓存（<cache>/covers），返回释放字节数 */
+      case "clearCoverCache":
+        return clearCoverCache();
       case "exit":
         quitApp();
         return null;

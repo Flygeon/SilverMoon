@@ -12,6 +12,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { readFile } from "@/ipc/fs";
 import { capabilities, isDesktop } from "@/capabilities";
+import { bqgCatalogueCached, novelCatalogueCached } from "@/utils/novelCache";
 import { useSettingsStore, type ReaderFontKey, type ReaderThemeKey } from "@/stores/settings";
 import { loadPdfjs, toArrayBuffer } from "@/utils/pdf";
 import { isLoginRequiredError } from "@/novel/wenku8Login";
@@ -599,9 +600,9 @@ async function initText() {
   error.value = "";
   try {
     if (isBqgSource.value) {
-      textVolumes.value = await capabilities.bqgCatalogue(props.novelSource!.aid);
+      textVolumes.value = await bqgCatalogueCached(props.novelSource!.aid);
     } else {
-      textVolumes.value = await capabilities.novelCatalogue(
+      textVolumes.value = await novelCatalogueCached(
         settings.wenku8Node,
         settings.novelCharset,
         props.novelSource!.aid,

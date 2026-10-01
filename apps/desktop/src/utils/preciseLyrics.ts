@@ -15,6 +15,7 @@ import { metingSearch } from "./meting";
 import { lrcGet, lrcSet } from "./onlineCache";
 import { parseLrc, filterInstrumentalPlaceholder } from "./lyricTimeline";
 import { hasWordLevel } from "./qrc";
+import { TtlCache } from "./ttlCache";
 import type { LyricLine, OnlineSong } from "@shared/types";
 
 /** 云端歌词来源 */
@@ -29,7 +30,19 @@ const MAX_CANDIDATES = 5;
 
 const OK_TTL = 60 * 60 * 1000;
 const FAIL_TTL = 10 * 60 * 1000;
-const resultCache = new Map<string, { t: number; result: PreciseLyricsResult }>();
+/** 条目上限（此前无上限，长听会一直堆） */
+const RESULT_CACHE_MAX = 512;
+
+/**
+ * 结果缓存：成功 1h / 失败 10min（键含来源顺序，手动切换后自动失效）。
+ * 复用统一实现：失败条目用 `ttlMs`，成功条目用 `okTtlMs`。
+ */
+const resultCache = new TtlCache<PreciseLyricsResult>("precise-lyrics", {
+  ttlMs: FAIL_TTL,
+  okTtlMs: OK_TTL,
+  isOk: (r) => r.ok,
+  maxEntries: RESULT_CACHE_MAX,
+});
 
 /** 回退原因（用于日志与界面提示） */
 export type QqFallbackReason = "missing-info" | "search-failed" | "no-match" | "no-lyrics";
@@ -293,14 +306,10 @@ export async function fetchCloudLyrics(opts: PreciseLyricsOptions): Promise<Prec
   const key = `${normalizeTitle(title)}|${Math.round(opts.durationMs)}|${opts.preferredSource ?? "auto"}|${opts.fallbackToMeting ? "meting" : "no-meting"}`;
   const cached = resultCache.get(key);
   if (cached && !opts.force) {
-    const ttl = cached.result.ok ? OK_TTL : FAIL_TTL;
-    if (Date.now() - cached.t < ttl) {
-      if (!cached.result.ok) {
-        console.info("[逐字歌词] 命中失败缓存（10 分钟内），跳过重试:", title);
-      }
-      return cached.result.ok ? { ...cached.result, fromCache: true } : cached.result;
+    if (!cached.ok) {
+      console.info("[逐字歌词] 命中失败缓存（10 分钟内），跳过重试:", title);
     }
-    resultCache.delete(key);
+    return cached.ok ? { ...cached, fromCache: true } : cached;
   }
 
   const base: LyricSource[] = [];
@@ -319,7 +328,7 @@ export async function fetchCloudLyrics(opts: PreciseLyricsOptions): Promise<Prec
       artist: opts.artist,
     });
     if (r.ok) {
-      resultCache.set(key, { t: Date.now(), result: r });
+      resultCache.set(key, r);
       return r;
     }
     lastFailure = r;
@@ -330,6 +339,6 @@ export async function fetchCloudLyrics(opts: PreciseLyricsOptions): Promise<Prec
     reason: lastFailure?.reason ?? "no-lyrics",
     detail: lastFailure?.detail,
   };
-  resultCache.set(key, { t: Date.now(), result });
+  resultCache.set(key, result);
   return result;
 }

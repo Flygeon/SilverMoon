@@ -24,6 +24,8 @@ import {
   mkdirSync,
   readFileSync,
   writeFileSync,
+  readdirSync,
+  unlinkSync,
 } from "node:fs";
 import { Readable } from "node:stream";
 import path from "node:path";
@@ -217,11 +219,30 @@ function coverPaths(url: string): { meta: string; blob: string } {
   return { meta: path.join(dir, `${hash}.json`), blob: path.join(dir, `${hash}.img`) };
 }
 
+/** meta 文件结构：命中记 ct/ts，失败记 fail（负缓存，落盘后重启仍生效）。 */
+interface CoverMeta {
+  ct?: string;
+  ts?: number;
+  /** 取图失败的时间戳；处于负缓存窗口内不再打网络 */
+  fail?: number;
+}
+
+function coverMetaRead(url: string): CoverMeta | null {
+  if (!coverCacheDir) return null;
+  try {
+    return JSON.parse(readFileSync(coverPaths(url).meta, "utf8")) as CoverMeta;
+  } catch {
+    return null;
+  }
+}
+
 function coverCacheRead(url: string): CoverCacheHit | null {
   if (!coverCacheDir) return null;
   const { meta, blob } = coverPaths(url);
   try {
-    const info = JSON.parse(readFileSync(meta, "utf8")) as { ct?: string };
+    const info = JSON.parse(readFileSync(meta, "utf8")) as CoverMeta;
+    // 记录过失败且仍在窗口内 → 负缓存命中（M7：落盘，重启后仍生效）
+    if (info.fail && Date.now() - info.fail < COVER_NEGATIVE_TTL) return null;
     if (!existsSync(blob)) return null;
     const buf = readFileSync(blob);
     // Buffer → ArrayBuffer 拷贝，保证 Response 的 BodyInit 类型匹配
@@ -244,12 +265,148 @@ function coverCacheWrite(url: string, ct: string, body: ArrayBuffer): void {
   }
 }
 
+/** 写入负缓存标记（只落 meta，无图体）。 */
+function coverCacheWriteFail(url: string): void {
+  if (!coverCacheDir) return;
+  const { meta } = coverPaths(url);
+  try {
+    mkdirSync(path.dirname(meta), { recursive: true });
+    writeFileSync(meta, JSON.stringify({ fail: Date.now() } satisfies CoverMeta));
+  } catch (error) {
+    log.warn("封面负缓存写入失败：", error);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// M6：封面磁盘缓存的容量上限与清理
+//
+// 此前 covers/ 只写不删，且设置页“清理缓存”只清 thumbs/ 不动这里，长期听歌会静默
+// 堆积。这里给上限 + 惰性淘汰（按 meta 里的 ts/fail 升序，最久未用的先删），
+// 并暴露 clearCoverCache() 供设置页“清理缓存”复用。
+// ---------------------------------------------------------------------------
+
+/** 封面缓存容量上限。 */
+const COVER_CACHE_MAX_BYTES = 256 * 1024 * 1024;
+/** 淘汰到的水位（滞回，避免频繁触发）。 */
+const COVER_CACHE_TARGET_BYTES = 200 * 1024 * 1024;
+/** 淘汰节流：距上次不足该时长就跳过。 */
+const COVER_CACHE_SWEEP_INTERVAL_MS = 60_000;
+
+let coverLastSweep = 0;
+
+interface CoverCacheItem {
+  meta: string;
+  blob: string;
+  at: number;
+  len: number;
+}
+
+/** 扫描缓存目录：返回 (占用字节, 按时间升序的条目)。 */
+function coverCacheScan(): { total: number; items: CoverCacheItem[] } {
+  const items: CoverCacheItem[] = [];
+  if (!coverCacheDir) return { total: 0, items };
+  let walk: string[];
+  try {
+    walk = readdirSync(coverCacheDir);
+  } catch {
+    return { total: 0, items };
+  }
+  for (const shard of walk) {
+    const dir = path.join(coverCacheDir, shard);
+    let files: string[];
+    try {
+      files = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const f of files) {
+      if (!f.endsWith(".json")) continue;
+      const meta = path.join(dir, f);
+      const blob = path.join(dir, f.replace(/\.json$/, ".img"));
+      let at = 0;
+      try {
+        const info = JSON.parse(readFileSync(meta, "utf8")) as CoverMeta;
+        at = info.ts ?? info.fail ?? 0;
+      } catch {
+        at = 0;
+      }
+      let len = 0;
+      try {
+        len = statSync(meta).size;
+        if (existsSync(blob)) len += statSync(blob).size;
+      } catch {
+        /* 忽略个别坏文件 */
+      }
+      items.push({ meta, blob, at, len });
+    }
+  }
+  items.sort((a, b) => a.at - b.at);
+  return { total: items.reduce((s, i) => s + i.len, 0), items };
+}
+
+/** 超限则按最久未用淘汰到目标水位。带 60s 节流，避免每次取图都扫目录。 */
+function enforceCoverCacheLimit(): void {
+  const now = Date.now();
+  if (coverLastSweep && now - coverLastSweep < COVER_CACHE_SWEEP_INTERVAL_MS) return;
+  coverLastSweep = now;
+
+  const { total, items } = coverCacheScan();
+  if (total <= COVER_CACHE_MAX_BYTES) return;
+  let cur = total;
+  let freed = 0;
+  for (const it of items) {
+    if (cur <= COVER_CACHE_TARGET_BYTES) break;
+    try {
+      if (existsSync(it.blob)) unlinkSync(it.blob);
+      unlinkSync(it.meta);
+      cur -= it.len;
+      freed += it.len;
+    } catch {
+      /* 个别文件删除失败不阻塞 */
+    }
+  }
+  if (freed > 0) {
+    log.info(
+      "封面缓存超限，按 LRU 淘汰 " +
+        (freed / 1024 / 1024).toFixed(1) +
+        "MB（剩约 " +
+        (cur / 1024 / 1024).toFixed(1) +
+        "MB）",
+    );
+  }
+}
+
+/** 清空封面磁盘缓存，返回释放的字节数（供设置页“清理缓存”复用）。 */
+export function clearCoverCache(): number {
+  coverLastSweep = 0;
+  coverFailedAt.clear();
+  const { total, items } = coverCacheScan();
+  let freed = 0;
+  for (const it of items) {
+    try {
+      if (existsSync(it.blob)) {
+        freed += statSync(it.blob).size;
+        unlinkSync(it.blob);
+      }
+      freed += statSync(it.meta).size;
+      unlinkSync(it.meta);
+    } catch {
+      /* 忽略个别文件 */
+    }
+  }
+  if (freed > 0) {
+    log.info("封面缓存已清空，释放 " + (freed / 1024 / 1024).toFixed(1) + "MB");
+  }
+  return freed || total;
+}
+
 /** 真正的取图（网络 + 缓存），供并发去重包装。 */
 async function fetchCover(target: string): Promise<CoverCacheHit | null> {
   const cached = coverCacheRead(target);
   if (cached) return cached;
 
-  const failedAt = coverFailedAt.get(target);
+  // 负缓存：内存优先，其次磁盘（重启后仍生效，见 CoverMeta.fail）
+  const failedAt = coverFailedAt.get(target) ?? coverMetaRead(target)?.fail;
   if (failedAt !== undefined && Date.now() - failedAt < COVER_NEGATIVE_TTL) {
     return null;
   }
@@ -270,10 +427,15 @@ async function fetchCover(target: string): Promise<CoverCacheHit | null> {
 
     coverCacheWrite(target, ct, buf);
     coverFailedAt.delete(target);
+    enforceCoverCacheLimit();
     return { ct, body: buf };
   } catch (error) {
     coverFailedAt.set(target, Date.now());
-    log.warn(`封面取图失败 ${parsed.hostname}: ${error instanceof Error ? error.message : error}`);
+    // 顺手写一份 meta，让负缓存跨重启生效
+    coverCacheWriteFail(target);
+    log.warn(
+      "封面取图失败 " + parsed.hostname + ": " + (error instanceof Error ? error.message : error),
+    );
     return null;
   }
 }
@@ -282,6 +444,8 @@ async function fetchCover(target: string): Promise<CoverCacheHit | null> {
 export function handleCoverProtocol(cacheDir: string): void {
   coverCacheDir = cacheDir;
   mkdirSync(cacheDir, { recursive: true });
+  // 启动时扫一次，把上次运行留下的超额部分淘汰掉
+  enforceCoverCacheLimit();
 
   protocol.handle(COVER_SCHEME, async (request) => {
     try {

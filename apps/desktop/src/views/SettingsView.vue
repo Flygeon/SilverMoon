@@ -362,7 +362,12 @@ function clearScanDirs() {
 }
 
 async function clearCache() {
-  const freed = await capabilities.clearThumbnailCache();
+  // M6：连在线封面缓存一起清（此前只清缩略图，covers/ 会静默堆积）
+  const [thumbs, covers] = await Promise.all([
+    capabilities.clearThumbnailCache(),
+    capabilities.clearCoverCache(),
+  ]);
+  const freed = thumbs + covers;
   library.invalidate();
   notify(`${t("settings.cacheCleared")}${freed ? ` · ${formatSize(freed)}` : ""}`);
 }

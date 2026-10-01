@@ -6,6 +6,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useSettingsStore } from "@/stores/settings";
 import { capabilities } from "@/capabilities";
+import { novelCatalogueCached } from "@/utils/novelCache";
 import { translate } from "@shared/i18n";
 import { requestRelogin } from "@/novel/wenku8Auth";
 import { isLoginRequiredError } from "@/novel/wenku8Login";
@@ -161,7 +162,7 @@ async function init() {
   error.value = "";
   try {
     void capabilities.appLog(`[reader] init() 开始拉目录 aid=${props.aid}`).catch(() => {});
-    volumes.value = await capabilities.novelCatalogue(
+    volumes.value = await novelCatalogueCached(
       settings.wenku8Node,
       settings.novelCharset,
       props.aid,

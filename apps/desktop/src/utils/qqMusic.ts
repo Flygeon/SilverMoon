@@ -8,6 +8,7 @@
  */
 import { qrcDecrypt, qrcToRawLines, rawLinesToLyricLines, mergeQqLyrics } from "./qrc";
 import { parseLrc, filterInstrumentalPlaceholder } from "./lyricTimeline";
+import { TtlCache } from "./ttlCache";
 import type { LyricLine } from "@shared/types";
 
 const API_URL = "https://u.y.qq.com/cgi-bin/musicu.fcg";
@@ -130,14 +131,18 @@ async function qqRequest(
 // ---- 搜索 ----
 
 const SEARCH_CACHE_TTL = 60 * 60 * 1000;
-const searchCache = new Map<string, { t: number; songs: QqSongInfo[] }>();
+/** 条目上限（此前无上限） */
+const SEARCH_CACHE_MAX = 256;
+/** 复用统一实现：TTL 1h + 容量上限 + 在途去重 */
+const searchCache = new TtlCache<QqSongInfo[]>("qq-search", {
+  ttlMs: SEARCH_CACHE_TTL,
+  maxEntries: SEARCH_CACHE_MAX,
+});
 
 /** 按关键词搜索歌曲（对应 qm.py search / DoSearchForQQMusicLite） */
 export async function qqSearchSongs(keyword: string): Promise<QqSongInfo[]> {
   const cached = searchCache.get(keyword);
-  if (cached && Date.now() - cached.t < SEARCH_CACHE_TTL) {
-    return cached.songs;
-  }
+  if (cached) return cached;
   // search_id：大整数拼接（Python 值超过 2^53，必须用 BigInt）
   const searchId = (
     (BigInt(1 + Math.floor(Math.random() * 20)) << 54n) +
@@ -170,14 +175,23 @@ export async function qqSearchSongs(keyword: string): Promise<QqSongInfo[]> {
     album: info?.album?.name ?? "",
     durationMs: (info?.interval ?? 0) * 1000,
   }));
-  searchCache.set(keyword, { t: Date.now(), songs });
+  searchCache.set(keyword, songs);
   return songs;
 }
 
 // ---- 歌词 ----
 
 const LYRICS_CACHE_TTL = 60 * 60 * 1000;
-const lyricsCache = new Map<string, { t: number; lines: LyricLine[] | null }>();
+/** 条目上限（此前无上限） */
+const LYRICS_CACHE_MAX = 512;
+/**
+ * 复用统一实现。注意：这里是 `LyricLine[] | null`——null 表示"确定无歌词"，
+ * 也是要缓存的结果（避免每次播放都重查一遍），所以显式允许 undefined 之外的 null。
+ */
+const lyricsCache = new TtlCache<LyricLine[] | null>("qq-lyrics", {
+  ttlMs: LYRICS_CACHE_TTL,
+  maxEntries: LYRICS_CACHE_MAX,
+});
 
 /** UTF-8 安全的 base64（对应 Python b64encode(x.encode()).decode()） */
 function utf8Base64(text: string): string {
@@ -222,9 +236,7 @@ async function parseTrack(encrypted: string): Promise<LyricLine[] | null> {
  */
 export async function qqFetchLyrics(song: QqSongInfo): Promise<LyricLine[] | null> {
   const cached = lyricsCache.get(song.id);
-  if (cached && Date.now() - cached.t < LYRICS_CACHE_TTL) {
-    return cached.lines;
-  }
+  if (cached !== undefined) return cached;
 
   const param = {
     albumName: utf8Base64(song.album),
@@ -269,11 +281,11 @@ export async function qqFetchLyrics(song: QqSongInfo): Promise<LyricLine[] | nul
       }
       lines = mergeQqLyrics(lines, trans, romaLines);
     }
-    lyricsCache.set(song.id, { t: Date.now(), lines });
+    lyricsCache.set(song.id, lines);
     return lines;
   } catch (e) {
     console.warn("[QQ歌词] 获取失败:", e instanceof Error ? e.message : e);
-    lyricsCache.set(song.id, { t: Date.now(), lines: null });
+    lyricsCache.set(song.id, null);
     return null;
   }
 }

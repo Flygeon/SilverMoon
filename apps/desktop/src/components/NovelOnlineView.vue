@@ -2,6 +2,7 @@
 import { onMounted, ref } from "vue";
 import { useSettingsStore } from "@/stores/settings";
 import { capabilities } from "@/capabilities";
+import { novelRankCached, novelRecommendCached } from "@/utils/novelCache";
 import { translate } from "@shared/i18n";
 import NovelCard from "@/components/NovelCard.vue";
 import NovelDetailPanel from "@/components/NovelDetailPanel.vue";
@@ -90,7 +91,7 @@ async function loadShelf() {
 async function loadRank() {
   rankLoading.value = true;
   try {
-    rankResults.value = await capabilities.novelRank(
+    rankResults.value = await novelRankCached(
       settings.wenku8Node,
       settings.novelCharset,
       rankSort.value,
@@ -108,7 +109,7 @@ async function loadRank() {
 
 async function loadRecommend() {
   try {
-    recommend.value = await capabilities.novelRecommend(settings.wenku8Node, settings.novelCharset);
+    recommend.value = await novelRecommendCached(settings.wenku8Node, settings.novelCharset);
   } catch (e) {
     console.warn("[Novel] 推荐加载失败:", e);
     recommend.value = [];

@@ -28,6 +28,7 @@ import {
 } from "@/utils/kugou";
 import { translate } from "@shared/i18n";
 import { CURATED_PLAYLISTS, metingPlaylist, metingSearch } from "@/utils/meting";
+import { TtlCache } from "@/utils/ttlCache";
 import type { MediaEntry, MusicServer, OnlinePlaylistEntry, OnlineSong } from "@shared/types";
 
 const library = useLibraryStore();
@@ -317,14 +318,27 @@ async function openCloud() {
   );
 }
 
-/** 酷狗：拉取排行榜卡片（只拉一次，失败可重试） */
+/** 酷狗排行榜卡片缓存（M9）：榜单元数据变化不频繁（日更），TTL 30 分钟 */
+const rankListCache = new TtlCache<KugouRankCard[]>("kugou-rank-list", {
+  ttlMs: 30 * 60 * 1000,
+  maxEntries: 4,
+});
+
+/** 酷狗：拉取排行榜卡片（命中缓存直接用，失败可重试） */
 async function loadKugouRanks() {
   if (kugouRanks.value.length || kugouRanksLoading.value) return;
+  const cached = rankListCache.get("rank-list");
+  if (cached) {
+    kugouRanks.value = cached;
+    return;
+  }
   kugouRanksLoading.value = true;
   kugouRanksError.value = "";
   try {
     const raw = await capabilities.kugouRankList();
-    kugouRanks.value = kugouRankCards(raw);
+    const cards = kugouRankCards(raw);
+    rankListCache.set("rank-list", cards);
+    kugouRanks.value = cards;
   } catch (e) {
     kugouRanksError.value = e instanceof Error ? e.message : String(e);
   } finally {

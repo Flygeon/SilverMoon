@@ -27,6 +27,90 @@ fn cache_key(file_id: &str, mtime: i64, size: i64, target: u32) -> String {
     format!("{:016x}", xxhash_rust::xxh3::xxh3_64(raw.as_bytes()))
 }
 
+/// 缩略图磁盘缓存的容量上限（字节）。超过后按最久未修改淘汰（见 `enforce_cache_limit`）。
+///
+/// 此前缓存**只增不减**：文件改名或内容变化后旧键的文件永久残留，库越大残留越多，
+/// 只有手动"清理缓存"能清。这里给一个上限，并在启动时惰性淘汰。
+const THUMB_CACHE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+
+/// 达到上限时淘汰到这个水位，避免每生成一张就触发一次淘汰（抖动）。
+const THUMB_CACHE_TARGET_BYTES: u64 = 400 * 1024 * 1024;
+
+/// 淘汰节流：距上次淘汰不足这个时长就跳过（生成缩略图在热路径上，不能每次都扫目录）。
+const THUMB_CACHE_SWEEP_INTERVAL_MS: u128 = 60_000;
+
+/// 上次淘汰时间（进程内）。用 `static` 而非持久化——重启后重新扫一次即可。
+static LAST_SWEEP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn now_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+/// 把缓存目录压到 `THUMB_CACHE_TARGET_BYTES` 以下：按 mtime 升序删最久未用的文件。
+///
+/// 只在**写入新缩略图之后**调用，且有 60s 节流：列表/扫描接口每秒可能生成成百上千张，
+/// 每次都做一次 `read_dir` + 排序会明显拖慢，而缓存增长是渐进的，一分钟扫一次足够。
+pub(crate) fn enforce_cache_limit(dir: &std::path::Path) {
+    let now = now_millis();
+    let last = LAST_SWEEP.load(std::sync::atomic::Ordering::Relaxed) as u128;
+    if last != 0 && now.saturating_sub(last) < THUMB_CACHE_SWEEP_INTERVAL_MS {
+        return;
+    }
+    LAST_SWEEP.store(now as u64, std::sync::atomic::Ordering::Relaxed);
+
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    struct Item {
+        path: std::path::PathBuf,
+        len: u64,
+        mtime: std::time::SystemTime,
+    }
+    let mut items: Vec<Item> = entries
+        .flatten()
+        .filter_map(|e| {
+            let md = e.metadata().ok()?;
+            if !md.is_file() {
+                return None;
+            }
+            Some(Item {
+                path: e.path(),
+                len: md.len(),
+                mtime: md.modified().ok()?,
+            })
+        })
+        .collect();
+
+    let total: u64 = items.iter().map(|i| i.len).sum();
+    if total <= THUMB_CACHE_MAX_BYTES {
+        return;
+    }
+
+    // 最久未修改的排前面，优先删
+    items.sort_by_key(|i| i.mtime);
+    let mut cur = total;
+    let mut freed = 0u64;
+    for item in items {
+        if cur <= THUMB_CACHE_TARGET_BYTES {
+            break;
+        }
+        if std::fs::remove_file(&item.path).is_ok() {
+            cur = cur.saturating_sub(item.len);
+            freed += item.len;
+        }
+    }
+    if freed > 0 {
+        log::info!(
+            "缩略图缓存超限，按 LRU 淘汰 {} 字节（剩余约 {} MB）",
+            freed,
+            cur / 1024 / 1024
+        );
+    }
+}
+
 /// 列表接口使用的缩略图尺寸。
 ///
 /// **必须**与前端按需请求的尺寸一致（`capabilities.getThumbnail(id, 320)`），
@@ -289,6 +373,7 @@ fn thumbnail_for(
     let Some(jpeg) = jpeg else { return Ok(None) };
 
     std::fs::write(&cache_file, &jpeg).map_err(|e| e.to_string())?;
+    enforce_cache_limit(&dir);
     Ok(Some(cache_file.to_string_lossy().into_owned()))
 }
 
@@ -345,6 +430,7 @@ pub fn save_thumbnail(
     };
     let path = dir.join(format!("{}.jpg", cache_key(&file_id, mtime, fsize, target)));
     std::fs::write(&path, &jpeg).map_err(|e| e.to_string())?;
+    enforce_cache_limit(&dir);
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 

@@ -164,6 +164,111 @@ const mainWindow = createMainWindow();          // ← 排在 await 之后
 
 ---
 
+## 六、缓存层优化（2026-10 补录）
+
+> 背景：对 Windows 端缓存做了全量盘点——**渲染层**（IndexedDB / 内存 Map）→
+> **Electron 主进程**（`app-cover://` 磁盘缓存）→ **Rust 后端**（`thumbs/` + SQLite）。
+> 本节只列**缺口**；已到位的一并列出（§6.1），避免重复做。
+
+### 6.1 已到位（勿重复做）
+
+| 能力 | 实现 |
+|---|---|
+| 本地媒体缩略图 | 磁盘缓存 `<cache>/thumbs/`，键 `xxh3(file_id:mtime:size:target)`，内容变即失效；列表侧一次 readdir 建索引 `(`commands/thumbnail.rs:19-71`)` |
+| 在线封面 | 主进程 `app-cover://` 磁盘缓存 `<cache>/covers/`（sha256 分片）+ 按域伪装 Referer/UA + 并发去重 `(`electron/protocols.ts:200-318`)` |
+| 封面离线 / 取主色 | IndexedDB `lumiluna-online` 的 `cover:` dataURL `(`src/utils/onlineCache.ts:57-73`)` |
+| 逐字歌词精排 | IndexedDB `lumiluna` / `wordTimes`，`v:1` 版本校验 `(`src/utils/wordCache.ts`)` |
+| WebDAV 目录 / 凭据 | IndexedDB `lumiluna-webdav` `(`src/utils/webdav.ts:20-36`)` |
+| Bangumi 收藏 | 磁盘 `bangumi.json` `(`src/stores/bangumiCollect.ts:74-92`)` |
+| 小说书架 + 章节正文 | SQLite `novel_shelf` / `novel_chapter_cache` `(`backend/src/commands/novel.rs:657,782`)` |
+| 番剧历史 / 追番 | SQLite `anime_history` / `anime_favorites` `(`backend/src/anime.rs:661-742`)` |
+| 媒体库列表 | stale-while-revalidate `(`src/stores/library.ts:95-137`)` + 缩略图内存 LRU 1200 `(`:58-71`)` |
+
+规律：**用户"拥有"的列表（收藏 / 书架 / 历史 / 追番）基本都落盘了；平台"供给"的浏览型列表大多没缓存**——这是 M8/M9 的由来。
+
+### 6.2 缺口（按性价比）
+
+### M5 ⭐ 缩略图磁盘缓存无容量上限 / 无 LRU
+
+**证据** `backend/src/commands/thumbnail.rs:353-367`：只有 `clear_thumbnail_cache` 手动全清；
+文件改名或内容变化后旧键文件**永久残留**，库越大残留越多。
+
+**改法**：加容量上限（如 2GB）+ 启动惰性 LRU 清理（按 `mtime` 淘汰最旧，复用列表侧那次 readdir 顺带统计）；
+保留手动"清理缓存"入口。
+
+> 注：`REWRITE_PROMPT_TAURI2.md:131` 早就规划了"带上限与 LRU 清理"，一直没落地。
+
+### M6 ⭐ 在线封面磁盘缓存无淘汰、无清理入口
+
+**证据** `electron/protocols.ts:235-246`（只写不删）、`src/views/SettingsView.vue:364`
+（"清理缓存"**只清 `thumbs/`**，不动 `covers/`）。
+
+**改法**：给 `covers/` 加 TTL（如 30 天）或容量上限 + 启动惰性清理；
+并把 `covers/` 纳入设置页"清理缓存"（复用 `freed` 字节回显）。
+
+### M7 负缓存只在内存
+
+**证据** `electron/protocols.ts:207`（`coverFailedAt` Map，TTL 1h）——重启即失效，死链会再打一次网络。
+
+**改法**：把失败时间戳写进 `covers/<hash>.json` 的 meta，读缓存时若处于负缓存窗口直接跳过；重启后仍生效。
+
+### M8 ⭐ 在线歌单 / 歌曲列表基本不缓存
+
+**证据**：
+
+- `src/utils/meting.ts:78-86`：`metingPlaylist` / `metingSearch` **纯 fetch，零缓存**；
+- `src/views/MusicView.vue:150-185`：仅 3 个预设榜单有内存 `playlistCache`（重启即丢、不覆盖用户歌单）；
+- `src/stores/netease.ts:229-233`：我的歌单 / 云盘每次进入重拉；
+- `src/utils/netease.ts:9-48`、`src/utils/kugou.ts:282-314`：只缓存**播放地址**（无 TTL、登出清空），不缓存歌曲列表。
+
+**改法**：在 `metingPlaylist` / 网易云 / 酷狗 列表拉取处加一层 `key = server:id` 的 TTL 缓存
+（建议 **10–30min**，歌单会变），落 IndexedDB 或内存 Map 均可。
+搜索词缓存已有（QQ/kg 1h：`src/utils/qqMusic.ts:132`、`src/utils/kgMusic.ts:122`），可直接复用同一抽象。
+
+### M9 笔趣阁 / 番剧浏览型列表未缓存
+
+**证据**：
+
+- `backend/src/novel_bqg.rs:117-129`：`get_api_json` 每次直连（带 fallback 域名），无 TTL、无落盘；
+  前端 `src/components/NovelOnlineView.vue:120` 进页面重拉 rank/recommend，
+  `src/components/NovelDetailPanel.vue:30` 打开详情重拉目录；
+- `src/stores/anime.ts:192-211` 热播榜、`:141` 规则库、Bangumi 搜索：**无前端缓存**，每次重拉；
+- 仅"搜索 / 换源抓取 HTML"有内存 TTL（`src/utils/animeFetcher.ts:27-103`，5min / 96 条 / 在途去重）。
+
+**改法**：目录与榜单加 TTL 缓存（10–60min，后端侧可落 SQLite）；
+番剧热播榜做 stale-while-revalidate（进页面先显旧数据再后台刷新，同媒体库列表的既有范式）。
+
+### M10 统一 TTL 缓存抽象（消除重复样板）
+
+**证据**：`src/utils/preciseLyrics.ts:30-32`（1h / 10min）、`src/utils/qqMusic.ts:132,179`、
+`src/utils/kgMusic.ts:122,199`、`src/utils/animeFetcher.ts:27-103`——**四处各自手写** `Map + TTL + 在途去重`。
+
+**改法**：抽一个 `src/utils/ttlCache.ts`（容量上限 + TTL + in-flight 去重 + `clear()`），四处替换；
+M8 / M9 直接复用，避免再长出第五份样板。
+
+### 6.3 结论记录：不引入 Redis
+
+全仓（排除 `node_modules` 与 `*/参考` 第三方项目）**无任何 Redis 依赖或代码**——
+命中项都在无关的参考项目（酷狗 / pixiv / ECHO）里。
+
+对单机桌面应用，Redis 是**过度设计**：多一个常驻进程、增大安装与运维复杂度，
+且封面 / 缩略图是二进制 blob，文件系统 + IndexedDB + SQLite 比 Redis 更契合"大值存储"。
+**结论：不引入，勿再议。**
+
+### 6.4 缓存项落地顺序
+
+| # | 项 | 工作量 | 风险 | 备注 |
+|---|---|---|---|---|
+| 1 | M10 统一 TTL 缓存抽象 | 0.5 天 | 低 | M8 / M9 的前置 |
+| 2 | M8 在线歌单列表 TTL 缓存 | 0.5 天 | 低 | 复用 M10 |
+| 3 | M9 笔趣阁目录 / 番剧榜单 TTL | 0.5 天 | 低 | 后端目录可落 SQLite |
+| 4 | M5 缩略图磁盘上限 + LRU | 1 天 | 中（动后端） | 与列表索引复用一次 readdir |
+| 5 | M6 封面 `covers/` 上限 + 纳入清理 | 0.5 天 | 低 | 独立改动 |
+| 6 | M7 负缓存落盘 | 1 小时 | 低 | 与 M6 同文件 |
+| — | M2 封面 IndexedDB LRU | 0.5 天 | 低 | 已在 §五排期第 5 项，可与 M6 合并做 |
+
+---
+
 ## 附录 A：本地 `vite build` 存量报错
 
 `npx vite build`（Node 24.15.0，本机）报：

@@ -9,6 +9,7 @@
 import { md5 } from "./md5";
 import { krcDecrypt, krcToRawLines, krcLinesToLyricLines } from "./krc";
 import { filterInstrumentalPlaceholder } from "./lyricTimeline";
+import { TtlCache } from "./ttlCache";
 import type { LyricLine } from "@shared/types";
 
 const REQUEST_TIMEOUT_MS = 8000;
@@ -120,7 +121,13 @@ async function kgRequest(
 // ---- 搜索 ----
 
 const SEARCH_CACHE_TTL = 60 * 60 * 1000;
-const searchCache = new Map<string, { t: number; songs: KgSongInfo[] }>();
+/** 条目上限（此前无上限） */
+const SEARCH_CACHE_MAX = 256;
+/** 复用统一实现：TTL 1h + 容量上限 + 在途去重 */
+const searchCache = new TtlCache<KgSongInfo[]>("kg-search", {
+  ttlMs: SEARCH_CACHE_TTL,
+  maxEntries: SEARCH_CACHE_MAX,
+});
 
 const OLD_SEARCH_DOMAINS = [
   "mobiles.kugou.com",
@@ -159,9 +166,7 @@ function formatOldSong(info: any): KgSongInfo {
 /** 按关键词搜索歌曲；新版接口失败时回退旧接口（移植 kg.py search/_old_search） */
 export async function kgSearchSongs(keyword: string): Promise<KgSongInfo[]> {
   const cached = searchCache.get(keyword);
-  if (cached && Date.now() - cached.t < SEARCH_CACHE_TTL) {
-    return cached.songs;
-  }
+  if (cached) return cached;
   let songs: KgSongInfo[] = [];
   try {
     const data = await kgRequest(
@@ -190,14 +195,23 @@ export async function kgSearchSongs(keyword: string): Promise<KgSongInfo[]> {
     });
     songs = (data?.data?.info ?? []).map(formatOldSong);
   }
-  searchCache.set(keyword, { t: Date.now(), songs });
+  searchCache.set(keyword, songs);
   return songs;
 }
 
 // ---- 歌词 ----
 
 const LYRICS_CACHE_TTL = 60 * 60 * 1000;
-const lyricsCache = new Map<string, { t: number; lines: LyricLine[] | null }>();
+/** 条目上限（此前无上限） */
+const LYRICS_CACHE_MAX = 512;
+/**
+ * 复用统一实现。注意：这里是 `LyricLine[] | null`——null 表示"确定无歌词"，
+ * 也是要缓存的结果（避免每次播放都重查一遍），所以显式允许 undefined 之外的 null。
+ */
+const lyricsCache = new TtlCache<LyricLine[] | null>("kg-lyrics", {
+  ttlMs: LYRICS_CACHE_TTL,
+  maxEntries: LYRICS_CACHE_MAX,
+});
 
 /**
  * 获取歌曲歌词：先查候选（lyrics.kugou.com/v1/search），再下载解密
@@ -206,9 +220,7 @@ const lyricsCache = new Map<string, { t: number; lines: LyricLine[] | null }>();
 export async function kgFetchLyrics(song: KgSongInfo): Promise<LyricLine[] | null> {
   const cacheKey = `${song.id}:${song.hash}`;
   const cached = lyricsCache.get(cacheKey);
-  if (cached && Date.now() - cached.t < LYRICS_CACHE_TTL) {
-    return cached.lines;
-  }
+  if (cached !== undefined) return cached;
   try {
     // 1. 歌词候选（移植 get_lyricslist）
     const keyword = song.artist ? `${song.artist} - ${song.title}` : song.title;
@@ -223,7 +235,7 @@ export async function kgFetchLyrics(song: KgSongInfo): Promise<LyricLine[] | nul
     // 注意：candidates 在响应顶层（与参考实现 data["candidates"] 一致）
     const candidates: any[] = listData?.candidates ?? [];
     if (!candidates.length) {
-      lyricsCache.set(cacheKey, { t: Date.now(), lines: null });
+      lyricsCache.set(cacheKey, null);
       return null;
     }
     const best = candidates[0]; // 接口按匹配度排序，取首个
@@ -240,13 +252,13 @@ export async function kgFetchLyrics(song: KgSongInfo): Promise<LyricLine[] | nul
     const content: string | undefined = dlData?.content;
     const contentType = dlData?.contenttype;
     if (!content) {
-      lyricsCache.set(cacheKey, { t: Date.now(), lines: null });
+      lyricsCache.set(cacheKey, null);
       return null;
     }
     if (contentType === 2) {
       // base64 纯文本歌词（无时间轴），无法用于逐字渲染，视为无可用歌词
       console.info("[酷狗歌词] 候选为纯文本歌词（无时间轴），跳过:", song.title);
-      lyricsCache.set(cacheKey, { t: Date.now(), lines: null });
+      lyricsCache.set(cacheKey, null);
       return null;
     }
     const plain = await krcDecrypt(content);
@@ -256,11 +268,11 @@ export async function kgFetchLyrics(song: KgSongInfo): Promise<LyricLine[] | nul
       const converted = krcLinesToLyricLines(parsed);
       lines = filterInstrumentalPlaceholder(converted);
     }
-    lyricsCache.set(cacheKey, { t: Date.now(), lines });
+    lyricsCache.set(cacheKey, lines);
     return lines;
   } catch (e) {
     console.warn("[酷狗歌词] 获取失败:", e instanceof Error ? e.message : e);
-    lyricsCache.set(cacheKey, { t: Date.now(), lines: null });
+    lyricsCache.set(cacheKey, null);
     return null;
   }
 }

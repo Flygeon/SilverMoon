@@ -2,6 +2,7 @@
 import { onMounted, ref } from "vue";
 import { useSettingsStore } from "@/stores/settings";
 import { capabilities } from "@/capabilities";
+import { novelCatalogueCached } from "@/utils/novelCache";
 import { translate } from "@shared/i18n";
 import { requestRelogin } from "@/novel/wenku8Auth";
 import { isLoginRequiredError } from "@/novel/wenku8Login";
@@ -27,7 +28,7 @@ onMounted(async () => {
   try {
     const [d, vols, shelf] = await Promise.all([
       capabilities.novelDetail(settings.wenku8Node, settings.novelCharset, props.aid),
-      capabilities.novelCatalogue(settings.wenku8Node, settings.novelCharset, props.aid),
+      novelCatalogueCached(settings.wenku8Node, settings.novelCharset, props.aid),
       capabilities.novelShelfList(),
     ]);
     detail.value = d;
