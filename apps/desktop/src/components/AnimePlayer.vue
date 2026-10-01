@@ -175,6 +175,21 @@ function destroyHls() {
   }
 }
 
+/**
+ * 把「设置里的弹幕开关」同步到插件。
+ *
+ * 插件的 visible 选项只在构造时生效，此后的显隐必须走 show()/hide()。
+ */
+function syncDanmakuVisibility() {
+  const d = art?.plugins?.artplayerPluginDanmuku as
+    { show?: () => unknown; hide?: () => unknown } | undefined;
+  const { show, hide } = d ?? {};
+  if (!show || !hide) return;
+  if (settings.danmakuEnabled) show();
+  else hide();
+  danmakuOn.value = settings.danmakuEnabled;
+}
+
 function isHlsSource(stream: { url: string; remoteUrl: string }): boolean {
   return /\.m3u8(\?|#|$)/i.test(`${stream.remoteUrl} ${stream.url}`);
 }
@@ -245,16 +260,9 @@ function makeControls(): Artplayer["option"]["controls"] {
       html: icon("subtitles"),
       tooltip: "弹幕",
       click: function (this: Artplayer) {
-        const d = this.plugins?.artplayerPluginDanmuku as
-          { show: () => unknown; hide: () => unknown; isHide: boolean } | undefined;
-        if (!d) return;
-        if (d.isHide) {
-          d.show();
-          danmakuOn.value = true;
-        } else {
-          d.hide();
-          danmakuOn.value = false;
-        }
+        // 与 B 站播放器同款：写回同一个可持久化设置，避免顶栏按钮和设置页各说各话
+        settings.danmakuEnabled = !settings.danmakuEnabled;
+        syncDanmakuVisibility();
       },
       style: { opacity: settings.danmakuEnabled ? "1" : "0.35" },
     },
@@ -355,7 +363,9 @@ async function createPlayer() {
     mode: 0 as const,
     modes: [0, 1, 2] as const,
     antiOverlap: settings.danmakuAntiOverlap,
-    visible: settings.danmakuEnabled,
+    // 必须恒为 true：这个选项只在构造时读一次，传 false 会永久隐藏弹幕
+    // （load() 不会把它改回来）。显隐一律走 show()/hide()，见 syncDanmakuVisibility()。
+    visible: true,
     emitter: false, // 仅看，不发（DanDanPlay API 发弹幕需要鉴权；暂不实现）
   };
 
@@ -423,6 +433,9 @@ async function createPlayer() {
     controls: makeControls(),
     // settings.lang 切换时这里 i18n 不重新创建控件（开关太多），提示文案靠 tooltip 静态翻译足够
   });
+
+  // 按设置把弹幕显示 / 隐藏落到实处（构造时的 visible 只决定初始态）
+  syncDanmakuVisibility();
 
   art.on("video:timeupdate", scheduleReport);
   art.on("video:ended", reportHistory);
@@ -589,7 +602,8 @@ onBeforeUnmount(() => {
       </m3e-button>
     </div>
 
-    <!-- 弹幕状态指示（DanDanPlay 无凭证 / 无匹配时显示原因）-->
+    <!-- 这一条只在「设置里开着弹幕、但插件尚未就绪」时短暂出现；
+         顶栏按钮现在写回同一个设置，danmakuOn 不会与 settings 不一致 -->
     <div v-if="danmakuOn && !settings.danmakuEnabled" class="danmaku-hint">
       弹幕已开启，请在设置中配置 DanDanPlay 凭证
     </div>
