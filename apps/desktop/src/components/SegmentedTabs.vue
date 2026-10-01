@@ -1,4 +1,4 @@
-<script setup lang="ts">
+<script setup lang="ts" generic="T extends string">
 /**
  * 子选项卡 —— M3 Expressive 连通按钮组（Connected Button Group）。
  *
@@ -14,22 +14,26 @@
 import { ref, watch, nextTick, onMounted, onActivated } from "vue";
 
 const props = defineProps<{
-  modelValue: string;
-  tabs: { value: string; label: string; icon?: string }[];
+  modelValue: T;
+  tabs: { value: T; label: string; icon?: string }[];
+  /** 只渲染按钮组本身，不渲染内容面板与滑动过渡（设置项单选行用） */
+  bare?: boolean;
+  /** 整组禁用（如皮肤锁定时的主题切换） */
+  disabled?: boolean;
 }>();
 
-const emit = defineEmits<{ "update:modelValue": [value: string] }>();
+const emit = defineEmits<{ "update:modelValue": [value: T] }>();
 
 const dir = ref<"next" | "prev">("next");
-const indexOf = (value: string) => props.tabs.findIndex((t) => t.value === value);
+const indexOf = (value: T) => props.tabs.findIndex((t) => t.value === value);
 const groupRef = ref<HTMLElement | null>(null);
 
 interface M3eGroup extends HTMLElement {
   updateComplete?: Promise<unknown>;
 }
 
-function select(value: string) {
-  if (value === props.modelValue) return;
+function select(value: T) {
+  if (props.disabled || value === props.modelValue) return;
   dir.value = indexOf(value) >= indexOf(props.modelValue) ? "next" : "prev";
   emit("update:modelValue", value);
 }
@@ -96,7 +100,7 @@ watch(
 </script>
 
 <template>
-  <div class="seg-wrap">
+  <div class="seg-wrap" :class="{ bare }">
     <m3e-button-group ref="groupRef" class="online-tabs" variant="connected" size="medium">
       <m3e-button
         v-for="tab in tabs"
@@ -105,6 +109,7 @@ watch(
         :class="{ active: tab.value === modelValue }"
         shape="round"
         size="medium"
+        :disabled="disabled"
         :variant="tab.value === modelValue ? 'filled' : 'tonal'"
         type="button"
         @click="select(tab.value)"
@@ -116,7 +121,7 @@ watch(
       </m3e-button>
     </m3e-button-group>
 
-    <div class="tabs-panels">
+    <div v-if="!bare" class="tabs-panels">
       <Transition :name="`tabs-${dir}`">
         <div :key="modelValue" class="tabs-panel">
           <slot />
@@ -140,6 +145,10 @@ watch(
   --m3e-button-icon-label-space: 8px;
   display: inline-flex;
   margin-bottom: 14px;
+}
+/* bare 模式：设置项单选行里不需要面板下方的留白 */
+.seg-wrap.bare .online-tabs {
+  margin-bottom: 0;
 }
 .seg-icon {
   font-size: 18px;

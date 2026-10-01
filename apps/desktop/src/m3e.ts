@@ -14,7 +14,8 @@
 // - m3e-menu / m3e-menu-item：菜单（全局右键菜单）
 // - m3e-card：内容卡（设置页区块 / 阅读统计 / 源结果卡）
 // - m3e-toolbar：动作条（创作页的格式工具栏）
-// - m3e-form-field：表单字段容器（创作页标题输入）
+// - m3e-form-field：表单字段容器（创作页标题输入 / 设置页表单）
+// - m3e-nav-menu / m3e-nav-menu-item / m3e-nav-menu-item-group：层级导航菜单（设置页左侧分类）
 // - m3e-snackbar：底部短提示（创作页保存/导出反馈）
 import "@m3e/web/bottom-sheet";
 import "@m3e/web/button";
@@ -28,6 +29,7 @@ import "@m3e/web/icon-button";
 import "@m3e/web/list";
 import "@m3e/web/loading-indicator";
 import "@m3e/web/menu";
+import "@m3e/web/nav-menu";
 import "@m3e/web/progress-indicator";
 import "@m3e/web/slider";
 import "@m3e/web/snackbar";

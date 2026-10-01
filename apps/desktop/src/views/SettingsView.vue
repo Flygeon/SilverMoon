@@ -17,6 +17,7 @@ import { useSkinsStore } from "@/stores/skins";
 import { useBangumiCollectStore } from "@/stores/bangumiCollect";
 import { useLibraryStore } from "@/stores/library";
 import AudioEffectsPanel from "@/components/AudioEffectsPanel.vue";
+import SegmentedTabs from "@/components/SegmentedTabs.vue";
 import { capabilities } from "@/capabilities";
 import { formatSize } from "@/utils/format";
 import { activeSkinDoc, skinModeLock, skinSafeMode } from "@/utils/skinRuntime";
@@ -63,6 +64,42 @@ function t(key: string) {
 
 const LYRIC_FONT_KEYS: LyricFontKey[] = ["system", "sans", "serif", "kai", "yuan"];
 const LYRICS_ANIMATIONS: DesktopLyricsAnimation[] = ["fade", "slide", "scale", "glow"];
+
+/**
+ * 设置项单选行的候选项。
+ *
+ * 统一交给 SegmentedTabs（@m3e/web 连通按钮组）渲染，这里只把「取值 + 文案」列出来；
+ * 文案走 t()，切语言时跟着变。收成一个工厂函数，避免十几处重复写同一份结构。
+ */
+function opts<T extends string>(values: readonly T[], label: (value: T) => string) {
+  return computed(() => values.map((value) => ({ value, label: label(value) })));
+}
+
+const themeTabs = opts(["system", "light", "dark"] as ThemeMode[], (v) => t("settings." + v));
+const langTabs = opts(["zh", "en"] as const, (v) => (v === "zh" ? "简体中文" : "English"));
+const closeActionTabs = opts(["tray", "quit"] as const, (v) => t("settings.closeAction_" + v));
+const pdfModeTabs = opts(["single", "dual", "scroll"] as PdfReadMode[], (v) =>
+  t("settings.pdfMode_" + v),
+);
+const dlToolbarTabs = opts(["click", "always"] as DesktopLyricsToolbar[], (v) =>
+  t("settings.desktopLyricsToolbar_" + v),
+);
+const dlDoubleClickTabs = opts(["none", "toggle"] as DesktopLyricsDoubleClick[], (v) =>
+  t("settings.desktopLyricsDoubleClick_" + v),
+);
+const playerBgTabs = opts(["animated", "amll", "image", "off"] as PlayerBgMode[], (v) =>
+  t("settings.playerBg_" + v),
+);
+const musicViewTabs = opts(["grid", "list"] as const, (v) => t("settings.musicViewMode_" + v));
+const shareCodeTabs = opts(["chinese", "original", "both"] as ShareCodePreference[], (v) =>
+  t("settings.shareCodePreference_" + v),
+);
+const musicServerTabs = opts(["netease", "kugou"] as const, (v) => t("settings.onlineServer_" + v));
+const wenku8NodeTabs = opts(["cc", "net"] as const, (v) => t("settings.wenku8Node_" + v));
+const novelCharsetTabs = opts(["gbk", "big5"] as const, (v) => t("settings.novelCharset_" + v));
+const pixivQualityTabs = opts(["squareMedium", "medium", "large", "original"] as const, (v) =>
+  t("settings.pixivQuality_" + v),
+);
 
 function notify(message: string) {
   toast.value = message;
@@ -410,20 +447,20 @@ function selectSection(id: string) {
   <div class="settings-view">
     <PageHeader :title="t('nav.settings')" :description="t('navDesc.settings')" />
     <aside class="settings-nav" aria-label="设置分类">
-      <template v-for="group in settingNav" :key="group.title">
-        <div class="settings-nav-group">{{ group.title }}</div>
-        <button
-          v-for="item in group.items"
-          :key="item.id"
-          class="settings-nav-item"
-          :class="{ active: activeSection === item.id }"
-          type="button"
-          @click="selectSection(item.id)"
-        >
-          <span class="material-symbols-outlined">{{ item.icon }}</span>
-          <span class="settings-nav-label">{{ item.label }}</span>
-        </button>
-      </template>
+      <m3e-nav-menu>
+        <m3e-nav-menu-item-group v-for="group in settingNav" :key="group.title">
+          <div slot="label" class="settings-nav-group">{{ group.title }}</div>
+          <m3e-nav-menu-item
+            v-for="item in group.items"
+            :key="item.id"
+            :selected="activeSection === item.id"
+            @click="selectSection(item.id)"
+          >
+            <span slot="icon" class="material-symbols-outlined">{{ item.icon }}</span>
+            <span slot="label" class="settings-nav-label">{{ item.label }}</span>
+          </m3e-nav-menu-item>
+        </m3e-nav-menu-item-group>
+      </m3e-nav-menu>
     </aside>
     <!-- 外观 -->
     <m3e-card
@@ -439,18 +476,13 @@ function selectSection(id: string) {
           <div class="row-label">
             <span>{{ t("settings.theme") }}</span>
           </div>
-          <div class="segmented">
-            <button
-              v-for="mode in ['system', 'light', 'dark'] as ThemeMode[]"
-              :key="mode"
-              class="seg"
-              :class="{ active: settings.theme === mode }"
-              :disabled="themeLocked"
-              @click="setTheme(mode)"
-            >
-              {{ t("settings." + mode) }}
-            </button>
-          </div>
+          <SegmentedTabs
+            bare
+            :model-value="settings.theme"
+            :tabs="themeTabs"
+            :disabled="themeLocked"
+            @update:model-value="setTheme"
+          />
         </div>
         <p v-if="themeLockHint" class="hint">{{ themeLockHint }}</p>
 
@@ -548,22 +580,7 @@ function selectSection(id: string) {
           <div class="row-label">
             <span>{{ t("settings.language") }}</span>
           </div>
-          <div class="segmented">
-            <button
-              class="seg"
-              :class="{ active: settings.lang === 'zh' }"
-              @click="settings.lang = 'zh'"
-            >
-              简体中文
-            </button>
-            <button
-              class="seg"
-              :class="{ active: settings.lang === 'en' }"
-              @click="settings.lang = 'en'"
-            >
-              English
-            </button>
-          </div>
+          <SegmentedTabs v-model="settings.lang" bare :tabs="langTabs" />
         </div>
 
         <div class="row">
@@ -610,22 +627,12 @@ function selectSection(id: string) {
           <div class="row-label">
             <span>{{ t("settings.closeAction") }}</span>
           </div>
-          <div class="segmented">
-            <button
-              class="seg"
-              :class="{ active: settings.closeToTray }"
-              @click="settings.closeToTray = true"
-            >
-              {{ t("settings.closeAction_tray") }}
-            </button>
-            <button
-              class="seg"
-              :class="{ active: !settings.closeToTray }"
-              @click="settings.closeToTray = false"
-            >
-              {{ t("settings.closeAction_quit") }}
-            </button>
-          </div>
+          <SegmentedTabs
+            bare
+            :model-value="settings.closeToTray ? 'tray' : 'quit'"
+            :tabs="closeActionTabs"
+            @update:model-value="settings.closeToTray = $event === 'tray'"
+          />
         </div>
         <p class="hint">{{ t("settings.closeToTrayHint") }}</p>
       </div>
@@ -706,17 +713,7 @@ function selectSection(id: string) {
           <div class="row-label">
             <span>{{ t("settings.pdfMode") }}</span>
           </div>
-          <div class="segmented">
-            <button
-              v-for="m in ['single', 'dual', 'scroll'] as PdfReadMode[]"
-              :key="m"
-              class="seg"
-              :class="{ active: settings.pdfReadMode === m }"
-              @click="settings.pdfReadMode = m"
-            >
-              {{ t("settings.pdfMode_" + m) }}
-            </button>
-          </div>
+          <SegmentedTabs v-model="settings.pdfReadMode" bare :tabs="pdfModeTabs" />
         </div>
       </div>
     </m3e-card>
@@ -909,33 +906,17 @@ function selectSection(id: string) {
           <div class="row-label">
             <span>{{ t("settings.desktopLyricsToolbar") }}</span>
           </div>
-          <div class="segmented">
-            <button
-              v-for="m in ['click', 'always'] as DesktopLyricsToolbar[]"
-              :key="m"
-              class="seg"
-              :class="{ active: settings.desktopLyricsToolbar === m }"
-              @click="settings.desktopLyricsToolbar = m"
-            >
-              {{ t("settings.desktopLyricsToolbar_" + m) }}
-            </button>
-          </div>
+          <SegmentedTabs v-model="settings.desktopLyricsToolbar" bare :tabs="dlToolbarTabs" />
         </div>
         <div class="row">
           <div class="row-label">
             <span>{{ t("settings.desktopLyricsDoubleClick") }}</span>
           </div>
-          <div class="segmented">
-            <button
-              v-for="m in ['none', 'toggle'] as DesktopLyricsDoubleClick[]"
-              :key="m"
-              class="seg"
-              :class="{ active: settings.desktopLyricsDoubleClick === m }"
-              @click="settings.desktopLyricsDoubleClick = m"
-            >
-              {{ t("settings.desktopLyricsDoubleClick_" + m) }}
-            </button>
-          </div>
+          <SegmentedTabs
+            v-model="settings.desktopLyricsDoubleClick"
+            bare
+            :tabs="dlDoubleClickTabs"
+          />
         </div>
 
         <div class="row">
@@ -1022,33 +1003,13 @@ function selectSection(id: string) {
           <div class="row-label">
             <span>{{ t("settings.playerBg") }}</span>
           </div>
-          <div class="segmented">
-            <button
-              v-for="m in ['animated', 'amll', 'image', 'off'] as PlayerBgMode[]"
-              :key="m"
-              class="seg"
-              :class="{ active: settings.playerBg === m }"
-              @click="settings.playerBg = m"
-            >
-              {{ t("settings.playerBg_" + m) }}
-            </button>
-          </div>
+          <SegmentedTabs v-model="settings.playerBg" bare :tabs="playerBgTabs" />
         </div>
         <div class="row">
           <div class="row-label">
             <span>{{ t("settings.musicViewMode") }}</span>
           </div>
-          <div class="segmented">
-            <button
-              v-for="m in ['grid', 'list'] as const"
-              :key="m"
-              class="seg"
-              :class="{ active: settings.musicViewMode === m }"
-              @click="settings.musicViewMode = m"
-            >
-              {{ t("settings.musicViewMode_" + m) }}
-            </button>
-          </div>
+          <SegmentedTabs v-model="settings.musicViewMode" bare :tabs="musicViewTabs" />
         </div>
         <p class="hint">{{ t("player.hotkeysHint") }}</p>
         <label class="row switch-row">
@@ -1067,17 +1028,7 @@ function selectSection(id: string) {
           <div class="row-label">
             <span>{{ t("settings.shareCodePreference") }}</span>
           </div>
-          <div class="segmented">
-            <button
-              v-for="mode in ['chinese', 'original', 'both'] as ShareCodePreference[]"
-              :key="mode"
-              class="seg"
-              :class="{ active: settings.shareCodePreference === mode }"
-              @click="settings.shareCodePreference = mode"
-            >
-              {{ t("settings.shareCodePreference_" + mode) }}
-            </button>
-          </div>
+          <SegmentedTabs v-model="settings.shareCodePreference" bare :tabs="shareCodeTabs" />
         </div>
         <p class="hint">{{ t("settings.shareCodePreferenceHint") }}</p>
         <AudioEffectsPanel />
@@ -1128,17 +1079,7 @@ function selectSection(id: string) {
           <div class="row-label">
             <span>{{ t("settings.onlineServer") }}</span>
           </div>
-          <div class="segmented">
-            <button
-              v-for="s in ['netease', 'kugou'] as const"
-              :key="s"
-              class="seg"
-              :class="{ active: settings.musicServer === s }"
-              @click="settings.musicServer = s"
-            >
-              {{ t("settings.onlineServer_" + s) }}
-            </button>
-          </div>
+          <SegmentedTabs v-model="settings.musicServer" bare :tabs="musicServerTabs" />
         </div>
       </div>
     </m3e-card>
@@ -1166,33 +1107,13 @@ function selectSection(id: string) {
           <div class="row-label">
             <span>{{ t("settings.wenku8Node") }}</span>
           </div>
-          <div class="segmented">
-            <button
-              v-for="n in ['cc', 'net'] as const"
-              :key="n"
-              class="seg"
-              :class="{ active: settings.wenku8Node === n }"
-              @click="settings.wenku8Node = n"
-            >
-              {{ t("settings.wenku8Node_" + n) }}
-            </button>
-          </div>
+          <SegmentedTabs v-model="settings.wenku8Node" bare :tabs="wenku8NodeTabs" />
         </div>
         <div v-if="settings.onlineNovelEnabled" class="row">
           <div class="row-label">
             <span>{{ t("settings.novelCharset") }}</span>
           </div>
-          <div class="segmented">
-            <button
-              v-for="c in ['gbk', 'big5'] as const"
-              :key="c"
-              class="seg"
-              :class="{ active: settings.novelCharset === c }"
-              @click="settings.novelCharset = c"
-            >
-              {{ t("settings.novelCharset_" + c) }}
-            </button>
-          </div>
+          <SegmentedTabs v-model="settings.novelCharset" bare :tabs="novelCharsetTabs" />
         </div>
       </div>
     </m3e-card>
@@ -1212,10 +1133,11 @@ function selectSection(id: string) {
         <template v-if="settings.onlineAnimeEnabled">
           <p class="hint">{{ t("settings.bangumiHint") }}</p>
           <div class="dav-form">
-            <div class="field">
-              <label>{{ t("settings.bangumiTokenLabel") }}</label>
+            <m3e-form-field variant="filled" class="field">
+              <label slot="label" for="bangumi-token">{{ t("settings.bangumiTokenLabel") }}</label>
               <div class="token-line">
                 <input
+                  id="bangumi-token"
                   v-model="bangumiTokenDraft"
                   type="password"
                   spellcheck="false"
@@ -1239,24 +1161,24 @@ function selectSection(id: string) {
                   {{ t("settings.bangumiDisconnect") }}
                 </m3e-button>
               </div>
-              <p v-if="bangumiCollect.authorized" class="token-state ok">
-                {{
-                  t("settings.bangumiConnected").replace(
-                    "{u}",
-                    bangumiCollect.user?.nickname || settings.bangumiUsername,
-                  )
-                }}
-              </p>
-              <p v-else-if="bangumiCollect.authError" class="token-state err">
-                {{ bangumiCollect.authError }}
-              </p>
-              <p class="hint">
-                {{ t("settings.bangumiTokenHelp") }}
-                <button class="link-inline" @click="openBangumiTokenPage">
-                  {{ t("settings.bangumiTokenLink") }}
-                </button>
-              </p>
-            </div>
+            </m3e-form-field>
+            <p v-if="bangumiCollect.authorized" class="token-state ok">
+              {{
+                t("settings.bangumiConnected").replace(
+                  "{u}",
+                  bangumiCollect.user?.nickname || settings.bangumiUsername,
+                )
+              }}
+            </p>
+            <p v-else-if="bangumiCollect.authError" class="token-state err">
+              {{ bangumiCollect.authError }}
+            </p>
+            <p class="hint">
+              {{ t("settings.bangumiTokenHelp") }}
+              <button class="link-inline" @click="openBangumiTokenPage">
+                {{ t("settings.bangumiTokenLink") }}
+              </button>
+            </p>
           </div>
         </template>
       </div>
@@ -1279,29 +1201,22 @@ function selectSection(id: string) {
             <div class="row-label">
               <span>{{ t("settings.pixivQuality") }}</span>
             </div>
-            <div class="segmented">
-              <button
-                v-for="q in ['squareMedium', 'medium', 'large', 'original'] as const"
-                :key="q"
-                class="seg"
-                :class="{ active: settings.pixivImageQuality === q }"
-                @click="settings.pixivImageQuality = q"
-              >
-                {{ t("settings.pixivQuality_" + q) }}
-              </button>
-            </div>
+            <SegmentedTabs v-model="settings.pixivImageQuality" bare :tabs="pixivQualityTabs" />
           </div>
           <p class="hint">{{ t("settings.pixivRefreshTokenHint") }}</p>
           <div class="dav-form">
-            <div class="field">
-              <label>{{ t("settings.pixivRefreshTokenLabel") }}</label>
+            <m3e-form-field variant="filled" class="field">
+              <label slot="label" for="pixiv-refresh-token">{{
+                t("settings.pixivRefreshTokenLabel")
+              }}</label>
               <input
+                id="pixiv-refresh-token"
                 v-model="settings.pixivRefreshToken"
                 type="password"
                 spellcheck="false"
                 autocomplete="off"
               />
-            </div>
+            </m3e-form-field>
           </div>
         </template>
       </div>
@@ -1325,24 +1240,28 @@ function selectSection(id: string) {
         </label>
         <template v-if="settings.danmakuEnabled">
           <div class="dav-form">
-            <div class="field">
-              <label>{{ t("settings.danmakuAppId") }}</label>
+            <m3e-form-field variant="filled" class="field">
+              <label slot="label" for="dandan-app-id">{{ t("settings.danmakuAppId") }}</label>
               <input
+                id="dandan-app-id"
                 v-model="settings.dandanAppId"
                 type="text"
                 spellcheck="false"
                 autocomplete="off"
               />
-            </div>
-            <div class="field">
-              <label>{{ t("settings.danmakuAppSecret") }}</label>
+            </m3e-form-field>
+            <m3e-form-field variant="filled" class="field">
+              <label slot="label" for="dandan-app-secret">{{
+                t("settings.danmakuAppSecret")
+              }}</label>
               <input
+                id="dandan-app-secret"
                 v-model="settings.dandanAppSecret"
                 type="password"
                 spellcheck="false"
                 autocomplete="off"
               />
-            </div>
+            </m3e-form-field>
           </div>
           <div class="dav-grid">
             <label class="field">
@@ -1381,9 +1300,10 @@ function selectSection(id: string) {
             </label>
           </div>
           <div class="dav-grid">
-            <label class="field">
-              <span>{{ t("settings.danmakuTimeOffset") }}</span>
+            <m3e-form-field variant="filled" class="field">
+              <label slot="label" for="danmaku-offset">{{ t("settings.danmakuTimeOffset") }}</label>
               <input
+                id="danmaku-offset"
                 :value="(settings.danmakuTimeOffsetMs / 1000).toFixed(1)"
                 type="number"
                 step="0.1"
@@ -1391,7 +1311,7 @@ function selectSection(id: string) {
                 max="30"
                 @change="onDanmakuOffsetChange"
               />
-            </label>
+            </m3e-form-field>
             <label class="row switch-row">
               <span class="row-label">{{ t("settings.danmakuAntiOverlap") }}</span>
               <m3e-switch
@@ -1424,30 +1344,33 @@ function selectSection(id: string) {
         </label>
 
         <div v-if="settings.webdavEnabled" class="dav-form">
-          <div class="field">
-            <label>{{ t("settings.webdavUrl") }}</label>
+          <m3e-form-field variant="filled" class="field">
+            <label slot="label" for="webdav-url">{{ t("settings.webdavUrl") }}</label>
             <input
+              id="webdav-url"
               v-model="settings.webdavUrl"
               type="url"
               :placeholder="t('settings.webdavUrlPlaceholder')"
               spellcheck="false"
               autocomplete="off"
             />
-          </div>
+          </m3e-form-field>
           <div class="dav-grid">
-            <div class="field">
-              <label>{{ t("settings.webdavUser") }}</label>
+            <m3e-form-field variant="filled" class="field">
+              <label slot="label" for="webdav-user">{{ t("settings.webdavUser") }}</label>
               <input
+                id="webdav-user"
                 v-model="settings.webdavUser"
                 type="text"
                 spellcheck="false"
                 autocomplete="off"
               />
-            </div>
-            <div class="field">
-              <label>{{ t("settings.webdavPass") }}</label>
+            </m3e-form-field>
+            <m3e-form-field variant="filled" class="field">
+              <label slot="label" for="webdav-pass">{{ t("settings.webdavPass") }}</label>
               <div class="pass-wrap">
                 <input
+                  id="webdav-pass"
                   v-model="settings.webdavPass"
                   :type="showDavPass ? 'text' : 'password'"
                   spellcheck="false"
@@ -1464,7 +1387,7 @@ function selectSection(id: string) {
                   </span>
                 </m3e-icon-button>
               </div>
-            </div>
+            </m3e-form-field>
           </div>
 
           <div v-if="davResult" class="status" :class="davResult.ok ? 'ok' : 'warn'">
@@ -1551,47 +1474,31 @@ function selectSection(id: string) {
   padding: 2px 0;
 }
 .settings-nav-group {
-  padding: 8px 12px 2px;
+  padding: 6px 0 2px;
   color: var(--md-sys-color-on-surface-variant);
   font-size: 12px;
   font-weight: 500;
   letter-spacing: 0.4px;
   opacity: 0.8;
 }
-.settings-nav-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 32px;
-  padding: 0 12px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: transparent;
-  color: var(--md-sys-color-on-surface-variant);
-  font: inherit;
-  font-size: var(--md-sys-typescale-label-large-size);
-  text-align: left;
-  cursor: pointer;
-  transition:
-    background-color 160ms var(--md-sys-motion-spring-effects-fast),
-    color 160ms var(--md-sys-motion-spring-effects-fast);
-}
-.settings-nav-item .material-symbols-outlined {
-  font-size: 20px;
+/* 导航项交给 m3e-nav-menu；这里只把默认 56dp 的行高压回原来的紧凑尺寸 */
+.settings-nav m3e-nav-menu {
+  width: 100%;
+  --m3e-nav-menu-padding-top: 0;
+  --m3e-nav-menu-padding-bottom: 0;
+  --m3e-nav-menu-padding-left: 0;
+  --m3e-nav-menu-padding-right: 0;
+  --m3e-nav-menu-item-height: 32px;
+  --m3e-nav-menu-item-padding: 12px;
+  --m3e-nav-menu-item-spacing: 8px;
+  --m3e-nav-menu-item-icon-size: 20px;
+  --m3e-nav-menu-item-group-label-inset: 12px;
+  --m3e-nav-menu-item-group-label-space: 0px;
 }
 .settings-nav-label {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-.settings-nav-item:hover {
-  background: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-on-surface);
-}
-.settings-nav-item.active {
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
-  font-weight: 500;
 }
 
 .card {
@@ -1617,21 +1524,17 @@ function selectSection(id: string) {
   gap: 8px;
   flex-wrap: wrap;
 }
+/* 输入框外框 / 焦点态由 m3e-form-field 提供（组件会 unset 掉 slot 内 input 的边框与底色），
+   这里只留弹性布局，避免手写边框套在 M3 填充容器里变成双层框 */
 .token-line input {
   flex: 1;
   min-width: 220px;
-  height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-medium);
-  background: var(--md-sys-color-surface-container);
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-medium-size);
-  outline: none;
 }
-.token-line input:focus {
-  border-color: var(--md-sys-color-primary);
+
+/* 表单字段宽度跟随容器（组件默认固定 270px） */
+.field {
+  --m3e-form-field-width: 100%;
+  width: 100%;
 }
 .token-line .material-symbols-outlined {
   font-size: 18px;
@@ -1691,33 +1594,6 @@ function selectSection(id: string) {
 }
 .switch-row m3e-switch {
   flex: none;
-}
-
-.segmented {
-  display: inline-flex;
-  padding: 3px;
-  gap: 2px;
-  background: var(--md-sys-color-surface-container-high);
-  border-radius: var(--lm-shape-button);
-}
-.seg {
-  border: none;
-  background: transparent;
-  padding: 7px 16px;
-  border-radius: var(--lm-shape-button);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-label-large-size);
-  color: var(--md-sys-color-on-surface-variant);
-  transition: all var(--md-sys-motion-duration-short) var(--md-sys-motion-spring-effects-fast);
-}
-.seg:hover {
-  color: var(--md-sys-color-on-surface);
-}
-.seg.active {
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
-  font-weight: 500;
 }
 
 /* 配色方案色板 */
@@ -2039,17 +1915,19 @@ m3e-icon-button.danger:hover {
   }
   .settings-nav {
     position: static;
-    flex-direction: row;
-    overflow-x: auto;
     margin-bottom: 12px;
     padding: 0 0 4px;
   }
+  /* 窄屏把纵向导航菜单摊平成横向可滚动的胶囊行 */
+  .settings-nav m3e-nav-menu {
+    display: flex;
+    flex-direction: row;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
   .settings-nav-group {
     display: none;
-  }
-  .settings-nav-item {
-    flex: 0 0 auto;
-    white-space: nowrap;
   }
   .card {
     scroll-margin-top: 12px;
