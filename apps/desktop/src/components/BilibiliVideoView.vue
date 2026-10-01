@@ -584,7 +584,9 @@ const metaItems = computed(() => {
 .bili-view {
   position: fixed;
   inset: 0;
-  z-index: 200;
+  /* 必须高于 BilibiliUserView(210)：从 UP 主页点开视频时，视频要盖在它上面，
+     关掉视频再回到 UP 主页，形成 主页 → 视频 的浮层栈 */
+  z-index: 220;
   display: flex;
   flex-direction: column;
   background: var(--md-sys-color-surface);

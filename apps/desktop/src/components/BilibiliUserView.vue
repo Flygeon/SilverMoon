@@ -28,7 +28,10 @@ function close(): void {
 }
 
 function onKeydown(e: KeyboardEvent): void {
-  if (e.key === "Escape" && !document.fullscreenElement) close();
+  if (e.key !== "Escape") return;
+  // 视频浮层盖在上面时，Esc 属于它；这里不能再关一次，否则一次 Esc 会连关两层
+  if (bili.current) return;
+  if (!document.fullscreenElement) close();
 }
 
 function openInBrowser(): void {

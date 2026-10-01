@@ -75,7 +75,10 @@ export const useBiliStore = defineStore("bilibili", () => {
   async function loadAccount(): Promise<void> {
     accountLoading.value = true;
     try {
-      account.value = await biliNav();
+      const next = await biliNav();
+      // 换号（或从匿名变登录）：旧账号的收藏夹 / 投稿 / 历史都不能留
+      if (next.mid !== account.value.mid) resetAccountData();
+      account.value = next;
       accountError.value = "";
     } catch (e) {
       account.value = { ...BILI_ANONYMOUS };
@@ -329,9 +332,33 @@ export const useBiliStore = defineStore("bilibili", () => {
     return false;
   }
 
+  /** 清空所有「跟着账号走」的数据（退出登录 / 换号时调用）。 */
+  function resetAccountData(): void {
+    // 收藏夹 id 是账号私有的：不清掉的话，换号后 loadFavorites 会拿旧 id 去查
+    favFolders.value = [];
+    favMediaId.value = 0;
+    favVideos.value = [];
+    favStatus.value = "idle";
+    favError.value = "";
+    favPage.value = 1;
+    favEnd.value = false;
+    myVideos.value = [];
+    myStatus.value = "idle";
+    myError.value = "";
+    myPage.value = 1;
+    myEnd.value = false;
+    myTotal.value = 0;
+    history.value = [];
+    historyStatus.value = "idle";
+    historyError.value = "";
+    historyCursor.value = { max: 0, viewAt: 0 };
+    historyEnd.value = false;
+  }
+
   async function logout(): Promise<void> {
     await biliLogout();
     account.value = { ...BILI_ANONYMOUS };
+    resetAccountData();
     notice.value = "已退出 B 站账号";
     // 退出后推荐流会变回未登录内容，重扫一次
     void loadFeed(true);
