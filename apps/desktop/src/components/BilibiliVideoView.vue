@@ -16,9 +16,18 @@ import BilibiliRelatedList from "@/components/BilibiliRelatedList.vue";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
 import { capabilities } from "@/capabilities";
-import { biliCount, biliDuration, biliFormatLabel, biliPubdate } from "@/utils/bilibili";
+import {
+  biliCount,
+  biliDuration,
+  biliFormatLabel,
+  biliPubdate,
+  type BiliStream,
+} from "@/utils/bilibili";
+import { BiliDashSession } from "@/utils/biliDash";
 import type { ArtDanmu } from "@/utils/danmaku";
 import { translate } from "@shared/i18n";
+
+const emit = defineEmits<{ (e: "login"): void }>();
 
 const bili = useBiliStore();
 const settings = useSettingsStore();
@@ -32,10 +41,14 @@ const playerError = ref("");
 
 let art: Artplayer | null = null;
 let danmakuGen = 0;
+/** 当前 DASH（MSE）会话；走 MP4 兜底时为 null */
+let dash: BiliDashSession | null = null;
 
 const detail = computed(() => bili.detail);
 const play = computed(() => bili.play);
 const videoUrl = computed(() => play.value?.durl[0] ?? "");
+/** 是否有可播源（DASH 或渐进式 MP4 任一即可） */
+const hasSource = computed(() => !!videoUrl.value || (play.value?.dashVideo.length ?? 0) > 0);
 const qualities = computed(() => play.value?.qualities ?? []);
 const parts = computed(() => detail.value?.parts ?? []);
 const showParts = computed(() => parts.value.length > 1);
@@ -86,7 +99,7 @@ async function reloadDanmaku(): Promise<void> {
   if (art && danmakuPlugin() === plugin) void plugin.load(items);
 }
 
-async function createPlayer(url: string): Promise<void> {
+async function createPlayer(url: string | null): Promise<void> {
   const root = container.value;
   if (!root) return;
   const [{ default: Artplayer }, { default: artplayerPluginDanmuku }] = await Promise.all([
@@ -110,8 +123,10 @@ async function createPlayer(url: string): Promise<void> {
 
   art = new Artplayer({
     container: root,
-    url,
+    url: url ?? "",
     poster: detail.value?.cover || undefined,
+    // DASH 走 MSE：这里只创建空 <video>，真正的数据由 BiliDashSession 推进
+    type: "auto",
     autoplay: true,
     autoMini: false,
     fullscreen: true,
@@ -125,7 +140,6 @@ async function createPlayer(url: string): Promise<void> {
     miniProgressBar: false,
     volume: 0.8,
     theme: readThemeColor(),
-    type: "auto",
     plugins: [artplayerPluginDanmuku(danmukuOpts)],
   });
 
@@ -141,16 +155,96 @@ async function createPlayer(url: string): Promise<void> {
 
 function retryPlayback(): void {
   playerError.value = "";
-  if (videoUrl.value) void mountPlayer(videoUrl.value);
+  void mountSource();
 }
 
-async function mountPlayer(url: string): Promise<void> {
+/** 选中的 DASH 视频轨：优先 avc1（Chromium 硬解最稳），没有则取码率最高的一路。 */
+function pickVideoTrack(currentQn: number): BiliStream | null {
+  const list = play.value?.dashVideo ?? [];
+  if (!list.length) return null;
+  const ofQuality = list.filter((s) => s.id === currentQn);
+  const candidates = ofQuality.length ? ofQuality : list;
+  const avc = candidates.find((s) => s.codecs.startsWith("avc1"));
+  return avc ?? candidates[0];
+}
+
+/**
+ * 挂载播放源。
+ *
+ * 优先 DASH（MSE 合流）：只有它拿得到 1080P 及以上。若当前环境 / 编码不支持
+ * MSE（例如 av01 且系统解码器缺失），退回渐进式 MP4 的 durl —— 那是 720P，
+ * 但至少能播，且失败原因会明确写在界面上。
+ */
+async function mountSource(): Promise<void> {
+  playerError.value = "";
+  const p = play.value;
+  if (!p) return;
+
+  const videoTrack = pickVideoTrack(p.quality || bili.activeQn);
+  const audioTrack = p.dashAudio[0] ?? null;
+
+  // 清掉上一轮 DASH 会话（切清晰度 / 切分 P 时 MediaSource 不能复用）
+  dash?.destroy();
+  dash = null;
+
+  if (videoTrack && BiliDashSession.canPlay(videoTrack, audioTrack)) {
+    await mountDash(videoTrack, audioTrack);
+    return;
+  }
+
+  // 兜底：渐进式 MP4（最高 720P）
+  if (p.durl[0]) {
+    await mountPlayer(p.durl[0], "auto");
+    return;
+  }
+  if (videoTrack) {
+    playerError.value = t("bili.dashUnsupported");
+  }
+}
+
+/** 用 MSE 会话喂 ArtPlayer（ArtPlayer 只负责 UI 与控件，数据由我们推进）。 */
+async function mountDash(videoTrack: BiliStream, audioTrack: BiliStream | null): Promise<void> {
+  if (!art) {
+    await createPlayer(null);
+  }
+  const el = art?.video;
+  if (!el || !art) return;
+
+  const session = new BiliDashSession();
+  dash = session;
+  const startTime = el.currentTime > 0 && Number.isFinite(el.currentTime) ? el.currentTime : 0;
+
+  try {
+    await session.load(el, {
+      video: videoTrack,
+      audio: audioTrack,
+      startTime,
+      onError: (e) => {
+        playerError.value = e instanceof Error ? e.message : String(e);
+      },
+      onReady: () => {
+        playerError.value = "";
+        void el.play().catch(() => undefined);
+      },
+    });
+  } catch (e) {
+    if (dash === session) {
+      dash = null;
+      playerError.value = e instanceof Error ? e.message : String(e);
+    }
+    session.destroy();
+  }
+  await reloadDanmaku();
+}
+
+async function mountPlayer(url: string, type: "auto" | "m3u8" = "auto"): Promise<void> {
   if (!url) return;
   playerError.value = "";
   if (!art) {
     await createPlayer(url);
   } else {
     try {
+      art.type = type;
       await art.switchUrl(url);
     } catch (e) {
       console.warn("[bilibili] switchUrl 失败：", e);
@@ -174,10 +268,14 @@ function onKeydown(e: KeyboardEvent): void {
 onMounted(() => {
   window.addEventListener("keydown", onKeydown);
   document.addEventListener("pointerdown", onDocPointerDown, true);
-  if (videoUrl.value) void mountPlayer(videoUrl.value);
-  unwatchUrl = watch(videoUrl, (url) => {
-    if (url) void mountPlayer(url);
-  });
+  if (hasSource.value) void mountSource();
+  // 播放地址变化（首帧到达 / 切清晰度 / 切分 P）时重挂
+  unwatchUrl = watch(
+    () => [play.value?.quality, play.value?.durl[0], bili.activeCid].join("|"),
+    () => {
+      if (hasSource.value) void mountSource();
+    },
+  );
 });
 
 onBeforeUnmount(() => {
@@ -186,6 +284,8 @@ onBeforeUnmount(() => {
   unwatchUrl?.();
   unwatchUrl = null;
   danmakuGen += 1;
+  dash?.destroy();
+  dash = null;
   art?.destroy(false);
   art = null;
 });
@@ -205,6 +305,11 @@ async function toggleDanmaku(): Promise<void> {
 function openInBrowser(): void {
   const bvid = detail.value?.bvid || bili.current?.bvid;
   if (bvid) void capabilities.openUrl(`https://www.bilibili.com/video/${bvid}`);
+}
+
+/** 点 UP 主头像 / 昵称进主页。 */
+function openUp(): void {
+  bili.openCurrentUp();
 }
 
 function partLabel(index: number, fallback: string): string {
@@ -270,7 +375,7 @@ const metaItems = computed(() => {
             <m3e-loading-indicator class="lm-loading" />
             <span>{{ t("bili.resolving") }}</span>
           </div>
-          <div v-else-if="bili.playStatus === 'error' && !videoUrl" class="player-overlay error">
+          <div v-else-if="bili.playStatus === 'error' && !hasSource" class="player-overlay error">
             <span class="material-symbols-outlined">error</span>
             <span class="err-text">{{ bili.playError || t("bili.resolveFailed") }}</span>
             <m3e-button variant="filled" size="small" @click="bili.selectQuality(bili.activeQn)">
@@ -303,18 +408,28 @@ const metaItems = computed(() => {
             </div>
 
             <div class="owner-row">
-              <span class="avatar">
-                <img
-                  v-if="detail.owner.face"
-                  :src="detail.owner.face"
-                  alt=""
-                  referrerpolicy="no-referrer"
-                />
-                <span v-else class="material-symbols-outlined">person</span>
-              </span>
-              <span class="owner-name" :title="detail.owner.name">{{
-                detail.owner.name || t("bili.unknownUp")
-              }}</span>
+              <!-- 头像 + 昵称整块可点：进 UP 主主页 -->
+              <button
+                class="owner-link"
+                type="button"
+                :title="t('bili.userHome')"
+                :disabled="!detail.owner.mid"
+                @click="openUp"
+              >
+                <span class="avatar">
+                  <img
+                    v-if="detail.owner.face"
+                    :src="detail.owner.face"
+                    alt=""
+                    referrerpolicy="no-referrer"
+                  />
+                  <span v-else class="material-symbols-outlined">person</span>
+                </span>
+                <span class="owner-name" :title="detail.owner.name">{{
+                  detail.owner.name || t("bili.unknownUp")
+                }}</span>
+                <span class="material-symbols-outlined go">chevron_right</span>
+              </button>
               <span class="grow" />
               <m3e-button
                 v-if="detail.owner.mid"
@@ -442,7 +557,7 @@ const metaItems = computed(() => {
             <span>{{ bili.playError }}</span>
           </div>
         </div>
-        <BilibiliComments />
+        <BilibiliComments @login="emit('login')" />
       </div>
 
       <!-- 右栏：相关推荐（sticky，长评论区滚动时始终可见） -->
@@ -750,9 +865,41 @@ const metaItems = computed(() => {
   height: 100%;
   object-fit: cover;
 }
+.owner-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 4px 10px 4px 4px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 160ms var(--md-sys-motion-spring-effects-fast);
+}
+.owner-link:hover:not(:disabled) {
+  background: var(--md-sys-color-surface-container-high);
+}
+.owner-link:disabled {
+  cursor: default;
+}
+.owner-link:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
 .owner-name {
   font-size: var(--md-sys-typescale-body-medium-size);
   font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.owner-link .go {
+  font-size: 18px;
+  color: var(--md-sys-color-on-surface-variant);
 }
 
 .block {

@@ -11,10 +11,13 @@ import { computed, onActivated, onMounted, onBeforeUnmount, ref, watch } from "v
 import SegmentedTabs from "@/components/SegmentedTabs.vue";
 import BilibiliCard from "@/components/BilibiliCard.vue";
 import BilibiliVideoView from "@/components/BilibiliVideoView.vue";
+import BilibiliUserView from "@/components/BilibiliUserView.vue";
+import BilibiliMinePanel from "@/components/BilibiliMinePanel.vue";
+import BilibiliSearchHistory from "@/components/BilibiliSearchHistory.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
-import { biliCount, type BiliVideo } from "@/utils/bilibili";
+import type { BiliVideo } from "@/utils/bilibili";
 import { translate } from "@shared/i18n";
 
 const bili = useBiliStore();
@@ -64,6 +67,12 @@ function attachObserver(): void {
 const searchInput = ref("");
 function submitSearch(): void {
   void bili.search(searchInput.value);
+}
+
+/** 点搜索历史里的词：回填输入框并直接搜。 */
+function pickHistory(word: string): void {
+  searchInput.value = word;
+  void bili.search(word);
 }
 
 // ---------------------------------------------------------------- 登录弹窗
@@ -141,11 +150,13 @@ onMounted(() => {
   attachObserver();
   if (!bili.feed.length) void bili.loadFeed(true);
   if (!bili.accountLoaded) void bili.loadAccount();
+  void bili.loadSearchHistory();
 });
 
 onActivated(() => {
   if (!bili.feed.length && bili.feedStatus !== "loading") void bili.loadFeed(true);
   if (!bili.accountLoaded) void bili.loadAccount();
+  void bili.loadSearchHistory();
 });
 
 onBeforeUnmount(() => {
@@ -178,7 +189,6 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
       <!-- ============================ 推荐 ============================ -->
       <template v-if="innerTab === 'feed'">
         <div class="toolbar">
-          <span class="toolbar-title">{{ t("bili.feedHint") }}</span>
           <m3e-button
             variant="tonal"
             size="small"
@@ -240,6 +250,9 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
           </m3e-button>
         </div>
 
+        <!-- 搜索历史：只在有记录时出现 -->
+        <BilibiliSearchHistory @pick="pickHistory" />
+
         <div v-if="bili.results.length" class="grid">
           <BilibiliCard
             v-for="v in bili.results"
@@ -284,49 +297,7 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
 
       <!-- ============================= 我的 ============================= -->
       <template v-else>
-        <div v-if="!bili.account.isLogin" class="account-empty">
-          <span class="avatar big">
-            <span class="material-symbols-outlined">account_circle</span>
-          </span>
-          <h3>{{ t("bili.notLoggedIn") }}</h3>
-          <p class="hint">{{ t("bili.loginHint") }}</p>
-          <m3e-button variant="filled" @click="openLogin">
-            <span slot="icon" class="material-symbols-outlined">qr_code_2</span>
-            {{ t("bili.scanLogin") }}
-          </m3e-button>
-        </div>
-
-        <div v-else class="account-card">
-          <div class="account-head">
-            <span class="avatar big">
-              <img
-                v-if="bili.account.face"
-                :src="bili.account.face"
-                alt=""
-                referrerpolicy="no-referrer"
-              />
-              <span v-else class="material-symbols-outlined">account_circle</span>
-            </span>
-            <div class="account-info">
-              <div class="account-name" :title="bili.account.name">{{ bili.account.name }}</div>
-              <div class="account-meta">
-                <span class="pill">{{ t("bili.level") }} Lv{{ bili.account.level }}</span>
-                <span v-if="bili.account.vip" class="pill vip">{{ t("bili.vip") }}</span>
-                <span class="pill">{{ biliCount(bili.account.coins) }} {{ t("bili.coins") }}</span>
-              </div>
-            </div>
-          </div>
-          <div class="account-actions">
-            <m3e-button variant="tonal" size="small" @click="openLogin">
-              <span slot="icon" class="material-symbols-outlined">sync</span>
-              {{ t("bili.relogin") }}
-            </m3e-button>
-            <m3e-button variant="text" size="small" @click="bili.logout()">
-              <span slot="icon" class="material-symbols-outlined">logout</span>
-              {{ t("bili.logout") }}
-            </m3e-button>
-          </div>
-        </div>
+        <BilibiliMinePanel @open="openVideo" @login="openLogin" />
       </template>
     </SegmentedTabs>
 
@@ -359,7 +330,10 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
     </Transition>
 
     <!-- 视频详情浮层（自行通过 store 关闭，父级只负责挂载） -->
-    <BilibiliVideoView v-if="bili.current" :key="bili.current.bvid" />
+    <BilibiliVideoView v-if="bili.current" :key="bili.current.bvid" @login="openLogin" />
+
+    <!-- UP 主主页浮层：从详情页点 UP 头像进入 -->
+    <BilibiliUserView v-if="bili.userMid" :key="bili.userMid" />
 
     <!-- 全局提示 -->
     <Transition name="bili-toast">
@@ -380,17 +354,9 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
 .toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
   margin-bottom: 14px;
-}
-.toolbar-title {
-  min-width: 0;
-  font-size: var(--md-sys-typescale-body-small-size);
-  color: var(--md-sys-color-on-surface-variant);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .search-bar {
@@ -440,96 +406,13 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
   font-size: var(--md-sys-typescale-body-medium-size);
 }
 
-/* ---- 账号 ---- */
-.account-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 56px 24px;
-  border-radius: var(--lm-shape-card);
-  background: var(--md-sys-color-surface-container-low);
-  box-shadow: inset 0 0 0 1px var(--lm-hairline);
-  text-align: center;
-}
-.account-empty h3 {
-  margin: 0;
-  font-size: var(--md-sys-typescale-title-medium-size);
-  font-weight: 500;
-}
+/* 账号卡已迁到 BilibiliMinePanel，「我的」页不再需要这组样式；仅保留登录弹窗用到的 .hint */
 .hint {
   margin: 0;
   max-width: 420px;
   font-size: var(--md-sys-typescale-body-small-size);
   line-height: 1.6;
   color: var(--md-sys-color-on-surface-variant);
-}
-
-.account-card {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  padding: 22px;
-  border-radius: var(--lm-shape-card);
-  background: var(--md-sys-color-surface-container-low);
-  box-shadow: inset 0 0 0 1px var(--lm-hairline);
-}
-.account-head {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-.avatar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  overflow: hidden;
-  background: var(--md-sys-color-surface-container-highest);
-  color: var(--md-sys-color-on-surface-variant);
-}
-.avatar.big {
-  width: 64px;
-  height: 64px;
-}
-.avatar.big .material-symbols-outlined {
-  font-size: 40px;
-}
-.avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.account-info {
-  min-width: 0;
-}
-.account-name {
-  font-size: var(--md-sys-typescale-title-medium-size);
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.account-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-.pill {
-  padding: 2px 10px;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
-  font-size: var(--md-sys-typescale-label-small-size);
-}
-.pill.vip {
-  background: color-mix(in srgb, var(--md-sys-color-tertiary) 24%, transparent);
-  color: var(--md-sys-color-tertiary);
-}
-.account-actions {
-  display: flex;
-  gap: 8px;
 }
 
 /* ---- 登录弹窗 ---- */

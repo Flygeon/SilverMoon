@@ -8,15 +8,30 @@
  *   `/x/v2/reply/reply` 的完整列表，可继续「加载更多」。
  * - 展开态就存在 store 的 `subReplies[rpid]` 上（有值即展开），不再另立一套开关。
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
+import BilibiliReplyComposer from "@/components/BilibiliReplyComposer.vue";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
 import { BILI_REPLY_HOT, BILI_REPLY_TIME, biliCount, type BiliReply } from "@/utils/bilibili";
 import { translate } from "@shared/i18n";
 
+const emit = defineEmits<{ (e: "login"): void }>();
+
 const bili = useBiliStore();
 const settings = useSettingsStore();
 const t = (key: string) => translate(settings.lang, key);
+
+/** 评论输入框；点某条评论的「回复」时把目标传下去。 */
+const composer = ref<InstanceType<typeof BilibiliReplyComposer> | null>(null);
+
+/** 回复某条一级评论：root 与 parent 都是它自己。 */
+function replyTo(r: BiliReply): void {
+  composer.value?.replyToComment(r.rpid, r.rpid, r.author.name);
+}
+/** 回复楼中楼里的某条：root 是所在楼的一级评论，parent 是这条子回复。 */
+function replyToSub(root: BiliReply, s: BiliReply): void {
+  composer.value?.replyToComment(s.rpid, root.rpid, s.author.name);
+}
 
 const sorts = computed(() => [
   { value: BILI_REPLY_HOT, label: t("bili.sortHot") },
@@ -37,6 +52,9 @@ function subMore(r: BiliReply): boolean {
 
 <template>
   <section class="comments">
+    <!-- 评论输入框：未登录时这里显示「去登录」提示 -->
+    <BilibiliReplyComposer ref="composer" @login="emit('login')" />
+
     <div class="bar">
       <h3 class="title">
         <span class="material-symbols-outlined">forum</span>
@@ -105,6 +123,15 @@ function subMore(r: BiliReply): boolean {
               <span class="tabular-nums">{{ biliCount(r.like) }}</span>
             </span>
             <button
+              class="act btn"
+              type="button"
+              :title="t('bili.replyAction')"
+              @click="replyTo(r)"
+            >
+              <span class="material-symbols-outlined">reply</span>
+              {{ t("bili.replyAction") }}
+            </button>
+            <button
               v-if="!subExpanded(r) && r.replyCount"
               class="act btn"
               type="button"
@@ -133,6 +160,14 @@ function subMore(r: BiliReply): boolean {
                 </span>
               </span>
               <span class="sub-text">{{ s.message }}</span>
+              <button
+                class="sub-reply"
+                type="button"
+                :title="t('bili.replyAction')"
+                @click="replyToSub(r, s)"
+              >
+                {{ t("bili.replyAction") }}
+              </button>
             </div>
             <button
               v-if="subMore(r)"
@@ -351,6 +386,24 @@ function subMore(r: BiliReply): boolean {
   cursor: pointer;
 }
 .btn:hover {
+  color: var(--md-sys-color-primary);
+}
+/* 「回复」按钮：比点赞数更靠后，视觉上更轻 */
+.act.btn .material-symbols-outlined {
+  font-size: 14px;
+}
+.sub-reply {
+  align-self: flex-start;
+  margin-top: 1px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--md-sys-color-on-surface-variant);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.sub-reply:hover {
   color: var(--md-sys-color-primary);
 }
 

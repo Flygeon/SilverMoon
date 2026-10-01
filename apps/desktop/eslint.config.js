@@ -95,6 +95,11 @@ export default [
       // B 站子选项卡：m3e-button / m3e-form-field 的 icon 槽
       "src/components/BilibiliOnlineView.vue",
       "src/components/BilibiliVideoView.vue",
+      // 「我的」/ UP 主主页 / 评论输入框：同样是 m3e-button 的 icon 槽
+      "src/components/BilibiliMinePanel.vue",
+      "src/components/BilibiliUserView.vue",
+      "src/components/BilibiliReplyComposer.vue",
+      "src/components/BilibiliSearchHistory.vue",
       "src/components/AudioEffectsPanel.vue",
       "src/components/LibraryToolbar.vue",
       "src/components/NovelBqgView.vue",
