@@ -70,6 +70,8 @@ function submitSearch(): void {
 const loginOpen = ref(false);
 const qrImage = ref("");
 let pollTimer: number | null = null;
+/** 轮询互斥：2s 定时器与切回前台补一次可能撞在一起 */
+let polling = false;
 
 watch(
   () => bili.qrContent,
@@ -100,10 +102,16 @@ function stopPolling(): void {
 }
 
 async function tick(): Promise<void> {
-  const done = await bili.pollQr();
-  if (done) {
-    stopPolling();
-    if (bili.account.isLogin) loginOpen.value = false;
+  if (polling) return;
+  polling = true;
+  try {
+    const done = await bili.pollQr();
+    if (done) {
+      stopPolling();
+      if (bili.account.isLogin) loginOpen.value = false;
+    }
+  } finally {
+    polling = false;
   }
 }
 
@@ -336,6 +344,7 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
             </div>
           </div>
           <p class="qr-status">{{ bili.qrStatusText }}</p>
+          <p v-if="bili.loginError" class="qr-error">{{ bili.loginError }}</p>
           <div class="modal-actions">
             <m3e-button variant="text" size="small" @click="refreshQr">
               <span slot="icon" class="material-symbols-outlined">refresh</span>
@@ -349,8 +358,8 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
       </div>
     </Transition>
 
-    <!-- 视频详情浮层 -->
-    <BilibiliVideoView v-if="bili.current" :key="bili.current.bvid" @close="bili.closeVideo()" />
+    <!-- 视频详情浮层（自行通过 store 关闭，父级只负责挂载） -->
+    <BilibiliVideoView v-if="bili.current" :key="bili.current.bvid" />
 
     <!-- 全局提示 -->
     <Transition name="bili-toast">
@@ -573,6 +582,12 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
   margin: 6px 0 14px;
   font-size: var(--md-sys-typescale-body-small-size);
   color: var(--md-sys-color-on-surface-variant);
+}
+/* 授权后账号信息拉取失败时必须显式告知，否则弹窗会停在「登录成功」上不动 */
+.qr-error {
+  margin: -8px 0 14px;
+  font-size: var(--md-sys-typescale-body-small-size);
+  color: var(--md-sys-color-error);
 }
 .modal-actions {
   display: flex;

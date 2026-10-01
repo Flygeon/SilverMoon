@@ -18,8 +18,6 @@ import { biliCount, biliDuration, biliFormatLabel, biliPubdate } from "@/utils/b
 import type { ArtDanmu } from "@/utils/danmaku";
 import { translate } from "@shared/i18n";
 
-const emit = defineEmits<{ (e: "close"): void }>();
-
 const bili = useBiliStore();
 const settings = useSettingsStore();
 const t = (key: string) => translate(settings.lang, key);
@@ -27,6 +25,8 @@ const t = (key: string) => translate(settings.lang, key);
 const container = ref<HTMLDivElement | null>(null);
 const descExpanded = ref(false);
 const danmakuOn = ref(settings.danmakuEnabled);
+/** 媒体加载失败提示（ArtPlayer 会自动重连，这里负责把原因讲清楚并给条退路） */
+const playerError = ref("");
 
 let art: Artplayer | null = null;
 let danmakuGen = 0;
@@ -126,10 +126,25 @@ async function createPlayer(url: string): Promise<void> {
     type: "auto",
     plugins: [artplayerPluginDanmuku(danmukuOpts)],
   });
+
+  // 媒体错误（多为 CDN 防盗链 403/503）——ArtPlayer 会自己重连几轮，
+  // 但界面上一片「重新连接」看不出原因，这里显式提示并提供重试。
+  art.on("error", () => {
+    playerError.value = t("bili.playbackFailed");
+  });
+  art.on("video:playing", () => {
+    playerError.value = "";
+  });
+}
+
+function retryPlayback(): void {
+  playerError.value = "";
+  if (videoUrl.value) void mountPlayer(videoUrl.value);
 }
 
 async function mountPlayer(url: string): Promise<void> {
   if (!url) return;
+  playerError.value = "";
   if (!art) {
     await createPlayer(url);
   } else {
@@ -144,7 +159,18 @@ async function mountPlayer(url: string): Promise<void> {
 
 let unwatchUrl: (() => void) | null = null;
 
+/** 关闭浮层：直接改 store 状态（不经过 emit 中转，避免多一层出错点） */
+function close(): void {
+  bili.closeVideo();
+}
+
+/** Esc 关闭浮层（全屏时交给 ArtPlayer 自己处理 Esc 退全屏） */
+function onKeydown(e: KeyboardEvent): void {
+  if (e.key === "Escape" && !document.fullscreenElement) close();
+}
+
 onMounted(() => {
+  window.addEventListener("keydown", onKeydown);
   if (videoUrl.value) void mountPlayer(videoUrl.value);
   unwatchUrl = watch(videoUrl, (url) => {
     if (url) void mountPlayer(url);
@@ -152,6 +178,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onKeydown);
   unwatchUrl?.();
   unwatchUrl = null;
   danmakuGen += 1;
@@ -206,24 +233,25 @@ const metaItems = computed(() => {
 
 <template>
   <div class="bili-view">
-    <!-- 顶栏 -->
+    <!-- 顶栏（用原生 button：浮层里的操作必须 100% 可点，不依赖自定义元素的事件转发） -->
     <header class="head lm-glass">
-      <m3e-icon-button size="small" :title="t('bili.close')" @click="emit('close')">
+      <button class="head-btn" type="button" :title="t('bili.close')" @click="close">
         <span class="material-symbols-outlined">arrow_back</span>
-      </m3e-icon-button>
+      </button>
       <span class="head-title" :title="title">{{ title }}</span>
       <span class="spacer" />
-      <m3e-icon-button
-        size="small"
+      <button
+        class="head-btn"
+        type="button"
+        :class="{ off: !danmakuOn }"
         :title="danmakuOn ? t('bili.danmakuOff') : t('bili.danmakuOn')"
-        :class="{ 'is-off': !danmakuOn }"
         @click="toggleDanmaku"
       >
         <span class="material-symbols-outlined">subtitles</span>
-      </m3e-icon-button>
-      <m3e-icon-button size="small" :title="t('bili.openBrowser')" @click="openInBrowser">
+      </button>
+      <button class="head-btn" type="button" :title="t('bili.openBrowser')" @click="openInBrowser">
         <span class="material-symbols-outlined">open_in_new</span>
-      </m3e-icon-button>
+      </button>
     </header>
 
     <!-- 播放器 -->
@@ -237,6 +265,15 @@ const metaItems = computed(() => {
         <span class="material-symbols-outlined">error</span>
         <span class="err-text">{{ bili.playError || t("bili.resolveFailed") }}</span>
         <m3e-button variant="filled" size="small" @click="bili.selectQuality(bili.activeQn)">
+          <span slot="icon" class="material-symbols-outlined">refresh</span>
+          {{ t("bili.retry") }}
+        </m3e-button>
+      </div>
+      <div v-else-if="playerError" class="player-overlay error">
+        <span class="material-symbols-outlined">error</span>
+        <span class="err-text">{{ playerError }}</span>
+        <span class="err-hint">{{ t("bili.playbackHint") }}</span>
+        <m3e-button variant="filled" size="small" @click="retryPlayback">
           <span slot="icon" class="material-symbols-outlined">refresh</span>
           {{ t("bili.retry") }}
         </m3e-button>
@@ -372,7 +409,31 @@ const metaItems = computed(() => {
 .head .spacer {
   flex: 1;
 }
-.head .is-off {
+.head-btn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: transparent;
+  color: var(--md-sys-color-on-surface-variant);
+  cursor: pointer;
+  transition: background 160ms var(--md-sys-motion-spring-effects-fast);
+}
+.head-btn:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+.head-btn:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: -2px;
+}
+.head-btn .material-symbols-outlined {
+  font-size: 20px;
+}
+.head-btn.off {
   opacity: 0.45;
 }
 
@@ -410,6 +471,13 @@ const metaItems = computed(() => {
   max-width: min(560px, 80%);
   text-align: center;
   color: #fff;
+}
+.player-overlay .err-hint {
+  max-width: min(560px, 80%);
+  text-align: center;
+  font-size: var(--md-sys-typescale-body-small-size);
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.75);
 }
 
 .detail-body {

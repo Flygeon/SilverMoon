@@ -768,6 +768,9 @@ export const messages = {
       collapse: "收起",
       resolving: "正在解析播放地址…",
       resolveFailed: "播放地址解析失败",
+      playbackFailed: "视频流加载失败",
+      playbackHint:
+        "通常是 CDN 防盗链或网络问题。若刚更新过应用，请完全退出并重新启动（主进程改动需重启才生效）；也可以换个清晰度或点重试。",
       loadingDetail: "正在加载视频详情…",
       openBrowser: "在浏览器打开",
       close: "返回",
@@ -1516,6 +1519,9 @@ export const messages = {
       collapse: "Collapse",
       resolving: "Resolving stream…",
       resolveFailed: "Failed to resolve stream",
+      playbackFailed: "Failed to load the video stream",
+      playbackHint:
+        "Usually a CDN hotlink-protection or network issue. If you just updated the app, fully quit and restart it (main-process changes need a restart); you can also try another quality or retry.",
       loadingDetail: "Loading video details…",
       openBrowser: "Open in browser",
       close: "Back",

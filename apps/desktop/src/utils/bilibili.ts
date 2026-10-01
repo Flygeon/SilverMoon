@@ -305,6 +305,85 @@ async function hostFetch(url: string, init: RequestInit = {}): Promise<Response>
   return fetch(url, init);
 }
 
+/**
+ * 带凭据收集的请求。
+ *
+ * 宿主通道读得到响应的 `Set-Cookie`（已实测：undici 不会像浏览器那样把它从
+ * headers 里过滤掉），所以每次请求都顺手并入 cookie 罐——这是最可靠的来源，
+ * 因为它的值是**原样**的。
+ */
+async function biliFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const res = await hostFetch(url, init);
+  absorbCookies(res);
+  return res;
+}
+
+/** Set-Cookie 的属性名，不能当成 cookie 收进来。 */
+const SET_COOKIE_ATTRS = new Set([
+  "expires",
+  "path",
+  "domain",
+  "max-age",
+  "secure",
+  "httponly",
+  "samesite",
+  "version",
+  "comment",
+]);
+
+/** 把响应的 Set-Cookie 并入 cookie 罐（值保持原样，不做解码）。 */
+function absorbCookies(res: Response): void {
+  const headers = res.headers as Headers & { getSetCookie?: () => string[] };
+  let raws: string[] = typeof headers.getSetCookie === "function" ? headers.getSetCookie() : [];
+  if (!raws.length) {
+    const single = res.headers.get("set-cookie");
+    if (single) raws = [single];
+  }
+  if (!raws.length) return;
+  let changed = false;
+  for (const raw of raws) {
+    const re = /([A-Za-z0-9_-]+)=([^;,]*)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(raw)) !== null) {
+      const name = m[1];
+      const value = m[2].trim();
+      if (!name || !value || SET_COOKIE_ATTRS.has(name.toLowerCase())) continue;
+      if (cookies[name] !== value) {
+        cookies[name] = value;
+        changed = true;
+      }
+    }
+  }
+  if (changed) void persistCookies();
+}
+
+/** 从 `k=v&...` 取**原始**（不解码）键值对：cookie 值必须逐字保留。 */
+function parseRawQuery(url: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const query = url.split("?")[1];
+  if (!query) return out;
+  for (const pair of query.split("&")) {
+    const eq = pair.indexOf("=");
+    if (eq <= 0) continue;
+    const key = pair.slice(0, eq);
+    const value = pair.slice(eq + 1);
+    if (key && value) out[key] = value;
+  }
+  return out;
+}
+
+/** 登录跳转链里这几个才是鉴权 cookie，其余（gourl / Expires / Sign…）不是。 */
+const URL_COOKIE_NAMES = new Set([
+  "SESSDATA",
+  "bili_jct",
+  "DedeUserID",
+  "DedeUserID__ckMd5",
+  "sid",
+  "buvid3",
+  "buvid4",
+  "b_nut",
+]);
+
 function baseHeaders(): Record<string, string> {
   const ck = cookieHeader();
   return {
@@ -327,7 +406,7 @@ async function getJson(
   url: string,
   headers?: Record<string, string>,
 ): Promise<Record<string, unknown>> {
-  const res = await hostFetch(url, { headers: { ...baseHeaders(), ...headers } });
+  const res = await biliFetch(url, { headers: { ...baseHeaders(), ...headers } });
   const text = await res.text();
   const json = decodeJson(text);
   if (!json || typeof json !== "object") throw new Error("B站返回了非对象 JSON");
@@ -470,17 +549,13 @@ export async function biliQrPoll(key: string): Promise<BiliQrStatus> {
   const code = data ? num(data.code, 86101) : 86101;
   const message = data ? str(data.message) : str(json.message);
   if (code === 0 && data) {
-    // 凭据内嵌在 data.url 的查询串里（主进程通道拿不到 Set-Cookie）
-    const url = str(data.url);
-    if (url) {
-      try {
-        const u = new URL(url);
-        u.searchParams.forEach((v, k) => {
-          if (k && v) cookies[k] = v;
-        });
-      } catch {
-        // 解析不动就只依赖已有 cookie
-      }
+    // 主来源是响应的 Set-Cookie（biliFetch 已按原值吸收）；这里再用 data.url 兜底。
+    // 必须**逐字**取值：SESSDATA 内嵌了 %2C 之类的编码，用 URLSearchParams 会解码，
+    // 服务端就认不出这个会话（表现为「提示扫码成功但 nav 仍返回未登录」）。
+    for (const [k, v] of Object.entries(parseRawQuery(str(data.url)))) {
+      if (!URL_COOKIE_NAMES.has(k)) continue;
+      // 本次登录新下发的值直接覆盖旧值（也顺带修掉历史遗留的、被解码坏了的 SESSDATA）
+      cookies[k] = v;
     }
     await persistCookies();
   }
@@ -491,7 +566,7 @@ export async function biliLogout(): Promise<void> {
   try {
     const csrf = biliCsrf();
     if (csrf) {
-      await hostFetch(`${PASSPORT}/login/exit/v2`, {
+      await biliFetch(`${PASSPORT}/login/exit/v2`, {
         method: "POST",
         headers: {
           ...baseHeaders(),
@@ -721,7 +796,7 @@ export function biliFormatLabel(play: BiliPlayUrl, qn: number): string {
 export async function biliDanmaku(cid: string): Promise<ArtDanmu[]> {
   if (!cid) return [];
   try {
-    const res = await hostFetch(`${API}/x/v1/dm/list.so?oid=${encodeURIComponent(cid)}`, {
+    const res = await biliFetch(`${API}/x/v1/dm/list.so?oid=${encodeURIComponent(cid)}`, {
       headers: { ...baseHeaders() },
     });
     const bytes = new Uint8Array(await res.arrayBuffer());
