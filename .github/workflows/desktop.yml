@@ -146,7 +146,13 @@ jobs:
       - name: Generate Windows app icon
         run: dart run flutter_launcher_icons
 
+      # webview_windows 的插件用 <experimental/coroutine>，MSVC 14.5x 已把它升为硬错误
+      # STL1011。bootstrap.ps1 已在 windows/CMakeLists.txt 里 add_compile_definitions，
+      # 这里再补一层环境变量：CMake 首次 configure 会把 CXXFLAGS 并入 CMAKE_CXX_FLAGS，
+      # 即便插件的 target 属性覆盖了目录属性，这一层也能兜住。
       - name: flutter build windows
+        env:
+          CXXFLAGS: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
         run: flutter build windows --release
 
       - name: Stage sidecar and package portable zip

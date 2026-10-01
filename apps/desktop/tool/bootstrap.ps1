@@ -71,6 +71,37 @@ try {
         Write-Host '[bootstrap] no tool/overlay directory, skipped'
     }
 
+    # ---------- 修补第三方插件的 C++ 编译 ----------
+    # webview_windows 的插件依赖 <experimental/coroutine>，而新版 MSVC（VS 18 / 14.5x）
+    # 已把该头文件升成硬错误 STL1011（deprecated by Microsoft and will be REMOVED SOON）。
+    # 官方给出的过渡开关就是下面这个宏，只有定义它才能继续编。
+    #
+    # 位置很讲究：必须写在 include(flutter/generated_plugins.cmake) **之前**。
+    # add_compile_definitions 改的是 CMake 的目录属性，而目录属性只传播给「之后」
+    # add_subdirectory 进来的子目录——插件正是那个子目录。
+    $cmakeLists = Join-Path $target 'CMakeLists.txt'
+    $marker = 'include(flutter/generated_plugins.cmake)'
+    $define = '_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS'
+    $raw = Get-Content -Raw -LiteralPath $cmakeLists
+    if ($raw -notlike ('*' + $define + '*')) {
+        if ($raw -notlike ('*' + $marker + '*')) {
+            throw "[bootstrap] 模板里找不到 $marker，Flutter 模板结构变了，请检查本补丁"
+        }
+        $patch = (@(
+                '# webview_windows 的 C++ 插件用到 <experimental/coroutine>，新版 MSVC (14.5x)',
+                '# 已将该头文件升为硬错误 STL1011。定义官方过渡宏压掉；必须写在',
+                '# include(flutter/generated_plugins.cmake) 之前，目录属性才会传播到插件子工程。',
+                ('add_compile_definitions(' + $define + ')'),
+                ''
+            ) -join "`n")
+        $raw = $raw.Replace($marker, $patch + $marker)
+        Set-Content -LiteralPath $cmakeLists -Value $raw -NoNewline -Encoding utf8
+        Write-Host "[bootstrap] patched: $define"
+    }
+    else {
+        Write-Host '[bootstrap] coroutine deprecation macro already present, skipped'
+    }
+
     Write-Host '[bootstrap] done'
 }
 finally {
