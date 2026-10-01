@@ -20,6 +20,16 @@ const router = useRouter();
 const rightTab = ref<"lyrics" | "queue" | "effects">("lyrics");
 const speed = ref(1);
 const isDragging = ref(false);
+
+/**
+ * 波浪进度条的取值范围。
+ * `m3e-linear-progress-indicator` 要求 `0 <= value <= max`；未加载歌曲时时长为 0/NaN，
+ * 这里给一个安全上限，避免 max<=0 让进度计算退化。
+ */
+const progressMax = computed(() => (player.duration > 0 ? player.duration : 100));
+const progressValue = computed(() =>
+  player.duration > 0 ? Math.min(player.currentTime, player.duration) : 0,
+);
 const commentsOpen = ref(false);
 const panelOpen = ref(false);
 const panelAnchor = ref<HTMLElement | null>(null);
@@ -61,7 +71,7 @@ function onBodyTap(e: MouseEvent) {
   const el = e.target as HTMLElement | null;
   if (!el) return;
   const hit = el.closest(
-    "button, a, m3e-button, m3e-icon-button, .lyric-item, .progress-bar, .tools-panel, input, textarea",
+    "button, a, m3e-button, m3e-icon-button, .lyric-item, .progress-track, .tools-panel, input, textarea",
   );
   if (!hit) mobileLyrics.value = false;
 }
@@ -221,7 +231,7 @@ onBeforeUnmount(() => {
 
         <div class="progress-section">
           <div
-            class="progress-bar"
+            class="progress-track"
             :class="{ dragging: isDragging }"
             @mousedown="isDragging = true"
             @mousemove="isDragging && onProgressClick($event)"
@@ -229,18 +239,13 @@ onBeforeUnmount(() => {
             @mouseleave="isDragging = false"
             @click="onProgressClick"
           >
-            <div
-              class="progress-fill"
-              :style="{
-                width: (player.duration ? (player.currentTime / player.duration) * 100 : 0) + '%',
-              }"
-            ></div>
-            <div
-              class="progress-thumb"
-              :style="{
-                left: (player.duration ? (player.currentTime / player.duration) * 100 : 0) + '%',
-              }"
-            ></div>
+            <!-- 进度条本体交给 @m3e/web：variant="wavy" 即 M3 Expressive 的波浪进度条。
+                 点击/拖动跳转挂在外层 .progress-track，视觉一律由组件令牌控制。 -->
+            <m3e-linear-progress-indicator
+              variant="wavy"
+              :max="progressMax"
+              :value="progressValue"
+            ></m3e-linear-progress-indicator>
           </div>
           <div class="time-row">
             <span>{{ formatTime(player.currentTime) }}</span>
@@ -614,39 +619,25 @@ onBeforeUnmount(() => {
   width: 425px;
   margin-top: 24px;
 }
-.progress-bar {
+/* 进度条视觉全部交给 m3e-linear-progress-indicator（variant="wavy"）。
+   这里只提供点击/拖动的命中区域，并把组件令牌换成应用色板；
+   波浪的振幅/波长沿用组件默认（3px / 40px），只把厚度对齐原来的 6px。 */
+.progress-track {
   width: 425px;
-  height: 6px;
-  padding: 0;
-  background: color-mix(in srgb, var(--md-sys-color-on-surface) 22%, transparent);
-  border-radius: var(--md-sys-shape-corner-full);
-  position: relative;
-  cursor: pointer;
-  transition: height 220ms var(--md-sys-motion-spring-soft);
-}
-.progress-bar:hover,
-.progress-bar.dragging {
   height: 12px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
 }
-.progress-fill {
-  height: 100%;
-  background: var(--md-sys-color-primary);
-  border-radius: inherit;
-}
-.progress-thumb {
-  position: absolute;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--md-sys-color-primary);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--md-sys-color-primary) 28%, transparent);
-  opacity: 0;
-  transition: opacity 200ms var(--md-sys-motion-spring-effects-fast);
-}
-.progress-bar:hover .progress-thumb {
-  opacity: 1;
+.progress-track m3e-linear-progress-indicator {
+  width: 100%;
+  --m3e-linear-progress-indicator-thickness: 6px;
+  --m3e-progress-indicator-track-color: color-mix(
+    in srgb,
+    var(--md-sys-color-on-surface) 22%,
+    transparent
+  );
+  --m3e-progress-indicator-color: var(--md-sys-color-primary);
 }
 .time-row {
   display: flex;
@@ -918,21 +909,19 @@ onBeforeUnmount(() => {
     font-size: 19px;
   }
   .progress-section,
-  .progress-bar,
+  .progress-track,
   .controls {
     width: 100%;
   }
   .progress-section {
     margin-top: 16px;
   }
-  /* 6px 的进度条手指点不准 */
-  .progress-bar {
-    height: 10px;
+  /* 6px 的进度条手指点不准，窄屏给足命中高度并加粗波浪 */
+  .progress-track {
+    height: 20px;
   }
-  .progress-thumb {
-    opacity: 1;
-    width: 16px;
-    height: 16px;
+  .progress-track m3e-linear-progress-indicator {
+    --m3e-linear-progress-indicator-thickness: 8px;
   }
   .tools-panel {
     min-width: 0;
@@ -945,9 +934,6 @@ onBeforeUnmount(() => {
   .cover-wrap:hover {
     transform: none;
     filter: none;
-  }
-  .progress-thumb {
-    opacity: 1;
   }
 }
 </style>
