@@ -17,7 +17,7 @@
  */
 import { isDesktop } from "@/capabilities";
 import { JsonStore } from "@/ipc/store";
-import { mergeDuplicates, type ArtDanmu } from "@/utils/danmaku";
+import { mapDanmakuMode, mergeDuplicates, type ArtDanmu } from "@/utils/danmaku";
 import { md5 } from "@/utils/md5";
 
 // ------------------------------------------------------------------ 常量
@@ -335,10 +335,34 @@ async function hostFetch(url: string, init: RequestInit = {}): Promise<Response>
  * headers 里过滤掉），所以每次请求都顺手并入 cookie 罐——这是最可靠的来源，
  * 因为它的值是**原样**的。
  */
-async function biliFetch(url: string, init: RequestInit = {}): Promise<Response> {
-  const res = await hostFetch(url, init);
-  absorbCookies(res);
-  return res;
+/**
+ * 单个请求的超时。
+ *
+ * 宿主通道（主进程 undici）**没有**默认超时，TCP 半开时 Promise 会一直挂着，
+ * 界面就永远停在 loading 且没有重试入口。这里统一兜住。
+ * 弹幕 XML 可能有几 MB，给宽一点；接口都是小 JSON。
+ */
+const REQUEST_TIMEOUT_MS = 15000;
+const MEDIA_TIMEOUT_MS = 30000;
+
+async function biliFetch(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<Response> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const res = await hostFetch(url, { ...init, signal: ac.signal });
+    absorbCookies(res);
+    return res;
+  } catch (e) {
+    // AbortError 的原始信息是 "This operation was aborted"，对用户毫无意义
+    if (ac.signal.aborted) throw new Error("请求超时，请检查网络后重试");
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Set-Cookie 的属性名，不能当成 cookie 收进来。 */
@@ -481,9 +505,15 @@ function decodeJson(text: string): unknown {
 async function getJson(
   url: string,
   headers?: Record<string, string>,
+  timeoutMs?: number,
 ): Promise<Record<string, unknown>> {
-  const res = await biliFetch(url, { headers: { ...baseHeaders(), ...headers } });
+  const res = await biliFetch(url, { headers: { ...baseHeaders(), ...headers } }, timeoutMs);
   const text = await res.text();
+  // 原来完全不看 HTTP 状态：上游 5xx / 412 挑战页 / 网关 HTML 一律被 decodeJson
+  // 说成「B站返回了非 JSON 内容」，无法区分「网络坏 / 被风控 / 接口变了」。
+  if (!res.ok) {
+    throw new Error(`请求失败：HTTP ${res.status}（${text.slice(0, 80) || "无响应体"}）`);
+  }
   const json = decodeJson(text);
   if (!json || typeof json !== "object") throw new Error("B站返回了非对象 JSON");
   return json as Record<string, unknown>;
@@ -494,7 +524,19 @@ function assertOk(json: Record<string, unknown>, what: string): void {
   const code = num(json.code);
   if (code === 0) return;
   const msg = str(json.message, "未知错误");
-  if (code === -101) throw new Error("需要先登录 B 站账号");
+  if (code === -101) {
+    // 服务端明确说未登录 —— 本地凭据已经失效了，必须清掉。
+    // 否则 biliIsLoggedIn() 永远返回 true，后续请求还会继续发、继续失败，
+    // 界面显示「已登录」却处处报「需要先登录」，自相矛盾。
+    if (cookies.SESSDATA) {
+      delete cookies.SESSDATA;
+      delete cookies.bili_jct;
+      delete cookies.DedeUserID;
+      delete cookies.DedeUserID__ckMd5;
+      void persistCookies();
+    }
+    throw new Error("登录已过期，请重新扫码登录");
+  }
   // 这三个码看起来都像「数据出错」，实际都是触发了风控 / 频控。
   // 把它们讲成人话，否则用户只会看到「失败：风控校验失败」，无从下手。
   if (code === -412) {
@@ -506,13 +548,35 @@ function assertOk(json: Record<string, unknown>, what: string): void {
   if (code === -799) {
     throw new Error(`${what}失败：请求过于频繁，请稍后再试`);
   }
+  // 这几个是「有明确含义、且用户能采取行动」的业务码（参考 PiliPlus video.dart 的映射）
+  const known: Record<number, string> = {
+    "-403": "没有访问权限",
+    "-404": "内容不存在或已被删除",
+    "-509": "请求过于频繁，请稍后再试",
+    62002: "该内容不可见",
+    87008: "该视频为充电专属，需要先充电才能观看",
+  };
+  const hint = known[code];
+  if (hint) throw new Error(`${what}失败：${hint}（code=${code}）`);
   throw new Error(`${what}失败：${msg}（code=${code}）`);
 }
 
 // ---- WBI 签名 ----
 
 let mixinKey = "";
-let mixinDay = -1;
+/**
+ * 密钥签发时间（毫秒）。
+ *
+ * 原来用的是「当月第几天」比较：桌面端进程可以连续运行好几天，跨天后
+ * `getDate()` 变了但缓存还在，于是**继续用旧密钥签名**，所有 WBI 接口
+ * （推荐 / 搜索 / 详情 / 空间投稿）全部回 -352，而界面只会说「风控校验失败」，
+ * 排查方向被完全带偏。改为按时间戳算 TTL，顺便避开跨月 / 时区问题。
+ */
+let mixinIssuedAt = 0;
+/** WBI 密钥有效期：上游每天轮换，取 6 小时足够保守 */
+const MIXIN_TTL_MS = 6 * 60 * 60 * 1000;
+/** 并发去重：多个请求同时发现密钥过期时只打一次 nav */
+let mixinInflight: Promise<string> | null = null;
 
 function fileNameOf(url: string): string {
   const noQuery = url.split("?")[0];
@@ -527,21 +591,32 @@ async function navRaw(): Promise<Record<string, unknown>> {
   return getJson(`${API}/x/web-interface/nav`);
 }
 
+function mixinFromNav(json: Record<string, unknown>): string {
+  const data = json.data as Record<string, unknown> | undefined;
+  const img = data?.wbi_img as Record<string, unknown> | undefined;
+  const orig = fileNameOf(str(img?.img_url)) + fileNameOf(str(img?.sub_url));
+  if (orig.length < 64) return "";
+  return MIXIN_KEY_ENC_TAB.map((i) => orig[i]).join("");
+}
+
 async function ensureMixinKey(): Promise<string> {
-  if (mixinKey && mixinDay === new Date().getDate()) return mixinKey;
-  try {
-    const json = await navRaw();
-    const data = json.data as Record<string, unknown> | undefined;
-    const img = data?.wbi_img as Record<string, unknown> | undefined;
-    const orig = fileNameOf(str(img?.img_url)) + fileNameOf(str(img?.sub_url));
-    if (orig.length >= 64) {
-      mixinKey = MIXIN_KEY_ENC_TAB.map((i) => orig[i]).join("");
-      mixinDay = new Date().getDate();
+  if (mixinKey && Date.now() - mixinIssuedAt < MIXIN_TTL_MS) return mixinKey;
+  if (mixinInflight) return mixinInflight;
+  mixinInflight = (async () => {
+    try {
+      const key = mixinFromNav(await navRaw());
+      if (key) {
+        mixinKey = key;
+        mixinIssuedAt = Date.now();
+      }
+    } catch (e) {
+      console.warn("[bilibili] WBI 密钥获取失败：", e);
+    } finally {
+      mixinInflight = null;
     }
-  } catch (e) {
-    console.warn("[bilibili] WBI 密钥获取失败：", e);
-  }
-  return mixinKey;
+    return mixinKey;
+  })();
+  return mixinInflight;
 }
 
 /**
@@ -550,6 +625,9 @@ async function ensureMixinKey(): Promise<string> {
  */
 async function signedQuery(params: Record<string, string | number>): Promise<string> {
   const key = await ensureMixinKey();
+  // 拿空 key 去签，w_rid 一定是错的，上游只会回 -352「风控校验失败」——
+  // 那会把「密钥没取到」误报成风控。这里显式抛，指向真正的原因。
+  if (!key) throw new Error("WBI 密钥获取失败，无法签名请求（可能被风控或网络异常）");
   const all: Record<string, string> = {};
   for (const [k, v] of Object.entries(params)) all[k] = String(v);
   all.wts = String(Math.floor(Date.now() / 1000));
@@ -599,13 +677,13 @@ export async function biliNav(): Promise<BiliAccount> {
       `账号信息查询失败：${str(json.message, "上游未返回数据")}（code=${num(json.code)}）`,
     );
   }
-  // 顺手缓存 WBI 密钥，省一次 nav
-  const img = data.wbi_img as Record<string, unknown> | undefined;
-  if (img && !mixinKey) {
-    const orig = fileNameOf(str(img.img_url)) + fileNameOf(str(img.sub_url));
-    if (orig.length >= 64) {
-      mixinKey = MIXIN_KEY_ENC_TAB.map((i) => orig[i]).join("");
-      mixinDay = new Date().getDate();
+  // 顺手缓存 WBI 密钥，省一次 nav。判据与 ensureMixinKey 保持一致（TTL），
+  // 原来的 `!mixinKey` 守卫会让过期密钥永远不被这次 nav 刷新。
+  if (!mixinKey || Date.now() - mixinIssuedAt >= MIXIN_TTL_MS) {
+    const key = mixinFromNav(json);
+    if (key) {
+      mixinKey = key;
+      mixinIssuedAt = Date.now();
     }
   }
   const level = data.level_info as Record<string, unknown> | undefined;
@@ -932,7 +1010,11 @@ async function biliPost(
     headers: { ...baseHeaders(), "Content-Type": "application/x-www-form-urlencoded" },
     body,
   });
-  const json = decodeJson(await res.text());
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`${what}失败：HTTP ${res.status}（${text.slice(0, 80) || "无响应体"}）`);
+  }
+  const json = decodeJson(text);
   if (!json || typeof json !== "object") throw new Error(`${what}失败：上游返回非对象 JSON`);
   assertOk(json as Record<string, unknown>, what);
   return json as Record<string, unknown>;
@@ -970,7 +1052,11 @@ export async function biliCoin(aid: string, multiply = 1): Promise<void> {
 /** 我的收藏夹（`/x/v3/fav/folder/created/list-all`，默认收藏夹排在第一位）。 */
 export async function biliFavFolders(mid: number): Promise<{ id: string; title: string }[]> {
   await ensureCookies();
-  const json = await getJson(`${API}/x/v3/fav/folder/created/list-all?up_mid=${mid}`);
+  // 必须带 spaceHeaders：个人空间类接口有 Referer/Origin 白名单，缺了回 -352
+  const json = await getJson(
+    `${API}/x/v3/fav/folder/created/list-all?up_mid=${mid}`,
+    spaceHeaders(mid),
+  );
   assertOk(json, "获取收藏夹");
   const d = json.data as Record<string, unknown> | undefined;
   const list = (d?.list as unknown[]) ?? [];
@@ -1038,10 +1124,16 @@ export async function biliRecommend(freshIdx = 0, ps = 20): Promise<BiliVideo[]>
   assertOk(json, "加载推荐");
   const data = json.data as Record<string, unknown> | undefined;
   const items = (data?.item as unknown[]) ?? [];
-  return items
-    .filter((it): it is Record<string, unknown> => !!it && typeof it === "object")
-    .map(videoFromFeed)
-    .filter((v) => !!v.bvid);
+  return (
+    items
+      .filter((it): it is Record<string, unknown> => !!it && typeof it === "object")
+      // 推荐流会混入广告（带 ad_info）、直播、番剧卡片；它们也可能带 bvid，
+      // 不过滤就会在视频网格里点开一个播不了的东西（参考 PiliPlus 只收 goto=='av'）。
+      .filter((it) => !it.ad_info)
+      .filter((it) => str(it.goto, "av") === "av")
+      .map(videoFromFeed)
+      .filter((v) => !!v.bvid)
+  );
 }
 
 export async function biliSearch(keyword: string, page = 1, pageSize = 20): Promise<BiliVideo[]> {
@@ -1105,6 +1197,27 @@ function videoFromSearch(m: Record<string, unknown>): BiliVideo {
     reason: "",
     goto: "av",
   };
+}
+
+/**
+ * 造一段随机 base64（长度约 `n` 字节）。
+ *
+ * 用于 playurl 的 dm_img_str / dm_cover_img_str 指纹字段：上游期望「一个看起来
+ * 像图片 base64 的随机串」，值本身无意义，但不能每次完全相同。
+ */
+function randomB64(n: number): string {
+  const bytes = new Uint8Array(n);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) crypto.getRandomValues(bytes);
+  else for (let i = 0; i < n; i++) bytes[i] = Math.floor(Math.random() * 256);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return typeof btoa === "function" ? btoa(bin) : bin;
+}
+
+/** 上游时长字段既有数字（秒）也有 `"12:34"` 字符串，统一成秒。 */
+function clockOrNum(v: unknown): number {
+  if (typeof v === "string" && v.includes(":")) return parseClock(v);
+  return num(v);
 }
 
 /** `"12:34"` / `"1:02:03"` → 秒。 */
@@ -1200,6 +1313,15 @@ export async function biliPlayUrl(bvid: string, cid: string, qn = 80): Promise<B
     high_quality: "1",
     platform: "pc",
     try_look: "1",
+    // 下面这组是 PC 网页端的风控指纹字段（参考 PiliPlus video.dart 的 makSign 参数）。
+    // 缺了它们更容易被回 -352，或返回缺 default 标记的高码率轨道。
+    gaia_source: "pre-load",
+    isGaiaAvoided: "true",
+    web_location: "1315873",
+    dm_img_list: "[]",
+    dm_img_str: randomB64(16),
+    dm_cover_img_str: randomB64(32),
+    dm_img_inter: '{"ds":[],"wh":[0,0,0],"of":[0,0,0]}',
   });
   const json = await getJson(`${API}/x/player/playurl?${qs.toString()}`, {
     Referer: `${VIDEO_REFERER}/video/${bvid}`,
@@ -1302,9 +1424,11 @@ export function biliFormatLabel(play: BiliPlayUrl, qn: number): string {
 export async function biliDanmaku(cid: string): Promise<ArtDanmu[]> {
   if (!cid) return [];
   try {
-    const res = await biliFetch(`${API}/x/v1/dm/list.so?oid=${encodeURIComponent(cid)}`, {
-      headers: { ...baseHeaders() },
-    });
+    const res = await biliFetch(
+      `${API}/x/v1/dm/list.so?oid=${encodeURIComponent(cid)}`,
+      { headers: { ...baseHeaders() } },
+      MEDIA_TIMEOUT_MS,
+    );
     const bytes = new Uint8Array(await res.arrayBuffer());
     let text = new TextDecoder("utf-8").decode(bytes);
     if (!text.includes("<d ") && !text.includes("<?xml")) {
@@ -1340,12 +1464,10 @@ function parseDanmakuXml(xml: string): ArtDanmu[] {
     const text = decodeXmlEntities(match[2]).trim();
     if (!text) continue;
     // B 站：1/2/3 滚动、4 底部、5 顶部、6 逆向、7 高级、8 代码。
-    // 与 utils/danmaku.ts 的 DanDanPlay 映射保持一致（4→1、5→2、其余→0）。
-    let mode: 0 | 1 | 2;
-    if (rawMode === 4) mode = 1;
-    else if (rawMode === 5) mode = 2;
-    else if (rawMode >= 1 && rawMode <= 3) mode = 0;
-    else continue;
+    // 6/7/8 插件没有对应形态（逆向 / 高级 / 代码弹幕），跳过。
+    if (rawMode < 1 || rawMode > 5) continue;
+    // 走共享映射：两条链路各写一份必然再写反一次（见 utils/danmaku.ts mapDanmakuMode）
+    const mode = mapDanmakuMode(rawMode);
     out.push({
       text,
       time,
@@ -1457,7 +1579,9 @@ export async function biliUserVideos(
         cid: str(x.cid),
         title: biliStripHtml(str(x.title)),
         cover: biliImage(x.pic ?? x.cover),
-        duration: num(x.length ?? x.duration),
+        // space/wbi/arc/search 的 length 是 "mm:ss" 字符串（PiliPlus 的 item.dart 也
+        // 声明为 String?），直接 num() 会得到 0，卡片上时长永远显示 00:00
+        duration: clockOrNum(x.length ?? x.duration),
         ownerName: str(x.author),
         ownerFace: "",
         ownerMid: num(x.mid) || mid,
@@ -1658,4 +1782,56 @@ export async function biliAddReply(
   const d = json.data as Record<string, unknown> | undefined;
   const reply = d?.reply as Record<string, unknown> | undefined;
   return str(reply?.rpid);
+}
+
+// ------------------------------------------------------------------ 观看进度
+
+/**
+ * 上报播放进度（`/x/click-interface/web/heartbeat`）。
+ *
+ * 这是 web 端「看到哪儿了」的权威来源：上报后 B 站网页 / App 的观看历史会同步，
+ * 本项目的 `biliHistory()` 也能读到，进而支持跨设备续播。
+ *
+ * 实测匿名也会回 code 0（只回一个 `{}`），但游客的进度不会出现在任何地方，
+ * 故仍只在登录时调用。`type=3` 是 UGC 视频（番剧 4 / 课程 10，见 PiliPlus
+ * `models/common/video/video_type.dart`）。
+ */
+export async function biliHeartbeat(bvid: string, cid: string, playedTime: number): Promise<void> {
+  if (!biliIsLoggedIn() || !bvid || !cid) return;
+  await biliPost(
+    "/x/click-interface/web/heartbeat",
+    {
+      bvid,
+      cid,
+      played_time: String(Math.max(0, Math.floor(playedTime))),
+      type: "3",
+      sub_type: "0",
+    },
+    "上报播放进度",
+  );
+}
+
+/**
+ * 该视频的「上次看到」（秒）+ 上次看到的分 P cid。
+ *
+ * 走 `/x/player/v2`：它同时给出 `last_play_time` / `last_play_cid`，比历史列表
+ * 更精确 —— 历史列表只有整条记录，拿不到「上次看到哪一分 P」。未登录或没看过时
+ * 返回 0。
+ */
+export async function biliLastPlay(
+  bvid: string,
+  cid: string,
+): Promise<{ seconds: number; cid: string }> {
+  if (!biliIsLoggedIn()) return { seconds: 0, cid: "" };
+  const qs = new URLSearchParams({ bvid, cid });
+  const json = await getJson(`${API}/x/player/v2?${qs.toString()}`, {
+    Referer: `${VIDEO_REFERER}/video/${bvid}`,
+  });
+  assertOk(json, "读取播放进度");
+  const d = json.data as Record<string, unknown> | undefined;
+  return {
+    // 上游单位是毫秒
+    seconds: num(d?.last_play_time) / 1000,
+    cid: str(d?.last_play_cid),
+  };
 }

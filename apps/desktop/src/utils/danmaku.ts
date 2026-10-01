@@ -16,11 +16,25 @@
 import type { DanmakuEntry } from "@shared/types";
 import { danmakuLog } from "@/utils/danmakuLog";
 
-/** DanDanPlay 模式 → artplayer 模式 */
-function mapMode(d: DanmakuEntry["mode"]): 0 | 1 | 2 {
-  if (d === 4) return 1; // 底部
-  if (d === 5) return 2; // 顶部
-  return 0; // 默认滚动
+/**
+ * 源端弹幕模式 → artplayer-plugin-danmuku 模式。
+ *
+ * **这是全项目唯一的映射实现**，B 站与 DanDanPlay 两条链路都走这里。
+ *
+ * 两边语义必须对齐，且都以 artplayer-plugin-danmuku 的官方定义为准：
+ *   artplayer: 0 = 滚动 / 1 = 顶部 / 2 = 底部
+ *   （见其 types/artplayer-plugin-danmuku.d.ts 对 `mode` 的注释）
+ *
+ * 源端（B 站与 DanDanPlay 同构）: 1/2/3 = 滚动, 4 = 底部, 5 = 顶部。
+ *
+ * ⚠️ 这里曾经写成 `4 → 1`、`5 → 2`，即把「底部」映射成了「顶部」、反之亦然，
+ * 表现为顶部弹幕从底部飘出来。插件自己的 XML 解析用的就是 `case 4: return 2;
+ * case 5: return 1`，可直接对照。
+ */
+export function mapDanmakuMode(mode: number): 0 | 1 | 2 {
+  if (mode === 4) return 2; // 底部
+  if (mode === 5) return 1; // 顶部
+  return 0; // 1/2/3 及其它一律按滚动
 }
 
 /** 十进制 RGB int → "#rrggbb" */
@@ -43,7 +57,7 @@ export function toArtDanmu(d: DanmakuEntry): ArtDanmu {
   return {
     text: d.text,
     time: d.time,
-    mode: mapMode(d.mode),
+    mode: mapDanmakuMode(d.mode),
     color: colorHex(d.color),
     border: true,
   };

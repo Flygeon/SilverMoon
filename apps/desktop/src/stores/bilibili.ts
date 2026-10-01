@@ -29,8 +29,10 @@ import {
   biliFavResources,
   biliFavorite,
   biliFollow,
+  biliHeartbeat,
   biliHistory,
   biliIsLoggedIn,
+  biliLastPlay,
   biliLike,
   biliLogout,
   biliNav,
@@ -242,7 +244,8 @@ export const useBiliStore = defineStore("bilibili", () => {
     } catch (e) {
       if (token !== searchToken) return;
       searchError.value = cleanError(e);
-      searchEnd.value = true;
+      // 刻意不置 searchEnd：一次瞬时抖动就把后续分页永久关掉，用户再也翻不了页；
+      // 「到底」只能由服务端契约（空页 / isEnd）决定。
     }
     searchLoadingMore.value = false;
   }
@@ -381,10 +384,78 @@ export const useBiliStore = defineStore("bilibili", () => {
   const playStatus = ref<BiliStatus>("idle");
   const playError = ref("");
   let openToken = 0;
+  /**
+   * 同一视频内的取流序号。
+   *
+   * `openToken` 只在「换视频」时变化，区分不了「同一视频连续切两次清晰度」：
+   * 两个 playurl 并发时后发的可能先回，先发的后回就会覆盖界面上的清晰度。
+   */
+  let playToken = 0;
+
+  // ---- 续播 / 进度上报 ----
+  /** 这条视频要起播的位置（秒）；0 表示从头播 */
+  const resumeAt = ref(0);
+  /**
+   * 进度上报节流。
+   *
+   * 上游对 heartbeat 有频控（实测短时间高频会回 -799），所以按 15s 一次上报；
+   * 暂停 / 关闭浮层 / 切分 P 时再补一次，保证「退出前看到哪」不丢。
+   */
+  let heartbeatTimer: number | null = null;
+  let lastReported = -1;
+
+  function stopHeartbeat(): void {
+    if (heartbeatTimer !== null) {
+      window.clearTimeout(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  }
+
+  /** 立即上报一次当前进度（失败静默：它只是锦上添花，不该弹错打扰观看）。 */
+  function reportProgress(seconds: number): void {
+    const v = current.value;
+    const cid = activeCid.value;
+    if (!v || !cid || !account.value.isLogin) return;
+    const t = Math.floor(seconds);
+    if (t <= 0) return;
+    lastReported = t;
+    void biliHeartbeat(v.bvid, cid, t).catch(() => {
+      // 风控 / 网络问题都吞掉：上报失败不影响播放
+    });
+  }
+
+  /** 播放中按时长节流上报。 */
+  function tickProgress(seconds: number): void {
+    if (heartbeatTimer !== null) return;
+    heartbeatTimer = window.setTimeout(() => {
+      heartbeatTimer = null;
+    }, 15000);
+    // 与上次上报相差太小就不发（避免同一秒重复打）。
+    // lastReported < 0 表示本次会话还没报过 —— 必须发，不能因 |t-(-1)| 太小被吃掉。
+    if (lastReported >= 0 && Math.abs(Math.floor(seconds) - lastReported) < 5) return;
+    reportProgress(seconds);
+  }
+
+  /** 打开视频时读取「上次看到」，供播放器起播定位。 */
+  async function loadResumePoint(bvid: string, cid: string): Promise<void> {
+    resumeAt.value = 0;
+    if (!account.value.isLogin || !cid) return;
+    try {
+      const last = await biliLastPlay(bvid, cid);
+      // 已看到 95% 以上视为看完，从头播（否则一进来就贴着结尾）
+      const total = detail.value?.duration ?? current.value?.duration ?? 0;
+      if (last.seconds > 5 && (!total || last.seconds < total * 0.95)) {
+        resumeAt.value = last.seconds;
+      }
+    } catch {
+      // 读不到进度就从 0 播，不必打扰用户
+    }
+  }
 
   async function resolvePlay(token: number, qn?: number): Promise<void> {
     const v = current.value;
     if (!v) return;
+    const myPlay = ++playToken;
     if (!activeCid.value) {
       playError.value = "该视频缺少 cid，无法解析播放地址";
       playStatus.value = "error";
@@ -394,7 +465,8 @@ export const useBiliStore = defineStore("bilibili", () => {
     playError.value = "";
     try {
       const p = await biliPlayUrl(v.bvid, activeCid.value, qn ?? activeQn.value);
-      if (token !== openToken) return;
+      // 两次校验：换视频（openToken）与同一视频内重复取流（playToken）都要拦
+      if (token !== openToken || myPlay !== playToken) return;
       play.value = p;
       // 用户没手动选过 → 直接落到最高档，避免被上游的默认 quality 拖回 720P
       if (!qualityPinned.value && p.qualities.length) {
@@ -404,7 +476,7 @@ export const useBiliStore = defineStore("bilibili", () => {
       }
       playStatus.value = "ready";
     } catch (e) {
-      if (token !== openToken) return;
+      if (token !== openToken || myPlay !== playToken) return;
       playError.value = cleanError(e);
       playStatus.value = "error";
     }
@@ -421,6 +493,9 @@ export const useBiliStore = defineStore("bilibili", () => {
     // 新视频重置到手动的「未选」态，重新按最高档起播
     qualityPinned.value = false;
     activeQn.value = 80;
+    resumeAt.value = 0;
+    lastReported = -1;
+    stopHeartbeat();
     resetDiscussions();
     // 相关推荐只依赖 bvid，和详情/取流并行，别让它排在后面等
     void loadRelated(video.bvid);
@@ -433,6 +508,11 @@ export const useBiliStore = defineStore("bilibili", () => {
       // 评论要拿 UP mid 标「UP 主」标记，所以等详情回来再拉；互动状态同理（要 aid）
       void loadReplies(true);
       void loadRelation();
+      // 续播点必须**先于**取流拿到：mountDash 起播时要一次性给对 startTime，
+      // 若并行则可能在播放器已挂载后才返回，表现为「从头开始播」。
+      // 时长判断要 detail，所以这一步只能排在这里（详情已在上面 await 过）。
+      await loadResumePoint(video.bvid, activeCid.value);
+      if (token !== openToken) return;
       await resolvePlay(token);
     } catch (e) {
       if (token !== openToken) return;
@@ -448,13 +528,21 @@ export const useBiliStore = defineStore("bilibili", () => {
     await resolvePlay(openToken, qn);
   }
 
-  async function selectPart(cid: string): Promise<void> {
+  async function selectPart(cid: string, playedSeconds = 0): Promise<void> {
     if (cid === activeCid.value) return;
+    // 切分 P 前先上报旧分 P 的进度，否则那一段的观看记录会丢
+    if (playedSeconds > 0) reportProgress(playedSeconds);
     activeCid.value = cid;
+    resumeAt.value = 0;
+    lastReported = -1;
     await resolvePlay(openToken);
+    void loadResumePoint(current.value?.bvid ?? "", cid);
   }
 
-  function closeVideo(): void {
+  function closeVideo(playedSeconds = 0): void {
+    // 关闭前补报一次：这是「退出时看到哪」唯一的落点
+    if (playedSeconds > 0) reportProgress(playedSeconds);
+    stopHeartbeat();
     openToken += 1;
     current.value = null;
     detail.value = null;
@@ -756,18 +844,42 @@ export const useBiliStore = defineStore("bilibili", () => {
   }
 
   // ---- 弹幕（按 cid 缓存）----
+  /**
+   * 弹幕缓存：按 cid 存，**带 LRU 上限**。
+   *
+   * 单个视频的弹幕可能有几千条，看几十个视频不动上限就会累积到几十 MB。
+   * Map 保持插入序，超限时删最旧的一条即可（简单 LRU 近似，够用）。
+   */
   const danmakuCache = new Map<string, ArtDanmu[]>();
+  const DANMAKU_CACHE_MAX = 8;
   const danmakuLoading = new Map<string, Promise<ArtDanmu[]>>();
+
+  function cacheDanmaku(cid: string, items: ArtDanmu[]): void {
+    // 重新插入以把它挪到 Map 末尾（最近使用）
+    danmakuCache.delete(cid);
+    danmakuCache.set(cid, items);
+    while (danmakuCache.size > DANMAKU_CACHE_MAX) {
+      const oldest = danmakuCache.keys().next().value;
+      if (oldest === undefined) break;
+      danmakuCache.delete(oldest);
+    }
+  }
 
   async function loadDanmaku(cid: string): Promise<ArtDanmu[]> {
     if (!cid) return [];
     const cached = danmakuCache.get(cid);
-    if (cached) return cached;
+    if (cached) {
+      // 命中即刷新 LRU 顺序
+      cacheDanmaku(cid, cached);
+      return cached;
+    }
     const inflight = danmakuLoading.get(cid);
     if (inflight) return inflight;
     const task = biliDanmaku(cid)
       .then((items) => {
-        danmakuCache.set(cid, items);
+        // 只在真拿到弹幕时写缓存：拉取失败也会返回 []，若把它缓存下来，
+        // 这个 cid 就永久变成「没有弹幕」，重开弹幕也救不回来。
+        if (items.length) cacheDanmaku(cid, items);
         return items;
       })
       .finally(() => danmakuLoading.delete(cid));
@@ -1039,7 +1151,7 @@ export const useBiliStore = defineStore("bilibili", () => {
     } catch (e) {
       if (token !== userToken) return;
       userError.value = cleanError(e);
-      userEnd.value = true;
+      // 同 loadMoreSearch：出错不等于到底，否则一次网络抖动就再也翻不了页
     } finally {
       userLoadingMore.value = false;
     }
@@ -1130,6 +1242,11 @@ export const useBiliStore = defineStore("bilibili", () => {
     selectPart,
     closeVideo,
     loadDanmaku,
+    // 续播 / 进度
+    resumeAt,
+    tickProgress,
+    reportProgress,
+    stopHeartbeat,
     // 评论 / 相关推荐
     replies,
     replyTotal,

@@ -24,7 +24,7 @@ import {
   type BiliStream,
 } from "@/utils/bilibili";
 import { BiliDashSession } from "@/utils/biliDash";
-import type { ArtDanmu } from "@/utils/danmaku";
+import { applyTimeOffset, type ArtDanmu } from "@/utils/danmaku";
 import { translate } from "@shared/i18n";
 
 const emit = defineEmits<{ (e: "login"): void }>();
@@ -77,31 +77,60 @@ async function loadDanmaku(): Promise<ArtDanmu[]> {
   if (!cid) return [];
   const items = await bili.loadDanmaku(cid);
   if (gen !== danmakuGen) return [];
-  const offset = settings.danmakuTimeOffsetMs / 1000;
-  return offset ? items.map((d) => ({ ...d, time: Math.max(0, d.time + offset) })) : items;
+  // 复用番剧侧同一实现，避免两处 clamp 规则分叉
+  return applyTimeOffset(items, settings.danmakuTimeOffsetMs);
 }
 
 type DanmakuPlugin = {
-  load: (d: ArtDanmu[]) => Promise<unknown>;
+  /** 无参调用才会 reset + 重新走 `option.danmuku`；传数组是「追加」，慎用 */
+  load: (d?: ArtDanmu[]) => Promise<unknown>;
   show?: () => void;
   hide?: () => void;
   isHide?: boolean;
+  /** 实时改配置（透明度 / 字号 / 速度 / 边距等），无需重建播放器 */
+  config?: (option: Record<string, unknown>) => void;
 };
 
 function danmakuPlugin(): DanmakuPlugin | undefined {
   return art?.plugins?.artplayerPluginDanmuku as DanmakuPlugin | undefined;
 }
 
+/**
+ * 重装弹幕。
+ *
+ * ⚠️ 必须**无参**调用 `plugin.load()`。
+ *
+ * 插件的 `load(data)` 只有在不传参时才执行 `reset()` + 清空 `queue/states/$refs`；
+ * 传数组时它只做「逐条 emit 追加」。而这个函数在每次挂源（首次播放、切清晰度、
+ * 切分 P）后都会被调用，配着构造时的 `danmuku` 回调（也是无参 load）一起，
+ * 同一条弹幕会被叠加 2~N 次 —— 表现为屏幕上弹幕成倍重复。
+ *
+ * 无参 load 会 reset 并重新调用 `option.danmuku`（即 `loadDanmaku()`），
+ * 天然带上当前 cid 与时间轴偏移，也是唯一能清空的路径。
+ */
 async function reloadDanmaku(): Promise<void> {
   const plugin = danmakuPlugin();
   if (!plugin) return;
-  // 关掉弹幕时清空已载入的列表，避免下次开启还留着上一条视频的弹幕
-  if (!settings.danmakuEnabled) {
-    void plugin.load([]);
-    return;
-  }
-  const items = await loadDanmaku();
-  if (art && danmakuPlugin() === plugin) void plugin.load(items);
+  await plugin.load();
+}
+
+/**
+ * 把弹幕外观设置实时推给插件。
+ *
+ * 这些值原来只在 createPlayer 构造时读一次，设置页改完必须重开视频才生效。
+ * 插件提供 `config()` 可热改，这里直接复用。
+ */
+function applyDanmakuAppearance(): void {
+  const plugin = danmakuPlugin();
+  if (!plugin?.config) return;
+  const area = Math.max(0, 100 - settings.danmakuArea) / 2;
+  plugin.config({
+    speed: settings.danmakuSpeed,
+    opacity: settings.danmakuOpacity / 100,
+    fontSize: settings.danmakuFontSize,
+    antiOverlap: settings.danmakuAntiOverlap,
+    margin: [`${area}%`, `${area}%`],
+  });
 }
 
 async function createPlayer(url: string | null): Promise<void> {
@@ -160,6 +189,11 @@ async function createPlayer(url: string | null): Promise<void> {
 
   // 按设置把弹幕显示 / 隐藏落到实处（构造时的 visible 只决定初始态）
   syncDanmakuVisibility();
+  applyDanmakuAppearance();
+
+  // 观看进度上报：播放中按时长节流，暂停时补一次（与番剧播放器同款节奏）
+  art.on("video:timeupdate", () => bili.tickProgress(currentSeconds()));
+  art.on("video:pause", () => bili.reportProgress(currentSeconds()));
 
   // 媒体错误（多为 CDN 防盗链 403/503）——ArtPlayer 会自己重连几轮，
   // 但界面上一片「重新连接」看不出原因，这里显式提示并提供重试。
@@ -238,7 +272,9 @@ async function mountDash(videoTrack: BiliStream, audioTrack: BiliStream | null):
 
   const session = new BiliDashSession();
   dash = session;
-  const startTime = el.currentTime > 0 && Number.isFinite(el.currentTime) ? el.currentTime : 0;
+  // 切清晰度时保留当前播放位置；首次起播用 store 读到的续播点
+  const startTime =
+    el.currentTime > 0 && Number.isFinite(el.currentTime) ? el.currentTime : (bili.resumeAt ?? 0);
 
   try {
     await session.load(el, {
@@ -280,10 +316,19 @@ async function mountPlayer(url: string, type: "auto" | "m3u8" = "auto"): Promise
 }
 
 let unwatchUrl: (() => void) | null = null;
+let unwatchDanmakuOpts: (() => void) | null = null;
+let unwatchDanmakuSwitch: (() => void) | null = null;
 
 /** 关闭浮层：直接改 store 状态（不经过 emit 中转，避免多一层出错点） */
 function close(): void {
-  bili.closeVideo();
+  // 带上当前位置，store 会在关闭前最后上报一次
+  bili.closeVideo(currentSeconds());
+}
+
+/** 当前播放位置（拿不到就是 0）。 */
+function currentSeconds(): number {
+  const t = art?.currentTime;
+  return typeof t === "number" && Number.isFinite(t) ? t : 0;
 }
 
 /** Esc 关闭浮层（全屏时交给 ArtPlayer 自己处理 Esc 退全屏） */
@@ -295,6 +340,26 @@ onMounted(() => {
   window.addEventListener("keydown", onKeydown);
   document.addEventListener("pointerdown", onDocPointerDown, true);
   if (hasSource.value) void mountSource();
+  // 弹幕外观改动实时生效（不必重开视频）
+  unwatchDanmakuOpts = watch(
+    () => [
+      settings.danmakuOpacity,
+      settings.danmakuFontSize,
+      settings.danmakuArea,
+      settings.danmakuSpeed,
+      settings.danmakuAntiOverlap,
+    ],
+    () => applyDanmakuAppearance(),
+  );
+  // 总开关：开着的时候把弹幕装回来（关掉时由 hide() 隐藏，但列表也需要清）
+  unwatchDanmakuSwitch = watch(
+    () => settings.danmakuEnabled,
+    (on) => {
+      syncDanmakuVisibility();
+      if (on) void reloadDanmaku();
+    },
+  );
+
   // 播放地址变化（首帧到达 / 切清晰度 / 切分 P）时重挂
   unwatchUrl = watch(
     () => [play.value?.quality, play.value?.durl[0], bili.activeCid].join("|"),
@@ -309,6 +374,13 @@ onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", onDocPointerDown, true);
   unwatchUrl?.();
   unwatchUrl = null;
+  unwatchDanmakuOpts?.();
+  unwatchDanmakuOpts = null;
+  unwatchDanmakuSwitch?.();
+  unwatchDanmakuSwitch = null;
+  // 卸载（切页 / 关应用）前把进度落一次，否则这一段观看记录会丢
+  bili.reportProgress(currentSeconds());
+  bili.stopHeartbeat();
   danmakuGen += 1;
   dash?.destroy();
   dash = null;
@@ -563,7 +635,7 @@ const metaItems = computed(() => {
                   class="part"
                   :class="{ active: p.cid === bili.activeCid }"
                   :title="partLabel(i, p.part)"
-                  @click="bili.selectPart(p.cid)"
+                  @click="bili.selectPart(p.cid, currentSeconds())"
                 >
                   <span class="part-name">{{ partLabel(i, p.part) }}</span>
                   <span class="part-time tabular-nums">{{ biliDuration(p.duration) }}</span>

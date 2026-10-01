@@ -209,7 +209,6 @@ class TrackFeeder {
     this.next = segmentIndexAt(this.segments, t);
   }
 
-
   /**
    * 目标播放位置没有数据时，把游标回退到该位置重新拉。
    *

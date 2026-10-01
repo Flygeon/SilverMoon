@@ -163,7 +163,10 @@ describe("拉取游标决策", () => {
     });
 
     it("多段缓冲区（evict 之后）只认真正覆盖该位置的那段", () => {
-      const b = ranges([[0, 5], [30, 40]]);
+      const b = ranges([
+        [0, 5],
+        [30, 40],
+      ]);
       expect(isTimeBuffered(b, 3)).toBe(true);
       expect(isTimeBuffered(b, 35)).toBe(true);
       // 中间的空洞没有数据
