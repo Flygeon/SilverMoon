@@ -13,8 +13,9 @@
  * ## 坐标系
  *
  * `outerPosition()` / `outerSize()` 给的是**物理像素**，而渲染进程的
- * `PointerEvent.screenX` 是 CSS 像素。为了让自绘标题栏的拖拽逻辑保持正确，
- * 这里刻意统一按物理像素进出，由主进程按显示器缩放比换算。
+ * `PointerEvent.screenX` 是 CSS 像素，两者口径**不同**，混算前须自己按显示器
+ * 缩放比换算（主进程侧由 `scaleOf` 处理，见 `electron/ipc.ts`）。
+ * 标题栏拖拽已改用系统原生 `app-region`，不再依赖这组坐标。
  *
  * ## 关闭拦截
  *

@@ -1,8 +1,9 @@
 /**
  * 几何类型：逻辑坐标与物理像素。
  *
- * 自绘标题栏的拖拽用 `PhysicalPosition`（物理像素，与 `PointerEvent.screenX`
- * 经主进程换算后一致）；`LogicalPosition` / `LogicalSize` 供需要逻辑坐标的场景。
+ * `PhysicalPosition`（物理像素）用于与主进程交换窗口几何——它与渲染进程的
+ * `PointerEvent.screenX`（CSS 像素）**不是同一口径**，混算前须按缩放比换算；
+ * `LogicalPosition` / `LogicalSize` 供需要逻辑坐标的场景。
  */
 /** 逻辑坐标（CSS 像素）位置 */
 export class LogicalPosition {

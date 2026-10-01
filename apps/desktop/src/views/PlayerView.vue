@@ -5,7 +5,6 @@ import { useSettingsStore } from "@/stores/settings";
 import { useNeteaseStore } from "@/stores/netease";
 import { useRouter } from "vue-router";
 import { translate } from "@shared/i18n";
-import { useWindowDrag } from "@/composables/useWindowDrag";
 import FluidBackground from "@/components/FluidBackground.vue";
 import LyricsView from "@/components/LyricsView.vue";
 import PlayerControlIcon from "@/components/PlayerControlIcon.vue";
@@ -75,8 +74,6 @@ function onBodyTap(e: MouseEvent) {
   );
   if (!hit) mobileLyrics.value = false;
 }
-
-const { startDrag } = useWindowDrag();
 
 /** 当前在线歌曲的网易云 ID（仅网易云在线歌曲可查评论/红心） */
 const neteaseSongId = computed(() => {
@@ -194,8 +191,8 @@ onBeforeUnmount(() => {
   <div class="player-page">
     <FluidBackground />
 
-    <!-- 顶部覆盖层（空白处可拖拽窗口） -->
-    <div class="player-topbar" @pointerdown="startDrag">
+    <!-- 顶部覆盖层（拖拽由 CSS app-region 交给系统原生处理） -->
+    <div class="player-topbar">
       <button class="back" @click="router.back()" @pointerdown.stop>
         <span class="material-symbols-outlined">arrow_back</span> {{ t("player.back") }}
       </button>
@@ -440,8 +437,12 @@ onBeforeUnmount(() => {
   padding-right: calc(24px + env(safe-area-inset-right));
   z-index: 10;
   background: linear-gradient(to bottom, rgba(0, 0, 0, 0.5), transparent);
+  /* 播放页不渲染标题栏，这条顶栏就是唯一的拖拽区 */
+  -webkit-app-region: drag;
 }
 .back {
+  /* 返回按钮不参与拖拽，否则收不到点击 */
+  -webkit-app-region: no-drag;
   position: absolute;
   left: 24px;
   top: calc(50% + 6px);

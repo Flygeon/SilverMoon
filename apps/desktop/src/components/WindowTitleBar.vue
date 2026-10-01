@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from "vue";
-import { useWindowDrag } from "@/composables/useWindowDrag";
+import { useWindowControls } from "@/composables/useWindowControls";
 import { useSettingsStore } from "@/stores/settings";
 import { capabilities } from "@/capabilities";
 import { isDesktop } from "@/capabilities";
@@ -8,7 +8,7 @@ import WindowControls from "@/components/WindowControls.vue";
 import type { ThemeMode } from "@/stores/settings";
 
 const settings = useSettingsStore();
-const { isMaximized, minimize, toggleMaximize, close, startDrag } = useWindowDrag();
+const { isMaximized, minimize, toggleMaximize, close } = useWindowControls();
 
 const GITHUB_REPO = "https://github.com/Flygeon/LumiLuna-Next";
 
@@ -62,8 +62,8 @@ onBeforeUnmount(() => {
 
 <template>
   <header v-if="isDesktop" class="window-title-bar lm-glass" data-lm-region="titlebar">
-    <!-- 品牌 + 可拖拽区 -->
-    <div class="tb-drag" @pointerdown="startDrag">
+    <!-- 品牌 + 拖拽区（拖拽由 CSS app-region 交给系统原生处理） -->
+    <div class="tb-drag">
       <span class="material-symbols-outlined tb-brand-icon">blur_on</span>
       <span class="tb-brand-name">SilverMoon</span>
     </div>
@@ -140,6 +140,9 @@ onBeforeUnmount(() => {
   min-width: 0;
   height: 100%;
   cursor: default;
+  /* 本窗口无系统标题栏（frame: false），这一条即是拖拽区。
+     子元素里的可点区域必须显式声明 no-drag，否则收不到点击。 */
+  -webkit-app-region: drag;
 }
 
 .tb-brand-icon {
@@ -164,6 +167,8 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 0;
   flex: none;
+  /* 外观菜单 / GitHub / 窗口控制按钮都不参与拖拽 */
+  -webkit-app-region: no-drag;
 }
 
 /* 图标按钮 */
