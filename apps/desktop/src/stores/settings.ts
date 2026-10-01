@@ -183,6 +183,12 @@ const DEFAULTS = {
   danmakuSpeed: 5,
   /** 弹幕防重叠 */
   danmakuAntiOverlap: true,
+  /** B 站播放器音量 0-1（重开浮层不再回到硬编码的 0.8） */
+  biliVolume: 0.8,
+  /** B 站播放器倍速 */
+  biliPlaybackRate: 1,
+  /** B 站播放器是否上报观看进度（对标 PiliPlus 的「暂停观看记录」） */
+  biliHistoryEnabled: true,
   /** Bangumi 官方 Access Token（在 https://next.bgm.tv/demo/access-token 获取；与 pixivRefreshToken 同款本地保存） */
   bangumiToken: "",
   /** 当前连接的 Bangumi 用户名（token 校验成功后写入，收藏接口按它查询） */
@@ -268,6 +274,9 @@ export const useSettingsStore = defineStore("settings", () => {
   const danmakuTimeOffsetMs = ref(DEFAULTS.danmakuTimeOffsetMs);
   const danmakuSpeed = ref(DEFAULTS.danmakuSpeed);
   const danmakuAntiOverlap = ref(DEFAULTS.danmakuAntiOverlap);
+  const biliVolume = ref(DEFAULTS.biliVolume);
+  const biliPlaybackRate = ref(DEFAULTS.biliPlaybackRate);
+  const biliHistoryEnabled = ref(DEFAULTS.biliHistoryEnabled);
   const bangumiToken = ref(DEFAULTS.bangumiToken);
   const bangumiUsername = ref(DEFAULTS.bangumiUsername);
   const bangumiSyncedAt = ref(DEFAULTS.bangumiSyncedAt);
@@ -360,6 +369,9 @@ export const useSettingsStore = defineStore("settings", () => {
     danmakuTimeOffsetMs,
     danmakuSpeed,
     danmakuAntiOverlap,
+    biliVolume,
+    biliPlaybackRate,
+    biliHistoryEnabled,
     bangumiToken,
     bangumiUsername,
     bangumiSyncedAt,

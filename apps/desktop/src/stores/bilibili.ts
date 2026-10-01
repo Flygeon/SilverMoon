@@ -51,6 +51,7 @@ import {
   biliVideoDetail,
 } from "@/utils/bilibili";
 import { JsonStore } from "@/ipc/store";
+import { useSettingsStore } from "@/stores/settings";
 import type { ArtDanmu } from "@/utils/danmaku";
 
 export type BiliStatus = "idle" | "loading" | "ready" | "error";
@@ -413,9 +414,13 @@ export const useBiliStore = defineStore("bilibili", () => {
 
   /** 立即上报一次当前进度（失败静默：它只是锦上添花，不该弹错打扰观看）。 */
   function reportProgress(seconds: number): void {
+    // 用户可关闭观看记录（对标 PiliPlus 的 historyPause）
+    if (!useSettingsStore().biliHistoryEnabled) return;
     const v = current.value;
     const cid = activeCid.value;
-    if (!v || !cid || !account.value.isLogin) return;
+    // 用 cookie 判定而非 account.isLogin：-101 清凭据后 account 要等下次 nav
+    // 才更新，这段时间会出现「界面显示已登录、实际发必败请求」的不一致。
+    if (!v || !cid || !biliIsLoggedIn()) return;
     const t = Math.floor(seconds);
     if (t <= 0) return;
     lastReported = t;
@@ -436,19 +441,42 @@ export const useBiliStore = defineStore("bilibili", () => {
     reportProgress(seconds);
   }
 
-  /** 打开视频时读取「上次看到」，供播放器起播定位。 */
+  /**
+   * 打开视频时读取「上次看到」，供播放器起播定位。
+   *
+   * 两个要点：
+   * - 上游给的是「上次看到的分 P」（`last_play_cid`）。多分 P 的视频若只顾时间轴，
+   *   会拿 P1 的 cid 去 seek 到「P2 的第 10 分钟」，位置完全是错的。所以这里会先用
+   *   `last.cid` 反查并预选该分 P，反查不到就干脆不 seek。
+   * - 已看到 95% 以上视为看完，从头播（否则一进来就贴着结尾）。
+   */
   async function loadResumePoint(bvid: string, cid: string): Promise<void> {
     resumeAt.value = 0;
-    if (!account.value.isLogin || !cid) return;
+    if (!useSettingsStore().biliHistoryEnabled || !cid) return;
+    if (!biliIsLoggedIn()) return;
     try {
       const last = await biliLastPlay(bvid, cid);
-      // 已看到 95% 以上视为看完，从头播（否则一进来就贴着结尾）
-      const total = detail.value?.duration ?? current.value?.duration ?? 0;
-      if (last.seconds > 5 && (!total || last.seconds < total * 0.95)) {
-        resumeAt.value = last.seconds;
+      if (last.seconds <= 5) return;
+
+      // 上游记录了另一个分 P → 先切过去，再按那一分 P 的时长判断是否看完
+      const parts = detail.value?.parts ?? [];
+      if (last.cid && last.cid !== cid && parts.length) {
+        const target = parts.find((p) => p.cid === last.cid);
+        if (target) {
+          activeCid.value = target.cid;
+          const total = target.duration || 0;
+          if (!total || last.seconds < total * 0.95) resumeAt.value = last.seconds;
+          return;
+        }
+        // 反查不到（分 P 被删 / 数据不同步）：宁可从头播，也不要跳错位置
+        return;
       }
-    } catch {
-      // 读不到进度就从 0 播，不必打扰用户
+
+      const total = detail.value?.duration ?? current.value?.duration ?? 0;
+      if (!total || last.seconds < total * 0.95) resumeAt.value = last.seconds;
+    } catch (e) {
+      // 读不到进度就从 0 播，但留一条日志便于排查（续播静默失效最难查）
+      console.warn("[bilibili] 读取续播点失败：", e);
     }
   }
 
@@ -530,13 +558,17 @@ export const useBiliStore = defineStore("bilibili", () => {
 
   async function selectPart(cid: string, playedSeconds = 0): Promise<void> {
     if (cid === activeCid.value) return;
+    const token = openToken;
     // 切分 P 前先上报旧分 P 的进度，否则那一段的观看记录会丢
     if (playedSeconds > 0) reportProgress(playedSeconds);
     activeCid.value = cid;
     resumeAt.value = 0;
     lastReported = -1;
+    // 必须先拿到续播点再取流：resolvePlay 会让 play.value 变化，播放器随即挂载
+    // 并读 resumeAt；排在后面的话写回的值没人消费，切分 P 的断点必然丢失。
+    await loadResumePoint(current.value?.bvid ?? "", cid);
+    if (token !== openToken) return;
     await resolvePlay(openToken);
-    void loadResumePoint(current.value?.bvid ?? "", cid);
   }
 
   function closeVideo(playedSeconds = 0): void {
@@ -987,8 +1019,14 @@ export const useBiliStore = defineStore("bilibili", () => {
       if (!favMediaId.value && favFolders.value.length) {
         favMediaId.value = favFolders.value[0].id;
       }
+      // 拉到 0 个收藏夹也要落到 ready，否则界面会永远停在 loading
+      if (favStatus.value === "idle") favStatus.value = "ready";
     } catch (e) {
+      // 必须置 error：否则 favStatus 永远停在 idle，而 loadFavorites 在
+      // 「没有 favMediaId」时会直接 return，于是错误被伪装成「这个收藏夹是空的」，
+      // MinePanel 里的 error EmptyState 也就永远不可达。
       favError.value = cleanError(e);
+      favStatus.value = "error";
     }
   }
 
@@ -997,7 +1035,13 @@ export const useBiliStore = defineStore("bilibili", () => {
       favMediaId.value = mediaId;
       refresh = true;
     }
-    if (!favMediaId.value) return;
+    if (!favMediaId.value) {
+      // 没有可用的收藏夹 id（列表拉取失败 / 账号下确实没有）——给明确错误态，
+      // 不能静默 return，否则界面显示「这个收藏夹还是空的」而实际是加载失败。
+      favStatus.value = "error";
+      if (!favError.value) favError.value = "没有可用的收藏夹";
+      return;
+    }
     const token = refresh ? ++favToken : favToken;
     if (refresh) {
       favStatus.value = "loading";

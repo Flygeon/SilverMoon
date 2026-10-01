@@ -80,7 +80,9 @@ function subMore(r: BiliReply): boolean {
       <span>{{ t("bili.loading") }}</span>
     </div>
 
-    <div v-else-if="bili.replyStatus === 'error'" class="state error">
+    <!-- 只在「一条都没加载出来」时才用错误态顶掉列表：
+         分页失败若也走这里，已有评论会整块消失，用户以为内容丢了 -->
+    <div v-else-if="bili.replyStatus === 'error' && !bili.replies.length" class="state error">
       <span class="material-symbols-outlined">error</span>
       <span>{{ bili.replyError || t("bili.replyFailed") }}</span>
       <button class="link" type="button" @click="bili.loadReplies(true)">
@@ -184,6 +186,11 @@ function subMore(r: BiliReply): boolean {
     </ul>
 
     <div v-if="bili.replies.length" class="more">
+      <!-- 分页失败：列表保留，错误就近提示并可重试（不要顶掉已有内容） -->
+      <p v-if="bili.replyStatus === 'error'" class="more-error">
+        <span class="material-symbols-outlined">error</span>
+        {{ bili.replyError || t("bili.replyFailed") }}
+      </p>
       <button
         v-if="!bili.replyEnd"
         class="link big"
@@ -482,6 +489,17 @@ function subMore(r: BiliReply): boolean {
 .link.big:hover:not(:disabled) {
   background: var(--md-sys-color-secondary-container);
   filter: brightness(1.06);
+}
+.more-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-size: var(--md-sys-typescale-body-small-size);
+  color: var(--md-sys-color-error);
+}
+.more-error .material-symbols-outlined {
+  font-size: 16px;
 }
 .end {
   font-size: var(--md-sys-typescale-body-small-size);

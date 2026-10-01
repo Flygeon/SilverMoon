@@ -1344,7 +1344,7 @@ export async function biliPlayUrl(bvid: string, cid: string, qn = 80): Promise<B
    * `initialization`/`Initialization` 两套大小写（不同端点、不同时间点上不一致），
    * 两套都读一遍，避免只有某一种 CDN 上能播。
    */
-  const pickStreams = (raw: unknown): BiliStream[] =>
+  const pickStreams = (raw: unknown, fallbackMime: string): BiliStream[] =>
     ((raw as unknown[]) ?? [])
       .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
       .map((x) => {
@@ -1362,7 +1362,10 @@ export async function biliPlayUrl(bvid: string, cid: string, qn = 80): Promise<B
           bandwidth: num(x.bandwidth),
           initRange: str(seg?.initialization ?? seg?.Initialization),
           indexRange: str(seg?.index_range ?? seg?.indexRange ?? seg?.IndexRange),
-          mimeType: str(x.mime_type ?? x.mimeType, "video/mp4"),
+          // 兜底必须按轨道类型给：音频一旦兜成 video/mp4，MSE 拼出的
+          // `video/mp4; codecs="mp4a.40.2"` 会 isTypeSupported=false，
+          // canPlay 直接判否 → 静默退回 720P durl，表现为「1080P 打不开」。
+          mimeType: str(x.mime_type ?? x.mimeType, fallbackMime),
         };
       })
       .filter((s) => !!s.url);
@@ -1375,10 +1378,10 @@ export async function biliPlayUrl(bvid: string, cid: string, qn = 80): Promise<B
     if (codecs.startsWith("av01")) return 2;
     return 3;
   };
-  const dashVideo = pickStreams(dash?.video).sort(
+  const dashVideo = pickStreams(dash?.video, "video/mp4").sort(
     (a, b) => b.id - a.id || b.bandwidth - a.bandwidth || codecRank(a.codecs) - codecRank(b.codecs),
   );
-  const dashAudio = pickStreams(dash?.audio).sort((a, b) => b.bandwidth - a.bandwidth);
+  const dashAudio = pickStreams(dash?.audio, "audio/mp4").sort((a, b) => b.bandwidth - a.bandwidth);
 
   const acceptQuality = ((d.accept_quality as unknown[]) ?? []).map((q) => num(q));
   const acceptDescription = ((d.accept_description as unknown[]) ?? []).map((s) => str(s));
@@ -1818,15 +1821,59 @@ export async function biliHeartbeat(bvid: string, cid: string, playedTime: numbe
  * 更精确 —— 历史列表只有整条记录，拿不到「上次看到哪一分 P」。未登录或没看过时
  * 返回 0。
  */
+
+// ------------------------------------------------------------------ 评论互动
+
+/**
+ * 给评论点赞 / 取消点赞（`/x/v2/reply/action`）。
+ *
+ * `action`：1 = 点赞，0 = 取消（上游语义与「是否已赞」相反，别搞混）。
+ * 按 rpid 定位评论，但 `oid`（视频 aid）仍要带。
+ */
+export async function biliLikeReply(aid: string, rpid: string, like: boolean): Promise<void> {
+  await biliPost(
+    "/x/v2/reply/action",
+    { type: "1", oid: aid, rpid, action: like ? "1" : "0" },
+    like ? "点赞评论" : "取消点赞评论",
+  );
+}
+
+/**
+ * 删除自己发的评论（`/x/v2/reply/del`）。只能删自己的，删别人的回 -403。
+ */
+export async function biliDeleteReply(aid: string, rpid: string): Promise<void> {
+  await biliPost("/x/v2/reply/del", { type: "1", oid: aid, rpid }, "删除评论");
+}
+
+// ------------------------------------------------------------------ 搜索联想
+
+/**
+ * 搜索联想词（`/x/web-interface/suggest`，需 WBI 签名）。
+ *
+ * 优先取 `value`（可直接拿去搜的干净词）；`term` 可能带 `<em>` 高亮，统一洗一遍。
+ */
+export async function biliSuggest(term: string): Promise<string[]> {
+  const word = term.trim();
+  if (!word) return [];
+  const json = await wbiGet("/x/web-interface/suggest", { term: word, highlight: 0 });
+  assertOk(json, "获取搜索建议");
+  const data = json.data as Record<string, unknown> | undefined;
+  const list = (data?.tag as unknown[]) ?? [];
+  return list
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+    .map((x) => biliStripHtml(str(x.value ?? x.term ?? x.name)))
+    .filter(Boolean)
+    .slice(0, 10);
+}
+
 export async function biliLastPlay(
   bvid: string,
   cid: string,
 ): Promise<{ seconds: number; cid: string }> {
   if (!biliIsLoggedIn()) return { seconds: 0, cid: "" };
-  const qs = new URLSearchParams({ bvid, cid });
-  const json = await getJson(`${API}/x/player/v2?${qs.toString()}`, {
-    Referer: `${VIDEO_REFERER}/video/${bvid}`,
-  });
+  // 走 WBI 变体：本文件其余带风控的接口都走它，普通 /x/player/v2 在未登录或
+  // 风控下常回 -352/-101，会让续播静默失效（参考 PiliPlus 用 player/wbi/v2）。
+  const json = await wbiGet("/x/player/wbi/v2", { bvid, cid });
   assertOk(json, "读取播放进度");
   const d = json.data as Record<string, unknown> | undefined;
   return {

@@ -182,7 +182,7 @@ async function createPlayer(url: string | null): Promise<void> {
     pip: true,
     flip: false,
     miniProgressBar: false,
-    volume: 0.8,
+    volume: settings.biliVolume,
     theme: readThemeColor(),
     plugins: [artplayerPluginDanmuku(danmukuOpts)],
   });
@@ -190,6 +190,19 @@ async function createPlayer(url: string | null): Promise<void> {
   // 按设置把弹幕显示 / 隐藏落到实处（构造时的 visible 只决定初始态）
   syncDanmakuVisibility();
   applyDanmakuAppearance();
+
+  // 恢复上次的倍速
+  if (settings.biliPlaybackRate !== 1) art.playbackRate = settings.biliPlaybackRate;
+
+  // 音量 / 倍速变化写回设置（重开浮层不再复位；对标 PiliPlus 的 storage_pref）
+  art.on("video:volumechange", () => {
+    const v = art?.volume;
+    if (typeof v === "number" && Number.isFinite(v)) settings.biliVolume = v;
+  });
+  art.on("video:ratechange", () => {
+    const r = art?.playbackRate;
+    if (typeof r === "number" && Number.isFinite(r)) settings.biliPlaybackRate = r;
+  });
 
   // 观看进度上报：播放中按时长节流，暂停时补一次（与番剧播放器同款节奏）
   art.on("video:timeupdate", () => bili.tickProgress(currentSeconds()));
@@ -333,7 +346,12 @@ function currentSeconds(): number {
 
 /** Esc 关闭浮层（全屏时交给 ArtPlayer 自己处理 Esc 退全屏） */
 function onKeydown(e: KeyboardEvent): void {
-  if (e.key === "Escape" && !document.fullscreenElement) close();
+  if (e.key !== "Escape" || document.fullscreenElement) return;
+  // 登录弹窗盖在这层之上（z-index 260），Esc 应先关它。
+  // 弹窗自己会消费 Esc；这里不判就会「一次 Esc 连关两层」——
+  // 播放页被拆掉，而弹窗还悬在 feed 上。
+  if (document.querySelector("m3e-dialog[open]")) return;
+  close();
 }
 
 onMounted(() => {

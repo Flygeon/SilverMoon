@@ -53,12 +53,19 @@ function openView(target: "history" | "favorites"): void {
   if (target === "history" && bili.historyStatus === "idle") void bili.loadHistory(true);
   if (target === "favorites") {
     if (!bili.favFolders.length) void bili.loadFavFolders();
-    if (bili.favStatus === "idle") void bili.loadFavorites(true);
+    // idle = 还没拉过；error = 上次失败，重进时再试一次
+    if (bili.favStatus === "idle" || bili.favStatus === "error") void bili.loadFavorites(true);
   }
 }
 
 function back(): void {
   view.value = null;
+}
+
+/** 收藏加载失败重试：收藏夹列表本身也可能没拉到，一起重来。 */
+async function retryFavorites(): Promise<void> {
+  await bili.loadFavFolders();
+  await bili.loadFavorites(true);
 }
 
 /** 登录成功后自动装载投稿与收藏夹（历史按需）。 */
@@ -296,7 +303,7 @@ watch(
           :title="t('bili.favoritesFailed')"
           :description="bili.favError"
           :action-label="t('bili.retry')"
-          @action="bili.loadFavorites(true)"
+          @action="retryFavorites"
         />
 
         <p v-else class="state-block">{{ t("bili.noFavorites") }}</p>

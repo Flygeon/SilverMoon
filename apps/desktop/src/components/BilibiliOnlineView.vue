@@ -76,7 +76,12 @@ function pickHistory(word: string): void {
 }
 
 // ---------------------------------------------------------------- 登录弹窗
-const loginOpen = ref(false);
+/** m3e-dialog 的打开 / 关闭方法 */
+interface M3eDialog extends HTMLElement {
+  show(): Promise<void>;
+  hide(returnValue?: string): Promise<void>;
+}
+const loginDialog = ref<M3eDialog | null>(null);
 const qrImage = ref("");
 let pollTimer: number | null = null;
 /** 轮询互斥：2s 定时器与切回前台补一次可能撞在一起 */
@@ -117,7 +122,7 @@ async function tick(): Promise<void> {
     const done = await bili.pollQr();
     if (done) {
       stopPolling();
-      if (bili.account.isLogin) loginOpen.value = false;
+      if (bili.account.isLogin) closeLogin();
     }
   } finally {
     polling = false;
@@ -125,7 +130,8 @@ async function tick(): Promise<void> {
 }
 
 async function openLogin(): Promise<void> {
-  loginOpen.value = true;
+  // show() 负责遮罩 / 焦点陷阱 / Esc；先开再拉二维码，避免等待期间界面无反馈
+  await loginDialog.value?.show();
   bili.resetQr();
   await bili.startQr();
   if (!bili.qrContent) return;
@@ -141,7 +147,13 @@ async function refreshQr(): Promise<void> {
 
 function closeLogin(): void {
   stopPolling();
-  loginOpen.value = false;
+  bili.resetQr();
+  void loginDialog.value?.hide();
+}
+
+/** m3e-dialog 完全关闭后（含 Esc / 点遮罩）兜底收敛状态。 */
+function onLoginClosed(): void {
+  stopPolling();
   bili.resetQr();
 }
 
@@ -301,33 +313,30 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
       </template>
     </SegmentedTabs>
 
-    <!-- 登录弹窗 -->
-    <Transition name="bili-modal">
-      <div v-if="loginOpen" class="modal-scrim" @click.self="closeLogin">
-        <div class="modal">
-          <h3>{{ t("bili.loginTitle") }}</h3>
-          <p class="hint">{{ t("bili.loginTip") }}</p>
-          <div class="qr-wrap">
-            <img v-if="qrImage" :src="qrImage" alt="QR" class="qr-img" />
-            <div v-else class="qr-loading">
-              <m3e-loading-indicator class="lm-loading" />
-              {{ bili.startingQr ? t("bili.loading") : bili.loginError || t("bili.qrFailed") }}
-            </div>
-          </div>
-          <p class="qr-status">{{ bili.qrStatusText }}</p>
-          <p v-if="bili.loginError" class="qr-error">{{ bili.loginError }}</p>
-          <div class="modal-actions">
-            <m3e-button variant="text" size="small" @click="refreshQr">
-              <span slot="icon" class="material-symbols-outlined">refresh</span>
-              {{ t("bili.refreshQr") }}
-            </m3e-button>
-            <m3e-button variant="filled" size="small" @click="closeLogin">
-              {{ t("bili.done") }}
-            </m3e-button>
-          </div>
+    <!-- 登录弹窗：走 m3e-dialog，遮罩 / 焦点陷阱 / Esc / 进出场都由组件负责
+         （此前是手写 modal，键盘完全不可达，且 Esc 会穿透到下面的视频浮层） -->
+    <m3e-dialog ref="loginDialog" class="login-dialog" @cancel="closeLogin" @closed="onLoginClosed">
+      <span slot="header">{{ t("bili.loginTitle") }}</span>
+      <p class="hint">{{ t("bili.loginTip") }}</p>
+      <div class="qr-wrap">
+        <img v-if="qrImage" :src="qrImage" alt="QR" class="qr-img" />
+        <div v-else class="qr-loading">
+          <m3e-loading-indicator class="lm-loading" />
+          {{ bili.startingQr ? t("bili.loading") : bili.loginError || t("bili.qrFailed") }}
         </div>
       </div>
-    </Transition>
+      <p class="qr-status">{{ bili.qrStatusText }}</p>
+      <p v-if="bili.loginError" class="qr-error">{{ bili.loginError }}</p>
+      <div slot="actions" end>
+        <m3e-button variant="text" size="small" @click="refreshQr">
+          <span slot="icon" class="material-symbols-outlined">refresh</span>
+          {{ t("bili.refreshQr") }}
+        </m3e-button>
+        <m3e-button variant="filled" size="small" @click="closeLogin">
+          {{ t("bili.done") }}
+        </m3e-button>
+      </div>
+    </m3e-dialog>
 
     <!-- 视频详情浮层（自行通过 store 关闭，父级只负责挂载） -->
     <BilibiliVideoView v-if="bili.current" :key="bili.current.bvid" @login="openLogin" />
@@ -415,26 +424,10 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
   color: var(--md-sys-color-on-surface-variant);
 }
 
-/* ---- 登录弹窗 ---- */
-.modal-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 260;
-  display: grid;
-  place-items: center;
-  background: var(--md-sys-color-scrim);
-}
-.modal {
-  width: min(420px, 88vw);
-  padding: 22px 24px;
-  border-radius: var(--md-sys-shape-corner-extra-large);
-  background: var(--md-sys-color-surface-container-high);
-  box-shadow: var(--md-elevation-3);
+/* ---- 登录弹窗（容器/遮罩/动画由 m3e-dialog 负责，这里只管内容）---- */
+.login-dialog {
+  --m3e-dialog-min-width: 380px;
   text-align: center;
-}
-.modal h3 {
-  margin: 0 0 6px;
-  font-size: var(--md-sys-typescale-title-medium-size);
 }
 .qr-wrap {
   display: flex;
@@ -471,19 +464,6 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
   margin: -8px 0 14px;
   font-size: var(--md-sys-typescale-body-small-size);
   color: var(--md-sys-color-error);
-}
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-.bili-modal-enter-active,
-.bili-modal-leave-active {
-  transition: opacity 180ms var(--md-sys-motion-spring-effects-fast);
-}
-.bili-modal-enter-from,
-.bili-modal-leave-to {
-  opacity: 0;
 }
 
 /* ---- 提示 ---- */

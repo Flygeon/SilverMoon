@@ -171,6 +171,10 @@ class TrackFeeder {
   private pending = false;
   private aborted = false;
   private stopped = false;
+  /** 连续重试计数（成功后清零），仅在拉取内部使用 */
+  private retries = 0;
+  /** 本轨道全部喂完时回调（由会话注入） */
+  onDrained?: () => void;
   /** 提前缓冲的秒数：太小容易卡顿，太大则白拉流量 */
   private readonly ahead: number;
 
@@ -181,6 +185,8 @@ class TrackFeeder {
     private readonly getTime: () => number,
     ahead: number,
     private readonly onError: (e: unknown) => void,
+    /** 会话级 signal：destroy() 时能真正取消在途分片请求 */
+    private readonly signal?: AbortSignal,
   ) {
     this.ahead = ahead;
     this.sb.addEventListener("updateend", this.onUpdateEnd);
@@ -221,6 +227,9 @@ class TrackFeeder {
    * 播放点，造成反复重拉同一批分片（表现为播放抖动、流量翻倍）。
    */
   resync(t: number): void {
+    // 有 append / fetch 在途时不能重定位：此刻 buffered 还没包含在途那一片，
+    // 会把 next 拽回它，与 append 完成后的 next += 1 相互覆盖，同一片被反复拉取。
+    if (this.appending || this.sb.updating) return;
     if (!isTimeBuffered(this.sb.buffered, t)) this.seekTo(t);
   }
 
@@ -249,7 +258,7 @@ class TrackFeeder {
     this.appending = true;
     this.pending = false;
     try {
-      const bytes = await fetchRange(this.url, seg.start, seg.end);
+      const bytes = await this.fetchWithRetry(seg);
       if (this.aborted || this.stopped) return;
       // appendBuffer 需要 ArrayBuffer；切片视图要按 offset 拷贝
       const copy = bytes.buffer.slice(
@@ -259,10 +268,37 @@ class TrackFeeder {
       this.sb.appendBuffer(copy);
       // appendBuffer 同步抛错时不计入 next，该分片下次还会重试
       this.next += 1;
+      this.retries = 0;
+      // 全部喂完 → 通知会话收尾（endOfStream / 自动下一 P）
+      if (this.next >= this.segments.length) this.onDrained?.();
     } catch (e) {
       this.appending = false;
-      if (!this.aborted && !this.stopped) this.onError(e);
+      // 被动中止（destroy / 切清晰度）不算错误
+      if (this.aborted || this.stopped) return;
+      this.onError(e);
     }
+  }
+
+  /**
+   * 拉一片，失败时带退避重试。
+   *
+   * 单次网络抖动不该直接弹「视频流加载失败」覆盖层：原来一片失败就 onError 且
+   * next 不前移，若播放器已进入 waiting 又没有新的 timeupdate，播放会永久停住。
+   */
+  private async fetchWithRetry(seg: DashSegment): Promise<Uint8Array> {
+    const maxAttempts = 3;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (this.aborted || this.stopped) throw new Error("已中止");
+      try {
+        return await fetchRange(this.url, seg.start, seg.end, this.signal);
+      } catch (e) {
+        lastError = e;
+        // 退避 400ms / 1200ms，给 CDN 一点恢复时间
+        await new Promise((r) => setTimeout(r, 400 * attempt + 400));
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
   /** 缓冲区里最前面的可用时间，用于丢旧数据。 */
@@ -298,6 +334,12 @@ export interface DashLoadOptions {
   /** 首个分片可播时回调 */
   onReady?: () => void;
   onProgress?: (bufferedEnd: number) => void;
+  /** 播放点之前保留的缓冲秒数（默认 30） */
+  keepBehindSeconds?: number;
+  /** 已缓冲时长超过该值才回收（默认 90） */
+  keepWindowSeconds?: number;
+  /** 全部轨道喂完后回调（用来到点 endOfStream / 自动下一 P） */
+  onEnded?: () => void;
 }
 
 /**
@@ -319,6 +361,10 @@ export class BiliDashSession {
   private duration = 0;
   /** MSE 只允许在 sourceopen 后创建 SourceBuffer；记录是否已就绪 */
   private sourceOpen = false;
+  /** 播放点之前保留多少秒缓冲（超出部分可回收） */
+  private keepBehind = 30;
+  /** 已缓冲长度超过该值才触发回收，避免频繁 remove 卡顿 */
+  private keepWindow = 90;
 
   /** 是否支持当前流（编码 / MSE 可用性）。 */
   static supported(track: BiliStream, fallback: "video/mp4" | "audio/mp4"): boolean {
@@ -341,6 +387,8 @@ export class BiliDashSession {
   async load(videoEl: HTMLVideoElement, opts: DashLoadOptions): Promise<void> {
     this.video = videoEl;
     this.opts = opts;
+    if (opts.keepBehindSeconds !== undefined) this.keepBehind = opts.keepBehindSeconds;
+    if (opts.keepWindowSeconds !== undefined) this.keepWindow = opts.keepWindowSeconds;
     this.destroyed = false;
     this.aborter = new AbortController();
     const signal = this.aborter.signal;
@@ -382,12 +430,19 @@ export class BiliDashSession {
         resolve();
         return;
       }
-      ms.addEventListener("sourceopen", () => resolve(), { once: true });
+      // 超时兜底：若 videoEl.src 被后续 mountSource 覆盖，这个 MediaSource
+      // 可能既不 open 也不 close，await 会永久挂起并泄漏整个 session。
+      const timer = setTimeout(() => reject(new Error("MediaSource 打开超时")), 5000);
+      const done = (fn: () => void) => {
+        clearTimeout(timer);
+        fn();
+      };
+      ms.addEventListener("sourceopen", () => done(resolve), { once: true });
       // 明确的失败路径：媒体源在打开前被关闭（例如元素被销毁）
       ms.addEventListener(
         "sourceclose",
         () => {
-          if (ms.readyState !== "open") reject(new Error("MediaSource 已关闭"));
+          if (ms.readyState !== "open") done(() => reject(new Error("MediaSource 已关闭")));
         },
         { once: true },
       );
@@ -413,6 +468,7 @@ export class BiliDashSession {
       () => video.currentTime,
       30,
       opts.onError,
+      signal,
     );
     vFeeder.seekTo(start);
     this.feeders.push(vFeeder);
@@ -425,9 +481,16 @@ export class BiliDashSession {
         () => video.currentTime,
         30,
         opts.onError,
+        signal,
       );
       aFeeder.seekTo(start);
       this.feeders.push(aFeeder);
+    }
+
+    // 两路都喂完 → endOfStream，让 <video> 触发 ended（否则播到片尾永远不停，
+    // 「自动下一个分 P」也拿不到挂点）
+    for (const feeder of this.feeders) {
+      feeder.onDrained = () => this.maybeEndOfStream();
     }
 
     // 5) 播放位置驱动：timeupdate / seeking 时补数据；顺带做缓冲区回收
@@ -445,11 +508,17 @@ export class BiliDashSession {
     video.addEventListener("waiting", this.onTimeUpdate);
 
     if (start > 0) {
-      try {
-        video.currentTime = start;
-      } catch {
-        /* 元数据未就绪时忽略，加载后自然从 0 播 */
-      }
+      const seek = () => {
+        try {
+          video.currentTime = start;
+        } catch {
+          /* 元数据仍未就绪则忽略 */
+        }
+      };
+      seek();
+      // 元数据没就绪时上面的赋值会被静默丢弃（新 MediaSource 的 duration 要等
+      // sidx 解析完），表现为偶发从 0 开始播。loadedmetadata 后再补一次。
+      if (video.readyState < 1) video.addEventListener("loadedmetadata", seek, { once: true });
     }
 
     // 6) 先喂够起播所需的首批分片
@@ -457,22 +526,48 @@ export class BiliDashSession {
     opts.onReady?.();
   }
 
-  /** 丢弃远离播放点的旧缓冲，避免长视频把内存吃满。 */
+  /**
+   * 丢弃远离播放点的旧缓冲，避免长视频把内存 / 配额吃满。
+   *
+   * **必须两路都回收**。此前只处理 `feeders[0]`（视频），音频那条一路 append 到
+   * 片尾：2 小时的视频音频能累积上百 MB，命中 Chromium 的单 SourceBuffer 配额后
+   * `error` 事件触发、feeder 从此停摆，且回退重拉还会再撞 QuotaExceededError ——
+   * 表现为长视频播到中途卡死且无法恢复。
+   */
   private evict(): void {
     const v = this.video;
-    if (!v || !this.feeders.length) return;
-    const sb = this.feeders[0]?.sb;
-    if (!sb || sb.updating) return;
-    const b = sb.buffered;
-    if (!b.length) return;
-    const keepFrom = Math.max(0, v.currentTime - 30);
-    // 只有缓冲明显长于窗口（>90s）才回收，避免频繁 remove 触发卡顿
-    if (keepFrom - b.start(0) > 90) {
-      try {
-        sb.remove(b.start(0), keepFrom);
-      } catch {
-        /* SourceBuffer 正在更新则跳过，下次再试 */
+    if (!v) return;
+    const keepFrom = Math.max(0, v.currentTime - this.keepBehind);
+    for (const feeder of this.feeders) {
+      const sb = feeder.sb;
+      // SourceBuffer 同一时刻只能有一个操作在途
+      if (sb.updating) continue;
+      const b = sb.buffered;
+      if (!b.length) continue;
+      // 缓冲明显长于窗口才回收，避免频繁 remove 造成卡顿
+      if (keepFrom - b.start(0) > this.keepWindow) {
+        try {
+          sb.remove(b.start(0), keepFrom);
+        } catch {
+          /* 正在更新则跳过，下次 timeupdate 再试 */
+        }
       }
+    }
+  }
+
+  /** 所有轨道都喂完了 → 收尾。只在 SourceBuffer 空闲时调用 endOfStream。 */
+  private maybeEndOfStream(): void {
+    if (this.destroyed || !this.sourceOpen) return;
+    if (!this.feeders.length || !this.feeders.every((f) => f.finished)) return;
+    const ms = this.media;
+    if (!ms || ms.readyState !== "open") return;
+    // 有 append 在途时 endOfStream 会抛 InvalidStateError
+    if (this.feeders.some((f) => f.sb.updating)) return;
+    try {
+      ms.endOfStream();
+      this.opts?.onEnded?.();
+    } catch {
+      /* 已 endOfStream 或状态不允许：忽略，下次 updateend 还会再试 */
     }
   }
 
