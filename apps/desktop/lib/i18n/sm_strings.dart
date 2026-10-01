@@ -36,11 +36,23 @@ class SmStrings {
       'titlebar.close': '关闭',
       'titlebar.language': '语言',
 
-      'miniplayer.idle': '未在播放',
-      'miniplayer.hint': '播放条为界面框架占位，接入播放层后由 player:state 事件驱动',
       'miniplayer.prev': '上一首',
       'miniplayer.play': '播放',
       'miniplayer.next': '下一首',
+      'miniplayer.expand': '展开播放器',
+      'miniplayer.unknownArtist': '未知艺术家',
+
+      'host.connecting': '正在连接后端…',
+      'host.failed': '后端未就绪',
+      'host.retry': '重试',
+
+      'images.empty': '媒体库还没有图片',
+      'images.emptyHint': '添加一个文件夹并扫描，图片会出现在这里',
+      'images.addFolder': '添加文件夹并扫描',
+      'images.loading': '正在读取媒体库…',
+      'images.loadMore': '加载更多',
+      'images.scanning': '正在扫描…',
+      'images.total': '张图片',
 
       'shell.route': '路由',
       'shell.phase': '阶段',
@@ -114,12 +126,23 @@ class SmStrings {
       'titlebar.close': 'Close',
       'titlebar.language': 'Language',
 
-      'miniplayer.idle': 'Nothing playing',
-      'miniplayer.hint':
-          'Placeholder bar for the UI framework stage; it will be driven by player:state events',
       'miniplayer.prev': 'Previous',
       'miniplayer.play': 'Play',
       'miniplayer.next': 'Next',
+      'miniplayer.expand': 'Expand player',
+      'miniplayer.unknownArtist': 'Unknown artist',
+
+      'host.connecting': 'Connecting to the backend…',
+      'host.failed': 'Backend not ready',
+      'host.retry': 'Retry',
+
+      'images.empty': 'No images in the library yet',
+      'images.emptyHint': 'Add a folder and scan it — images will show up here',
+      'images.addFolder': 'Add folder and scan',
+      'images.loading': 'Loading library…',
+      'images.loadMore': 'Load more',
+      'images.scanning': 'Scanning…',
+      'images.total': 'images',
 
       'shell.route': 'Route',
       'shell.phase': 'Phase',
