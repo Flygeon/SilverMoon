@@ -173,6 +173,7 @@ function onKeydown(e: KeyboardEvent): void {
 
 onMounted(() => {
   window.addEventListener("keydown", onKeydown);
+  document.addEventListener("pointerdown", onDocPointerDown, true);
   if (videoUrl.value) void mountPlayer(videoUrl.value);
   unwatchUrl = watch(videoUrl, (url) => {
     if (url) void mountPlayer(url);
@@ -181,6 +182,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKeydown);
+  document.removeEventListener("pointerdown", onDocPointerDown, true);
   unwatchUrl?.();
   unwatchUrl = null;
   danmakuGen += 1;
@@ -209,18 +211,20 @@ function partLabel(index: number, fallback: string): string {
   return fallback || `P${index + 1}`;
 }
 
-const statItems = computed(() => {
-  const s = detail.value?.stat;
-  if (!s) return [] as { icon: string; value: number }[];
-  return [
-    { icon: "play_arrow", value: s.view },
-    { icon: "subtitles", value: s.danmaku },
-    { icon: "thumb_up", value: s.like },
-    { icon: "monetization_on", value: s.coin },
-    { icon: "star", value: s.favorite },
-    { icon: "share", value: s.share },
-  ];
-});
+// ---- 互动（点赞 / 投币 / 收藏 / 分享）----
+const coinOpen = ref(false);
+
+function sendCoin(n: number): void {
+  coinOpen.value = false;
+  void bili.addCoin(n);
+}
+
+/** 点气泡外面就关掉（与 WindowTitleBar 的外观菜单同一套做法） */
+function onDocPointerDown(e: PointerEvent): void {
+  if (!coinOpen.value) return;
+  if ((e.target as HTMLElement | null)?.closest(".act-wrap")) return;
+  coinOpen.value = false;
+}
 
 const metaItems = computed(() => {
   const d = detail.value;
@@ -311,6 +315,78 @@ const metaItems = computed(() => {
               <span class="owner-name" :title="detail.owner.name">{{
                 detail.owner.name || t("bili.unknownUp")
               }}</span>
+              <span class="grow" />
+              <m3e-button
+                v-if="detail.owner.mid"
+                :variant="bili.relation?.followed ? 'tonal' : 'filled'"
+                size="small"
+                :disabled="bili.acting.follow"
+                @click="bili.toggleFollow()"
+              >
+                <span slot="icon" class="material-symbols-outlined">{{
+                  bili.relation?.followed ? "check" : "add"
+                }}</span>
+                {{ bili.relation?.followed ? t("bili.followed") : t("bili.follow") }}
+              </m3e-button>
+            </div>
+
+            <!-- 互动：点赞 / 投币 / 收藏 / 分享（对应参考布局里那排胶囊按钮） -->
+            <div class="actions">
+              <button
+                class="act"
+                :class="{ on: bili.relation?.liked }"
+                type="button"
+                :title="t('bili.likeAction')"
+                :disabled="bili.acting.like"
+                @click="bili.toggleLike()"
+              >
+                <span class="material-symbols-outlined">thumb_up</span>
+                <span class="tabular-nums">{{ biliCount(detail.stat.like) }}</span>
+              </button>
+
+              <div class="act-wrap">
+                <button
+                  class="act"
+                  :class="{ on: (bili.relation?.coin ?? 0) > 0 }"
+                  type="button"
+                  :title="t('bili.coinAction')"
+                  @click="coinOpen = !coinOpen"
+                >
+                  <span class="material-symbols-outlined">monetization_on</span>
+                  <span class="tabular-nums">{{ biliCount(detail.stat.coin) }}</span>
+                </button>
+                <Transition name="coin-pop">
+                  <div v-if="coinOpen" class="coin-pop lm-glass">
+                    <button class="coin-opt" type="button" @click="sendCoin(1)">
+                      <span class="material-symbols-outlined">monetization_on</span>
+                      {{ t("bili.coinOne") }}
+                    </button>
+                    <button class="coin-opt" type="button" @click="sendCoin(2)">
+                      <span class="material-symbols-outlined">monetization_on</span>
+                      {{ t("bili.coinTwo") }}
+                    </button>
+                  </div>
+                </Transition>
+              </div>
+
+              <button
+                class="act"
+                :class="{ on: bili.relation?.favored }"
+                type="button"
+                :title="t('bili.favAction')"
+                :disabled="bili.acting.fav"
+                @click="bili.toggleFavorite()"
+              >
+                <span class="material-symbols-outlined">{{
+                  bili.relation?.favored ? "star" : "star_border"
+                }}</span>
+                <span class="tabular-nums">{{ biliCount(detail.stat.favorite) }}</span>
+              </button>
+
+              <button class="act" type="button" @click="bili.shareVideo()">
+                <span class="material-symbols-outlined">share</span>
+                {{ t("bili.share") }}
+              </button>
             </div>
 
             <div v-if="qualities.length" class="block">
@@ -358,13 +434,6 @@ const metaItems = computed(() => {
               >
                 {{ descExpanded ? t("bili.collapse") : t("bili.expand") }}
               </m3e-button>
-            </div>
-
-            <div class="stat-row tabular-nums">
-              <span v-for="s in statItems" :key="s.icon" class="stat">
-                <span class="material-symbols-outlined">{{ s.icon }}</span
-                >{{ biliCount(s.value) }}
-              </span>
             </div>
           </template>
 
@@ -565,6 +634,106 @@ const metaItems = computed(() => {
   gap: 10px;
   margin-top: 14px;
 }
+.grow {
+  flex: 1;
+}
+
+/* ---- 互动按钮（点赞 / 投币 / 收藏 / 分享）---- */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+.act {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 14px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
+  font-family: inherit;
+  font-size: var(--md-sys-typescale-label-large-size);
+  cursor: pointer;
+  transition:
+    background 160ms var(--md-sys-motion-spring-effects-fast),
+    transform 200ms var(--md-sys-motion-spring-spatial-fast);
+}
+.act:hover:not(:disabled) {
+  background: var(--md-sys-color-surface-container-highest);
+}
+.act:active:not(:disabled) {
+  transform: scale(0.96);
+}
+.act:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.act:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+/* 已激活（已赞 / 已投币 / 已收藏）：走主色容器，一眼能看出状态 */
+.act.on {
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+}
+.act .material-symbols-outlined {
+  font-size: 18px;
+}
+
+.act-wrap {
+  position: relative;
+}
+.coin-pop {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 132px;
+  padding: 6px;
+  border: 1px solid var(--lm-hairline);
+  border-radius: var(--md-sys-shape-corner-medium);
+  box-shadow: var(--md-elevation-3);
+}
+.coin-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: transparent;
+  color: var(--md-sys-color-on-surface);
+  font-family: inherit;
+  font-size: var(--md-sys-typescale-body-medium-size);
+  text-align: left;
+  cursor: pointer;
+}
+.coin-opt:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+.coin-opt .material-symbols-outlined {
+  font-size: 18px;
+  color: var(--md-sys-color-primary);
+}
+.coin-pop-enter-active,
+.coin-pop-leave-active {
+  transition:
+    opacity 120ms var(--md-sys-motion-spring-effects-fast),
+    transform 200ms var(--md-sys-motion-spring-spatial-fast);
+}
+.coin-pop-enter-from,
+.coin-pop-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
+}
 .avatar {
   display: flex;
   align-items: center;
@@ -659,25 +828,6 @@ const metaItems = computed(() => {
 .desc.expanded {
   display: block;
   overflow: visible;
-}
-
-.stat-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 18px;
-  margin-top: 22px;
-  padding-top: 16px;
-  border-top: 1px solid var(--lm-hairline);
-  color: var(--md-sys-color-on-surface-variant);
-  font-size: var(--md-sys-typescale-body-small-size);
-}
-.stat {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.stat .material-symbols-outlined {
-  font-size: 18px;
 }
 
 .detail-error {

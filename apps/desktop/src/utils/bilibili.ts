@@ -839,6 +839,124 @@ export async function biliRelated(bvid: string): Promise<BiliVideo[]> {
     .filter((v) => !!v.bvid);
 }
 
+// ------------------------------------------------------------------ 互动（三连 / 关注）
+
+export interface BiliRelation {
+  liked: boolean;
+  disliked: boolean;
+  /** 已投币枚数 0/1/2 */
+  coin: number;
+  favored: boolean;
+  /** 已关注该 UP 主 */
+  followed: boolean;
+}
+
+export const BILI_RELATION_NONE: BiliRelation = {
+  liked: false,
+  disliked: false,
+  coin: 0,
+  favored: false,
+  followed: false,
+};
+
+/** 上游把布尔值给成 0/1 或 true/false 两种形态，统一成布尔。 */
+function flag(v: unknown): boolean {
+  return v === true || num(v) === 1;
+}
+
+/**
+ * 带 csrf 的表单 POST。
+ *
+ * 互动类写接口（点赞 / 投币 / 收藏 / 关注）全部是这一套：`application/x-www-form-urlencoded`
+ * 表单体 + `csrf`（就是 cookie 里的 `bili_jct`）。未登录时 csrf 为空，上游回 -101，
+ * `assertOk` 会翻成「需要先登录 B 站账号」。
+ */
+async function biliPost(
+  path: string,
+  params: Record<string, string>,
+  what: string,
+): Promise<Record<string, unknown>> {
+  await ensureCookies();
+  const body = new URLSearchParams({ ...params, csrf: biliCsrf() }).toString();
+  const res = await biliFetch(`${API}${path}`, {
+    method: "POST",
+    headers: { ...baseHeaders(), "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  const json = decodeJson(await res.text());
+  if (!json || typeof json !== "object") throw new Error(`${what}失败：上游返回非对象 JSON`);
+  assertOk(json as Record<string, unknown>, what);
+  return json as Record<string, unknown>;
+}
+
+/** 当前账号与该视频的互动状态（已赞 / 已投币数 / 已收藏 / 已关注）。需要登录。 */
+export async function biliRelation(aid: string): Promise<BiliRelation> {
+  await ensureCookies();
+  const json = await getJson(`${API}/x/web-interface/archive/relation?aid=${aid}`);
+  assertOk(json, "查询互动状态");
+  const d = json.data as Record<string, unknown> | undefined;
+  return {
+    liked: flag(d?.like),
+    disliked: flag(d?.dislike),
+    coin: num(d?.coin),
+    favored: flag(d?.favorite),
+    followed: flag(d?.attention),
+  };
+}
+
+/** 点赞 / 取消点赞（上游 `like=1` 点赞、`like=0` 取消，参数用 aid）。 */
+export async function biliLike(aid: string, like: boolean): Promise<void> {
+  await biliPost("/x/web-interface/archive/like", { aid, like: like ? "1" : "0" }, "点赞");
+}
+
+/** 投币（`multiply` 枚数 1/2；`select_like=0` 表示不强制同时点赞）。 */
+export async function biliCoin(aid: string, multiply = 1): Promise<void> {
+  await biliPost(
+    "/x/web-interface/coin/add",
+    { aid, multiply: String(multiply), select_like: "0" },
+    "投币",
+  );
+}
+
+/** 我的收藏夹（`/x/v3/fav/folder/created/list-all`，默认收藏夹排在第一位）。 */
+export async function biliFavFolders(mid: number): Promise<{ id: string; title: string }[]> {
+  await ensureCookies();
+  const json = await getJson(`${API}/x/v3/fav/folder/created/list-all?up_mid=${mid}`);
+  assertOk(json, "获取收藏夹");
+  const d = json.data as Record<string, unknown> | undefined;
+  const list = (d?.list as unknown[]) ?? [];
+  return list
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+    .map((x) => ({ id: str(x.id), title: str(x.title) }))
+    .filter((x) => !!x.id);
+}
+
+/** 收藏 / 取消收藏：`rid` 是 aid、`type=2` 是视频，收藏夹 id 分别走 add / del。 */
+export async function biliFavorite(
+  aid: string,
+  folderId: string,
+  favorite: boolean,
+): Promise<void> {
+  await biliPost(
+    "/x/v3/fav/resource/deal",
+    {
+      rid: aid,
+      type: "2",
+      ...(favorite ? { add_media_ids: folderId } : { del_media_ids: folderId }),
+    },
+    favorite ? "收藏" : "取消收藏",
+  );
+}
+
+/** 关注 / 取关 UP 主（`act` 1 关注、2 取关）。 */
+export async function biliFollow(mid: number, follow: boolean): Promise<void> {
+  await biliPost(
+    "/x/relation/modify",
+    { fid: String(mid), act: follow ? "1" : "2", re_src: "11" },
+    follow ? "关注" : "取消关注",
+  );
+}
+
 // ------------------------------------------------------------------ 推荐 / 搜索
 
 export async function biliRecommend(freshIdx = 0, ps = 20): Promise<BiliVideo[]> {

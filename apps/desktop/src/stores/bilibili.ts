@@ -9,23 +9,31 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import {
   BILI_ANONYMOUS,
+  BILI_RELATION_NONE,
   BILI_REPLY_HOT,
   type BiliAccount,
   type BiliDetail,
   type BiliPlayUrl,
   type BiliQrStatus,
+  type BiliRelation,
   type BiliReply,
   type BiliReplySort,
   type BiliVideo,
   biliApplyCookies,
+  biliCoin,
   biliDanmaku,
+  biliFavFolders,
+  biliFavorite,
+  biliFollow,
   biliIsLoggedIn,
+  biliLike,
   biliLogout,
   biliNav,
   biliPlayUrl,
   biliQrGenerate,
   biliQrPoll,
   biliRecommend,
+  biliRelation,
   biliRelated,
   biliReplies,
   biliReplyReplies,
@@ -322,8 +330,9 @@ export const useBiliStore = defineStore("bilibili", () => {
       detail.value = d;
       activeCid.value = d.parts.length ? d.parts[0].cid : d.cid || video.cid;
       detailStatus.value = "ready";
-      // 评论要拿 UP mid 标「UP 主」标记，所以等详情回来再拉
+      // 评论要拿 UP mid 标「UP 主」标记，所以等详情回来再拉；互动状态同理（要 aid）
       void loadReplies(true);
+      void loadRelation();
       await resolvePlay(token);
     } catch (e) {
       if (token !== openToken) return;
@@ -399,6 +408,8 @@ export const useBiliStore = defineStore("bilibili", () => {
     replyOffset = "";
     related.value = [];
     relatedStatus.value = "idle";
+    relation.value = null;
+    acting.value = {};
   }
 
   /**
@@ -504,6 +515,145 @@ export const useBiliStore = defineStore("bilibili", () => {
     }
   }
 
+  // -------------------------------------------------------- 互动（三连 / 关注）
+  const relation = ref<BiliRelation | null>(null);
+  /** 写操作忙碌标记（like / coin / fav / follow 各自独立，互不禁用） */
+  const acting = ref<Record<string, boolean>>({});
+  /** 默认收藏夹 id 缓存；id 跟着账号走，换号必须重取 */
+  let favFolderId = "";
+  let favFolderFor = -1;
+
+  async function loadRelation(): Promise<void> {
+    const aid = commentAid();
+    if (!aid || !biliIsLoggedIn()) {
+      relation.value = null;
+      return;
+    }
+    try {
+      relation.value = await biliRelation(aid);
+    } catch {
+      // 未登录 / 被风控：按钮退回未激活态就行，不必打扰用户
+      relation.value = null;
+    }
+  }
+
+  /** 统一包一层：防重复点击、成败都提示；成功返回 true，调用方据此更新本地状态。 */
+  async function act(key: string, run: () => Promise<void>, okMsg: string): Promise<boolean> {
+    if (acting.value[key]) return false;
+    acting.value = { ...acting.value, [key]: true };
+    try {
+      await run();
+      notice.value = okMsg;
+      return true;
+    } catch (e) {
+      notice.value = cleanError(e);
+      return false;
+    } finally {
+      const busy = { ...acting.value };
+      delete busy[key];
+      acting.value = busy;
+    }
+  }
+
+  /**
+   * 点互动按钮前先确保拿到最新状态。
+   *
+   * 这一步不是多余的：本地状态为空时若直接按「未点赞」取反，就会把「取消点赞」
+   * 当成「点赞」发出去（反之亦然），而且是不可逆的误操作。
+   */
+  async function ensureRelation(): Promise<BiliRelation> {
+    if (!relation.value) await loadRelation();
+    return relation.value ?? BILI_RELATION_NONE;
+  }
+
+  function bumpStat(field: "like" | "coin" | "favorite", delta: number): void {
+    const d = detail.value;
+    if (!d) return;
+    detail.value = { ...d, stat: { ...d.stat, [field]: Math.max(0, d.stat[field] + delta) } };
+  }
+
+  async function toggleLike(): Promise<void> {
+    const aid = commentAid();
+    if (!aid) return;
+    const rel = await ensureRelation();
+    const next = !rel.liked;
+    if (!(await act("like", () => biliLike(aid, next), next ? "已点赞" : "已取消点赞"))) return;
+    relation.value = { ...rel, liked: next };
+    bumpStat("like", next ? 1 : -1);
+  }
+
+  async function addCoin(count = 1): Promise<void> {
+    const aid = commentAid();
+    if (!aid) return;
+    const rel = await ensureRelation();
+    if (rel.coin >= 2) {
+      notice.value = "已经投过两枚硬币了";
+      return;
+    }
+    const add = Math.min(count, 2 - rel.coin);
+    if (!(await act("coin", () => biliCoin(aid, add), `已投 ${add} 枚硬币`))) return;
+    relation.value = { ...rel, coin: rel.coin + add };
+    bumpStat("coin", add);
+  }
+
+  /** 收藏到「默认收藏夹」（上游列表的第一项）。要挑收藏夹再展开成分组弹窗。 */
+  async function toggleFavorite(): Promise<void> {
+    const aid = commentAid();
+    if (!aid) return;
+    const rel = await ensureRelation();
+    if (favFolderFor !== account.value.mid) {
+      favFolderId = "";
+      favFolderFor = account.value.mid;
+    }
+    if (!favFolderId) {
+      try {
+        const folders = await biliFavFolders(account.value.mid);
+        favFolderId = folders[0]?.id ?? "";
+      } catch (e) {
+        notice.value = cleanError(e);
+        return;
+      }
+    }
+    if (!favFolderId) {
+      notice.value = "账号下没有可用的收藏夹";
+      return;
+    }
+    const next = !rel.favored;
+    if (
+      !(await act(
+        "fav",
+        () => biliFavorite(aid, favFolderId, next),
+        next ? "已收藏到默认收藏夹" : "已取消收藏",
+      ))
+    ) {
+      return;
+    }
+    relation.value = { ...rel, favored: next };
+    bumpStat("favorite", next ? 1 : -1);
+  }
+
+  async function toggleFollow(): Promise<void> {
+    const mid = detail.value?.owner.mid ?? 0;
+    if (!mid) return;
+    const rel = await ensureRelation();
+    const next = !rel.followed;
+    if (!(await act("follow", () => biliFollow(mid, next), next ? "已关注" : "已取消关注"))) return;
+    relation.value = { ...rel, followed: next };
+  }
+
+  /** 分享：桌面端最实用的就是把链接复制走（复制不可用就把链接本身显示出来）。 */
+  async function shareVideo(): Promise<void> {
+    const bvid = detail.value?.bvid || current.value?.bvid;
+    if (!bvid) return;
+    const url = `https://www.bilibili.com/video/${bvid}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      notice.value = "视频链接已复制";
+    } catch {
+      notice.value = url;
+    }
+  }
+
   // ---- 弹幕（按 cid 缓存）----
   const danmakuCache = new Map<string, ArtDanmu[]>();
   const danmakuLoading = new Map<string, Promise<ArtDanmu[]>>();
@@ -591,5 +741,14 @@ export const useBiliStore = defineStore("bilibili", () => {
     loadSubReplies,
     related,
     relatedStatus,
+    // 互动
+    relation,
+    acting,
+    loadRelation,
+    toggleLike,
+    addCoin,
+    toggleFavorite,
+    toggleFollow,
+    shareVideo,
   };
 });
