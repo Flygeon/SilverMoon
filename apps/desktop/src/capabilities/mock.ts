@@ -674,6 +674,9 @@ export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case "kugou_rank_list":
     case "kugou_rank_songs":
     case "kugou_everyday_recommend":
+    case "kugou_recommend_songs":
+    case "kugou_user_playlists":
+    case "kugou_playlist_tracks":
       return as(null);
 
     // ---- osu! 谱面源：浏览器预览返回演示数据，真实下载需桌面端运行 ----

@@ -481,8 +481,9 @@ export const capabilities = {
       pagesize: pagesize ?? null,
     });
   },
-  kugouPlaylistDetail(id: string): Promise<unknown> {
-    return safeInvoke("kugou_playlist_detail", { id });
+  /** 歌单详情：参数名是 ids（上游按 global_collection_id 批量查），多个用英文逗号分隔 */
+  kugouPlaylistDetail(ids: string): Promise<unknown> {
+    return safeInvoke("kugou_playlist_detail", { ids });
   },
   kugouRankList(zone?: string): Promise<unknown> {
     return safeInvoke("kugou_rank_list", { zone: zone ?? null });
@@ -496,6 +497,25 @@ export const capabilities = {
   },
   kugouEverydayRecommend(): Promise<unknown> {
     return safeInvoke("kugou_everyday_recommend");
+  },
+  /** 个性化每日推荐（带上 cookie 里的 userid，登录后才是「为你推荐」） */
+  kugouRecommendSongs(): Promise<unknown> {
+    return safeInvoke("kugou_recommend_songs");
+  },
+  /** 我的歌单（userid/token 由 Rust 侧从 cookie 读取） */
+  kugouUserPlaylists(page?: number, pagesize?: number): Promise<unknown> {
+    return safeInvoke("kugou_user_playlists", {
+      page: page ?? null,
+      pagesize: pagesize ?? null,
+    });
+  },
+  /** 自己歌单的歌曲列表：必须传「我的歌单」条目里的 listid */
+  kugouPlaylistTracks(listid: string, page?: number, pagesize?: number): Promise<unknown> {
+    return safeInvoke("kugou_playlist_tracks", {
+      listid,
+      page: page ?? null,
+      pagesize: pagesize ?? null,
+    });
   },
 
   // ---- osu! 谱面源（backend/src/osu.rs）----

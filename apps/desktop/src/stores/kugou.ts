@@ -9,7 +9,8 @@ import { computed, ref } from "vue";
 import QRCode from "qrcode";
 import { capabilities } from "@/capabilities";
 import { useSettingsStore } from "@/stores/settings";
-import { clearKugouUrlCache } from "@/utils/kugou";
+import { clearKugouUrlCache, kugouUserPlaylists as parseKugouPlaylists } from "@/utils/kugou";
+import type { KugouPlaylist } from "@/utils/kugou";
 import type { KugouProfile } from "@shared/types";
 
 /** 扫码轮询间隔 */
@@ -34,6 +35,34 @@ export const useKugouStore = defineStore("kugou", () => {
 
   /** 今天是否已签到（供签到入口显示状态） */
   const signedToday = computed(() => signedDays.value.includes(todayKey()));
+
+  // ---- 我的歌单 ----
+  //
+  // 「我的歌单」接口需要登录（userid/token 来自 Rust 侧 cookie），未登录时
+  // 直接给空态、不发请求；登录成功由调用方把状态复位为 idle 触发重取。
+  const playlists = ref<KugouPlaylist[]>([]);
+  const playlistsStatus = ref<"idle" | "loading" | "ready" | "error">("idle");
+  const playlistsError = ref("");
+
+  /** 拉取「我的歌单」；force=true 时忽略已有结果强制重取（错误重试用） */
+  async function loadPlaylists(force = false): Promise<void> {
+    if (!loggedIn.value) {
+      playlists.value = [];
+      playlistsStatus.value = "idle";
+      playlistsError.value = "";
+      return;
+    }
+    if (!force && playlistsStatus.value !== "idle" && playlistsStatus.value !== "error") return;
+    playlistsStatus.value = "loading";
+    playlistsError.value = "";
+    try {
+      playlists.value = parseKugouPlaylists(await capabilities.kugouUserPlaylists(1, 50));
+      playlistsStatus.value = "ready";
+    } catch (e) {
+      playlistsStatus.value = "error";
+      playlistsError.value = e instanceof Error ? e.message : String(e);
+    }
+  }
 
   // ---- 签到 ----
   const signing = ref(false);
@@ -253,6 +282,9 @@ export const useKugouStore = defineStore("kugou", () => {
     loggedIn.value = false;
     profile.value = null;
     signedDays.value = [];
+    playlists.value = [];
+    playlistsStatus.value = "idle";
+    playlistsError.value = "";
     signInMessage.value = "";
     needVerify.value = false;
     clearKugouUrlCache();
@@ -277,8 +309,12 @@ export const useKugouStore = defineStore("kugou", () => {
     smsCooldown,
     phoneLogging,
     phoneError,
+    playlists,
+    playlistsStatus,
+    playlistsError,
     init,
     refreshStatus,
+    loadPlaylists,
     openQr,
     closeQr,
     sendSms,

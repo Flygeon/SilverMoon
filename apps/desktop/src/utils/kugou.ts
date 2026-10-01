@@ -276,6 +276,51 @@ export function kugouRankCards(raw: unknown): KugouRankCard[] {
     .filter((c) => c.id && c.name);
 }
 
+// ---- 我的歌单 ----
+
+/** 「我的歌单」条目（`/user/playlist` → `/v7/get_all_list`） */
+export interface KugouPlaylist {
+  /** 用户订阅版本的 listid：拉歌单内歌曲要用它（不是 global_collection_id） */
+  listid: string;
+  /** 歌单标识（global_collection_id / specialid），用于展示与去重 */
+  id: string;
+  name: string;
+  cover: string;
+  /** 歌曲数 */
+  count: number;
+}
+
+/** 歌单形状判定：命中歌单特征键且不是歌曲 */
+function looksLikePlaylist(o: Obj): boolean {
+  if ("FileHash" in o || "hash" in o || "SongName" in o || "songname" in o) return false;
+  return "listid" in o || "list_create_listid" in o || "specialname" in o || "listname" in o;
+}
+
+/**
+ * 把 `/user/playlist` 响应归一化为「我的歌单」列表。
+ * 字段对齐参考实现 `KugouPlaylistBrief.fromJson`：名称 `specialname/name`、
+ * 封面 `sizable_cover/imgurl/…`、歌曲数 `songcount/song_count/count`。
+ * 没有 `listid` 的条目直接丢弃——缺它就无法拉取歌单内歌曲。
+ */
+export function kugouUserPlaylists(raw: unknown): KugouPlaylist[] {
+  const list = findArray(raw, looksLikePlaylist);
+  if (!list) return [];
+  return list
+    .map((o) => {
+      const listid = str(o, "listid");
+      return {
+        listid,
+        id: str(o, "global_collection_id", "gid", "specialid", "id") || listid,
+        name: str(o, "specialname", "listname", "list_name", "name"),
+        cover: normalizeCover(
+          str(o, "sizable_cover", "imgurl", "img", "pic", "cover_url", "cover"),
+        ),
+        count: num(o, "songcount", "song_count", "count"),
+      };
+    })
+    .filter((p) => p.listid && p.name);
+}
+
 // ---- 播放地址延迟解析 ----
 
 /** 播放地址会话缓存（hash → url） */

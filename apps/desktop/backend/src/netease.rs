@@ -10,7 +10,6 @@
 
 use std::collections::HashMap;
 use std::error::Error as _;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -101,17 +100,68 @@ static STATE: OnceLock<Mutex<NeteasePersist>> = OnceLock::new();
 /// 调试日志路径（app data 目录 netease-debug.log，ensure_loaded 时初始化）
 static LOG_PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
 
-/// 追加一行调试日志（不影响功能，仅排障用）
+/// 调试日志开关。默认关闭；排障时启动前设 `SILVERMOON_NETEASE_DEBUG=1`。
+///
+/// 之所以默认关闭并强制脱敏：这份日志落在 app data 目录，早期实现把完整请求
+/// （含 `Cookie: MUSIC_U=...` 登录凭据）原样写盘，等于把账号凭据明文留在磁盘上。
+static DEBUG_LOG: OnceLock<bool> = OnceLock::new();
+
+fn debug_log_enabled() -> bool {
+    *DEBUG_LOG.get_or_init(|| match std::env::var("SILVERMOON_NETEASE_DEBUG") {
+        Ok(v) => v == "1" || v.eq_ignore_ascii_case("true"),
+        Err(_) => false,
+    })
+}
+
+/// 凭据字段名：命中后其值一律替换为 `***`
+const SECRET_KEYS: [&str; 8] = [
+    "MUSIC_U",
+    "MUSIC_A",
+    "MUSIC_A_T",
+    "MUSIC_R_T",
+    "MUSIC_R_U",
+    "MUSIC_SNS",
+    "NMSCVT",
+    "__csrf",
+];
+
+/// 把 `KEY=value` 里的 value 抹成 `***`（值以 `;`／空白／`\\`／`"` 为止）
+fn redact_key(input: &str, key: &str) -> String {
+    let needle = format!("{key}=");
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(i) = rest.find(&needle) {
+        let (head, tail) = rest.split_at(i + needle.len());
+        out.push_str(head);
+        let end = tail
+            .find(|c: char| c == ';' || c.is_whitespace() || c == '\\' || c == '"')
+            .unwrap_or(tail.len());
+        out.push_str("***");
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 追加一行调试日志（默认关闭；写入前统一脱敏，凭据永不落盘）
 fn netease_log(msg: &str) {
-    if let Some(p) = LOG_PATH.get() {
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(p)
-        {
-            let _ = writeln!(f, "[{}] {}", now_millis(), msg);
-        }
+    if !debug_log_enabled() {
+        return;
+    }
+    let Some(p) = LOG_PATH.get() else {
+        return;
+    };
+    let mut line = msg.to_string();
+    for key in SECRET_KEYS {
+        line = redact_key(&line, key);
+    }
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(p)
+    {
+        let _ = writeln!(f, "[{}] {}", now_millis(), line);
     }
 }
 
@@ -119,17 +169,22 @@ fn state() -> &'static Mutex<NeteasePersist> {
     STATE.get_or_init(|| Mutex::new(NeteasePersist::default()))
 }
 
-/// 是否已从文件加载过持久化状态（只加载一次，避免覆盖登录流程中合并的 cookie）
-static LOADED: AtomicBool = AtomicBool::new(false);
+/// 首次加载的同步栅栏。
+///
+/// 必须用 `Once::call_once`（会**阻塞**其他线程直到加载完成），不能写成
+/// 「AtomicBool 先置位、再读文件」——那样并发的第二个调用者会直接跳过加载、
+/// 拿到默认空状态，把「已登录」误判成「未登录」。启动时 `netease.init()` 会
+/// 并发打出 4 个命令（账号 / 歌单 / 云盘 / 喜欢），实测造成偶发掉登录。
+static LOADED: std::sync::Once = std::sync::Once::new();
 
 fn ensure_loaded(app: &silvermoon_ipc::Host) {
-    if !LOADED.swap(true, Ordering::SeqCst) {
+    LOADED.call_once(|| {
         *state().lock().unwrap() = load_persist(app);
-    }
-    // 初始化调试日志路径（供 api_call 记录完整请求）
-    if let Ok(dir) = app.path().app_data_dir() {
-        let _ = LOG_PATH.set(dir.join("netease-debug.log"));
-    }
+        // 初始化调试日志路径（仅在 SILVERMOON_NETEASE_DEBUG=1 时才会真正写入）
+        if let Ok(dir) = app.path().app_data_dir() {
+            let _ = LOG_PATH.set(dir.join("netease-debug.log"));
+        }
+    });
 }
 
 fn persist_path(app: &silvermoon_ipc::Host) -> Result<std::path::PathBuf, String> {
@@ -233,21 +288,6 @@ fn aes_cbc_b64(key: &[u8], iv: &[u8; 16], plain: &str) -> Result<String, String>
         .encrypt_padded_mut::<Pkcs7>(&mut buf, msg.len())
         .map_err(|e| format!("AES 加密失败：{e:?}"))?;
     Ok(base64::engine::general_purpose::STANDARD.encode(ct))
-}
-
-/// AES-128-CBC 解密（PKCS7 去填充），自检用：验证 weapi 加密自洽
-fn aes_cbc_b64_decrypt(key: &[u8], iv: &[u8; 16], b64: &str) -> Result<String, String> {
-    use cbc::cipher::BlockDecryptMut as _;
-    type Aes128CbcDec = cbc::Decryptor<Aes128>;
-    let ct = base64::engine::general_purpose::STANDARD
-        .decode(b64)
-        .map_err(|e| e.to_string())?;
-    let dec = Aes128CbcDec::new(key.into(), iv.into());
-    let mut buf = ct.clone();
-    let pt = dec
-        .decrypt_padded_mut::<Pkcs7>(&mut buf)
-        .map_err(|e| format!("AES 解密失败：{e:?}"))?;
-    String::from_utf8(pt.to_vec()).map_err(|e| e.to_string())
 }
 
 /// AES-128-ECB（PKCS7 填充），输出大写 hex（参考 aesEncrypt format='hex'）
@@ -595,6 +635,8 @@ fn get_xeapi_key(_app: &silvermoon_ipc::Host) -> Result<XeapiKey, String> {
 
 /// 注册匿名身份：xeapi 调用 /api/register/anonimous，拿 MUSIC_A cookie
 fn register_anonymous(app: &silvermoon_ipc::Host) -> Result<(), String> {
+    // 兜底：确保持久化状态已加载，避免把「未加载的空状态」写回文件覆盖登录态
+    ensure_loaded(app);
     let xeapi_key = get_xeapi_key(app)?;
     let device_id = {
         let persist = state().lock().unwrap();
@@ -737,43 +779,6 @@ fn weapi(data: &Value) -> Result<(String, String), String> {
     let params = aes_cbc_b64(secret.as_bytes(), IV, &inner)?;
     let reversed: String = secret.chars().rev().collect();
     let enc_sec_key = rsa_encrypt_hex(reversed.as_bytes())?;
-    // 自检：用同一密钥解密回验（定位加密实现问题）
-    let dec_inner = aes_cbc_b64_decrypt(secret.as_bytes(), IV, &params);
-    let selfcheck = match &dec_inner {
-        Ok(di) => {
-            let dec_text = aes_cbc_b64_decrypt(PRESET_KEY, IV, di);
-            match dec_text {
-                Ok(dt) => format!(
-                    "自检OK 内层一致={} text={}",
-                    *di == inner,
-                    dt.chars().take(100).collect::<String>()
-                ),
-                Err(e) => format!(
-                    "自检内层可解但外层失败：{e} 内层前40={}",
-                    di.chars().take(40).collect::<String>()
-                ),
-            }
-        }
-        Err(e) => format!("自检失败：{e}"),
-    };
-    netease_log(&format!("WEAPI-SELFCHECK {selfcheck}"));
-    // 固定密钥复现测试：用固定 secret 加密 text，输出中间值供 Node 同参数对比
-    {
-        let fixed_secret = "AbCdEfGhIjKlMnOp"; // 恰好 16 字符（AES-128 密钥必须 16 字节，否则 key.into() 断言 panic）
-        match aes_cbc_b64(PRESET_KEY, IV, &text) {
-            Ok(fx_inner) => match aes_cbc_b64(fixed_secret.as_bytes(), IV, &fx_inner) {
-                Ok(fx_params) => {
-                    let fx_dec = aes_cbc_b64_decrypt(fixed_secret.as_bytes(), IV, &fx_params);
-                    netease_log(&format!(
-                        "FIXED-TEST text={} inner={} params={} dec={:?}",
-                        text, fx_inner, fx_params, fx_dec
-                    ));
-                }
-                Err(e) => netease_log(&format!("FIXED-TEST 外层加密失败：{e}")),
-            },
-            Err(e) => netease_log(&format!("FIXED-TEST 内层加密失败：{e}")),
-        }
-    }
     Ok((params, enc_sec_key))
 }
 
@@ -1056,7 +1061,15 @@ fn api_call(crypto: &str, path: &str, data: &mut Value) -> Result<(i64, Value), 
     {
         let hdrs: String = headers
             .iter()
-            .map(|(k, v)| format!("{k}={v}"))
+            .map(|(k, v)| {
+                if k.eq_ignore_ascii_case("cookie") {
+                    // 凭据不进日志：只留字段名与项数（值可能含 MUSIC_U）
+                    let n = v.split(';').filter(|s| !s.trim().is_empty()).count();
+                    format!("{k}=<{n} 项，已脱敏>")
+                } else {
+                    format!("{k}={v}")
+                }
+            })
             .collect::<Vec<_>>()
             .join("\n  ");
         netease_log(&format!(

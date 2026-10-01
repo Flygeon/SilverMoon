@@ -227,6 +227,9 @@ pub fn run() {
             kugou::kugou_rank_list,
             kugou::kugou_rank_songs,
             kugou::kugou_everyday_recommend,
+            kugou::kugou_recommend_songs,
+            kugou::kugou_user_playlists,
+            kugou::kugou_playlist_tracks,
             // ---- osu! 谱面源 ----
             osu::osu_search,
             osu::osu_download,

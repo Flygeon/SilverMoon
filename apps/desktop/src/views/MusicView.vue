@@ -356,7 +356,18 @@ async function openKugouRank(card: KugouRankCard) {
 /** 酷狗：进入每日推荐（立即进详情，歌曲区骨架占位） */
 async function openKugouDaily() {
   await openDetailAsync(t("homeFeed.dailyRecommend"), async () =>
-    kugouToOnlineSongs(await capabilities.kugouEverydayRecommend()),
+    kugouToOnlineSongs(
+      await (kugou.loggedIn
+        ? capabilities.kugouRecommendSongs()
+        : capabilities.kugouEverydayRecommend()),
+    ),
+  );
+}
+
+/** 酷狗：进入「我的歌单」（用订阅版 listid 拉歌单内歌曲） */
+async function openKugouPlaylist(listid: string, name: string) {
+  await openDetailAsync(name, async () =>
+    kugouToOnlineSongs(await capabilities.kugouPlaylistTracks(listid)),
   );
 }
 
@@ -574,7 +585,11 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
     <SegmentedTabs v-model="tab" :tabs="showOnlineRoot ? onlineTabs : []">
       <!-- 现在就听信息流：一平台一组件（两家推荐结构不同） -->
       <template v-if="showOnlineRoot && tab === 'feed'">
-        <KugouFeed v-if="isKugou" @play-songs="handleFeedPlaySongs" />
+        <KugouFeed
+          v-if="isKugou"
+          @play-songs="handleFeedPlaySongs"
+          @open-playlist="openKugouPlaylist"
+        />
         <NowPlayingFeed
           v-else
           @play-songs="handleFeedPlaySongs"

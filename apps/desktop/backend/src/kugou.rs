@@ -1,5 +1,6 @@
 //! 酷狗音乐账号模块：扫码 / 手机号登录、账号信息、音乐解析（播放地址）、
-//! 每日签到（畅听 VIP + 概念版升级），以及搜索 / 歌单 / 排行榜 / 每日推荐。
+//! 每日签到（畅听 VIP + 概念版升级），以及搜索 / 歌单详情 / 我的歌单 /
+//! 排行榜 / 游客每日推荐 / 个性化每日推荐。
 //!
 //! 实现形态：本模块只做「宿主命令层」——网络请求全部交给 vendored 的
 //! `kugou_server` crate（`bridge::call` 进程内直调其路由表，不开本地端口、
@@ -15,7 +16,6 @@
 //! 这类容错归一化放在 `src/utils/kugou.ts` 里与既有 `meting.ts` 的做法一致
 //! （第三方音乐接口的响应整形统一在 TS 侧），本层只负责取数与登录态。
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use base64::Engine;
@@ -59,7 +59,14 @@ struct KugouPersist {
 }
 
 static STATE: OnceLock<Mutex<KugouPersist>> = OnceLock::new();
-static LOADED: AtomicBool = AtomicBool::new(false);
+
+/// 首次加载的同步栅栏。
+///
+/// 必须用 `Once::call_once`（会**阻塞**其他线程直到加载完成）。原先写成
+/// 「AtomicBool 先置位、再读文件」，并发调用者会直接跳过加载拿到空状态——
+/// 既让 `kugou_login_status` 把已登录误报成未登录，也让 `bridge::init`
+/// 与设备身份登记被跳过（每次启动注册成新设备，旧 token 随之失效）。
+static LOADED: std::sync::Once = std::sync::Once::new();
 
 fn state() -> &'static Mutex<KugouPersist> {
     STATE.get_or_init(|| Mutex::new(KugouPersist::default()))
@@ -73,21 +80,20 @@ fn persist_path(app: &silvermoon_ipc::Host) -> Result<std::path::PathBuf, String
 
 /// 首次调用时载入落盘状态，并初始化酷狗设备身份（device_info.json）。
 fn ensure_loaded(app: &silvermoon_ipc::Host) {
-    if LOADED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    if let Ok(dir) = app.path().app_data_dir() {
-        let _ = std::fs::create_dir_all(&dir);
-        // 设备身份由 kugou_server 自己维护；必须先登记目录，否则
-        // /register/dev 拿到的 dfid 无法落盘，每次启动都会注册成新设备。
-        kugou_server::bridge::init(&dir.to_string_lossy());
-    }
-    let loaded = persist_path(app)
-        .ok()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str::<KugouPersist>(&s).ok())
-        .unwrap_or_default();
-    *state().lock().unwrap() = loaded;
+    LOADED.call_once(|| {
+        if let Ok(dir) = app.path().app_data_dir() {
+            let _ = std::fs::create_dir_all(&dir);
+            // 设备身份由 kugou_server 自己维护；必须先登记目录，否则
+            // /register/dev 拿到的 dfid 无法落盘，每次启动都会注册成新设备。
+            kugou_server::bridge::init(&dir.to_string_lossy());
+        }
+        let loaded = persist_path(app)
+            .ok()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|s| serde_json::from_str::<KugouPersist>(&s).ok())
+            .unwrap_or_default();
+        *state().lock().unwrap() = loaded;
+    });
 }
 
 /// 落盘（best-effort，失败不影响当前会话）
@@ -927,12 +933,15 @@ pub async fn kugou_search(
     .map_err(|e| format!("酷狗请求异常：{e}"))?
 }
 
-/// 歌单详情
+/// 歌单详情（按 `global_collection_id` 查，多个用英文逗号分隔）
+///
+/// 模块层读的是 `ids` 而非 `id`（见 `kugou_server::modules::playlist::handle_detail`）；
+/// 早期这里传 `id`，上游拿到空 gcid 恒返回空结果，前端也因此没有调用方。
 #[silvermoon_ipc::command]
-pub async fn kugou_playlist_detail(app: silvermoon_ipc::Host, id: String) -> Result<Value, String> {
+pub async fn kugou_playlist_detail(app: silvermoon_ipc::Host, ids: String) -> Result<Value, String> {
     silvermoon_ipc::rt::spawn_blocking(move || {
         ensure_loaded(&app);
-        call_json("/playlist/detail", json!({ "id": id }))
+        call_json("/playlist/detail", json!({ "ids": ids }))
     })
     .await
     .map_err(|e| format!("酷狗请求异常：{e}"))?
@@ -978,12 +987,78 @@ pub async fn kugou_rank_songs(
     .map_err(|e| format!("酷狗请求异常：{e}"))?
 }
 
-/// 每日推荐
+/// 每日推荐（游客向，不带 userid；登录后应优先用 `kugou_recommend_songs`）
 #[silvermoon_ipc::command]
 pub async fn kugou_everyday_recommend(app: silvermoon_ipc::Host) -> Result<Value, String> {
     silvermoon_ipc::rt::spawn_blocking(move || {
         ensure_loaded(&app);
         call_json("/everyday/recommend", json!({}))
+    })
+    .await
+    .map_err(|e| format!("酷狗请求异常：{e}"))?
+}
+
+/// 个性化每日推荐（`/recommend/songs`）。
+///
+/// 与 `kugou_everyday_recommend` 的区别：上游 `everyday_song_recommend` 接口
+/// 会读请求体里的 `userid`，模块层取不到参数时回退到 cookie 里的 userid
+/// （见 `kugou_server::modules::everyday::handle_recommend_songs`）。
+/// 因此登录后走这个命令拿到的才是「为你推荐」，未登录时上游按 userid=0 返回游客数据。
+#[silvermoon_ipc::command]
+pub async fn kugou_recommend_songs(app: silvermoon_ipc::Host) -> Result<Value, String> {
+    silvermoon_ipc::rt::spawn_blocking(move || {
+        ensure_loaded(&app);
+        call_json("/recommend/songs", json!({ "platform": "android" }))
+    })
+    .await
+    .map_err(|e| format!("酷狗请求异常：{e}"))?
+}
+
+/// 我的歌单（`/user/playlist` → `/v7/get_all_list`）。
+///
+/// userid 与 token 由模块层从 cookie jar 读取，调用方无需传参；未登录时上游
+/// 返回错误码，前端据此提示登录。
+#[silvermoon_ipc::command]
+pub async fn kugou_user_playlists(
+    app: silvermoon_ipc::Host,
+    page: Option<i64>,
+    pagesize: Option<i64>,
+) -> Result<Value, String> {
+    silvermoon_ipc::rt::spawn_blocking(move || {
+        ensure_loaded(&app);
+        call_json(
+            "/user/playlist",
+            json!({
+                "page": page.unwrap_or(1),
+                "pagesize": pagesize.unwrap_or(30),
+            }),
+        )
+    })
+    .await
+    .map_err(|e| format!("酷狗请求异常：{e}"))?
+}
+
+/// 自己歌单的歌曲列表（`/playlist/track/all/new` → `/v4/get_list_all_file`）。
+///
+/// 必须传「我的歌单」条目里的 `listid`（用户订阅后的版本），不是
+/// `global_collection_id`——后者走 `/playlist/track/all` 只适用于他人公开歌单。
+#[silvermoon_ipc::command]
+pub async fn kugou_playlist_tracks(
+    app: silvermoon_ipc::Host,
+    listid: String,
+    page: Option<i64>,
+    pagesize: Option<i64>,
+) -> Result<Value, String> {
+    silvermoon_ipc::rt::spawn_blocking(move || {
+        ensure_loaded(&app);
+        call_json(
+            "/playlist/track/all/new",
+            json!({
+                "listid": listid,
+                "page": page.unwrap_or(1),
+                "pagesize": pagesize.unwrap_or(30),
+            }),
+        )
     })
     .await
     .map_err(|e| format!("酷狗请求异常：{e}"))?

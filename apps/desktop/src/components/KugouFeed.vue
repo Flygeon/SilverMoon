@@ -7,15 +7,20 @@
  * 推荐歌单；酷狗是每日推荐 / 签到 / 排行榜），硬塞进一张能力表反而拧巴。
  * 这与 `BooksView.vue` 里 `NovelOnlineView` / `NovelBqgView` 的既有做法一致。
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { capabilities } from "@/capabilities";
+import CachedCover from "@/components/CachedCover.vue";
 import { useKugouStore } from "@/stores/kugou";
 import { useSettingsStore } from "@/stores/settings";
 import { kugouToOnlineSongs } from "@/utils/kugou";
 import { translate } from "@shared/i18n";
 import type { OnlineSong } from "@shared/types";
 
-const emit = defineEmits<{ (e: "play-songs", songs: OnlineSong[], index: number): void }>();
+const emit = defineEmits<{
+  (e: "play-songs", songs: OnlineSong[], index: number): void;
+  /** 打开「我的歌单」：传订阅版 listid（拉歌单内歌曲要用它） */
+  (e: "open-playlist", listid: string, name: string): void;
+}>();
 
 const settings = useSettingsStore();
 const kugou = useKugouStore();
@@ -35,7 +40,10 @@ async function loadDaily() {
   status.value = "loading";
   error.value = "";
   try {
-    const raw = await capabilities.kugouEverydayRecommend();
+    // 登录后走带 userid 的个性化接口（/recommend/songs），未登录退回游客接口
+    const raw = kugou.loggedIn
+      ? await capabilities.kugouRecommendSongs()
+      : await capabilities.kugouEverydayRecommend();
     dailySongs.value = kugouToOnlineSongs(raw);
     status.value = "ready";
   } catch (e) {
@@ -82,7 +90,27 @@ const monthLabel = computed(() => {
 
 const signedCount = computed(() => monthDays.value.filter((d) => d.signed).length);
 
-onMounted(loadDaily);
+// ---- 我的歌单 ----
+
+const playlistsSubtitle = computed(() =>
+  kugou.loggedIn && kugou.playlistsStatus === "ready" && kugou.playlists.length
+    ? `${kugou.playlists.length} ${t("homeFeed.playlists")}`
+    : "",
+);
+
+onMounted(() => {
+  void loadDaily();
+  void kugou.loadPlaylists();
+});
+
+// 登录态变化后重取：刚登录拿个性化推荐与歌单，登出时 store 内部已清空
+watch(
+  () => kugou.loggedIn,
+  () => {
+    void loadDaily();
+    void kugou.loadPlaylists();
+  },
+);
 </script>
 
 <template>
@@ -115,6 +143,47 @@ onMounted(loadDaily);
             >play_arrow</span
           >
         </button>
+      </section>
+
+      <!-- 我的歌单 -->
+      <section class="feed-section">
+        <div class="feed-section-head">
+          <h3 class="feed-section-title">{{ t("kugou.myPlaylists") }}</h3>
+          <span class="feed-section-sub">{{ playlistsSubtitle }}</span>
+        </div>
+
+        <p v-if="!kugou.loggedIn" class="pl-hint">{{ t("kugou.playlistsGuest") }}</p>
+        <p v-else-if="kugou.playlistsStatus === 'error'" class="feed-error">
+          <span class="material-symbols-outlined">error</span>
+          {{ kugou.playlistsError }}
+          <m3e-button variant="text" size="small" @click="kugou.loadPlaylists(true)">
+            {{ t("actions.retry") }}
+          </m3e-button>
+        </p>
+        <div v-else-if="kugou.playlistsStatus === 'loading'" class="feed-hint">
+          <m3e-loading-indicator class="lm-loading" />
+          {{ t("online.loading") }}
+        </div>
+        <p v-else-if="!kugou.playlists.length" class="pl-hint">
+          {{ t("kugou.playlistsEmpty") }}
+        </p>
+        <div v-else class="pl-grid">
+          <button
+            v-for="p in kugou.playlists"
+            :key="p.id"
+            class="pl-card"
+            @click="emit('open-playlist', p.listid, p.name)"
+          >
+            <div class="pl-thumb">
+              <CachedCover v-if="p.cover" :url="p.cover" :alt="p.name" />
+              <span v-else class="material-symbols-outlined">queue_music</span>
+            </div>
+            <div class="pl-name" :title="p.name">{{ p.name }}</div>
+            <div v-if="p.count" class="pl-count tabular-nums">
+              {{ p.count }} {{ t("kugou.tracks") }}
+            </div>
+          </button>
+        </div>
       </section>
 
       <!-- 每日签到 -->
@@ -331,5 +400,72 @@ onMounted(loadDaily);
   background: var(--md-sys-color-primary);
   color: var(--md-sys-color-on-primary);
   font-weight: 500;
+}
+
+.pl-hint {
+  margin: 0;
+  padding: 12px 0;
+  font-size: var(--md-sys-typescale-body-small-size);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.pl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 12px;
+}
+.pl-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 0 8px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-large);
+  background: var(--md-sys-color-surface-container-low);
+  color: var(--md-sys-color-on-surface);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  transition:
+    transform 220ms var(--md-sys-motion-spring-spatial-fast),
+    box-shadow 180ms;
+}
+.pl-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--md-elevation-2);
+}
+.pl-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  background: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface-variant);
+}
+.pl-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.pl-thumb .material-symbols-outlined {
+  font-size: 32px;
+}
+.pl-name,
+.pl-count {
+  padding: 0 10px;
+}
+.pl-name {
+  font-size: var(--md-sys-typescale-body-small-size);
+  font-weight: 500;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.pl-count {
+  font-size: var(--md-sys-typescale-label-small-size);
+  color: var(--md-sys-color-on-surface-variant);
 }
 </style>
