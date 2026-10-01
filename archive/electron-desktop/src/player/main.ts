@@ -12,7 +12,7 @@
  * 路由用 hash 模式：产物经 loopback 伺服时路径不固定，hash 路由无需服务端
  * 重写就能深链（player.html#/music、player.html#/player）。
  */
-import { computed, createApp, defineComponent, h, onMounted } from "vue";
+import { computed, createApp, defineComponent, h, onMounted, onUnmounted } from "vue";
 import { createPinia } from "pinia";
 import { RouterView, createRouter, createWebHashHistory, useRoute } from "vue-router";
 import MiniPlayer from "@/components/MiniPlayer.vue";
@@ -63,6 +63,22 @@ const PlayerShell = defineComponent({
       await settings.load();
       settings.applyTheme(settings.theme);
     });
+
+    /**
+     * 宿主设置变更。
+     *
+     * 播放层在自己的进程里跑，settings store 只在挂载时读过一次盘；Flutter 设置页
+     * 写的是同一个 settings.json，不重读就会出现「设置页改了，播放器还用旧值」。
+     * 宿主在写盘后广播 app:settings-changed（中间层 POST /bridge/emit → SSE →
+     * silvermoon:event），这里收到就重读并重新应用主题。
+     */
+    const onHostEvent = (event: Event): void => {
+      const frame = (event as CustomEvent<{ event?: string }>).detail;
+      if (frame?.event !== "app:settings-changed") return;
+      void settings.load().then(() => settings.applyTheme(settings.theme));
+    };
+    onMounted(() => window.addEventListener("silvermoon:event", onHostEvent));
+    onUnmounted(() => window.removeEventListener("silvermoon:event", onHostEvent));
 
     return () =>
       h("div", { class: ["player-shell", { "has-player": showMiniPlayer.value }] }, [

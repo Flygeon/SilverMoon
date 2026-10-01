@@ -29,6 +29,9 @@ void main() {
           HttpHeaders.contentTypeHeader,
           'text/event-stream; charset=utf-8',
         );
+      // 假后端也必须关缓冲：HttpResponse 默认会把几十字节的帧攒着不发，
+      // 中间层就永远收不到上游事件（曾因此把整条 SSE 通道误判成好的）。
+      req.response.bufferOutput = false;
       req.response.write(
         'data: {"event":"scan:progress","target":null,"payload":{"percent":42}}\n\n',
       );
