@@ -950,5 +950,4 @@ onBeforeUnmount(() => {
     opacity: 1;
   }
 }
-
 </style>

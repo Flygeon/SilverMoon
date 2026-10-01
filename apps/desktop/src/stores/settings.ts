@@ -390,9 +390,7 @@ export const useSettingsStore = defineStore("settings", () => {
   function applyPatch(patch: Record<string, unknown>) {
     if (!patch || typeof patch !== "object") return;
     for (const [key, value] of Object.entries(patch)) {
-      const refObj = (fields as Record<string, unknown>)[key] as
-        | { value: unknown }
-        | undefined;
+      const refObj = (fields as Record<string, unknown>)[key] as { value: unknown } | undefined;
       if (refObj && typeof refObj === "object" && "value" in refObj) {
         refObj.value = value;
       }

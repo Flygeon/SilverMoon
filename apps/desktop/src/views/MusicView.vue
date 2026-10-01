@@ -1717,5 +1717,4 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
     opacity: 1;
   }
 }
-
 </style>
