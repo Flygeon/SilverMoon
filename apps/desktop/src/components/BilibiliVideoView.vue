@@ -158,14 +158,22 @@ function retryPlayback(): void {
   void mountSource();
 }
 
-/** 选中的 DASH 视频轨：优先 avc1（Chromium 硬解最稳），没有则取码率最高的一路。 */
+/**
+ * 选中的 DASH 视频轨。
+ *
+ * 两个约束一起满足：
+ * - **优先 avc1**：Chromium 对 hev1/av01 的硬解支持因机器而异，avc1 最稳。若某一档
+ *   只有 av01（4K/8K 常见），宁可退到低一档的 avc1，也不要直接播不了；
+ * - **不高于 `currentQn`**：用户手动选了 480P 就不该偷偷给 1080P。
+ *
+ * `dashVideo` 在 utils 里已按清晰度 / 码率降序排好，故池子里第一项即最高档。
+ */
 function pickVideoTrack(currentQn: number): BiliStream | null {
   const list = play.value?.dashVideo ?? [];
   if (!list.length) return null;
-  const ofQuality = list.filter((s) => s.id === currentQn);
-  const candidates = ofQuality.length ? ofQuality : list;
-  const avc = candidates.find((s) => s.codecs.startsWith("avc1"));
-  return avc ?? candidates[0];
+  const avc = list.filter((s) => s.codecs.startsWith("avc1"));
+  const pool = avc.length ? avc : list;
+  return pool.find((s) => s.id <= currentQn) ?? pool[0];
 }
 
 /**

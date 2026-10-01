@@ -343,6 +343,13 @@ export const useBiliStore = defineStore("bilibili", () => {
   const play = ref<BiliPlayUrl | null>(null);
   const activeCid = ref("");
   const activeQn = ref(80);
+  /**
+   * 用户是否**手动**选过清晰度。
+   *
+   * 没选过时默认取上游声明的最高档：上游的 `quality` 字段在未登录预览下会回
+   * 720P（dash 里却带着 1080P 轨道），若直接跟随它，界面就还是「最高只有 720P」。
+   */
+  const qualityPinned = ref(false);
   const detailStatus = ref<BiliStatus>("idle");
   const playStatus = ref<BiliStatus>("idle");
   const playError = ref("");
@@ -362,7 +369,12 @@ export const useBiliStore = defineStore("bilibili", () => {
       const p = await biliPlayUrl(v.bvid, activeCid.value, qn ?? activeQn.value);
       if (token !== openToken) return;
       play.value = p;
-      if (p.quality) activeQn.value = p.quality;
+      // 用户没手动选过 → 直接落到最高档，避免被上游的默认 quality 拖回 720P
+      if (!qualityPinned.value && p.qualities.length) {
+        activeQn.value = p.qualities[0];
+      } else if (p.quality) {
+        activeQn.value = p.quality;
+      }
       playStatus.value = "ready";
     } catch (e) {
       if (token !== openToken) return;
@@ -379,6 +391,8 @@ export const useBiliStore = defineStore("bilibili", () => {
     playError.value = "";
     detailStatus.value = "loading";
     playStatus.value = "idle";
+    // 新视频重置到手动的「未选」态，重新按最高档起播
+    qualityPinned.value = false;
     activeQn.value = 80;
     resetDiscussions();
     // 相关推荐只依赖 bvid，和详情/取流并行，别让它排在后面等
@@ -402,6 +416,7 @@ export const useBiliStore = defineStore("bilibili", () => {
 
   async function selectQuality(qn: number): Promise<void> {
     if (qn === activeQn.value && play.value) return;
+    qualityPinned.value = true;
     activeQn.value = qn;
     await resolvePlay(openToken, qn);
   }
