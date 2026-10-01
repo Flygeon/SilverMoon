@@ -133,6 +133,13 @@ class SmStrings {
       'videos.total': '个视频',
       'videos.empty': '媒体库还没有视频',
       'videos.emptyHint': '添加文件夹并扫描，视频会出现在这里',
+      'folders.empty': '暂无已索引目录',
+      'folders.items': '项',
+      'books.progress': '阅读进度',
+      'books.readerPending': '阅读器复用 Vue 的 epub.js / pdf.js 渲染层（WebView2 宿主），尚未接入；当前先列出本地书籍与阅读进度。',
+      'webdav.saveConnect': '保存并连接',
+      'webdav.up': '返回上级',
+      'webdav.openFile': '用默认程序打开',
     },
     'en': <String, String>{
       'app.name': 'SilverMoon',
@@ -250,6 +257,13 @@ class SmStrings {
       'videos.total': 'videos',
       'videos.empty': 'No videos in the library yet',
       'videos.emptyHint': 'Add a folder and scan it — videos will show up here',
+      'folders.empty': 'No indexed folders yet',
+      'folders.items': 'items',
+      'books.progress': 'Reading progress',
+      'books.readerPending': 'The reader reuses the Vue epub.js / pdf.js renderer (WebView2 host) and is not wired up yet; this page lists local books with their reading progress.',
+      'webdav.saveConnect': 'Save & connect',
+      'webdav.up': 'Go up',
+      'webdav.openFile': 'Open with default app',
     },
   };
 

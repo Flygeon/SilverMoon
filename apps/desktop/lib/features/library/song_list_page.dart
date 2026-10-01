@@ -10,6 +10,7 @@ import '../../state/app_state.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/design_tokens.dart';
 import 'media_entry.dart';
+import 'media_format.dart';
 
 /// 曲目列表的数据源，对应 Rust `commands::song` 的三条命令。
 ///
@@ -282,39 +283,13 @@ class _SongRow extends StatelessWidget {
     return parts.join(' · ');
   }
 
-  static String _duration(int? ms) {
-    if (ms == null || ms <= 0) return '';
-    final int totalSeconds = ms ~/ 1000;
-    final int minutes = totalSeconds ~/ 60;
-    final int seconds = totalSeconds % 60;
-    return minutes.toString() + ':' + (seconds < 10 ? '0' : '') + seconds.toString();
-  }
-
-  static String _size(int bytes) {
-    if (bytes <= 0) return '';
-    if (bytes < 1024) return bytes.toString() + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toStringAsFixed(1) + ' KB';
-    if (bytes < 1024 * 1024 * 1024) {
-      return (bytes / (1024 * 1024)).toStringAsFixed(1) + ' MB';
-    }
-    return (bytes / (1024 * 1024 * 1024)).toStringAsFixed(2) + ' GB';
-  }
-
-  static String _date(int ms) {
-    if (ms <= 0) return '';
-    final DateTime time = DateTime.fromMillisecondsSinceEpoch(ms);
-    final String month = time.month < 10 ? '0' + time.month.toString() : time.month.toString();
-    final String day = time.day < 10 ? '0' + time.day.toString() : time.day.toString();
-    return time.year.toString() + '-' + month + '-' + day;
-  }
-
   @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = context.scheme;
     final List<String> meta = <String>[
-      if (showDate) _date(entry.mtime),
-      _duration(entry.durationMs),
-      _size(entry.size),
+      if (showDate) formatMediaDate(entry.mtime),
+      formatMediaDuration(entry.durationMs),
+      formatMediaSize(entry.size),
     ].where((String part) => part.isNotEmpty).toList();
 
     return Padding(
