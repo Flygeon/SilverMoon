@@ -1,0 +1,196 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+# 同一 ref 的新推送直接取消上一轮未完成的运行：连推多次时不会堆积排队。
+# 只作用于同一分支/PR，tag 与 main 之间互不影响。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 让 cargo 在 Actions 上输出更紧凑的日志，减少 I/O
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 静态检查：前端 lint/格式/类型 + Rust fmt/clippy
+  # ---------------------------------------------------------------------------
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          # 与 Electron 44 内置的 Node 对齐（Node 20 已被 actions 标记弃用）
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # clippy 要编译整棵依赖树；不缓存的话这一步每轮都要从零编一遍（实测 ~124s）
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: backend -> target
+          # 与构建作业区分开，避免两边的 target 目录互相覆盖缓存
+          prefix-key: clippy
+
+      # 后端只需要 native-tls 的 pkg-config 支持，无需任何桌面框架的开发库。
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+
+      - name: Install frontend dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Prettier check
+        run: npm run format:check
+
+      - name: Typecheck (renderer + electron main)
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Rustfmt check (backend)
+        working-directory: backend
+        run: cargo fmt --check
+
+      # silvermoon-ipc 两个 crate 是 path 依赖、不属于 workspace 成员，
+      # `cargo fmt` 不会顺带检查它们，因此这里显式各查一次
+      - name: Rustfmt check (ipc layer)
+        run: |
+          cargo fmt --check --manifest-path backend/crates/silvermoon-ipc/Cargo.toml
+          cargo fmt --check --manifest-path backend/crates/silvermoon-ipc-macros/Cargo.toml
+
+      - name: Clippy (backend)
+        working-directory: backend
+        run: cargo clippy --all-targets -- -D warnings
+
+  # ---------------------------------------------------------------------------
+  # 安装包：Windows NSIS / Linux AppImage
+  #
+  # **刻意不写 `needs: lint`**：构建是整条流水线里最慢的一环（Windows 侧
+  # Rust release 编译 + 打包约 12 分钟），串行等待 lint 会让总时长凭空多 4 分钟。
+  # 两者并行后，总时长由最慢的 Windows 决定。若 lint 先失败，
+  # concurrency 会在下一次推送时直接取消这一轮，浪费可控。
+  # ---------------------------------------------------------------------------
+  build:
+    name: build (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows
+            package-args: --win nsis
+            artifact-name: windows-build
+            artifact-path: release/*.exe
+            # @electron/get 的下载缓存与 electron-builder 的 nsis/appimage 工具链缓存
+            # 不在 npm 缓存范围内，单独缓存后打包步骤能省下大量下载时间
+            cache-paths: |
+              ~/AppData/Local/electron/Cache
+              ~/AppData/Local/electron-builder/Cache
+          - os: ubuntu-latest
+            label: linux
+            package-args: --linux AppImage
+            artifact-name: linux-build
+            artifact-path: release/*.AppImage
+            cache-paths: |
+              ~/.cache/electron
+              ~/.cache/electron-builder
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # 缓存 ~/.cargo 与 backend/target：命中后 release 编译只重编改动过的 crate
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: backend -> target
+          prefix-key: release
+
+      - name: Cache electron / electron-builder downloads
+        uses: actions/cache@v4
+        with:
+          path: ${{ matrix.cache-paths }}
+          key: ${{ runner.os }}-electron-cache-${{ hashFiles('package-lock.json', 'electron-builder.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-cache-
+
+      - name: Install system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+
+      - name: Install frontend dependencies
+        run: npm ci --no-audit --no-fund
+
+      # 后端必须先生成：electron-builder 会把它作为 extraResources 打进安装包
+      - name: Build Rust backend (release)
+        run: cargo build --release --manifest-path backend/Cargo.toml
+
+      - name: Build renderer + electron main
+        run: npm run build:renderer && npm run build:main
+
+      - name: Package
+        run: npx electron-builder ${{ matrix.package-args }} --publish never
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: ${{ matrix.artifact-path }}
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 打 tag 时发布
+  # ---------------------------------------------------------------------------
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [lint, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release-assets/**/*

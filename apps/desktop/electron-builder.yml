@@ -1,0 +1,95 @@
+appId: cn.cool.silvermoon
+productName: SilverMoon
+copyright: Copyright © SilverMoon contributors
+
+directories:
+  output: release
+  buildResources: build
+
+# 只打包运行期需要的东西：前端产物、Electron 主进程产物、package.json
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+  - "!**/*.map"
+  # 必须显式排除生产依赖树。
+  #
+  # electron-builder 打包 node_modules 是**独立于上面正向模式**的一条支路：
+  #   app-builder-lib/out/platformPackager.js 无条件调用 computeNodeModuleFileSets，
+  #   而 fileMatcher.js 里给 node_modules 用的匹配器**只取本数组中的 "!" 排除项**，
+  #   再强行 prependPattern("**/*")。所以 dist/**/* 这类正向模式对它毫无约束，
+  #   不写这一行就会把整个生产依赖树原样塞进 app.asar。
+  #
+  # 本项目不需要运行期 node_modules：渲染进程由 Vite 全量打包进 dist/，
+  # 主进程/预加载由 esbuild 打包（scripts/build-electron.mjs 只把 electron 标为
+  # external，产物 main.cjs 仅 0.03MB），electron/ 下没有任何运行时 require()。
+  # 实测生产依赖树解包后约 55MB（pdfjs-dist 32.9MB、@m3e/web 31.8MB、hls.js 31.1MB
+  # 三者就占了绝大部分），属于纯重复打包。
+  - "!node_modules/**/*"
+
+# extraResources **只在各平台条目里声明，顶层一律不写**。
+#
+# 两条原因都是实测踩出来的：
+#  1. electron-builder 对「平台级 extraResources 与顶层」到底是合并还是覆盖，
+#     不同版本行为不一致，写在两边语义不确定；
+#  2. 更要命的是：同一个 `from → to` 若同时出现在顶层与平台级，electron-builder
+#     会把它当成两条 matcher，**并发**地向同一个目标 copyfile —— Windows 上必踩
+#     `EBUSY: resource busy or locked`（Linux 恰好容忍），表现为 NSIS 打包整步失败。
+#
+# 因此每个平台在自己的清单里写全（图标 + 后端可执行文件），任何版本下语义唯一。
+# 另外**不能**把 Windows 的 .exe 写在顶层：Linux 构建会去找一个不存在的文件。
+
+asar: true
+
+# Electron 自带 55 个语言包（locales/*.pak），实测解包后 48.3MB，而界面只提供中文。
+# 只保留 zh-CN / en-US 两个（各约 0.56MB），其余由 electron-builder 在打包后删除。
+# 实现见 app-builder-lib/out/electron/ElectronFramework.js 的
+# removeUnusedLanguagesIfNeeded()。系统语言不在列表内时 Electron 回退到 en-US。
+electronLanguages:
+  - zh-CN
+  - en-US
+
+win:
+  icon: backend/icons/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  extraResources:
+    - from: backend/icons/icon.png
+      to: icon.png
+    # 后端以独立可执行文件随包分发（Electron 主进程 spawn 拉起，不能塞进 asar）。
+    # 构建前请先执行 npm run build:backend:release。
+    - from: backend/target/release/silvermoon.exe
+      to: bin/silvermoon-server.exe
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: SilverMoon
+  artifactName: ${productName}-${version}-setup.${ext}
+
+mac:
+  icon: backend/icons/icon.icns
+  category: public.app-category.entertainment
+  target:
+    - dmg
+  extraResources:
+    - from: backend/icons/icon.png
+      to: icon.png
+    - from: backend/target/release/silvermoon
+      to: bin/silvermoon-server
+
+linux:
+  icon: backend/icons/icon.png
+  category: AudioVideo
+  target:
+    - AppImage
+  extraResources:
+    - from: backend/icons/icon.png
+      to: icon.png
+    - from: backend/target/release/silvermoon
+      to: bin/silvermoon-server

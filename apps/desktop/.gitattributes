@@ -1,0 +1,26 @@
+* text=auto eol=lf
+
+# --- 归一化说明 ---
+# 原 LumiLuna 项目工作区是 CRLF（core.autocrlf=true）而 prettier 配置 endOfLine: lf，
+# 导致本地 `prettier --check` / `eslint .` 出现全量假阳性（改没改过的文件都报）。
+# 本项目在初始化时统一声明 eol=lf，工作区与索引都是 LF，本地检查结果与 CI 一致。
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.pdf binary
+*.epub binary
+*.zip binary
+*.mp3 binary
+*.mp4 binary
+*.exe binary
+*.dll binary
+*.node binary
