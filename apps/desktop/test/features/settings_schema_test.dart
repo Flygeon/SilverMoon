@@ -58,24 +58,30 @@ void main() {
 
   test('用到的每个词条在 zh / en 都存在', () {
     final Set<String> used = <String>{};
+    // 只校验真正的词条 key：语言名（'中文' / 'English'）是刻意直出的字面量，
+    // 不含点号，t() 取不到时原样返回正是预期行为。
+    void addKey(String key) {
+      if (key.contains('.')) used.add(key);
+    }
+
     for (final SmSection section in kSettingsSections) {
-      if (section.titleKey.isNotEmpty) used.add(section.titleKey);
-      if (section.hintKey.isNotEmpty) used.add(section.hintKey);
+      addKey(section.titleKey);
+      addKey(section.hintKey);
       for (final SmField field in section.fields) {
-        if (field.labelKey.isNotEmpty) used.add(field.labelKey);
-        if (field.hintKey.isNotEmpty) used.add(field.hintKey);
-        if (field.placeholderKey.isNotEmpty) used.add(field.placeholderKey);
-        if (field.offLabelKey.isNotEmpty) used.add(field.offLabelKey);
+        addKey(field.labelKey);
+        addKey(field.hintKey);
+        addKey(field.placeholderKey);
+        addKey(field.offLabelKey);
         for (final SmChoice choice in field.choices) {
-          if (choice.labelKey.isNotEmpty) used.add(choice.labelKey);
+          addKey(choice.labelKey);
         }
       }
     }
     for (final SmChoice seed in kColorSeeds) {
-      used.add(seed.labelKey);
+      addKey(seed.labelKey);
     }
     for (final SmChoice font in kFontChoices) {
-      used.add(font.labelKey);
+      addKey(font.labelKey);
     }
 
     expect(used, isNotEmpty);
