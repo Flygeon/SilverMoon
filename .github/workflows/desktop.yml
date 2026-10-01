@@ -2,9 +2,11 @@ name: Desktop Build (Electron Windows)
 
 # 桌面端主线在回滚后重新是 Electron 实现（见 revert 提交 0115500）。
 #
-# 历史遗留问题：重构前这套构建流程长在 apps/desktop/.github/workflows/build.yml，
-# 而 GitHub 不会执行子目录里的工作流 —— 它当年其实一直没有真正跑过，归档后更是
-# 彻底失去 CI 覆盖。这里把它接到仓库根目录，并把所有路径补成 apps/desktop/**。
+# 这套构建流程原本是仓库根目录的 .github/workflows/build.yml（9a25438 从 Tauri 迁到
+# Electron 44 时建立），一直在根目录正常执行；monorepo 重构时它随应用目录一起挪到了
+# apps/desktop/.github/ 下面，而 GitHub 只执行仓库根目录下的工作流，从那时起它便不再
+# 被触发。本文件把它接回根目录：步骤、顺序、action 版本都照原文件搬，只补 monorepo
+# 带来的路径差异。原文件保持不动，不做任何修改。
 #
 # 刻意让 windows 作业**不**依赖 lint：lint 红必须看得见，但不该拦住建得出产物。
 
