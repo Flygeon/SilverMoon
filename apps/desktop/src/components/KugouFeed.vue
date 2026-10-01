@@ -1,10 +1,10 @@
 <script setup lang="ts">
 /**
- * 酷狗「为你推荐」信息流：每日推荐 + 每日签到（签到日历）。
+ * 酷狗「为你推荐」信息流：每日推荐 + 我的歌单 + 每日签到（签到日历）。
  *
  * 与网易云的 `NowPlayingFeed` 并列存在（一平台一组件），而不是让同一个组件
  * 吃 `server` 参数——两家的推荐结构本就不同（网易云是私人 FM / 每日推荐 /
- * 推荐歌单；酷狗是每日推荐 / 签到 / 排行榜），硬塞进一张能力表反而拧巴。
+ * 推荐歌单；酷狗是每日推荐 / 我的歌单 / 签到），硬塞进一张能力表反而拧巴。
  * 这与 `BooksView.vue` 里 `NovelOnlineView` / `NovelBqgView` 的既有做法一致。
  */
 import { computed, onMounted, ref, watch } from "vue";
