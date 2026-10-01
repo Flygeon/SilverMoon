@@ -2,11 +2,15 @@
 /**
  * B 站视频详情与播放（全屏浮层）。
  *
- * 播放器复用既有 ArtPlayer + artplayer-plugin-danmuku（与番剧同一套）：
- * - B 站 playurl 走 `fnval=1` 拿到的整段 MP4（durl），ArtPlayer 原生即可播，
- *   无需 DASH 合流；CDN 的防盗链 Referer 由主进程 webRequest 统一补。
+ * 播放器 = ArtPlayer（UI / 控件 / 弹幕）+ 自建 MSE DASH 引擎（取流）：
+ * - 取流走**非 WBI** 的 `/x/player/playurl` + `fnval=4048` + `try_look=1`，
+ *   由 `utils/biliDash.ts` 用 MediaSource 合流音视频轨。只有这条路线拿得到
+ *   1080P+（渐进式 durl 被上游钳在 720P，WBI 变体更是只有 480P，详见该文件注释）。
+ * - durl 仅在 MSE 不可用（编码不支持）时兜底，此时最高 720P，界面会说明原因。
+ * - CDN 的防盗链 Referer 由 `utils/biliDash` 的取流显式带上（PCDN 域名不在
+ *   主进程 webRequest 白名单内）。
  * - 弹幕走 B 站 `list.so`（XML），映射成 ArtPlayer 弹幕格式（utils/bilibili.ts）。
- * - 清晰度 / 分 P 切换在下方信息区，切换后 store 重取 playurl，这里 switchUrl。
+ * - 清晰度 / 分 P 切换在下方信息区；store 重取 playurl 后这里重新挂源。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type Artplayer from "artplayer";

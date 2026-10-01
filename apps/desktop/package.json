@@ -21,8 +21,8 @@
     "dist:dir": "npm run build && electron-builder --dir",
     "test": "vitest run",
     "pack:skins": "node scripts/pack-example-skins.mjs",
-    "lint": "eslint . --ext .ts,.vue",
-    "lint:fix": "eslint . --ext .ts,.vue --fix",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "format": "prettier --write \"src/**/*.{ts,vue,css,json}\" \"shared/**/*.{ts,json}\" \"electron/**/*.ts\" \"scripts/**/*.mjs\"",
     "format:check": "prettier --check \"src/**/*.{ts,vue,css,json}\" \"shared/**/*.{ts,json}\" \"electron/**/*.ts\" \"scripts/**/*.mjs\""
   },

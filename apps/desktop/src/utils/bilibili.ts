@@ -801,6 +801,8 @@ export interface BiliReply {
   replyCount: number;
   /** UP 主点过赞 */
   upLiked: boolean;
+  /** 当前登录用户是否已给这条评论点赞（上游顶层字段 `action`：0 未赞 / 1 已赞） */
+  liked: boolean;
   /** 是否 UP 主本人发的 */
   isUp: boolean;
   /** 置顶（整体置顶 / UP 置顶） */
@@ -854,6 +856,8 @@ function replyFromJson(raw: Record<string, unknown>, upMid: number): BiliReply {
     // 一级评论的「回复数」在 rcount，count 是含楼中楼的总数
     replyCount: num(raw.rcount ?? raw.count),
     upLiked: upAction?.like === true,
+    // 别用 reply_control.action —— 实测常为 undefined；顶层 action 才是权威
+    liked: num(raw.action) === 1,
     isUp: upMid > 0 && num(raw.mid) === upMid,
     isTop: false,
     replies: subs
@@ -1270,14 +1274,6 @@ export async function biliVideoDetail(bvid: string): Promise<BiliDetail> {
   };
 }
 
-/**
- * 播放地址。
- *
- * `fnval=1` 请求**整段 MP4（durl）**：B 站会把音视频封装进一个渐进式文件，
- * `<video>` / ArtPlayer 无需任何 DASH 合流即可直接播放（参考项目用 media_kit
- * 的 `edl://` 合并 DASH，而浏览器做不到，故这里取 durl 路线）。
- * 未登录时最高 720P，登录后可达 1080P。
- */
 /**
  * 播放地址（**DASH 通道**）。
  *

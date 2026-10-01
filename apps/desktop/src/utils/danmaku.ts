@@ -85,51 +85,52 @@ export function mergeDuplicates(entries: ArtDanmu[], windowSec = 5): ArtDanmu[] 
       .replace(/[^\w\u4e00-\u9fa5]+/g, "")
       .toLowerCase();
   const out: ArtDanmu[] = [];
+  /**
+   * 每条保留项的**原始正文**与累计计数。
+   *
+   * 两者都必须与 `out[i].text` 分开存：计数后缀一旦写回 text，下一轮归一化比对就会
+   * 拿「哈哈哈 x2」去和「哈哈哈」比，永远匹配不上（表现为去重完全失效）；
+   * 而正文本身就长成「好的 x2」时，也会被误判成已有计数。
+   */
+  const baseText: string[] = [];
+  const counts: number[] = [];
+  /** 保留项未经改写的展示文本（与 norm 后的 baseText 不同：这个保留原样） */
+  const shownText: string[] = [];
   for (const cur of sorted) {
     const key = norm(cur.text);
-    const last = out[out.length - 1];
-    if (last && norm(last.text.split(/ x\d+$/)[0]) === key && cur.time - last.time <= windowSec) {
-      const m = last.text.match(/^(.*) x(\d+)$/);
-      if (m) {
-        last.text = `${m[1]} x${Number(m[2]) + 1}`;
-      } else {
-        last.text = `${last.text} x2`;
-      }
+    const i = out.length - 1;
+    // 必须同模式才合并：顶部弹幕与滚动弹幕内容相同时并成一条，会连模式带颜色
+    // 一起被前一条覆盖（表现为「顶部弹幕跑到滚动里」）。
+    if (
+      i >= 0 &&
+      baseText[i] === key &&
+      out[i].mode === cur.mode &&
+      cur.time - out[i].time <= windowSec
+    ) {
+      counts[i] += 1;
+      // 始终基于原始文本重建后缀，避免「x2 x3」这样越叠越长
+      out[i].text = `${shownText[i]} x${counts[i]}`;
     } else {
       out.push({ ...cur });
+      baseText.push(key);
+      counts.push(1);
+      shownText.push(cur.text);
     }
   }
   return out;
 }
 
 /**
- * 按 time 秒聚合为"秒→该秒弹幕列表"索引。
- * 注意 artplayer-plugin-danmuku 内部也是按 time 排序发射的，这里多此一举？
- * 不多余——它内部用 setInterval 轮询 currentTime，索引给我们在播放循环外做"提前批量"、
- * "时间窗过滤"等扩展（参照参考项目 PlayerDanmakuController._emitDanmakusForCurrentPosition）。
- */
-export function indexBySecond(entries: ArtDanmu[]): Map<number, ArtDanmu[]> {
-  const idx = new Map<number, ArtDanmu[]>();
-  for (const d of entries) {
-    const sec = Math.floor(d.time);
-    let bucket = idx.get(sec);
-    if (!bucket) {
-      bucket = [];
-      idx.set(sec, bucket);
-    }
-    bucket.push(d);
-  }
-  return idx;
-}
-
-/**
  * 端到端：DanDanPlay 原始条目数组 → artplayer 可直接 load 的数组。
- * 包含：时间偏移、去重、按秒索引统计（不索引结果本身，按需调用）。
+ *
+ * 只做「偏移 + 去重」。此前还顺带算了一份「秒 → 弹幕列表」索引，但**没有任何
+ * 消费方**（全项目仅 AnimePlayer 解构了 items），等于每轮加载白遍历一次近万条
+ * 数组；投放节奏本来也由插件内部的 currentTime 轮询负责，故删掉。
  */
 export function adaptDandanToArt(
   raw: DanmakuEntry[],
   options: { offsetMs?: number; dedup?: boolean; dedupWindowSec?: number } = {},
-): { items: ArtDanmu[]; bySecond: Map<number, ArtDanmu[]>; total: number } {
+): { items: ArtDanmu[]; total: number } {
   const offsetMs = options.offsetMs ?? 0;
   const dedup = options.dedup ?? true;
   const win = options.dedupWindowSec ?? 5;
@@ -138,9 +139,6 @@ export function adaptDandanToArt(
   if (dedup) items = mergeDuplicates(items, win);
   items = applyTimeOffset(items, offsetMs);
 
-  const bySecond = indexBySecond(items);
-  void danmakuLog(
-    `适配弹幕 完成 raw=${raw.length} 去重后=${items.length} 索引秒数=${bySecond.size}`,
-  );
-  return { items, bySecond, total: items.length };
+  void danmakuLog(`适配弹幕 完成 raw=${raw.length} 去重后=${items.length}`);
+  return { items, total: items.length };
 }

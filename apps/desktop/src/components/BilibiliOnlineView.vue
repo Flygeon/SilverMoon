@@ -175,15 +175,29 @@ onBeforeUnmount(() => {
   observer?.disconnect();
   observer = null;
   stopPolling();
+  if (noticeTimer !== null) {
+    window.clearTimeout(noticeTimer);
+    noticeTimer = null;
+  }
 });
 
 watch(feedSentinel, () => attachObserver());
 
+let noticeTimer: number | null = null;
+
 watch(
   () => bili.notice,
   (msg) => {
+    // 定时器要能取消：否则连续两条提示时，前一条的 timer 会提前清掉后一条
+    if (noticeTimer !== null) {
+      window.clearTimeout(noticeTimer);
+      noticeTimer = null;
+    }
     if (!msg) return;
-    window.setTimeout(() => bili.clearNotice(), 2600);
+    noticeTimer = window.setTimeout(() => {
+      noticeTimer = null;
+      bili.clearNotice();
+    }, 2600);
   },
 );
 

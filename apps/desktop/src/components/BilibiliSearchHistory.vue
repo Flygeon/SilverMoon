@@ -4,7 +4,7 @@
  *
  * 只在有历史时渲染（父级用 `v-if`），点 chip 直接重搜该词，点 × 删除单条。
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
 import { translate } from "@shared/i18n";
@@ -16,6 +16,8 @@ const settings = useSettingsStore();
 const t = (key: string) => translate(settings.lang, key);
 
 const hasHistory = computed(() => bili.searchHistory.length > 0);
+/** 清空不可恢复（历史是本地持久化数据），二次确认 */
+const confirmClear = ref(false);
 </script>
 
 <template>
@@ -25,9 +27,25 @@ const hasHistory = computed(() => bili.searchHistory.length > 0);
         <span class="material-symbols-outlined">history</span>
         {{ t("bili.searchHistory") }}
       </span>
-      <button class="clear" type="button" @click="bili.clearSearchHistory()">
+      <button v-if="!confirmClear" class="clear" type="button" @click="confirmClear = true">
         {{ t("bili.clearHistory") }}
       </button>
+      <span v-else class="clear-confirm">
+        {{ t("bili.clearHistoryConfirm") }}
+        <button
+          class="clear"
+          type="button"
+          @click="
+            bili.clearSearchHistory();
+            confirmClear = false;
+          "
+        >
+          {{ t("bili.confirm") }}
+        </button>
+        <button class="clear" type="button" @click="confirmClear = false">
+          {{ t("bili.cancelReply") }}
+        </button>
+      </span>
     </div>
 
     <div class="chips">
@@ -83,6 +101,13 @@ const hasHistory = computed(() => bili.searchHistory.length > 0);
 }
 .clear:hover {
   background: var(--md-sys-color-surface-container-high);
+}
+.clear-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--md-sys-typescale-label-large-size);
+  color: var(--md-sys-color-on-surface-variant);
 }
 
 .chips {

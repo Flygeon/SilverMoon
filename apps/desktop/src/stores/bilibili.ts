@@ -32,6 +32,7 @@ import {
   biliHeartbeat,
   biliHistory,
   biliIsLoggedIn,
+  biliLikeReply,
   biliLastPlay,
   biliLike,
   biliLogout,
@@ -52,6 +53,7 @@ import {
 } from "@/utils/bilibili";
 import { JsonStore } from "@/ipc/store";
 import { useSettingsStore } from "@/stores/settings";
+import { translate } from "@shared/i18n";
 import type { ArtDanmu } from "@/utils/danmaku";
 
 export type BiliStatus = "idle" | "loading" | "ready" | "error";
@@ -59,6 +61,18 @@ export type BiliStatus = "idle" | "loading" | "ready" | "error";
 function cleanError(e: unknown): string {
   const s = e instanceof Error ? e.message : String(e);
   return s.replace(/^Error:\s*/, "");
+}
+
+/**
+ * 取词：store 里也有用户可见文案（notice / 错误提示）。
+ *
+ * 硬编码中文会让 EN 界面破功（项目里其他 store 也是这么取词的，
+ * 见 stores/player.ts 的 translate(useSettingsStore().lang, …)）。
+ */
+function t(key: string, vars?: Record<string, string>): string {
+  let s = translate(useSettingsStore().lang, key);
+  if (vars) for (const [k, v] of Object.entries(vars)) s = s.replace(`{${k}}`, v);
+  return s;
 }
 
 export const useBiliStore = defineStore("bilibili", () => {
@@ -217,7 +231,7 @@ export const useBiliStore = defineStore("bilibili", () => {
       searchPage.value = 2;
       searchEnd.value = list.length === 0;
       searchStatus.value = "ready";
-      if (!list.length) searchError.value = "没有找到相关视频";
+      if (!list.length) searchError.value = t("bili.searchEmptyResult");
       // 只在真的有结果时记历史：搜空的词留在历史里没有回访价值
       if (list.length) void rememberSearch(word);
     } catch (e) {
@@ -317,7 +331,7 @@ export const useBiliStore = defineStore("bilibili", () => {
             : "已授权，但账号信息获取失败，请重新登录";
           return true;
         }
-        notice.value = `欢迎回来，${account.value.name || "B 站用户"}`;
+        notice.value = t("bili.loggedInAs", { name: account.value.name || t("bili.biliUser") });
         return true;
       }
       if (s.code === 86038) {
@@ -363,7 +377,7 @@ export const useBiliStore = defineStore("bilibili", () => {
     await biliLogout();
     account.value = { ...BILI_ANONYMOUS };
     resetAccountData();
-    notice.value = "已退出 B 站账号";
+    notice.value = t("bili.loggedOut");
     // 退出后推荐流会变回未登录内容，重扫一次
     void loadFeed(true);
   }
@@ -712,7 +726,7 @@ export const useBiliStore = defineStore("bilibili", () => {
       };
       subEnds.value = { ...subEnds.value, [rpid]: r.isEnd };
     } catch (e) {
-      notice.value = `加载回复失败：${cleanError(e)}`;
+      notice.value = `${t("bili.replyLoadFailed")}：${cleanError(e)}`;
     } finally {
       const busy = { ...subBusy.value };
       delete busy[rpid];
@@ -756,6 +770,51 @@ export const useBiliStore = defineStore("bilibili", () => {
       // 未登录 / 被风控：按钮退回未激活态就行，不必打扰用户
       relation.value = null;
     }
+  }
+
+  /**
+   * 给评论点赞 / 取消点赞。
+   *
+   * 先本地乐观更新（点赞数 ±1、状态取反），失败再回滚 —— 评论点赞是高频轻操作，
+   * 等一个来回再变色会让手感很钝。
+   */
+  async function toggleReplyLike(r: BiliReply): Promise<void> {
+    const aid = commentAid();
+    if (!aid) return;
+    const key = `reply-like-${r.rpid}`;
+    if (acting.value[key]) return;
+    const next = !r.liked;
+    acting.value = { ...acting.value, [key]: true };
+    // 乐观更新：一级评论与楼中楼共用同一条记录（按 rpid 找）
+    applyReplyLike(r.rpid, next);
+    try {
+      await biliLikeReply(aid, r.rpid, next);
+    } catch (e) {
+      applyReplyLike(r.rpid, !next);
+      notice.value = cleanError(e);
+    } finally {
+      const busy = { ...acting.value };
+      delete busy[key];
+      acting.value = busy;
+    }
+  }
+
+  /** 就地改某条评论的点赞态与计数（一级列表与楼中楼都覆盖）。 */
+  function applyReplyLike(rpid: string, liked: boolean): void {
+    const patch = (list: BiliReply[]): BiliReply[] =>
+      list.map((x) =>
+        x.rpid === rpid
+          ? { ...x, liked, like: Math.max(0, x.like + (liked ? 1 : -1)) }
+          : { ...x, replies: x.replies.length ? patch(x.replies) : x.replies },
+      );
+    replies.value = patch(replies.value);
+    const subs = { ...subReplies.value };
+    let touched = false;
+    for (const [k, v] of Object.entries(subs)) {
+      subs[k] = patch(v);
+      if (subs[k] !== v) touched = true;
+    }
+    if (touched) subReplies.value = subs;
   }
 
   /** 统一包一层：防重复点击、成败都提示；成功返回 true，调用方据此更新本地状态。 */
@@ -808,7 +867,7 @@ export const useBiliStore = defineStore("bilibili", () => {
     if (!aid) return;
     const rel = await ensureRelation();
     if (rel.coin >= 2) {
-      notice.value = "已经投过两枚硬币了";
+      notice.value = t("bili.coinAlready");
       return;
     }
     const add = Math.min(count, 2 - rel.coin);
@@ -836,7 +895,7 @@ export const useBiliStore = defineStore("bilibili", () => {
       }
     }
     if (!favFolderId) {
-      notice.value = "账号下没有可用的收藏夹";
+      notice.value = t("bili.noFavFolder");
       return;
     }
     const next = !rel.favored;
@@ -869,7 +928,7 @@ export const useBiliStore = defineStore("bilibili", () => {
     const url = `https://www.bilibili.com/video/${bvid}`;
     try {
       await navigator.clipboard.writeText(url);
-      notice.value = "视频链接已复制";
+      notice.value = t("bili.linkCopied");
     } catch {
       notice.value = url;
     }
@@ -1039,7 +1098,7 @@ export const useBiliStore = defineStore("bilibili", () => {
       // 没有可用的收藏夹 id（列表拉取失败 / 账号下确实没有）——给明确错误态，
       // 不能静默 return，否则界面显示「这个收藏夹还是空的」而实际是加载失败。
       favStatus.value = "error";
-      if (!favError.value) favError.value = "没有可用的收藏夹";
+      if (!favError.value) favError.value = t("bili.noFavFolderShort");
       return;
     }
     const token = refresh ? ++favToken : favToken;
@@ -1307,6 +1366,7 @@ export const useBiliStore = defineStore("bilibili", () => {
     setReplySort,
     loadSubReplies,
     postReply,
+    toggleReplyLike,
     replySending,
     related,
     relatedStatus,

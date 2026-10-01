@@ -6,9 +6,14 @@
  * 发丝描边、hover 上浮。封面来自 i0.hdslb.com，防盗链 Referer 由主进程
  * webRequest 统一补（见 electron/net-headers.ts）。
  */
+import { useSettingsStore } from "@/stores/settings";
 import { biliCount, biliDuration, type BiliVideo } from "@/utils/bilibili";
+import { translate } from "@shared/i18n";
 
 defineProps<{ video: BiliVideo }>();
+
+const settings = useSettingsStore();
+const t = (key: string) => translate(settings.lang, key);
 defineEmits<{ (e: "open", video: BiliVideo): void }>();
 </script>
 
@@ -34,7 +39,7 @@ defineEmits<{ (e: "open", video: BiliVideo): void }>();
       <div class="title" :title="video.title">{{ video.title }}</div>
       <div class="up" :title="video.ownerName">
         <span class="material-symbols-outlined">person</span>
-        <span class="up-name">{{ video.ownerName || "未知 UP 主" }}</span>
+        <span class="up-name">{{ video.ownerName || t("bili.unknownUp") }}</span>
       </div>
       <div class="stats tabular-nums">
         <span class="stat">

@@ -61,17 +61,17 @@ function subMore(r: BiliReply): boolean {
         <span v-if="bili.replyTotal" class="tabular-nums">{{ biliCount(bili.replyTotal) }}</span>
         {{ t("bili.commentUnit") }}
       </h3>
+      <!-- 用 m3e-filter-chip：自带选中态语义（aria-pressed），也免去自己维护 .active -->
       <div class="sorts">
-        <button
+        <m3e-filter-chip
           v-for="s in sorts"
           :key="s.value"
-          class="sort"
-          :class="{ active: bili.replySort === s.value }"
-          type="button"
+          class="sort-chip"
+          :selected="bili.replySort === s.value"
           @click="bili.setReplySort(s.value)"
         >
           {{ s.label }}
-        </button>
+        </m3e-filter-chip>
       </div>
     </div>
 
@@ -120,10 +120,17 @@ function subMore(r: BiliReply): boolean {
           <p class="text">{{ r.message }}</p>
 
           <div class="acts">
-            <span class="act" :class="{ on: r.upLiked }" :title="t('bili.likeCount')">
+            <button
+              class="act btn"
+              :class="{ on: r.liked }"
+              type="button"
+              :title="t('bili.likeCount')"
+              :disabled="!!bili.acting['reply-like-' + r.rpid]"
+              @click="bili.toggleReplyLike(r)"
+            >
               <span class="material-symbols-outlined">thumb_up</span>
               <span class="tabular-nums">{{ biliCount(r.like) }}</span>
-            </span>
+            </button>
             <button
               class="act btn"
               type="button"
@@ -157,9 +164,16 @@ function subMore(r: BiliReply): boolean {
               <span class="sub-head">
                 <span class="sub-name" :class="{ up: s.isUp }">{{ s.author.name }}</span>
                 <span v-if="s.isUp" class="badge up sm">UP</span>
-                <span v-if="s.like" class="sub-like tabular-nums">
+                <button
+                  class="sub-like tabular-nums"
+                  :class="{ on: s.liked }"
+                  type="button"
+                  :title="t('bili.likeCount')"
+                  :disabled="!!bili.acting['reply-like-' + s.rpid]"
+                  @click="bili.toggleReplyLike(s)"
+                >
                   <span class="material-symbols-outlined">thumb_up</span>{{ biliCount(s.like) }}
-                </span>
+                </button>
               </span>
               <span class="sub-text">{{ s.message }}</span>
               <button
@@ -237,24 +251,8 @@ function subMore(r: BiliReply): boolean {
   display: flex;
   gap: 4px;
 }
-.sort {
-  padding: 4px 10px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: transparent;
-  color: var(--md-sys-color-on-surface-variant);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-label-large-size);
-  cursor: pointer;
-  transition: background 160ms var(--md-sys-motion-spring-effects-fast);
-}
-.sort:hover {
-  background: var(--md-sys-color-surface-container-high);
-}
-.sort.active {
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
-  font-weight: 500;
+.sort-chip {
+  --m3e-chip-container-height: 28px;
 }
 
 .state {
@@ -380,6 +378,20 @@ function subMore(r: BiliReply): boolean {
 .act.on {
   color: var(--md-sys-color-primary);
 }
+/* 点赞按钮：可点 + 满足 M3 最小触达（原来 14px 高，几乎点不中） */
+.act.btn {
+  min-height: 28px;
+  padding: 0 4px;
+  border-radius: var(--md-sys-shape-corner-full);
+  transition: background 160ms var(--md-sys-motion-spring-effects-fast);
+}
+.act.btn:hover:not(:disabled) {
+  background: var(--md-sys-color-surface-container-high);
+}
+.act.btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 .act .material-symbols-outlined {
   font-size: 14px;
 }
@@ -446,9 +458,27 @@ function subMore(r: BiliReply): boolean {
   display: inline-flex;
   align-items: center;
   gap: 2px;
+  min-height: 24px;
   margin-left: auto;
-  font-size: 11px;
+  padding: 0 4px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: transparent;
   color: var(--md-sys-color-outline);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.sub-like:hover:not(:disabled) {
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-primary);
+}
+.sub-like.on {
+  color: var(--md-sys-color-primary);
+}
+.sub-like:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 .sub-like .material-symbols-outlined {
   font-size: 12px;
