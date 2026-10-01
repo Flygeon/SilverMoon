@@ -40,9 +40,13 @@ flutter:
   assets:
     # 应用元信息唯一真源：Rust 编译期、Electron 运行期、Flutter 宿主运行期共读同一份
     - backend/silvermoon.config.json
-    # 播放层产物（由归档的 Vue 源码单独构建，vite.player.config.ts → player-dist）。
-    # 目录整体声明：产物文件多且会随构建变化，逐个列举既易漏又难维护。
+    # 播放层产物（归档的 Vue 源码单独构建：vite.player.config.ts → player-dist）。
+    # 注意 Flutter 列目录**不递归**：assets/player/ 只覆盖直接子层的 player.html、
+    # shim.js、default.svg；入口 JS / CSS / 字体都在 assets/player/assets/ 里，必须再列
+    # 一层，漏了就是运行时 404——而播放层的 isDesktop 是硬开关，加载失败会静默退回 mock
+    # 数据（界面能开、列表为空、不报错），极难排查。
     - assets/player/
+    - assets/player/assets/
 
   # 字族与 Electron 版对齐（archive/electron-desktop/src/tokens/theme.css 的 body 字族栈）：
   #   Roboto（拉丁）→ SarasaGothicSC-Regular（中日韩）→ 系统兜底

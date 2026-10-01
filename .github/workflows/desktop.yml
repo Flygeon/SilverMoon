@@ -227,13 +227,18 @@ jobs:
             Flutter 桌面端（Windows x64）自动构建产物。**本包已内置 Rust 后端**
             （\`silvermoon-server.exe\`，与主程序同级）。
 
-            **P0.1 阶段**：在 P0 界面框架之上接通后端 —— 数据目录 / 旧数据迁移 /
-            JsonStore / sidecar 拉起与 15s 就绪握手 / `POST /cmd` 命令通道 /
-            `GET /events` SSE 事件总线，并把 /images 换成真实图片库
-            （\`list_files\` + \`get_thumbnails\` 批量取缩略图，可添加文件夹并扫描）。
+            **当前进度**：界面框架 + 真实后端（数据目录 / 旧数据迁移 / JsonStore / 就绪握手 /
+            `POST /cmd` 命令通道 / `GET /events` SSE）。/images、/folders、/books、/stats、
+            /novel-stats、/webdav、/osu 已接真实数据。
 
-            其余 18 条路由仍是占位页；WebView 播放层、托盘 / 热键 / 反向 `/rpc`
-            通道、设置持久化界面尚未接入。
+            **音乐播放层**：/music 与 /music/player 由 WebView2 承载复用原 Vue 的播放器
+            （歌单 / 全屏播放器 / 迷你条），Web Audio 效果链保留在 WebView 内；中间层是本机
+            loopback HTTP+SSE，设置与播放层共用同一份 settings.json，网易云 / 酷狗登录走既有
+            后端命令。需要系统已装 **WebView2 Runtime**（Windows 11 自带；Win10 缺失时请装
+            Evergreen Runtime），否则播放页会提示运行时缺失。
+
+            尚未接入：托盘 / 全局热键 / 多窗口（播放器独立窗口、桌面歌词）、/desktop-lyrics、
+            /extension-host、/treasure/market 仍是占位页。
 
             解压后运行 \`silvermoon.exe\`（Windows 10/11 x64）。
           files: dist/*
