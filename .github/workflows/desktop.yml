@@ -1,0 +1,167 @@
+name: Desktop Build (Flutter Windows)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/desktop/**'
+      - '.github/workflows/desktop.yml'
+  pull_request:
+    paths:
+      - 'apps/desktop/**'
+      - '.github/workflows/desktop.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 静态门禁：pub 解析 + analyze + 单元测试。
+  #
+  # 刻意放在便宜得多的 ubuntu 上、并让 windows 作业 needs 它：Dart 侧的错误在
+  # 分钟级反馈，不必等 5~10 分钟的 Windows 构建才知道写错了。（Electron 版当年
+  # 反过来做是因为 Windows 侧还有 12 分钟的 Rust release 编译。）
+  # ---------------------------------------------------------------------------
+  analyze:
+    name: Analyze & test (Dart)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.5
+          cache: true
+
+      - name: Toolchain versions
+        run: flutter --version
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: flutter analyze
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: flutter test
+        run: flutter test
+
+  # ---------------------------------------------------------------------------
+  # Windows x64 构建
+  # ---------------------------------------------------------------------------
+  windows:
+    name: Windows x64 build
+    needs: [analyze]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.5
+          cache: true
+
+      - name: Toolchain versions
+        run: flutter --version
+
+      # windows/ 不入库，由当前 Flutter 模板现场生成（见 tool/bootstrap.ps1 顶部注释）
+      - name: Bootstrap Windows platform folder
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tool/bootstrap.ps1
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Generate Windows app icon
+        run: dart run flutter_launcher_icons
+
+      - name: flutter build windows
+        run: flutter build windows --release
+
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          $candidates = @(
+            'build/windows/x64/runner/Release',
+            'build/windows/runner/Release'
+          )
+          $release = $candidates |
+            Where-Object { Test-Path (Join-Path $_ 'silvermoon.exe') } |
+            Select-Object -First 1
+          if (-not $release) {
+            Write-Host '--- build tree ---'
+            Get-ChildItem -Path build -Recurse -Directory -ErrorAction SilentlyContinue |
+              Select-Object -ExpandProperty FullName
+            throw 'Release directory not found (silvermoon.exe is missing)'
+          }
+          Write-Host "packaging: $release"
+          $zip = 'SilverMoon-windows-x64.zip'
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path $release -DestinationPath $zip -Force
+          Get-Item $zip | Select-Object Name, Length
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: silvermoon-windows-x64
+          path: apps/desktop/SilverMoon-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # 交付：把 zip 挂到 Release 上（PR 不发布）
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish build
+    needs: [windows]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect
+        run: |
+          mkdir -p dist
+          find artifacts -type f -name '*.zip' -exec cp {} dist/ \;
+          ls -lh dist
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: desktop-v${{ github.run_number }}
+          name: SilverMoon Desktop build ${{ github.run_number }}
+          prerelease: true
+          body: |
+            Flutter 桌面端（Windows x64）自动构建产物。
+
+            **本版本是 P0「界面框架」阶段产物**：只提供无边框窗口、自定义标题栏、
+            左侧导航 Rail、迷你播放条占位、M3 主题（浅色 / 深色 / 跟随系统）、
+            中英文切换，以及 19 条路由的占位页。
+
+            命令通道、事件总线、Rust sidecar、WebView 播放层与持久化设置**尚未接入**。
+
+            解压后运行 `silvermoon.exe`（Windows 10/11 x64）。
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

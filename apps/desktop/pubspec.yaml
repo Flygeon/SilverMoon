@@ -1,0 +1,40 @@
+name: silvermoon
+description: "SilverMoon（银月）桌面端 — Flutter 宿主（P0 界面框架阶段）"
+publish_to: 'none'
+version: 0.0.1+1
+
+# Flutter 3.47.5 自带 Dart 3.13.4；go_router 18 要求 Dart >=3.12，故此处声明真实下限。
+environment:
+  sdk: ^3.12.0
+  flutter: ">=3.47.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # 状态管理：与 apps/mobile 保持一致（provider，不用 riverpod）
+  provider: ^6.1.2
+  # 路由：Electron 版 19 条 vue-router 路由的等价表达
+  go_router: ^18.0.2
+  # 无边框窗口 / 自定义标题栏 / 最小化最大化关闭 / 窗口拖拽
+  window_manager: ^0.5.2
+  # 打开 GitHub 仓库等外部链接
+  url_launcher: ^6.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  # 从 app-icon.png 生成 windows/runner/resources/app_icon.ico
+  flutter_launcher_icons: ^0.14.4
+
+flutter:
+  uses-material-design: true
+
+flutter_launcher_icons:
+  windows:
+    generate: true
+    image_path: "app-icon.png"
+    icon_size: 256
