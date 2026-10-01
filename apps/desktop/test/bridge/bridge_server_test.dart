@@ -128,6 +128,8 @@ void main() {
     final HttpClient http = HttpClient();
     final HttpClientRequest req =
         await http.openUrl(method, Uri.parse(bridge.origin + path));
+    // 默认会跟随 302：断言「/ 跳转到 /player/」时会被跟到下一跳的 404 上去
+    req.followRedirects = false;
     headers.forEach(req.headers.set);
     if (body != null) {
       req.headers.contentType = ContentType.json;

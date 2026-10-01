@@ -338,6 +338,9 @@ class BridgeServer {
     );
     response.headers.set(HttpHeaders.cacheControlHeader, 'no-cache');
     response.headers.set('X-Accel-Buffering', 'no');
+    // 关键：SSE 必须关掉输出缓冲。HttpResponse 默认会把不足缓冲区的字节攒起来，
+    // 几十字节的事件帧会一直卡着不发出——浏览器侧表现为「连上了但永远收不到事件」。
+    response.bufferOutput = false;
     await response.flush();
 
     final StreamController<List<int>> controller = StreamController<List<int>>();
