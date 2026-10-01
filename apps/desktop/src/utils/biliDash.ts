@@ -144,9 +144,29 @@ export function mseMime(track: BiliStream, fallback: "video/mp4" | "audio/mp4"):
   return track.codecs ? `${mime}; codecs="${track.codecs}"` : mime;
 }
 
+/** 时间 `t` 落在第几个分片里（返回该分片下标；`t` 超过最后一片则返回最后一片）。 */
+export function segmentIndexAt(segments: DashSegment[], t: number): number {
+  let i = 0;
+  while (i + 1 < segments.length && segments[i + 1].startTime <= t) i++;
+  return i;
+}
+
+/**
+ * `t` 是否已落在某段缓冲区内（`evict` 之后 buffered 通常是多段的）。
+ *
+ * 容差 0.5s：`timeupdate` 的采样点与分片边界不会严格对齐。
+ */
+export function isTimeBuffered(buffered: TimeRanges, t: number): boolean {
+  for (let i = 0; i < buffered.length; i++) {
+    if (t >= buffered.start(i) - 0.5 && t <= buffered.end(i) + 0.5) return true;
+  }
+  return false;
+}
+
 /** 单路轨道（视频或音频）的拉取 / 喂给 `SourceBuffer` 状态机。 */
 class TrackFeeder {
-  private next = 0;
+  /** 下一个待拉取的分片下标（测试需要断言，故为包可见） */
+  next = 0;
   private appending = false;
   private pending = false;
   private aborted = false;
@@ -186,29 +206,23 @@ class TrackFeeder {
 
   /** 把游标对齐到时间 `t` 所在（或之前最近）的分片，供跳转 / 起播定位。 */
   seekTo(t: number): void {
-    let i = 0;
-    while (i + 1 < this.segments.length && this.segments[i + 1].startTime <= t) i++;
-    this.next = i;
+    this.next = segmentIndexAt(this.segments, t);
   }
 
+
   /**
-   * 用户往回拖进度条时的重定位。
+   * 目标播放位置没有数据时，把游标回退到该位置重新拉。
    *
-   * `next` 只向前推进，被 `evict` 回收掉的旧分片也不会自动回填；若目标时间落在
-   * 已丢弃区间，就**回退游标**重新拉这一段，否则播放会卡在缓冲空洞上。
+   * `next` 只向前推进，而 `evict` 会丢弃播放点之前的旧分片；用户往回拖进度条
+   * （或某片拉取失败留下空洞）之后，目标位置就没有数据了，必须回退游标回填，
+   * 否则播放会卡在空洞上。
+   *
+   * ⚠️ 判据必须是「**该位置是否已缓冲**」，不能写成「t 是否落在缓冲区中段」——
+   * 中段恰恰是已经有数据的地方，那种写法会在**每次 timeupdate** 都把游标拽回
+   * 播放点，造成反复重拉同一批分片（表现为播放抖动、流量翻倍）。
    */
   resync(t: number): void {
-    const cur = this.segments[this.next];
-    // 目标时间在下一片之前 → 游标回退重新拉（可能是用户回拖，也可能是 evict 回收过）
-    if (!cur || t < cur.startTime - 1) {
-      this.seekTo(t);
-      return;
-    }
-    // 游标已领先，但被回收的区间（buffered.start 之后没有数据）仍然空缺 → 回填
-    const b = this.sb.buffered;
-    if (b.length && t > b.start(0) + 0.5 && t < this.bufferedEnd() - 0.5) {
-      this.seekTo(t);
-    }
+    if (!isTimeBuffered(this.sb.buffered, t)) this.seekTo(t);
   }
 
   /** 已缓冲到的时间上限（没有缓冲返回 0）。 */
