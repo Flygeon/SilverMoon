@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../bridge/backend_client.dart';
+import '../bridge/bridge_server.dart';
 import '../bridge/event_bus.dart';
 import '../features/library/library_api.dart';
 import 'app_config.dart';
@@ -35,6 +36,7 @@ class HostController extends ChangeNotifier {
   BackendClient? _client;
   LibraryApi? _library;
   JsonStore? _store;
+  BridgeServer? _bridge;
   HostPaths? _paths;
   StreamSubscription<Map<String, Object?>>? _events;
   bool _disposed = false;
@@ -44,6 +46,9 @@ class HostController extends ChangeNotifier {
   BackendClient? get client => _client;
   LibraryApi? get library => _library;
   JsonStore? get store => _store;
+
+  /// loopback 中间层：WebView 里的播放层靠它访问后端命令、事件与本地文件。
+  BridgeServer? get bridge => _bridge;
   HostPaths? get paths => _paths;
   bool get isReady => _status == HostStatus.ready;
 
@@ -113,6 +118,23 @@ class HostController extends ChangeNotifier {
   }
 
   /// 停止后端并保留已落盘的设置（退出时用）。
+  /// 启动给 WebView 用的 loopback 中间层。
+  ///
+  /// 依赖传的是**取值闭包**而不是快照：[retry] 会换一个新的 [BackendClient]，
+  /// 闭包每次取到的都是最新的那个，于是中间层不必跟着重启——端口一换，
+  /// WebView 里已经加载好的页面就全废了。
+  Future<BridgeServer?> startBridge() async {
+    if (_bridge != null) return _bridge;
+    final BridgeServer bridge = BridgeServer(
+      client: () => _client,
+      store: _store,
+    );
+    await bridge.start();
+    _bridge = bridge;
+    _notify();
+    return bridge;
+  }
+
   Future<void> stop() async {
     await _teardown();
     _status = HostStatus.idle;

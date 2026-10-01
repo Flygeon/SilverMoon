@@ -61,6 +61,17 @@ class JsonStore {
     }
   }
 
+  /// 丢掉内存副本，下次读写重新从磁盘加载（对应 Electron store 的 reload）。
+  ///
+  /// 用于「同一个文件被两边写」的场景：WebView 里的播放层与 Flutter 设置页共用
+  /// settings.json，谁都不该拿内存里的旧副本去覆盖对方刚写下的值。
+  void reload(String file) {
+    _files.remove(_resolve(file));
+  }
+
+  /// 某个 store 文件的落盘路径（对应 Electron store 的 path 查询）。
+  String pathOf(String file) => _resolve(file);
+
   /// 便捷读取：设置页与启动流程用，等价 handle 的 get。
   Object? read(String file, String key) {
     final _StoreFile entry = _load(file);

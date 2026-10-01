@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SilverMoon · 播放器</title>
+    <style>
+      /* 播放器入口没有左侧导航 Rail：MiniPlayer 用 left: var(--lm-nav-width) 定位，
+         这里把该变量归零，迷你播放条才能贴满左边缘（不改动 MiniPlayer.vue 本体）。 */
+      body {
+        --lm-nav-width: 0px;
+      }
+      /* 主应用里滚动容器是 App.vue 的 .main-content；播放器入口没有外壳，
+         由 .player-shell 承担同样的职责（滚动 + 内容内边距 + 迷你条避让）。 */
+      .player-shell {
+        height: 100%;
+        overflow-y: auto;
+        scrollbar-gutter: stable;
+        padding: var(--lm-content-pad);
+      }
+      .player-shell.has-player {
+        padding-bottom: calc(var(--lm-miniplayer-height) + var(--lm-content-pad));
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <!-- 宿主垫片：Flutter 的 loopback 中间层在 http://127.0.0.1:<port>/shim.js 提供，
+         负责注入 window.__SILVERMOON__。必须排在应用模块之前（不能用 defer/async）。 -->
+    <script src="/shim.js"></script>
+    <script type="module" src="/src/player/main.ts"></script>
+  </body>
+</html>

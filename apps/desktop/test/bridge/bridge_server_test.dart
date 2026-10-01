@@ -478,6 +478,19 @@ void main() {
       expect(await utf8.decoder.bind(res).join(), '<html>player</html>');
     });
 
+    test('/player/ 缺 index.html 时回退到 player.html', () async {
+      final String sep = Platform.pathSeparator;
+      File(playerRoot.path + sep + 'index.html').deleteSync();
+      File(
+        playerRoot.path + sep + 'player.html',
+      ).writeAsStringSync('<html>player-entry</html>');
+
+      final HttpClientResponse res = await send('GET', '/player/');
+
+      expect(res.statusCode, 200);
+      expect(await utf8.decoder.bind(res).join(), '<html>player-entry</html>');
+    });
+
     test('子目录里的 js 用正确的 MIME 类型', () async {
       final HttpClientResponse res = await send('GET', '/player/assets/app.js');
 
@@ -507,6 +520,231 @@ void main() {
         'application/javascript',
       );
       await res.drain<void>();
+    });
+  });
+
+  group('POST /bridge/call（fs / http / dialog / store 生命周期）', () {
+    test('文本与 Base64 二进制都能往返，裸二进制 op 回错误（渲染端据此回退）', () async {
+      final String textPath = root.path + Platform.pathSeparator + 'a.txt';
+      final Map<String, Object?> wrote = await postJson(
+        '/bridge/call',
+        <String, Object?>{
+          'channel': 'fs',
+          'payload': <String, Object?>{
+            'op': 'writeTextFile',
+            'path': textPath,
+            'contents': '你好',
+          },
+        },
+      );
+      expect(wrote['ok'], isTrue);
+
+      final Map<String, Object?> read = await postJson(
+        '/bridge/call',
+        <String, Object?>{
+          'channel': 'fs',
+          'payload': <String, Object?>{'op': 'readTextFile', 'path': textPath},
+        },
+      );
+      expect(read['data'], '你好');
+
+      final List<int> bytes = List<int>.generate(300, (int i) => i % 256);
+      final String binPath = root.path + Platform.pathSeparator + 'b.bin';
+      final Map<String, Object?> wroteBin = await postJson(
+        '/bridge/call',
+        <String, Object?>{
+          'channel': 'fs',
+          'payload': <String, Object?>{
+            'op': 'writeFileBase64',
+            'path': binPath,
+            'data': base64Encode(bytes),
+          },
+        },
+      );
+      expect(wroteBin['ok'], isTrue);
+
+      final Map<String, Object?> gotBin = await postJson(
+        '/bridge/call',
+        <String, Object?>{
+          'channel': 'fs',
+          'payload': <String, Object?>{'op': 'readFileBase64', 'path': binPath},
+        },
+      );
+      expect(base64Decode(gotBin['data']! as String), bytes);
+
+      final Map<String, Object?> raw = await postJson(
+        '/bridge/call',
+        <String, Object?>{
+          'channel': 'fs',
+          'payload': <String, Object?>{'op': 'readFile', 'path': binPath},
+        },
+      );
+      expect(raw['ok'], isFalse, reason: '裸二进制 op 必须失败，上游才会回退到 Base64');
+      expect(raw['error'], contains('Base64'));
+    });
+
+    test('mkdir / stat / readDir / exists', () async {
+      final String dir = root.path + Platform.pathSeparator + 'sub';
+      final Map<String, Object?> made = await postJson(
+        '/bridge/call',
+        <String, Object?>{
+          'channel': 'fs',
+          'payload': <String, Object?>{
+            'op': 'mkdir',
+            'path': dir,
+            'recursive': true,
+          },
+        },
+      );
+      expect(made['ok'], isTrue);
+      File(dir + Platform.pathSeparator + 'x.txt').writeAsStringSync('hi');
+
+      final Map<String, Object?> stat = await postJson(
+        '/bridge/call',
+        <String, Object?>{
+          'channel': 'fs',
+          'payload': <String, Object?>{'op': 'stat', 'path': dir},
+        },
+      );
+      final Map<Object?, Object?> info = stat['data']! as Map<Object?, Object?>;
+      expect(info['isDirectory'], isTrue);
+      expect(info['isFile'], isFalse);
+
+      final Map<String, Object?> listing = await postJson(
+        '/bridge/call',
+        <String, Object?>{
+          'channel': 'fs',
+          'payload': <String, Object?>{'op': 'readDir', 'path': dir},
+        },
+      );
+      final List<Object?> entries = listing['data']! as List<Object?>;
+      expect(entries.length, 1);
+      final Map<Object?, Object?> entry = entries.first! as Map<Object?, Object?>;
+      expect(entry['name'], 'x.txt');
+      expect(entry['isFile'], isTrue);
+
+      final Map<String, Object?> exists = await postJson(
+        '/bridge/call',
+        <String, Object?>{
+          'channel': 'fs',
+          'payload': <String, Object?>{
+            'op': 'exists',
+            'path': dir + Platform.pathSeparator + 'x.txt',
+          },
+        },
+      );
+      expect(exists['data'], isTrue);
+
+      final Map<String, Object?> gone = await postJson(
+        '/bridge/call',
+        <String, Object?>{
+          'channel': 'fs',
+          'payload': <String, Object?>{
+            'op': 'exists',
+            'path': dir + Platform.pathSeparator + 'nope.txt',
+          },
+        },
+      );
+      expect(gone['data'], isFalse);
+    });
+
+    test('http 通道由宿主代发（绕 CORS），响应体是字节数组', () async {
+      File(
+        playerRoot.path + Platform.pathSeparator + 'probe.txt',
+      ).writeAsStringSync('hello-http');
+
+      final Map<String, Object?> reply = await postJson(
+        '/bridge/call',
+        <String, Object?>{
+          'channel': 'http',
+          'payload': <String, Object?>{
+            'url': bridge.origin + '/player/probe.txt',
+            'method': 'GET',
+            'headers': <List<String>>[],
+            'body': null,
+          },
+        },
+      );
+
+      expect(reply['ok'], isTrue);
+      final Map<Object?, Object?> res = reply['data']! as Map<Object?, Object?>;
+      expect(res['status'], 200);
+      expect(
+        utf8.decode((res['body']! as List<Object?>).cast<int>()),
+        'hello-http',
+        reason: '响应体按字节数组过桥，src/ipc/bridge.ts 的 toBytes 才认得出二进制',
+      );
+    });
+
+    test('dialog 的 message 明确报未接入，不假装「取消」', () async {
+      final Map<String, Object?> reply = await postJson(
+        '/bridge/call',
+        <String, Object?>{
+          'channel': 'dialog',
+          'payload': <String, Object?>{'op': 'message', 'message': 'hi'},
+        },
+      );
+
+      expect(reply['ok'], isFalse);
+      expect(reply['error'], contains('尚未在 Flutter 宿主里接入'));
+    });
+
+    test('store 的 save / reload / path', () async {
+      await postJson(
+        '/bridge/call',
+        <String, Object?>{
+          'channel': 'store',
+          'payload': <String, Object?>{
+            'op': 'set',
+            'file': 'settings.json',
+            'key': 'volume',
+            'value': 0.42,
+          },
+        },
+      );
+      final Map<String, Object?> saved = await postJson(
+        '/bridge/call',
+        <String, Object?>{
+          'channel': 'store',
+          'payload': <String, Object?>{'op': 'save', 'file': 'settings.json'},
+        },
+      );
+      expect(saved['ok'], isTrue);
+
+      final File file = File(root.path + Platform.pathSeparator + 'settings.json');
+      expect(file.existsSync(), isTrue);
+      expect(file.readAsStringSync(), contains('volume'));
+
+      final Map<String, Object?> reloaded = await postJson(
+        '/bridge/call',
+        <String, Object?>{
+          'channel': 'store',
+          'payload': <String, Object?>{'op': 'reload', 'file': 'settings.json'},
+        },
+      );
+      expect(reloaded['ok'], isTrue);
+
+      final Map<String, Object?> read = await postJson(
+        '/bridge/call',
+        <String, Object?>{
+          'channel': 'store',
+          'payload': <String, Object?>{
+            'op': 'get',
+            'file': 'settings.json',
+            'key': 'volume',
+          },
+        },
+      );
+      expect(read['data'], 0.42);
+
+      final Map<String, Object?> where = await postJson(
+        '/bridge/call',
+        <String, Object?>{
+          'channel': 'store',
+          'payload': <String, Object?>{'op': 'path', 'file': 'settings.json'},
+        },
+      );
+      expect(where['data'], file.path);
     });
   });
 

@@ -1,21 +1,16 @@
 import 'package:flutter/material.dart';
 
-import '../../shell/placeholder_page.dart';
+import 'music_webview.dart';
 
-/// /music —— P0 阶段的占位页。
+/// /music —— 复用归档 Vue 播放层的歌单与列表页。
 ///
-/// 真实实现在界面框架确认后填入；届时本文件整体替换为实际视图，
-/// 路由表与外壳无需改动。
+/// 播放链路整体在 WebView 里（原样复用的 MusicView / PlayerView / MiniPlayer，
+/// 以及 Web Audio 效果链），本页只负责把它挂进 Flutter 窗口。
 class MusicPage extends StatelessWidget {
   const MusicPage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return const PlaceholderPage(
-      routePath: '/music',
-      icon: Icons.music_note_outlined,
-      titleKey: 'page.music.title',
-      descKey: 'page.music.desc',
-    );
+    return const MusicWebview(route: '/music');
   }
 }

@@ -24,6 +24,9 @@ dependencies:
   url_launcher: ^6.3.2
   # 目录/文件选择：添加媒体库扫描目录（方案 §5.6 指定）
   file_selector: ^1.1.0
+  # WebView2：复用归档里的 Vue 播放层（MusicView / PlayerView / MiniPlayer）。
+  # 只有 WebView 能承载 Web Audio 效果链，原生 Flutter 侧做不到（见重构方案 §2.3）。
+  webview_windows: ^0.4.0
 
 dev_dependencies:
   flutter_test:
