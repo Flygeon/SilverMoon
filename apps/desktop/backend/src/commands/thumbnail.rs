@@ -103,11 +103,8 @@ pub(crate) fn enforce_cache_limit(dir: &std::path::Path) {
         }
     }
     if freed > 0 {
-        log::info!(
-            "缩略图缓存超限，按 LRU 淘汰 {} 字节（剩余约 {} MB）",
-            freed,
-            cur / 1024 / 1024
-        );
+        // 后端统一用 eprintln!（本 crate 未引入 log 门面）
+        eprintln!("[thumbs] LRU 淘汰 {freed} 字节（剩 {}MB）", cur / 1024 / 1024);
     }
 }
 
