@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../host/host_controller.dart';
+import '../../host/json_store.dart';
+import '../../host/settings_store.dart';
 import '../../i18n/sm_strings.dart';
 import '../../state/app_state.dart';
 import '../../theme/app_theme.dart';
@@ -37,6 +39,7 @@ class _ImagesPageState extends State<ImagesPage> {
   String? _error;
   int _total = 0;
   ScanJobInfo? _scan;
+  List<String> _savedDirs = <String>[];
 
   @override
   void didChangeDependencies() {
@@ -44,6 +47,7 @@ class _ImagesPageState extends State<ImagesPage> {
     final HostController host = context.watch<HostController>();
     if (host.isReady && !_loadedOnce) {
       _loadedOnce = true;
+      _savedDirs = _settings?.scanDirs() ?? <String>[];
       WidgetsBinding.instance.addPostFrameCallback((Duration _) {
         if (mounted) unawaited(_load(reset: true));
       });
@@ -51,6 +55,11 @@ class _ImagesPageState extends State<ImagesPage> {
   }
 
   LibraryApi? get _api => context.read<HostController>().library;
+
+  SettingsStore? get _settings {
+    final JsonStore? store = context.read<HostController>().store;
+    return store == null ? null : SettingsStore(store);
+  }
 
   Future<void> _load({required bool reset}) async {
     final LibraryApi? api = _api;
@@ -102,20 +111,37 @@ class _ImagesPageState extends State<ImagesPage> {
   }
 
   Future<void> _addFolderAndScan() async {
-    final LibraryApi? api = _api;
-    if (api == null) return;
     final String? dir = await getDirectoryPath(
       confirmButtonText: context.read<AppState>().strings.t('images.addFolder'),
     );
     if (dir == null || !mounted) return;
+    // 先记进 settings.json 再扫描：库本身会持久化，但扫描目录不记住的话，
+    // 用户下次启动想增量补扫就得重新选一遍目录。
+    _settings?.addScanDir(dir);
+    _savedDirs = _settings?.scanDirs() ?? _savedDirs;
+    await _runScan(<String>[dir]);
+  }
+
+  Future<void> _scanSavedDirs() async {
+    final List<String> dirs = _savedDirs;
+    if (dirs.isEmpty) return;
+    await _runScan(dirs);
+  }
+
+  /// 发起扫描并轮询进度。
+  ///
+  /// P0 用 400ms 轮询；后端其实已经在推 scan:progress 事件（宿主的事件总线也已就绪），
+  /// P1 把这里换成订阅即可，不必再轮询。
+  Future<void> _runScan(List<String> dirs) async {
+    final LibraryApi? api = _api;
+    if (api == null) return;
     setState(() {
       _scanning = true;
       _error = null;
       _scan = null;
     });
     try {
-      final String jobId = await api.scanStart(dirs: <String>[dir]);
-      // P0 用轮询取进度；P1 接上 SSE 的 scan:progress 事件后改为事件驱动。
+      final String jobId = await api.scanStart(dirs: dirs);
       while (mounted) {
         final ScanJobInfo? info = await api.scanStatus(jobId);
         if (!mounted) return;
@@ -176,7 +202,7 @@ class _ImagesPageState extends State<ImagesPage> {
               child: Text(sm.t('images.loadMore')),
             ),
           IconButton(
-            tooltip: sm.t('page.images.title'),
+            tooltip: sm.t('images.refresh'),
             onPressed: _loading ? null : () => unawaited(_load(reset: true)),
             icon: const Icon(Icons.refresh, size: 20),
           ),
@@ -279,6 +305,13 @@ class _ImagesPageState extends State<ImagesPage> {
             icon: const Icon(Icons.create_new_folder_outlined, size: 18),
             label: Text(sm.t('images.addFolder')),
           ),
+          if (_savedDirs.isNotEmpty) ...<Widget>[
+            const SizedBox(height: SM.space200),
+            TextButton(
+              onPressed: _scanning ? null : () => unawaited(_scanSavedDirs()),
+              child: Text(sm.t('images.scanSaved')),
+            ),
+          ],
         ],
       ),
     );

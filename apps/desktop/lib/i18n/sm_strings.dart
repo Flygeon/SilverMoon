@@ -51,6 +51,8 @@ class SmStrings {
       'images.addFolder': '添加文件夹并扫描',
       'images.loading': '正在读取媒体库…',
       'images.loadMore': '加载更多',
+      'images.refresh': '刷新',
+      'images.scanSaved': '扫描已保存的文件夹',
       'images.scanning': '正在扫描…',
       'images.total': '张图片',
 
@@ -141,6 +143,8 @@ class SmStrings {
       'images.addFolder': 'Add folder and scan',
       'images.loading': 'Loading library…',
       'images.loadMore': 'Load more',
+      'images.refresh': 'Refresh',
+      'images.scanSaved': 'Scan saved folders',
       'images.scanning': 'Scanning…',
       'images.total': 'images',
 

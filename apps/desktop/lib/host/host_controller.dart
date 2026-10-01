@@ -9,6 +9,7 @@ import '../features/library/library_api.dart';
 import 'app_config.dart';
 import 'app_paths.dart';
 import 'json_store.dart';
+import 'legacy_migration.dart';
 import 'sidecar.dart';
 
 enum HostStatus { idle, starting, ready, failed }
@@ -61,9 +62,11 @@ class HostController extends ChangeNotifier {
       if (paths.appDataRoot.isEmpty) {
         throw StateError('读取不到 APPDATA，无法定位应用数据目录');
       }
+      // 顺序是关键：_migrateLegacy 以「目标目录不存在」为前提判断是否迁移，
+      // 因此必须在 ensureDataDirs() **之前**调用，否则迁移永远不会执行。
+      _migrateLegacy(paths);
       paths.ensureDataDirs();
       _paths = paths;
-      _migrateLegacy(paths);
       _store = JsonStore(paths.dataDir);
 
       final String exe = Sidecar.resolveExecutable(
@@ -154,32 +157,17 @@ class HostController extends ChangeNotifier {
 
   /// 首次启动把旧项目 LumiLuna 的数据整目录复制过来。
   ///
-  /// 只在「新目录还不存在」且「旧目录存在」时执行一次，**只读旧目录、绝不删改**，
-  /// 失败也不阻断启动（与 Electron config.ts 的 migrateLegacyData 同语义）。
+  /// 判定与复制见 [shouldMigrate] / [copyTree]；失败不阻断启动。
   void _migrateLegacy(HostPaths paths) {
     final String legacyId = config.legacyIdentifier;
     if (legacyId.isEmpty) return;
-    if (Directory(paths.dataDir).existsSync()) return;
-    final Directory legacy = Directory(paths.legacyDataDir(legacyId));
-    if (!legacy.existsSync()) return;
+    final String legacyDir = paths.legacyDataDir(legacyId);
+    if (!shouldMigrate(dataDir: paths.dataDir, legacyDir: legacyDir)) return;
     try {
-      _copyTree(legacy, Directory(paths.dataDir));
-      debugPrint('[host] 已迁移旧数据：' + legacy.path);
+      final int copied = copyTree(Directory(legacyDir), Directory(paths.dataDir));
+      debugPrint('[host] 已迁移旧数据：' + legacyDir + '（' + copied.toString() + ' 个文件）');
     } catch (error) {
       debugPrint('[host] 旧数据迁移失败（不阻断启动）：' + error.toString());
-    }
-  }
-
-  /// 递归复制目录；不跟随符号链接（与 Electron 版一致，避免成环）。
-  void _copyTree(Directory from, Directory to) {
-    to.createSync(recursive: true);
-    for (final FileSystemEntity entity in from.listSync(followLinks: false)) {
-      final String target = to.path + Platform.pathSeparator + _basename(entity.path);
-      if (entity is Directory) {
-        _copyTree(entity, Directory(target));
-      } else if (entity is File) {
-        entity.copySync(target);
-      }
     }
   }
 
@@ -203,9 +191,4 @@ class HostController extends ChangeNotifier {
     }
     return null;
   }
-}
-
-String _basename(String path) {
-  final int index = path.lastIndexOf(RegExp(r'[\\/]'));
-  return index < 0 ? path : path.substring(index + 1);
 }

@@ -132,7 +132,8 @@ class Sidecar {
         .listen(
       (String line) {
         if (!ready.isCompleted) {
-          final SidecarEndpoint? ep = _parseReady(line, effectiveToken);
+          final SidecarEndpoint? ep =
+              parseReady(line, token: effectiveToken);
           if (ep != null) {
             ready.complete(ep);
             return;
@@ -205,7 +206,11 @@ class Sidecar {
     }
   }
 
-  static SidecarEndpoint? _parseReady(String line, String token) {
+  /// 解析就绪行 `SILVERMOON_READY {"port":N}`。
+  ///
+  /// 公开是为了能被单测直接覆盖：握手失败会退化成「后端未就绪」，
+  /// 而这里只要多认/少认一个字符就会静默失效。非就绪行返回 null（当普通日志处理）。
+  static SidecarEndpoint? parseReady(String line, {required String token}) {
     final String trimmed = line.trim();
     if (!trimmed.startsWith(readyPrefix)) return null;
     try {
