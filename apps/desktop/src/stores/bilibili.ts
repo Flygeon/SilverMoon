@@ -7,6 +7,8 @@
  */
 import { defineStore } from "pinia";
 import { ref } from "vue";
+import { isDesktop } from "@/capabilities";
+import { biliLog, biliLoginLogReset, biliLogSection } from "@/utils/biliLog";
 import {
   BILI_ANONYMOUS,
   type BiliAccount,
@@ -14,6 +16,7 @@ import {
   type BiliPlayUrl,
   type BiliQrStatus,
   type BiliVideo,
+  biliApplyCookies,
   biliDanmaku,
   biliIsLoggedIn,
   biliLogout,
@@ -45,13 +48,19 @@ export const useBiliStore = defineStore("bilibili", () => {
   const account = ref<BiliAccount>({ ...BILI_ANONYMOUS });
   const accountLoaded = ref(false);
   const accountLoading = ref(false);
+  /** 最近一次账号查询的失败原因（登录流程要把上游原话带给用户） */
+  const accountError = ref("");
 
   async function loadAccount(): Promise<void> {
     accountLoading.value = true;
     try {
       account.value = await biliNav();
+      accountError.value = "";
+      biliLog(`账号校验通过：${account.value.name || "（无昵称）"} mid=${account.value.mid}`);
     } catch (e) {
       account.value = { ...BILI_ANONYMOUS };
+      accountError.value = cleanError(e);
+      biliLog(`账号校验失败：${accountError.value}`);
       console.warn("[bilibili] 账号获取失败：", e);
     }
     accountLoaded.value = true;
@@ -193,12 +202,21 @@ export const useBiliStore = defineStore("bilibili", () => {
     qrStatus.value = null;
     qrExpired.value = false;
     pollFailures = 0;
+    // 每开一次二维码就重开一份日志，复制/落盘拿到的正好是一条完整会话
+    biliLoginLogReset();
+    biliLogSection("B 站扫码登录 · 开始");
+    biliLog(
+      `环境：isDesktop=${isDesktop} lang=${navigator.language} 起始登录态=${
+        account.value.isLogin ? "已登录" : "未登录"
+      } UA=${navigator.userAgent}`,
+    );
     try {
       const r = await biliQrGenerate();
       qrContent.value = r.url;
       qrKey = r.key;
     } catch (e) {
       loginError.value = `获取二维码失败：${cleanError(e)}`;
+      biliLog(`申请二维码失败：${loginError.value}`);
     }
     startingQr.value = false;
   }
@@ -213,29 +231,49 @@ export const useBiliStore = defineStore("bilibili", () => {
       qrExpired.value = s.code === 86038;
       if (s.code === 0) {
         qrStatusText.value = "登录成功";
+        biliLogSection("服务端已确认扫码 · 开始校验登录态");
         await loadAccount();
+        biliLog(`校验条①立即验：isLogin=${account.value.isLogin}`);
         if (!account.value.isLogin) {
           // 上游偶尔延迟下发凭据，再给一次机会
           await new Promise((r) => setTimeout(r, 600));
           await loadAccount();
+          biliLog(`校验条②延迟 600ms 再验：isLogin=${account.value.isLogin}`);
+        }
+        if (!account.value.isLogin && s.alt) {
+          // 凭据还有另一种编码形态（跳转链的 `,` ↔ cookie 的 `%2C`），哪种才是服务端
+          // 认的形态只有 nav 说了算 —— 换上另一种再验一次，避免把可用会话判成失败。
+          await biliApplyCookies(s.alt);
+          await loadAccount();
+          biliLog(`校验条③换成跳转链原形态再验：isLogin=${account.value.isLogin}`);
         }
         if (!account.value.isLogin) {
-          loginError.value = "已授权，但账号信息获取失败，请重新登录";
+          // 带上上游原话（-101 / -352 …），否则这一条永远只有「获取失败」，无从下手
+          loginError.value = accountError.value
+            ? `已授权，但账号信息获取失败：${accountError.value}`
+            : "已授权，但账号信息获取失败，请重新登录";
+          biliLogSection(`登录失败 · ${loginError.value}`);
           return true;
         }
         notice.value = `欢迎回来，${account.value.name || "B 站用户"}`;
+        biliLogSection(
+          `登录成功 · ${account.value.name || "（无昵称）"} mid=${account.value.mid} Lv${account.value.level}`,
+        );
         return true;
       }
       if (s.code === 86038) {
         qrStatusText.value = "二维码已过期，请点击刷新";
+        biliLog("二维码已过期（86038），停止轮询");
         return true;
       }
       qrStatusText.value =
         s.code === 86090 ? "已扫码，请在手机上确认" : "请使用「哔哩哔哩」App 扫描二维码";
     } catch (e) {
       pollFailures += 1;
+      biliLog(`轮询异常（第 ${pollFailures} 次）：${cleanError(e)}`);
       if (pollFailures >= 4) {
         loginError.value = `网络异常：${cleanError(e)}`;
+        biliLogSection(`登录中断 · ${loginError.value}`);
         return true;
       }
     }

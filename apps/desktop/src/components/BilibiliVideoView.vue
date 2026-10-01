@@ -13,7 +13,7 @@ import type Artplayer from "artplayer";
 import type { Option as DanmukuOption } from "artplayer-plugin-danmuku";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
-import { capabilities } from "@/capabilities";
+import { capabilities, isDesktop } from "@/capabilities";
 import { biliCount, biliDuration, biliFormatLabel, biliPubdate } from "@/utils/bilibili";
 import type { ArtDanmu } from "@/utils/danmaku";
 import { translate } from "@shared/i18n";
@@ -232,7 +232,7 @@ const metaItems = computed(() => {
 </script>
 
 <template>
-  <div class="bili-view">
+  <div class="bili-view" :class="{ 'below-titlebar': isDesktop }">
     <!-- 顶栏（用原生 button：浮层里的操作必须 100% 可点，不依赖自定义元素的事件转发） -->
     <header class="head lm-glass">
       <button class="head-btn" type="button" :title="t('bili.close')" @click="close">
@@ -379,7 +379,23 @@ const metaItems = computed(() => {
   display: flex;
   flex-direction: column;
   background: var(--md-sys-color-surface);
+  /* 浮层内部不参与窗口拖拽。根因见 .below-titlebar：标题栏是系统拖拽区，
+     盖在它上面的元素收不到点击；这里再声明一次，防以后又改回整窗铺满。 */
+  -webkit-app-region: no-drag;
   animation: bili-fade-in 200ms var(--md-sys-motion-spring-effects-fast);
+}
+
+/**
+ * 桌面端必须从标题栏**下面**开始。
+ *
+ * 标题栏 `.tb-drag` 是 `-webkit-app-region: drag`（系统原生拖拽区），它按
+ * 布局树生效，**不会**因为浮层 z-index 更高就被让开：浮层顶栏的返回 / 弹幕 /
+ * 站内打开三个按钮正好落在这一条里，按下去只会被当成拖窗口 —— 表现就是
+ * 「点了没反应」。让开这一条后按钮落在零拖拽区里，100% 可点，同时窗口
+ * 控制按钮（最小化/关闭）也不会被浮层遮住。
+ */
+.bili-view.below-titlebar {
+  top: var(--lm-titlebar-height);
 }
 @keyframes bili-fade-in {
   from {

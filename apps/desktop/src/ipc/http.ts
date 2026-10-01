@@ -102,7 +102,15 @@ export async function fetch(
   const raw = init.signal ? await abortable(call, init.signal) : await call;
 
   const bytes = toBytes(raw.body);
-  const headers = (raw.headers ?? []).filter(([key]) => !STRIPPED_HEADERS.has(key.toLowerCase()));
+  const rawHeaders = raw.headers ?? [];
+  const headers = rawHeaders.filter(([key]) => !STRIPPED_HEADERS.has(key.toLowerCase()));
+
+  // `Set-Cookie` 在 Fetch 规范里是**禁止响应头**：塞进 `new Response(...)` 会被静默丢弃，
+  // 之后 `headers.getSetCookie()` 恒为空数组。而宿主（undici）那边是原样传过来的，
+  // 所以在这里把原始值挂回实例上 —— 否则「服务端明明下发了凭据、渲染进程却读不到」。
+  const setCookies = rawHeaders
+    .filter(([key]) => key.toLowerCase() === "set-cookie")
+    .map(([, value]) => value);
 
   // `Response` 只接受 200–599 的状态码，且 statusText 必须是 ByteString；
   // 上游若给出异常值，这里退化处理，避免整条通道因构造抛错而不可用。
@@ -111,6 +119,14 @@ export async function fetch(
   const statusText = String(raw.statusText ?? "").replace(/[^\x20-\x7e]/g, "");
 
   const response = new Response(bytes, { status, statusText, headers });
+
+  // 上面那批 Set-Cookie 已被规范丢掉，这里挂回去，让调用方能按浏览器同款方式读。
+  if (setCookies.length) {
+    Object.defineProperty(response.headers, "getSetCookie", {
+      value: () => [...setCookies],
+      configurable: true,
+    });
+  }
 
   // `Response.url` 是只读的，跨源场景下原生 fetch 也常为空；
   // 这里补一个与请求一致的地址，便于调用方按 host 分流。

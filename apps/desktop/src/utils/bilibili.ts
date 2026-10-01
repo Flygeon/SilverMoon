@@ -17,6 +17,7 @@
  */
 import { isDesktop } from "@/capabilities";
 import { JsonStore } from "@/ipc/store";
+import { biliLog, cookieDigest, cookieFingerprint, cookieNames } from "@/utils/biliLog";
 import { mergeDuplicates, type ArtDanmu } from "@/utils/danmaku";
 import { md5 } from "@/utils/md5";
 
@@ -151,6 +152,13 @@ export interface BiliQrStatus {
   /** 0 成功 / 86038 过期 / 86090 已扫码待确认 / 86101 未扫码 */
   code: number;
   message: string;
+  /**
+   * 扫码成功时，跳转链给出的同一批凭据的**另一种形态**（urlencoded 原值）。
+   *
+   * `crossDomain` 的 query 与 cookie 对逗号的表示不同（`,` vs `%2C`），到底哪种
+   * 服务端才认，只有 `nav` 能回答。主形态验不过时由 store 拿这份再试一次。
+   */
+  alt?: Record<string, string>;
 }
 
 // ------------------------------------------------------------------ 工具
@@ -331,33 +339,44 @@ const SET_COOKIE_ATTRS = new Set([
   "comment",
 ]);
 
+/** 取出响应里的原始 Set-Cookie 串（宿主通道会挂回 `getSetCookie`，见 `@/ipc/http`）。 */
+function rawSetCookies(res: Response): string[] {
+  const headers = res.headers as Headers & { getSetCookie?: () => string[] };
+  if (typeof headers.getSetCookie === "function") {
+    const list = headers.getSetCookie();
+    if (list.length) return list;
+  }
+  const single = res.headers.get("set-cookie");
+  return single ? [single] : [];
+}
+
+/** 解析一条 Set-Cookie 的键值对（值逐字保留，不解码）。 */
+function parseSetCookie(raw: string): [string, string][] {
+  const out: [string, string][] = [];
+  const re = /([A-Za-z0-9_-]+)=([^;,]*)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) {
+    const name = m[1];
+    const value = m[2].trim();
+    if (!name || !value || SET_COOKIE_ATTRS.has(name.toLowerCase())) continue;
+    out.push([name, value]);
+  }
+  return out;
+}
+
 /** 把响应的 Set-Cookie 并入 cookie 罐（值保持原样，不做解码）。 */
 function absorbCookies(res: Response): void {
-  const headers = res.headers as Headers & { getSetCookie?: () => string[] };
-  let raws: string[] = typeof headers.getSetCookie === "function" ? headers.getSetCookie() : [];
-  if (!raws.length) {
-    const single = res.headers.get("set-cookie");
-    if (single) raws = [single];
-  }
-  if (!raws.length) return;
   let changed = false;
-  for (const raw of raws) {
-    const re = /([A-Za-z0-9_-]+)=([^;,]*)/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(raw)) !== null) {
-      const name = m[1];
-      const value = m[2].trim();
-      if (!name || !value || SET_COOKIE_ATTRS.has(name.toLowerCase())) continue;
-      if (cookies[name] !== value) {
-        cookies[name] = value;
-        changed = true;
-      }
+  for (const [name, value] of rawSetCookies(res).flatMap(parseSetCookie)) {
+    if (cookies[name] !== value) {
+      cookies[name] = value;
+      changed = true;
     }
   }
   if (changed) void persistCookies();
 }
 
-/** 从 `k=v&...` 取**原始**（不解码）键值对：cookie 值必须逐字保留。 */
+/** 从 `k=v&...` 取**原始**（不解码）键值对。 */
 function parseRawQuery(url: string): Record<string, string> {
   const out: Record<string, string> = {};
   const query = url.split("?")[1];
@@ -370,6 +389,27 @@ function parseRawQuery(url: string): Record<string, string> {
     if (key && value) out[key] = value;
   }
   return out;
+}
+
+/**
+ * 把登录跳转链里的值还原成 **cookie 形态**。
+ *
+ * 服务端拼 `crossDomain?...` 用的是 urlencoded 规则：`,` 与 `*` 原样留着，只有
+ * `: /` 之类才转义（实测形如
+ * `SESSDATA=35f5d9fc,1667303493,e6e01*51&gourl=https%3A%2F%2Fwww.bilibili.com`）。
+ * 而 cookie 值按 RFC 6265 不允许出现逗号 —— 浏览器真正存下来、之后每次请求发出去的
+ * 都是 `35f5d9fc%2C1667303493%2Ce6e01*51`。所以这里先解回原值、再按 cookie 规则编回去；
+ * 直接把 query 里的逗号形态当 cookie 发，服务端一律按未登录处理（界面表现就是
+ * 「已授权，但账号信息获取失败」）。
+ */
+function cookieValueFromLoginUrl(raw: string): string {
+  try {
+    // `+` 按 urlencoded 语义是空格；`*` `!` `'` `(` `)` 这几个 encodeURIComponent
+    // 不转义，正好也都是合法 cookie-octet，所以编出来即为合法 cookie 值。
+    return encodeURIComponent(decodeURIComponent(raw.replace(/\+/g, " ")));
+  } catch {
+    return encodeURIComponent(raw);
+  }
 }
 
 /** 登录跳转链里这几个才是鉴权 cookie，其余（gourl / Expires / Sign…）不是。 */
@@ -481,10 +521,26 @@ async function wbiGet(
   return getJson(`${API}${path}?${qs}`);
 }
 
+/** url 的 host（日志用；非法 url 不抛） */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "（非法 url）";
+  }
+}
+
+/** 打日志用：只看鉴权相关的几个 cookie 的指纹（值一律脱敏） */
+function authCookieDigest(): string {
+  const keys = ["SESSDATA", "bili_jct", "DedeUserID"].filter((k) => cookies[k]);
+  return cookieDigest(keys.map((k) => [k, cookies[k]] as [string, string]));
+}
+
 /** 匿名会话也要有 `buvid3`，否则推荐/取流会回 -352 风控。 */
 export async function biliEnsureDevice(): Promise<void> {
   await ensureCookies();
   if (cookies.buvid3) return;
+  biliLog("设备指纹：本地无 buvid3，向 finger/spi 申请");
   try {
     const json = await getJson(`${API}/x/frontend/finger/spi`);
     const data = json.data as Record<string, unknown> | undefined;
@@ -493,7 +549,9 @@ export async function biliEnsureDevice(): Promise<void> {
     if (b3) cookies.buvid3 = b3;
     if (b4) cookies.buvid4 = b4;
     await persistCookies();
+    biliLog(`设备指纹：buvid3=${b3 ? "有" : "无"} buvid4=${b4 ? "有" : "无"}`);
   } catch (e) {
+    biliLog(`设备指纹：申请失败 ${e instanceof Error ? e.message : String(e)}`);
     console.warn("[bilibili] buvid 初始化失败：", e);
   }
 }
@@ -502,9 +560,17 @@ export async function biliEnsureDevice(): Promise<void> {
 
 export async function biliNav(): Promise<BiliAccount> {
   await biliEnsureDevice();
+  biliLog(`nav 请求：Cookie 名字=${cookieNames(cookies)}；鉴权凭据 ${authCookieDigest()}`);
   const json = await navRaw();
   const data = json.data as Record<string, unknown> | undefined;
-  if (!data) return { ...BILI_ANONYMOUS };
+  // `data` 缺失只出现在业务失败时（-101 未登录 / -352 风控…）。把上游原话抛出去，
+  // 否则界面只能笼统报「账号信息获取失败」，无法区分是凭据没生效还是被风控拦了。
+  if (!data) {
+    biliLog(`nav 失败：code=${num(json.code)} message=${str(json.message, "（无）")}`);
+    throw new Error(
+      `账号信息查询失败：${str(json.message, "上游未返回数据")}（code=${num(json.code)}）`,
+    );
+  }
   // 顺手缓存 WBI 密钥，省一次 nav
   const img = data.wbi_img as Record<string, unknown> | undefined;
   if (img && !mixinKey) {
@@ -515,7 +581,7 @@ export async function biliNav(): Promise<BiliAccount> {
     }
   }
   const level = data.level_info as Record<string, unknown> | undefined;
-  return {
+  const account: BiliAccount = {
     isLogin: data.isLogin === true,
     mid: num(data.mid),
     name: str(data.uname),
@@ -524,45 +590,100 @@ export async function biliNav(): Promise<BiliAccount> {
     level: num(level?.current_level),
     vip: num(data.vipStatus) === 1,
   };
+  biliLog(
+    `nav 返回：isLogin=${account.isLogin} code=${num(json.code)} mid=${account.mid} uname=${
+      account.name || "（空）"
+    }`,
+  );
+  return account;
 }
 
 // ------------------------------------------------------------------ 扫码登录
 
 export async function biliQrGenerate(): Promise<{ key: string; url: string }> {
   await ensureCookies();
+  biliLog("申请二维码：GET /x/passport-login/web/qrcode/generate");
   const json = await getJson(`${PASSPORT}/x/passport-login/web/qrcode/generate`);
   assertOk(json, "获取二维码");
   const data = json.data as Record<string, unknown> | undefined;
   const key = str(data?.qrcode_key);
   const url = str(data?.url);
-  if (!key || !url) throw new Error("上游未返回二维码");
+  if (!key || !url) {
+    biliLog("申请二维码：上游未返回 qrcode_key / url");
+    throw new Error("上游未返回二维码");
+  }
+  // 二维码内容本身不是凭据（就是个未确认的登录链接），记 host 足够定位问题
+  biliLog(`申请二维码：成功 key=${cookieFingerprint(key)} 扫码跳转 host=${hostOf(url)}`);
   return { key, url };
 }
 
 export async function biliQrPoll(key: string): Promise<BiliQrStatus> {
   await ensureCookies();
-  const json = await getJson(
+  let alt: Record<string, string> | undefined;
+  const res = await biliFetch(
     `${PASSPORT}/x/passport-login/web/qrcode/poll?qrcode_key=${encodeURIComponent(key)}`,
+    { headers: baseHeaders() },
   );
+  // biliFetch 已就地把这次的 Set-Cookie 按原值吸收 —— 这是最权威的来源（服务端下发什么、
+  // 浏览器就存什么）。这里只记下「哪些名字来自响应头」，好让下面的 url 兜底不去覆盖它们。
+  const headerPairs = rawSetCookies(res).flatMap(parseSetCookie);
+  const fromHeader = new Set(headerPairs.map(([name]) => name));
+  const json = decodeJson(await res.text()) as Record<string, unknown>;
   const data = json.data as Record<string, unknown> | undefined;
   // 扫码状态码在 data.code，外层 code 恒为 0
   const code = data ? num(data.code, 86101) : 86101;
   const message = data ? str(data.message) : str(json.message);
+  biliLog(`轮询：HTTP=${res.status} code=${code} message=${message || "（无）"}`);
   if (code === 0 && data) {
-    // 主来源是响应的 Set-Cookie（biliFetch 已按原值吸收）；这里再用 data.url 兜底。
-    // 必须**逐字**取值：SESSDATA 内嵌了 %2C 之类的编码，用 URLSearchParams 会解码，
-    // 服务端就认不出这个会话（表现为「提示扫码成功但 nav 仍返回未登录」）。
-    for (const [k, v] of Object.entries(parseRawQuery(str(data.url)))) {
-      if (!URL_COOKIE_NAMES.has(k)) continue;
-      // 本次登录新下发的值直接覆盖旧值（也顺带修掉历史遗留的、被解码坏了的 SESSDATA）
-      cookies[k] = v;
+    // 兜底：跳转链里也带着同一批凭据，值是 urlencoded 形态，先按 cookie 形态落罐
+    // （见 cookieValueFromLoginUrl）；原始形态一并返回，验不过时换它再试。
+    const pairs = Object.entries(parseRawQuery(str(data.url))).filter(([k]) =>
+      URL_COOKIE_NAMES.has(k),
+    );
+    // 两条来源各自的形态都记下来：这是「服务端到底认哪种形态」唯一的现场证据
+    biliLog(`轮询·凭据来源①响应头：名字=${cookieNames(headerPairs)}`);
+    if (headerPairs.length) biliLog(`轮询·凭据来源①响应头：${cookieDigest(headerPairs)}`);
+    biliLog(`轮询·凭据来源②跳转链：host=${hostOf(str(data.url))} 名字=${cookieNames(pairs)}`);
+    if (pairs.length) biliLog(`轮询·凭据来源②跳转链原值：${cookieDigest(pairs)}`);
+    const written: [string, string][] = [];
+    for (const [k, v] of pairs) {
+      if (fromHeader.has(k)) continue;
+      cookies[k] = cookieValueFromLoginUrl(v);
+      written.push([k, cookies[k]]);
     }
     await persistCookies();
+    biliLog(
+      `轮询·落罐（cookie 形态）：${
+        written.length ? cookieDigest(written) : "未改动（全部取自响应头）"
+      }`,
+    );
+    if (pairs.length) alt = Object.fromEntries(pairs);
   }
-  return { code, message };
+  return { code, message, alt };
+}
+
+/**
+ * 直接写入一批 cookie（值**原样**，不再做编码转换）。
+ *
+ * 登录兜底用：跳转链 query 的 `,` 形态与 cookie 的 `%2C` 形态只能二选一，而哪个
+ * 才是服务端认的形态，只有 `nav` 能回答 —— `biliQrPoll` 返回的 `alt` 就是这个
+ * 「另一种形态」，验不过时由 store 换上再验一次。
+ */
+export async function biliApplyCookies(pairs: Record<string, string>): Promise<void> {
+  await ensureCookies();
+  const applied: [string, string][] = [];
+  for (const [name, value] of Object.entries(pairs)) {
+    if (value) {
+      cookies[name] = value;
+      applied.push([name, value]);
+    }
+  }
+  await persistCookies();
+  biliLog(`换上备选形态落罐：${cookieDigest(applied)}`);
 }
 
 export async function biliLogout(): Promise<void> {
+  biliLog("登出：请求 /login/exit/v2 并清空本地凭据");
   try {
     const csrf = biliCsrf();
     if (csrf) {
@@ -576,6 +697,7 @@ export async function biliLogout(): Promise<void> {
       });
     }
   } catch (e) {
+    biliLog(`登出：请求失败（本地凭据照样清空）${e instanceof Error ? e.message : String(e)}`);
     console.warn("[bilibili] 登出请求失败：", e);
   }
   cookies = {};
