@@ -380,7 +380,7 @@ function enforceCoverCacheLimit(): void {
 export function clearCoverCache(): number {
   coverLastSweep = 0;
   coverFailedAt.clear();
-  const { total, items } = coverCacheScan();
+  const { items } = coverCacheScan();
   let freed = 0;
   for (const it of items) {
     try {
@@ -397,7 +397,7 @@ export function clearCoverCache(): number {
   if (freed > 0) {
     log.info("封面缓存已清空，释放 " + (freed / 1024 / 1024).toFixed(1) + "MB");
   }
-  return freed || total;
+  return freed;
 }
 
 /** 真正的取图（网络 + 缓存），供并发去重包装。 */

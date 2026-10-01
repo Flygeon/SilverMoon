@@ -104,7 +104,10 @@ pub(crate) fn enforce_cache_limit(dir: &std::path::Path) {
     }
     if freed > 0 {
         // 后端统一用 eprintln!（本 crate 未引入 log 门面）
-        eprintln!("[thumbs] LRU 淘汰 {freed} 字节（剩 {}MB）", cur / 1024 / 1024);
+        eprintln!(
+            "[thumbs] LRU 淘汰 {freed} 字节（剩 {}MB）",
+            cur / 1024 / 1024
+        );
     }
 }
 
