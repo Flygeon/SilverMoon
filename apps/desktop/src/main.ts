@@ -33,6 +33,24 @@ const app = createApp(App);
 app.use(createPinia());
 app.use(router);
 
+/**
+ * AutoMix 控制台调试接口。
+ *
+ * 用动态 import 而不是顶层 import：安装它只需要两个轻量工具模块，
+ * 但顶层引入会把它们拉进首屏 bundle。等挂载后下一帧再装，不拖慢启动。
+ *
+ * getStatus / getLast 用函数注入，避免 main.ts 直接依赖 player store
+ * （那会引入较长的依赖链，且此时 Pinia 才刚装好）。
+ */
+void import("@/utils/autoMixConsole").then(({ installAutoMixConsole }) =>
+  import("@/stores/player").then(({ usePlayerStore }) =>
+    installAutoMixConsole(
+      () => usePlayerStore().automixDebug(),
+      () => usePlayerStore().lastMixPlan,
+    ),
+  ),
+);
+
 // Vue 渲染/生命周期错误
 app.config.errorHandler = (err, instance, info) => {
   void reportError("vue-err", {

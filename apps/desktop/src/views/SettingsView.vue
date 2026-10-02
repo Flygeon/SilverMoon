@@ -337,6 +337,9 @@ type BoolSettingKey =
   | "danmakuEnabled"
   | "danmakuAntiOverlap"
   | "ambilightEnabled"
+  | "autoMixEnabled"
+  | "autoMixBeatMatch"
+  | "autoMixTrimSilence"
   | "sponsorBlockEnabled"
   | "sponsorBlockToast"
   | "webdavEnabled";
@@ -353,6 +356,8 @@ type SliderIntKey =
   | "danmakuFontSize"
   | "danmakuArea"
   | "danmakuSpeed"
+  | "autoMixDuration"
+  | "autoMixMaxRateDeviation"
   | "ambilightBlur"
   | "ambilightSpread"
   | "ambilightOpacity"
@@ -1033,6 +1038,69 @@ function selectSection(id: string) {
           <span class="row-label">{{ t("settings.lyricBlur") }}</span>
           <m3e-switch :checked="settings.lyricBlur" @change="setSwitch('lyricBlur', $event)" />
         </label>
+      </div>
+    </m3e-card>
+
+    <!-- AutoMix 自动混音 -->
+    <m3e-card v-if="activeSection === 'settings-playback'" class="card" variant="outlined">
+      <div slot="content">
+        <h3>{{ t("settings.autoMix") }}</h3>
+        <label class="row switch-row">
+          <span class="row-label">{{ t("settings.autoMixEnabled") }}</span>
+          <m3e-switch
+            :checked="settings.autoMixEnabled"
+            @change="setSwitch('autoMixEnabled', $event)"
+          />
+        </label>
+        <p class="hint">{{ t("settings.autoMixHint") }}</p>
+
+        <template v-if="settings.autoMixEnabled">
+          <div class="row">
+            <div class="row-label">
+              <span>{{ t("settings.autoMixDuration") }}</span>
+            </div>
+            <m3e-slider
+              :min="3"
+              :max="16"
+              :step="1"
+              :value="settings.autoMixDuration"
+              @input="onSliderInt($event, 'autoMixDuration')"
+            />
+            <span class="value">{{ settings.autoMixDuration }}s</span>
+          </div>
+
+          <label class="row switch-row">
+            <span class="row-label">{{ t("settings.autoMixBeatMatch") }}</span>
+            <m3e-switch
+              :checked="settings.autoMixBeatMatch"
+              @change="setSwitch('autoMixBeatMatch', $event)"
+            />
+          </label>
+
+          <label class="row switch-row">
+            <span class="row-label">{{ t("settings.autoMixTrimSilence") }}</span>
+            <m3e-switch
+              :checked="settings.autoMixTrimSilence"
+              @change="setSwitch('autoMixTrimSilence', $event)"
+            />
+          </label>
+
+          <div class="row">
+            <div class="row-label">
+              <span>{{ t("settings.autoMixMaxRate") }}</span>
+            </div>
+            <m3e-slider
+              :min="1"
+              :max="12"
+              :step="1"
+              :value="settings.autoMixMaxRateDeviation"
+              @input="onSliderInt($event, 'autoMixMaxRateDeviation')"
+            />
+            <span class="value">±{{ settings.autoMixMaxRateDeviation }}%</span>
+          </div>
+          <p class="hint">{{ t("settings.autoMixMaxRateHint") }}</p>
+          <p class="hint debug-hint">{{ t("settings.autoMixDebugHint") }}</p>
+        </template>
       </div>
     </m3e-card>
 
@@ -1728,6 +1796,12 @@ function selectSection(id: string) {
   text-align: right;
   font-size: var(--md-sys-typescale-body-small-size);
   color: var(--md-sys-color-on-surface-variant);
+}
+
+/* AutoMix 调试提示：等宽字体，提示这是给控制台用的 */
+.debug-hint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  opacity: 0.8;
 }
 
 /* ---- 空降助手：分类勾选 ---- */

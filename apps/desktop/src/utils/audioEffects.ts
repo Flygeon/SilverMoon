@@ -45,6 +45,16 @@ export class AudioEffectEngine {
   private wetGain: GainNode | null = null;
   private convolver: ConvolverNode | null = null;
 
+  /** 主元素的专用增益（AutoMix 淡入用）；未接入时为 null */
+  private primaryGain: GainNode | null = null;
+
+  /** 额外接入的 media 元素（双 deck 的第二个 deck） */
+  private extraSources: {
+    media: HTMLAudioElement;
+    source: MediaElementAudioSourceNode;
+    gain: GainNode;
+  }[] = [];
+
   private widthGains: {
     lOut0: GainNode;
     lOut1: GainNode;
@@ -67,8 +77,17 @@ export class AudioEffectEngine {
     const output = ctx.createGain();
     const bypass = ctx.createGain();
     const effectMix = ctx.createGain();
+    /**
+     * 主元素专用增益，插在 source 与 input 之间。
+     *
+     * AutoMix 需要能**单独淡入当前曲**而不影响其他 deck。默认恒为 1，
+     * 因此不开启 AutoMix 时它等于不存在（信号乘以 1）。
+     */
+    const primaryGain = ctx.createGain();
+    primaryGain.gain.value = 1;
 
-    source.connect(input);
+    source.connect(primaryGain);
+    primaryGain.connect(input);
     input.connect(bypass);
     bypass.connect(output);
     output.connect(ctx.destination);
@@ -130,6 +149,7 @@ export class AudioEffectEngine {
 
     this.ctx = ctx;
     this.media = media;
+    this.primaryGain = primaryGain;
     this.input = input;
     this.output = output;
     this.bypass = bypass;
@@ -139,6 +159,47 @@ export class AudioEffectEngine {
     this.wetGain = wet;
     this.convolver = convolver;
     this.widthGains = { lOut0, lOut1, rOut0, rOut1 };
+  }
+
+  /**
+   * 把**第二个** media element 接进同一条音效链（AutoMix 双 deck 用）。
+   *
+   * 为什么需要单独一个方法：`createMediaElementSource` 对同一个元素只能调用一次，
+   * 所以第二个 deck 必须建自己的 source 节点。这里只建 source + 一个增益，
+   * 然后接到既有的 `input` 上 —— EQ / 混响 / 宽度等下游节点完全不动，
+   * 因此「双 deck 接入」不会改变任何音效行为。
+   *
+   * 返回该 deck 的增益节点，供 AutoMix 做交叉淡化；
+   * 若音效链尚未建立，返回 null（调用方退回 element.volume）。
+   */
+  attachAdditional(media: HTMLAudioElement): GainNode | null {
+    if (!this.ctx || !this.input) return null;
+    // 幂等：同一元素只能建一次 MediaElementSource（重复会抛 InvalidStateError）。
+    // AutoMix 会「接管」已被音效链接入的主元素，必须走这条复用分支而不是新建。
+    if (this.media === media) return this.primaryGain;
+    const existing = this.extraSources.find((s) => s.media === media);
+    if (existing) return existing.gain;
+    const source = this.ctx.createMediaElementSource(media);
+    const gain = this.ctx.createGain();
+    gain.gain.value = 1;
+    source.connect(gain);
+    gain.connect(this.input);
+    this.extraSources.push({ media, source, gain });
+    return gain;
+  }
+
+  /**
+   * 主元素的专用增益。AutoMix 用它淡入当前曲；未接 Web Audio 时返回 null，
+   * 调用方退回 element.volume。
+   */
+  getPrimaryGain(): GainNode | null {
+    return this.primaryGain;
+  }
+
+  /** 某元素是否已接入（避免重复 createMediaElementSource 抛错）。 */
+  hasSource(media: HTMLAudioElement): boolean {
+    if (this.media === media) return true;
+    return this.extraSources.some((s) => s.media === media);
   }
 
   update(config: AudioEffectConfig): void {

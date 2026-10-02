@@ -19,6 +19,26 @@ import {
 } from "@/utils/preciseLyrics";
 import { translate } from "@shared/i18n";
 import { applyPreciseWordTimes, getPreciseWordTimes } from "@/utils/wordAnalysis";
+import { DualDeck } from "@/utils/dualDeck";
+import { audioEffectEngine } from "@/utils/audioEffects";
+import { planMix, type AutoMixSettings, type MixPlan } from "@/utils/autoMixEngine";
+import {
+  analyzeTrack,
+  analysisKey,
+  clearAnalysisCache,
+  type AutoMixSource,
+  type TrackAnalysis,
+} from "@/utils/autoMixAnalysis";
+import {
+  clearEntries as clearMixLog,
+  consumeForceMix,
+  getEntries as getMixLog,
+  requestForceMix,
+  mixError,
+  mixLog,
+  mixWarn,
+  setVerbose as setMixVerbose,
+} from "@/utils/autoMixLog";
 import type {
   LyricLine,
   MediaEntry,
@@ -230,11 +250,23 @@ export const usePlayerStore = defineStore("player", () => {
    */
   const audioEl = ref<HTMLAudioElement | null>(null);
 
-  function ensureAudio(): HTMLAudioElement {
-    if (audioEl.value) return audioEl.value;
-    const el = new Audio();
-    el.preload = "auto";
+  /**
+   * 给一个 audio 元素挂上全部状态同步监听。
+   *
+   * 抽成函数是为了 AutoMix 的「deck 提升」：过渡结束后，原来作为「下一曲」的
+   * 那个元素会变成当前元素，必须给它挂上同一套监听，否则进度条/歌词/SMTC
+   * 会全部停在旧元素上不动。
+   */
+  function bindElement(el: HTMLAudioElement): void {
+    /**
+     * 只有「当前 deck」才能驱动状态。
+     *
+     * AutoMix 过渡期间两个元素都在播，若不加这道闸，下一曲的 timeupdate 会把
+     * 进度条/歌词拽到它的时间轴上，界面会来回跳。非当前元素的事件一律忽略。
+     */
+    const isActive = () => audioEl.value === el;
     el.addEventListener("timeupdate", () => {
+      if (!isActive()) return;
       currentTime.value = el.currentTime;
       // 听歌时长累计：仅播放中且正向增量
       if (playing.value && el.currentTime > lastTickPos) {
@@ -244,38 +276,56 @@ export const usePlayerStore = defineStore("player", () => {
       updateActiveLine();
       syncSmtc();
       syncDesktopLyrics();
+      // AutoMix：快到曲末时预载并执行过渡
+      maybeAutoMix();
     });
     el.addEventListener("loadedmetadata", () => {
+      if (!isActive()) return;
       duration.value = el.duration;
       syncSmtc(true);
+      // 元数据就绪后后台预载下一曲（分析 + 取源），这样过渡时不必等网络。
+      // 用 void 不阻塞；失败会在 prepareNext 内部降级。
+      void prepareNext();
     });
     el.addEventListener("play", () => {
+      if (!isActive()) return;
       playing.value = true;
       useAudioEffectsStore().resume();
       syncSmtc(true);
       syncDesktopLyrics(true);
     });
     el.addEventListener("pause", () => {
+      if (!isActive()) return;
       playing.value = false;
       useAudioEffectsStore().suspend();
       syncSmtc(true);
       syncDesktopLyrics(true);
     });
     el.addEventListener("seeked", () => {
+      if (!isActive()) return;
       // seek 后更新 lastTickPos，避免下一步 timeupdate 误增
       lastTickPos = el.currentTime;
       syncSmtc(true);
     });
     el.addEventListener("ended", () => {
+      if (!isActive()) return;
       playing.value = false;
       // 听歌时长：标记完成
       flushSession(true);
       void next();
     });
     el.addEventListener("error", () => {
+      if (!isActive()) return;
       playing.value = false;
       lastError.value = `无法播放：${song.value?.title ?? ""}`;
     });
+  }
+
+  function ensureAudio(): HTMLAudioElement {
+    if (audioEl.value) return audioEl.value;
+    const el = new Audio();
+    el.preload = "auto";
+    bindElement(el);
     audioEl.value = el;
     useAudioEffectsStore().registerAudioElement(el);
     return el;
@@ -290,6 +340,334 @@ export const usePlayerStore = defineStore("player", () => {
     // audio 由 store 持有，离开播放器页时无需做任何事
   }
 
+  // ---------------------------------------------------------------- AutoMix（自动混音）
+
+  /**
+   * AutoMix 由双 deck 引擎 + 分析 + 过渡执行三部分组成。
+   *
+   * 关键点：不使用 AutoMix 时**完全不创建第二个 deck**，因此对现有播放零影响。
+   */
+  const mixDeck = ref<"a" | "b">("a");
+  /** 最近一次过渡的决策（调试面板 / __automix.last() 展示） */
+  const lastMixPlan = ref<MixPlan | null>(null);
+  /** 过渡进行中 */
+  const mixing = ref(false);
+  /** 预分析状态，供 UI 显示 */
+  const analysisStatus = ref<"idle" | "analyzing" | "ready" | "failed">("idle");
+
+  let dualDeck: DualDeck | null = null;
+  /** 已发起的预分析：key -> Promise，避免重复分析 */
+  const analysisInflight = new Map<string, Promise<TrackAnalysis | null>>();
+  /** 已准备的下一个 deck（预载完成，等待过渡） */
+  let prepared: { index: number; analysis: TrackAnalysis | null; src: string } | null = null;
+  /** 过渡是否已为本曲触发过（避免 timeupdate 反复触发） */
+  let mixTriggeredFor: string | null = null;
+  /** 本次播放是否真的用上了 AutoMix（决定结束时要等过渡还是直接切） */
+  let usedAutoMix = false;
+  /** AutoMix 过渡交接期间，抑制 loadXxx 内部的 startPlayback */
+  let suppressStart = false;
+
+  function mixSettings(): AutoMixSettings {
+    const s = useSettingsStore();
+    return {
+      enabled: s.autoMixEnabled,
+      durationSec: s.autoMixDuration,
+      beatMatch: s.autoMixBeatMatch,
+      trimSilence: s.autoMixTrimSilence,
+      maxRateDeviation: s.autoMixMaxRateDeviation / 100,
+    };
+  }
+
+  /**
+   * 执行一次过渡：把当前 deck 淡出、把下一曲 deck 淡入。
+   *
+   * 这是整个 AutoMix 唯一真正「出声」的地方。设计上：
+   * - 失败一律退回直接切歌（next()），绝不让播放停住；
+   * - 过渡结束后把「下一曲」提升为当前曲，会话/歌词/封面等状态照常更新。
+   */
+  async function runMix(): Promise<boolean> {
+    const s = useSettingsStore();
+    const cfg = mixSettings();
+    if (!prepared) {
+      mixLog("没有预载的下一曲，跳过过渡");
+      return false;
+    }
+    const el = audioEl.value;
+    if (!el) return false;
+
+    const item = queue.value[prepared.index];
+    if (!item) return false;
+
+    mixing.value = true;
+    try {
+      const cur = currentSource();
+      const curDur = duration.value || (song.value?.durationMs ?? 0) / 1000;
+      const curAnalysis = cur ? await analyze(cur.source, cur.id, curDur) : null;
+      const plan = planMix(curDur, curAnalysis, prepared.analysis, el.currentTime, cfg);
+      lastMixPlan.value = plan;
+      mixLog("过渡方案已确定", plan);
+      for (const r of plan.reasons) mixLog("  · " + r);
+
+      const decks = ensureDualDeck();
+      /**
+       * currentDeck 是**正在播当前曲**的元素，永远等于 audioEl.value。
+       *
+       * 第一次过渡时它就是主 audio 元素；过渡结束后我们会把 audioEl 换成
+       * 另一个元素（deck 提升），所以这里必须动态取，不能固定用 "a"。
+       */
+      const currentDeck = decks.deckFor(el) ?? decks.adopt(mixDeck.value, el);
+      // 主元素在 ensureAudio 里已经挂过监听；标记一下，避免它以后
+      // 作为「下一曲 deck」被提升时又 bindElement 一次（事件会翻倍）。
+      if (currentDeck.el === el && audioEl.value === el) currentDeck.listenersBound = true;
+      const oldEl = el;
+      const to = decks.other(currentDeck.id);
+      // 只有当前元素在音效链之外时才需要补挂（已在链上时 deckFor 已命中）
+      decks.tryRoute(currentDeck);
+      decks.tryRoute(to);
+      decks.setGain(currentDeck, 1);
+      decks.setGain(to, 0);
+
+      // 预载下一曲并 seek 到跳过静音后的位置
+      to.el.src = prepared.src;
+      to.el.load();
+      await new Promise<void>((resolve) => {
+        const onReady = () => resolve();
+        to.el.addEventListener("loadedmetadata", onReady, { once: true });
+        // 3 秒拿不到元数据也别卡住，直接按原样开始
+        setTimeout(resolve, 3000);
+      });
+      try {
+        to.el.currentTime = plan.nextStartAt;
+      } catch {
+        /* 元数据未就绪时 seek 可能失败，忽略 */
+      }
+      if (plan.rate !== null) to.el.playbackRate = plan.rate;
+
+      mixLog("开始播放下一曲 deck", { rate: plan.rate, startAt: plan.nextStartAt });
+      await to.el.play().catch(() => {});
+
+      // 等当前曲播到淡出点
+      while (el.currentTime < plan.fadeOutAt - 0.05) {
+        await new Promise((r) => setTimeout(r, 50));
+        if (!mixing.value) break;
+      }
+
+      await decks.crossfade(currentDeck, to, plan.durationSec * 1000);
+
+      // ---- deck 提升：把「下一曲」变成当前曲 ----
+      // 顺序很重要：先让 to 成为 audioEl，再暂停旧元素。
+      // 反过来的话，旧元素的 pause 事件（此时它还是 active）会把 playing 置 false。
+      const target = prepared.index;
+      mixDeck.value = to.id;
+      audioEl.value = to.el;
+      // 旧元素停掉并断开源，避免它继续占用解码资源
+      el.pause();
+      oldEl.src = "";
+      oldEl.load();
+      decks.setGain(currentDeck, 0);
+      decks.setGain(to, 1);
+      // audio 元素换了，音效链的「主元素」登记也要跟着换，否则 resume/suspend 作用在旧元素上
+      useAudioEffectsStore().registerAudioElement(to.el);
+
+      // 补挂状态同步监听（只在第一次复用时挂，避免事件翻倍）
+      if (!to.listenersBound) {
+        to.listenersBound = true;
+        bindElement(to.el);
+      }
+
+      // 把「下一曲」正式提升为当前曲：复用现有加载路径更新全部状态
+      // （skipStart 让 loadXxx 内部的 startPlayback 不生效，因为 deck 已经在播）
+      currentIndex.value = target;
+      mixTriggeredFor = null;
+      prepared = null;
+      mixing.value = false;
+      await playFromQueue(target, { skipStart: true });
+      mixLog("过渡完成，当前曲已切换", { index: target, deck: to.id });
+      return true;
+    } catch (e) {
+      mixError("过渡失败，回退为直接切歌", e instanceof Error ? e.message : String(e));
+      return false;
+    } finally {
+      mixing.value = false;
+      prepared = null;
+      usedAutoMix = false;
+    }
+  }
+
+  /**
+   * 由 timeupdate 驱动的检查：快到曲末时准备并执行过渡。
+   *
+   * 只在前瞻窗口内触发一次（mixTriggeredFor 去重），避免 timeupdate 每秒触发多次。
+   */
+  function maybeAutoMix(): void {
+    const s = useSettingsStore();
+    const forced = consumeForceMix();
+    if ((!s.autoMixEnabled && !forced) || mixing.value) return;
+    if (!audioEl.value || queue.value.length === 0) return;
+    if (repeatMode.value === "one") return;
+    const dur = duration.value;
+    if (!(dur > 0)) return;
+    const cfg = mixSettings();
+    // 前瞻窗口：过渡时长 + 2 秒余量（预载分析需要时间）
+    const lead = cfg.durationSec + 2;
+    const remain = dur - audioEl.value.currentTime;
+    if (remain > lead) return;
+    const token = song.value?.id ?? "";
+    if (mixTriggeredFor === token) return;
+    mixTriggeredFor = token;
+    mixLog("进入过渡窗口", { remain, lead, hasPrepared: !!prepared });
+    void runMix();
+  }
+  /**
+   * 预载下一曲到另一个 deck。
+   *
+   * 这一步只「准备」不「播放」：设好 src、seek 到跳过静音后的位置、暂停着等待。
+   * 提前载入是为了让过渡那一刻不需要等网络 —— 否则会听到「淡出结束但下一曲没声」。
+   */
+  async function prepareNext(): Promise<void> {
+    const s = useSettingsStore();
+    if (!s.autoMixEnabled && !consumeForceMix()) return;
+    if (queue.value.length === 0) return;
+    const idx = nextQueueIndex();
+    if (idx === null) return;
+    const item = queue.value[idx];
+
+    // 已经为这一曲准备过就不再重复
+    if (prepared?.index === idx) return;
+
+    const cur = currentSource();
+    if (!cur) {
+      mixWarn("当前曲没有可分析的音频源，跳过 AutoMix");
+      return;
+    }
+    usedAutoMix = true;
+    const cfg = mixSettings();
+
+    // 拉下一曲的播放地址（本地曲不需要联网）
+    const src = await resolveQueueItemSrc(item);
+    if (!src) {
+      mixWarn("无法解析下一曲地址，跳过 AutoMix");
+      return;
+    }
+
+    // 并行分析：当前曲 + 下一曲
+    const curDur = duration.value || (song.value?.durationMs ?? 0) / 1000;
+    const [curAnalysis, nextAnalysis] = await Promise.all([
+      analyze(cur.source, cur.id, curDur),
+      analyzeNextItem(item, src),
+    ]);
+
+    prepared = { index: idx, analysis: nextAnalysis, src };
+    mixLog("下一曲已准备", {
+      index: idx,
+      rate: null,
+      nextStartAt: nextAnalysis?.silenceStart ?? 0,
+      curBpm: curAnalysis?.bpm ?? null,
+      nextBpm: nextAnalysis?.bpm ?? null,
+    });
+  }
+
+  /** 队列条目的稳定标识（与分析缓存 key 一一对应）。 */
+  function queueItemId(item: QueueItem): string {
+    if (isWebDav(item)) return `webdav:${item.path}`;
+    if (isOnline(item)) return item.id;
+    return item.id;
+  }
+
+  /**
+   * 解析队列条目的可播放地址（**不切换当前播放**）。
+   *
+   * 与 startPlayback 分离：预载只想知道 URL 与来源，不想动当前播放状态。
+   * 三种来源各有各的取法，与 loadOnlineSong / loadWebDavSong 保持同一套语义。
+   */
+  async function resolveQueueItemSrc(item: QueueItem): Promise<string | null> {
+    try {
+      if (isWebDav(item)) {
+        return await capabilities.webdavMediaUrl(item.path);
+      }
+      if (isOnline(item)) {
+        // 酷狗的 url 可能为空、需要单独解析（与播放路径一致）
+        if (item.url) return item.url;
+        if (item.server === "kugou" && item.hash) {
+          return (await resolveKugouUrl(item)) || null;
+        }
+        return null;
+      }
+      const full = await capabilities.getSong(item.id);
+      return toMediaSrc(full.file.path);
+    } catch (e) {
+      mixWarn("解析下一曲地址失败", e instanceof Error ? e.message : String(e));
+      return null;
+    }
+  }
+
+  /** 分析队列里的某个条目（需要先解析出可播放地址）。 */
+  async function analyzeNextItem(item: QueueItem, src: string) {
+    const id = queueItemId(item);
+    if (isWebDav(item)) return analyze({ kind: "webdav", url: src }, id, 0);
+    if (isOnline(item)) return analyze({ kind: "online", url: src }, id, 0);
+    // 本地曲：src 是 asset:// URL，分析要的是磁盘路径
+    const full = await capabilities
+      .getSong(item.id)
+      .then((s) => s.file.path)
+      .catch(() => null);
+    return analyze({ kind: "local", filePath: full ?? undefined }, id, 0);
+  }
+
+  /** 下一个要播的队列下标（考虑随机/循环）；没有则 null。 */
+  function nextQueueIndex(): number | null {
+    if (queue.value.length === 0) return null;
+    if (repeatMode.value === "one") return null;
+    if (shuffleMode.value) {
+      const pos = shuffledIndices.value.indexOf(currentIndex.value);
+      const nextPos = pos + 1;
+      if (nextPos < shuffledIndices.value.length) return shuffledIndices.value[nextPos];
+      return repeatMode.value === "all" ? (shuffledIndices.value[0] ?? null) : null;
+    }
+    const next = currentIndex.value + 1;
+    if (next < queue.value.length) return next;
+    return repeatMode.value === "all" ? 0 : null;
+  }
+  /** 惰性创建双 deck（只在 AutoMix 真正要用的那一刻）。 */
+  function ensureDualDeck(): DualDeck {
+    if (!dualDeck) {
+      dualDeck = new DualDeck(audioEffectEngine, (msg, detail) => mixLog(msg, detail));
+    }
+    return dualDeck;
+  }
+
+  /**
+   * 把当前歌曲的音频源描述出来，供分析器使用。
+   *
+   * 本地曲给 filePath，在线曲给 url —— 与逐字歌词用的是同一套语义。
+   */
+  function currentSource(): { source: AutoMixSource; id: string } | null {
+    const s = song.value;
+    if (!s) return null;
+    // NowPlaying 自带 kind 与两个来源字段，直接据此判断
+    if (s.kind === "local") {
+      return s.filePath ? { source: { kind: "local", filePath: s.filePath }, id: s.id } : null;
+    }
+    // 在线 / WebDAV 都用可播放 URL 直接拉取分析
+    return s.src ? { source: { kind: s.kind, url: s.src }, id: s.id } : null;
+  }
+
+  /** 分析某首歌，带 inflight 去重。 */
+  function analyze(source: AutoMixSource, id: string, durationSec: number) {
+    const key = analysisKey(source, id);
+    const existing = analysisInflight.get(key);
+    if (existing) return existing;
+    analysisStatus.value = "analyzing";
+    mixLog("开始分析", { key, durationSec });
+    const p = analyzeTrack(source, durationSec, key, (m, d) => mixLog(m, d))
+      .then((r) => {
+        analysisStatus.value = r ? "ready" : "failed";
+        return r;
+      })
+      .finally(() => analysisInflight.delete(key));
+    analysisInflight.set(key, p);
+    return p;
+  }
   const currentLyric = computed(() =>
     activeLine.value >= 0 ? lyrics.value[activeLine.value]?.text : "",
   );
@@ -750,6 +1128,8 @@ export const usePlayerStore = defineStore("player", () => {
   async function startPlayback() {
     const src = song.value?.src;
     if (!src) return;
+    // AutoMix 过渡期间：deck 已在播放这一曲，不要重设 src
+    if (suppressStart) return;
     const el = ensureAudio();
     lastError.value = null;
     el.src = src;
@@ -990,16 +1370,23 @@ export const usePlayerStore = defineStore("player", () => {
     }
   }
 
-  async function playFromQueue(index: number) {
+  async function playFromQueue(index: number, opts: { skipStart?: boolean } = {}) {
     if (index < 0 || index >= queue.value.length) return;
     currentIndex.value = index;
     const item = queue.value[index];
-    if (isWebDav(item)) {
-      await loadWebDavSong(item);
-    } else if (isOnline(item)) {
-      await loadOnlineSong(item);
-    } else {
-      await loadById(item.id);
+    // AutoMix 过渡时 deck 已经在播下一曲：这里只需要把「状态」切过去，
+    // 不能再走 startPlayback（重设 src 会把正在播的音频打断）。
+    if (opts.skipStart) suppressStart = true;
+    try {
+      if (isWebDav(item)) {
+        await loadWebDavSong(item);
+      } else if (isOnline(item)) {
+        await loadOnlineSong(item);
+      } else {
+        await loadById(item.id);
+      }
+    } finally {
+      suppressStart = false;
     }
   }
 
@@ -1198,6 +1585,30 @@ export const usePlayerStore = defineStore("player", () => {
     });
   }
 
+  // ---- AutoMix 对外接口 ----
+  /**
+   * 供控制台调试使用的 API。
+   *
+   * 暴露在 `__automix`（见 installAutoMixConsole），也直接从 store 调用，
+   * 便于组件里做「立即分析一次」「查看上次决策」之类的操作。
+   */
+  function automixDebug() {
+    const s = useSettingsStore();
+    return {
+      enabled: s.autoMixEnabled,
+      duration: s.autoMixDuration,
+      beatMatch: s.autoMixBeatMatch,
+      trimSilence: s.autoMixTrimSilence,
+      maxRateDeviationPct: s.autoMixMaxRateDeviation,
+      mixing: mixing.value,
+      analysisStatus: analysisStatus.value,
+      prepared: prepared ? { index: prepared.index, hasAnalysis: !!prepared.analysis } : null,
+      currentDeck: mixDeck.value,
+      lastPlan: lastMixPlan.value,
+      inflight: [...analysisInflight.keys()],
+    };
+  }
+
   return {
     song,
     playing,
@@ -1205,6 +1616,16 @@ export const usePlayerStore = defineStore("player", () => {
     duration,
     currentIndex,
     audioEl,
+    // AutoMix
+    mixing,
+    lastMixPlan,
+    analysisStatus,
+    automixDebug,
+    setMixVerbose,
+    getMixLog,
+    clearMixLog,
+    clearAnalysisCache,
+    requestForceMix,
     queue,
     loadingSong,
     lastError,

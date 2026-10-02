@@ -237,6 +237,21 @@ const DEFAULTS = {
   } as Record<string, boolean>,
   /** 跳过时是否给提示 */
   sponsorBlockToast: true,
+  /**
+   * AutoMix（自动混音）：像 DJ 一样把相邻歌曲平滑地混在一起。
+   *
+   * 默认关闭：它会为当前曲与下一曲各做一次音频分析（读完整音频、解码、FFT），
+   * 有一定 CPU 与带宽开销。开启后首个分析会在后台进行，不阻塞播放。
+   */
+  autoMixEnabled: false,
+  /** 过渡时长（秒）。DJ 式混音通常 6~12 秒 */
+  autoMixDuration: 8,
+  /** 是否尝试对拍（按 BPM 微调速度，让两首的节拍对齐） */
+  autoMixBeatMatch: true,
+  /** 是否裁掉首尾静音（避免淡出到一片寂静再干等） */
+  autoMixTrimSilence: true,
+  /** 对拍允许的最大速度偏移（百分比）。超过就不对拍，避免明显走音 */
+  autoMixMaxRateDeviation: 6,
   /** Bangumi 官方 Access Token（在 https://next.bgm.tv/demo/access-token 获取；与 pixivRefreshToken 同款本地保存） */
   bangumiToken: "",
   /** 当前连接的 Bangumi 用户名（token 校验成功后写入，收藏接口按它查询） */
@@ -337,6 +352,11 @@ export const useSettingsStore = defineStore("settings", () => {
     ...DEFAULTS.sponsorBlockCategories,
   });
   const sponsorBlockToast = ref(DEFAULTS.sponsorBlockToast);
+  const autoMixEnabled = ref(DEFAULTS.autoMixEnabled);
+  const autoMixDuration = ref(DEFAULTS.autoMixDuration);
+  const autoMixBeatMatch = ref(DEFAULTS.autoMixBeatMatch);
+  const autoMixTrimSilence = ref(DEFAULTS.autoMixTrimSilence);
+  const autoMixMaxRateDeviation = ref(DEFAULTS.autoMixMaxRateDeviation);
   const bangumiToken = ref(DEFAULTS.bangumiToken);
   const bangumiUsername = ref(DEFAULTS.bangumiUsername);
   const bangumiSyncedAt = ref(DEFAULTS.bangumiSyncedAt);
@@ -442,6 +462,11 @@ export const useSettingsStore = defineStore("settings", () => {
     sponsorBlockServer,
     sponsorBlockCategories,
     sponsorBlockToast,
+    autoMixEnabled,
+    autoMixDuration,
+    autoMixBeatMatch,
+    autoMixTrimSilence,
+    autoMixMaxRateDeviation,
     bangumiToken,
     bangumiUsername,
     bangumiSyncedAt,

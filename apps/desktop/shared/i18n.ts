@@ -305,6 +305,18 @@ export const messages = {
         "启用后视频页显示「B站」分段：推荐流、搜索、扫码登录与在线播放（ArtPlayer + B 站弹幕）。接口来自 B 站网页端公开接口，数据仅供个人学习使用。",
       bilibiliEnable: "启用 B 站视频",
       bilibiliLoginHint: "在「视频 → B站 → 我的」里扫码登录。登录后推荐更个性化，播放可达 1080P。",
+      autoMix: "自动混音（AutoMix）",
+      autoMixEnabled: "启用自动混音",
+      autoMixHint:
+        "像 DJ 一样把相邻歌曲平滑地混在一起：分析两首歌的速度与节拍，在乐句边界做等功率交叉淡化，并微调速度对齐节拍。开启后会在后台分析当前曲与下一曲（读完整音频、解码、FFT），不阻塞播放。",
+      autoMixDuration: "过渡时长",
+      autoMixBeatMatch: "对拍（按 BPM 对齐节拍）",
+      autoMixTrimSilence: "裁掉首尾静音",
+      autoMixMaxRate: "对拍最大速度偏移",
+      autoMixMaxRateHint:
+        "两首 BPM 差距超过这个范围就放弃对拍，改为普通交叉淡化——强行对齐会明显走音。",
+      autoMixDebugHint:
+        "调试：在开发者控制台输入 __automix.help() 可查看状态、生效流程与最近一次过渡的决策依据。",
       sponsorBlock: "空降助手（跳过广告）",
       sponsorBlockHint:
         "识别并自动跳过视频里的赞助 / 广告等片段。数据来自社区众包的 BilibiliSponsorBlock 服务；开启后会把当前视频的 bvid 与 cid 发往该服务。进度条上会用彩色刻痕标出片段位置。",
@@ -1254,6 +1266,18 @@ export const messages = {
       bilibiliEnable: "Enable Bilibili",
       bilibiliLoginHint:
         "Scan the QR code in Videos → Bilibili → Account. Signing in improves recommendations and unlocks 1080P.",
+      autoMix: "AutoMix (automatic mixing)",
+      autoMixEnabled: "Enable AutoMix",
+      autoMixHint:
+        "Blends adjacent tracks like a DJ: analyzes tempo and beats of both songs, crossfades with an equal-power curve at phrase boundaries, and nudges playback speed to align beats. Enabling this analyzes the current and next track in the background (reads full audio, decodes, FFT) without blocking playback.",
+      autoMixDuration: "Transition length",
+      autoMixBeatMatch: "Beat match (align tempo by BPM)",
+      autoMixTrimSilence: "Trim leading/trailing silence",
+      autoMixMaxRate: "Max tempo deviation for beat matching",
+      autoMixMaxRateHint:
+        "If the two tracks differ by more than this, beat matching is skipped in favor of a plain crossfade — forcing alignment would audibly detune.",
+      autoMixDebugHint:
+        "Debug: run __automix.help() in the DevTools console to inspect status, the decision log, and the last transition rationale.",
       sponsorBlock: "SponsorBlock (skip ads)",
       sponsorBlockHint:
         "Detects and automatically skips sponsor/ad segments. Data comes from the community-run BilibiliSponsorBlock service; enabling this sends the current video bvid and cid to that service. Segments are marked with colored ticks on the progress bar.",
