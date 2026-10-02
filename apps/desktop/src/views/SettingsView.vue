@@ -328,6 +328,7 @@ type BoolSettingKey =
   | "onlinePixivEnabled"
   | "danmakuEnabled"
   | "danmakuAntiOverlap"
+  | "ambilightEnabled"
   | "webdavEnabled";
 
 /** 整数滑块对应的数值设置项键 */
@@ -341,7 +342,12 @@ type SliderIntKey =
   | "danmakuOpacity"
   | "danmakuFontSize"
   | "danmakuArea"
-  | "danmakuSpeed";
+  | "danmakuSpeed"
+  | "ambilightBlur"
+  | "ambilightSpread"
+  | "ambilightOpacity"
+  | "ambilightSaturation"
+  | "ambilightBrightness";
 
 // ---- 最小体积过滤 ----
 
@@ -1134,6 +1140,66 @@ function selectSection(id: string) {
         <p v-if="settings.bilibiliEnabled" class="hint">
           {{ t("settings.bilibiliLoginHint") }}
         </p>
+
+        <!-- 氛围光（ambient light）：默认关闭，参数可调 -->
+        <template v-if="settings.bilibiliEnabled">
+          <label class="row switch-row">
+            <span class="row-label">{{ t("settings.ambilight") }}</span>
+            <m3e-switch
+              :checked="settings.ambilightEnabled"
+              @change="setSwitch('ambilightEnabled', $event)"
+            />
+          </label>
+          <p class="hint">{{ t("settings.ambilightHint") }}</p>
+
+          <template v-if="settings.ambilightEnabled">
+            <div class="row">
+              <div class="row-label">
+                <span>{{ t("settings.ambilightBlur") }}</span>
+              </div>
+              <m3e-slider :min="0" :max="160" @input="onSliderInt($event, 'ambilightBlur')">
+                <m3e-slider-thumb :value="settings.ambilightBlur" />
+              </m3e-slider>
+              <span class="value tabular-nums">{{ settings.ambilightBlur }}px</span>
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <span>{{ t("settings.ambilightSpread") }}</span>
+              </div>
+              <m3e-slider :min="0" :max="60" @input="onSliderInt($event, 'ambilightSpread')">
+                <m3e-slider-thumb :value="settings.ambilightSpread" />
+              </m3e-slider>
+              <span class="value tabular-nums">{{ settings.ambilightSpread }}%</span>
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <span>{{ t("settings.ambilightOpacity") }}</span>
+              </div>
+              <m3e-slider :min="10" :max="100" @input="onSliderInt($event, 'ambilightOpacity')">
+                <m3e-slider-thumb :value="settings.ambilightOpacity" />
+              </m3e-slider>
+              <span class="value tabular-nums">{{ settings.ambilightOpacity }}%</span>
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <span>{{ t("settings.ambilightSaturation") }}</span>
+              </div>
+              <m3e-slider :min="50" :max="250" @input="onSliderInt($event, 'ambilightSaturation')">
+                <m3e-slider-thumb :value="settings.ambilightSaturation" />
+              </m3e-slider>
+              <span class="value tabular-nums">{{ settings.ambilightSaturation }}%</span>
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <span>{{ t("settings.ambilightBrightness") }}</span>
+              </div>
+              <m3e-slider :min="40" :max="160" @input="onSliderInt($event, 'ambilightBrightness')">
+                <m3e-slider-thumb :value="settings.ambilightBrightness" />
+              </m3e-slider>
+              <span class="value tabular-nums">{{ settings.ambilightBrightness }}%</span>
+            </div>
+          </template>
+        </template>
       </div>
     </m3e-card>
 

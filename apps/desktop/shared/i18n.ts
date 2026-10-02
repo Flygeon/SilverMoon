@@ -305,6 +305,14 @@ export const messages = {
         "启用后视频页显示「B站」分段：推荐流、搜索、扫码登录与在线播放（ArtPlayer + B 站弹幕）。接口来自 B 站网页端公开接口，数据仅供个人学习使用。",
       bilibiliEnable: "启用 B 站视频",
       bilibiliLoginHint: "在「视频 → B站 → 我的」里扫码登录。登录后推荐更个性化，播放可达 1080P。",
+      ambilight: "氛围光",
+      ambilightHint:
+        "把视频画面的颜色模糊成光晕铺在播放器四周（参考 youtube-ambilight）。默认关闭：它需要持续对视频帧做降采样与模糊，会占用一些 GPU。",
+      ambilightBlur: "模糊半径",
+      ambilightSpread: "外扩范围",
+      ambilightOpacity: "不透明度",
+      ambilightSaturation: "饱和度",
+      ambilightBrightness: "亮度",
       bangumiHint:
         "连接 Bangumi 账号后，可在「动漫 → 我的追番」查看并同步你在 Bangumi 的番剧收藏。",
       bangumiTokenLabel: "Bangumi Access Token",
@@ -1239,6 +1247,14 @@ export const messages = {
       bilibiliEnable: "Enable Bilibili",
       bilibiliLoginHint:
         "Scan the QR code in Videos → Bilibili → Account. Signing in improves recommendations and unlocks 1080P.",
+      ambilight: "Ambient light",
+      ambilightHint:
+        "Blurs the video's colors into a glow around the player (inspired by youtube-ambilight). Off by default: it continuously downsamples and blurs video frames, which costs some GPU.",
+      ambilightBlur: "Blur radius",
+      ambilightSpread: "Spread",
+      ambilightOpacity: "Opacity",
+      ambilightSaturation: "Saturation",
+      ambilightBrightness: "Brightness",
       bangumiHint:
         "Connect your Bangumi account to view and sync your anime collections in Anime → My Collection.",
       bangumiTokenLabel: "Bangumi Access Token",

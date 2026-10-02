@@ -28,6 +28,7 @@ import {
 } from "@/utils/bilibili";
 import { BiliDashSession } from "@/utils/biliDash";
 import { applyTimeOffset, type ArtDanmu } from "@/utils/danmaku";
+import { useAmbilight } from "@/composables/useAmbilight";
 import { translate } from "@shared/i18n";
 
 const emit = defineEmits<{ (e: "login"): void }>();
@@ -37,6 +38,45 @@ const settings = useSettingsStore();
 const t = (key: string) => translate(settings.lang, key);
 
 const container = ref<HTMLDivElement | null>(null);
+
+// ---- 氛围光（ambient light）----
+const ambilightCanvas = ref<HTMLCanvasElement | null>(null);
+const ambilight = useAmbilight(
+  {
+    enabled: computed(() => settings.ambilightEnabled),
+    blur: computed(() => settings.ambilightBlur),
+    spread: computed(() => settings.ambilightSpread),
+    opacity: computed(() => settings.ambilightOpacity),
+    saturation: computed(() => settings.ambilightSaturation),
+    brightness: computed(() => settings.ambilightBrightness),
+  },
+  ambilightCanvas,
+);
+
+/**
+ * 光晕外观。
+ *
+ * 三层组合（对应参考项目 projector + filter 的分工）：
+ * - `blur()`：把 48px 宽的小画布抹成一片柔和的色块；
+ * - `saturate()/brightness()`：让颜色更「亮眼」，否则糊完会发灰；
+ * - 负 inset + `opacity`：把画布拉伸到比播放器更大并压暗，让光晕只作为背景存在。
+ */
+const ambilightStyle = computed(() => {
+  const s = Math.max(0, settings.ambilightSpread);
+  // canvas 是 replaced element：只给 inset 不会拉伸（会退回固有尺寸 48×27），
+  // 必须显式给 width/height 百分比，再用 left/top + translate 居中。
+  const size = 100 + s * 2;
+  return {
+    width: `${size}%`,
+    height: `${size}%`,
+    opacity: String(Math.max(0, Math.min(100, settings.ambilightOpacity)) / 100),
+    filter: [
+      `blur(${Math.max(0, settings.ambilightBlur)}px)`,
+      `saturate(${Math.max(0, settings.ambilightSaturation)}%)`,
+      `brightness(${Math.max(0, settings.ambilightBrightness)}%)`,
+    ].join(" "),
+  };
+});
 const descExpanded = ref(false);
 
 /** 媒体加载失败提示（ArtPlayer 会自动重连，这里负责把原因讲清楚并给条退路） */
@@ -194,6 +234,9 @@ async function createPlayer(url: string | null): Promise<void> {
   syncDanmakuVisibility();
   applyDanmakuAppearance();
 
+  // 把 <video> 交给氛围光（ArtPlayer 的 video 就是它内部的播放元素）
+  ambilight.attach(art.video);
+
   // 恢复上次的倍速
   if (settings.biliPlaybackRate !== 1) art.playbackRate = settings.biliPlaybackRate;
 
@@ -334,6 +377,7 @@ async function mountPlayer(url: string, type: "auto" | "m3u8" = "auto"): Promise
 let unwatchUrl: (() => void) | null = null;
 let unwatchDanmakuOpts: (() => void) | null = null;
 let unwatchDanmakuSwitch: (() => void) | null = null;
+let unwatchAmbilight: (() => void) | null = null;
 
 /** 关闭浮层：直接改 store 状态（不经过 emit 中转，避免多一层出错点） */
 function close(): void {
@@ -372,6 +416,14 @@ onMounted(() => {
     ],
     () => applyDanmakuAppearance(),
   );
+  // 氛围光：开启时若播放器已就绪，补一次 attach（开关可能晚于播放器创建才打开）
+  unwatchAmbilight = watch(
+    () => settings.ambilightEnabled,
+    (on) => {
+      if (on) ambilight.attach(art?.video ?? null);
+    },
+  );
+
   // 总开关：开着的时候把弹幕装回来（关掉时由 hide() 隐藏，但列表也需要清）
   unwatchDanmakuSwitch = watch(
     () => settings.danmakuEnabled,
@@ -399,10 +451,13 @@ onBeforeUnmount(() => {
   unwatchDanmakuOpts = null;
   unwatchDanmakuSwitch?.();
   unwatchDanmakuSwitch = null;
+  unwatchAmbilight?.();
+  unwatchAmbilight = null;
   // 卸载（切页 / 关应用）前把进度落一次，否则这一段观看记录会丢
   bili.reportProgress(currentSeconds());
   bili.stopHeartbeat();
   danmakuGen += 1;
+  ambilight.attach(null);
   dash?.destroy();
   dash = null;
   art?.destroy(false);
@@ -479,7 +534,17 @@ const metaItems = computed(() => {
     <div class="content">
       <div class="main">
         <!-- 播放器 -->
-        <div class="player-area">
+        <div class="player-area" :class="{ 'has-ambilight': settings.ambilightEnabled }">
+          <!-- 氛围光：把视频帧降采样到小画布，再靠 CSS blur 铺开。
+               放在播放器**之下**（z-index 更低），模糊边缘溢出到四周形成光晕。
+               关闭时不渲染，省掉一张画布与合成层。 -->
+          <canvas
+            v-if="settings.ambilightEnabled"
+            ref="ambilightCanvas"
+            class="ambilight"
+            aria-hidden="true"
+            :style="ambilightStyle"
+          />
           <div ref="container" class="art-container" />
           <div v-if="bili.playStatus === 'loading'" class="player-overlay">
             <m3e-loading-indicator class="lm-loading" />
@@ -771,6 +836,7 @@ const metaItems = computed(() => {
   align-items: flex-start;
   flex-wrap: wrap;
   gap: 22px;
+  /* 左右留白要够：氛围光会向两侧外扩，padding 太小光晕会被视口边缘切掉 */
   padding: 18px 22px 40px;
   overflow-y: auto;
   scrollbar-gutter: stable;
@@ -800,6 +866,45 @@ const metaItems = computed(() => {
   aspect-ratio: 16 / 9;
   max-height: 62vh;
   background: #000;
+}
+/*
+ * 氛围光画布。
+ *
+ * 关键点：
+ * - absolute + 负 inset：比播放器更大（外扩量由内联 style 的 inset 给），
+ *   模糊后的边缘才能溢出到播放器之外形成光晕；
+ * - z-index: -1 让它落在播放器**下面**（播放器 .art-container 是 z-index auto，
+ *   但同层下 negative 一定更靠后）；
+ * - pointer-events: none / user-select: none：纯装饰，不能吃掉播放器上的点击；
+ * - will-change/transform: translateZ(0)：把它提升为独立合成层，
+ *   避免每帧重绘整个播放器区域（不加的话模糊会连带父层一起重算，明显掉帧）。
+ */
+.ambilight {
+  position: absolute;
+  /* 0 即可：.player-area.has-ambilight 建了层叠上下文，
+     播放器 .art-container 是 1，画布自然在它下面 */
+  z-index: 0;
+  left: 50%;
+  top: 50%;
+  display: block;
+  /* 尺寸由内联 style 给（100% + 2×外扩）；canvas 是 replaced element，
+     只给 inset 不会拉伸，会退回 48×27 的固有尺寸 */
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  user-select: none;
+  will-change: filter;
+}
+/*
+ * 开启氛围光时：父级底色交给光晕本身（黑底会把光晕盖住）。
+ * 同时给容器建层叠上下文，让「画布在下、播放器在上」稳定成立 ——
+ * 只靠画布的 z-index:-1 在无层叠上下文的父级里会掉到父级背景之下。
+ */
+.player-area.has-ambilight {
+  background: transparent;
+  isolation: isolate;
+}
+.player-area.has-ambilight .art-container {
+  z-index: 1;
 }
 .art-container {
   position: absolute;

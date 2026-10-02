@@ -189,6 +189,24 @@ const DEFAULTS = {
   biliPlaybackRate: 1,
   /** B 站播放器是否上报观看进度（对标 PiliPlus 的「暂停观看记录」） */
   biliHistoryEnabled: true,
+  /**
+   * B 站播放器「氛围光」（ambient light / 环境光晕）。
+   *
+   * 把视频画面的边缘颜色模糊成大范围光晕铺在播放器四周，参考项目
+   * youtube-ambilight（WesselKroos）。默认关闭：它会持续对每一帧做降采样 + 模糊，
+   * 属于「好看但要花 GPU」的功能，应由用户自行开启。
+   */
+  ambilightEnabled: false,
+  /** 光晕强度（模糊半径，px）：越大越弥散 */
+  ambilightBlur: 60,
+  /** 光晕外扩（相对播放器尺寸的百分比）：越大铺得越开 */
+  ambilightSpread: 22,
+  /** 光晕不透明度 0-100 */
+  ambilightOpacity: 70,
+  /** 光晕饱和度 0-200（100 = 原样） */
+  ambilightSaturation: 140,
+  /** 光晕亮度 0-200（100 = 原样） */
+  ambilightBrightness: 100,
   /** Bangumi 官方 Access Token（在 https://next.bgm.tv/demo/access-token 获取；与 pixivRefreshToken 同款本地保存） */
   bangumiToken: "",
   /** 当前连接的 Bangumi 用户名（token 校验成功后写入，收藏接口按它查询） */
@@ -277,6 +295,12 @@ export const useSettingsStore = defineStore("settings", () => {
   const biliVolume = ref(DEFAULTS.biliVolume);
   const biliPlaybackRate = ref(DEFAULTS.biliPlaybackRate);
   const biliHistoryEnabled = ref(DEFAULTS.biliHistoryEnabled);
+  const ambilightEnabled = ref(DEFAULTS.ambilightEnabled);
+  const ambilightBlur = ref(DEFAULTS.ambilightBlur);
+  const ambilightSpread = ref(DEFAULTS.ambilightSpread);
+  const ambilightOpacity = ref(DEFAULTS.ambilightOpacity);
+  const ambilightSaturation = ref(DEFAULTS.ambilightSaturation);
+  const ambilightBrightness = ref(DEFAULTS.ambilightBrightness);
   const bangumiToken = ref(DEFAULTS.bangumiToken);
   const bangumiUsername = ref(DEFAULTS.bangumiUsername);
   const bangumiSyncedAt = ref(DEFAULTS.bangumiSyncedAt);
@@ -372,6 +396,12 @@ export const useSettingsStore = defineStore("settings", () => {
     biliVolume,
     biliPlaybackRate,
     biliHistoryEnabled,
+    ambilightEnabled,
+    ambilightBlur,
+    ambilightSpread,
+    ambilightOpacity,
+    ambilightSaturation,
+    ambilightBrightness,
     bangumiToken,
     bangumiUsername,
     bangumiSyncedAt,
