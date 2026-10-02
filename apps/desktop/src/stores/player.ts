@@ -426,14 +426,20 @@ export const usePlayerStore = defineStore("player", () => {
         resolve(el.duration * 1000);
         return;
       }
-      const timer = setTimeout(() => {
-        el.removeEventListener("loadedmetadata", onMeta);
-        resolve(undefined);
-      }, timeoutMs);
+      // 成功与超时两条路径都必须摘掉监听：audio 是单例，只挂不摘会随调用次数
+      // 线性累积（闭包还持有 resolve）。
       const onMeta = () => {
-        clearTimeout(timer);
+        cleanup();
         resolve(Number.isFinite(el.duration) ? el.duration * 1000 : undefined);
       };
+      const cleanup = () => {
+        clearTimeout(timer);
+        el.removeEventListener("loadedmetadata", onMeta);
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        resolve(undefined);
+      }, timeoutMs);
       el.addEventListener("loadedmetadata", onMeta);
     });
   }

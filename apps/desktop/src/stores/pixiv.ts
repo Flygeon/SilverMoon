@@ -15,11 +15,40 @@ import type {
   PixivUgoiraFrame,
 } from "@shared/types";
 
-/** 图片 Blob URL 内存缓存（不要用 base64，大图会爆内存） */
+/**
+ * 图片 Blob URL 内存缓存（不要用 base64，大图会爆内存）。
+ *
+ * ⚠️ 必须有上限并 revoke：blob URL 只要不 revoke，浏览器就一直保着它的
+ * **底层字节 + 解码后的位图**（一张 540² 缩略图约 1.1 MB 位图）。
+ * 而 PixivCard 是网格渲染、**每张卡片都会调 imageUrl()**，等于滚动浏览就持续写入。
+ * 快照实测只有 17 个 blob（那个会话没怎么用 pixiv），但结构同样是只涨不降。
+ */
 const imageCache = new Map<string, string>();
+/** 静态图缓存条目上限；超出后按插入序淘汰最早的一批 */
+const IMAGE_CACHE_LIMIT = 200;
 
 /** ugoira 帧 Blob URL 缓存（key = illust id） */
 const ugoiraCache = new Map<number, { src: string; delay: number }[]>();
+/**
+ * 动图缓存上限。
+ *
+ * ugoira 是**每帧一个 blob URL**（典型 20 帧），且每帧都会被解码成位图 ——
+ * 单个动图就能占几十 MB，所以上限要比静态图小得多。
+ */
+const UGOIRA_CACHE_LIMIT = 6;
+
+/** 淘汰最早的若干条，并 revoke 它们持有的 blob URL。 */
+function evictOldest<K, V>(cache: Map<K, V>, limit: number, release: (v: V) => void): void {
+  if (cache.size < limit) return;
+  // 一次淘汰 20%，避免每加一条都触发一次 delete
+  const drop = Math.max(1, Math.floor(limit * 0.2));
+  let i = 0;
+  for (const [key, value] of cache) {
+    if (i++ >= drop) break;
+    release(value);
+    cache.delete(key);
+  }
+}
 
 /** 每个会话只尝试一次「刷新会话恢复 user」——失败不反复打扰后端 */
 let userFixTried = false;
@@ -405,6 +434,8 @@ export const usePixivStore = defineStore("pixiv", () => {
       type: "image/jpeg",
     });
     const obj = URL.createObjectURL(blob);
+    // 先淘汰再写入：淘汰时 revoke 掉被丢掉的 blob，防止只涨不降
+    evictOldest(imageCache, IMAGE_CACHE_LIMIT, (old) => URL.revokeObjectURL(old));
     imageCache.set(url, obj);
     return obj;
   }
@@ -430,6 +461,10 @@ export const usePixivStore = defineStore("pixiv", () => {
         return { src: URL.createObjectURL(blob), delay: f.delayMs };
       }),
     );
+    // 每个动图 = N 个 blob URL（N 帧），淘汰时逐个 revoke
+    evictOldest(ugoiraCache, UGOIRA_CACHE_LIMIT, (frames) => {
+      for (const f of frames) URL.revokeObjectURL(f.src);
+    });
     ugoiraCache.set(id, out);
     return out;
   }

@@ -232,13 +232,68 @@ function applyDanmakuAppearance(): void {
   });
 }
 
+/**
+ * 惰性载入 ArtPlayer 与弹幕插件。
+ *
+ * 两者都用动态 import：只有进 B 站播放页才加载它们的 chunk。
+ * 用模块级 Promise 记住这次载入，避免并发调用时重复 import。
+ */
+let artplayerModules: Promise<
+  [
+    { default: typeof Artplayer },
+    { default: (typeof import("artplayer-plugin-danmuku"))["default"] },
+  ]
+> | null = null;
+
+function loadArtplayer() {
+  if (!artplayerModules) {
+    artplayerModules = Promise.all([
+      import("artplayer"),
+      import("artplayer-plugin-danmuku"),
+    ]) as Promise<
+      [
+        { default: typeof Artplayer },
+        { default: (typeof import("artplayer-plugin-danmuku"))["default"] },
+      ]
+    >;
+  }
+  return artplayerModules;
+}
+
+/**
+ * 创建播放器。
+ *
+ * ⚠️ 这里**必须**防并发，否则会泄漏 ArtPlayer 实例（实测快照里累积了 17 个）。
+ *
+ * 原因：本函数要先 await 动态 import，然后才给 `art` 赋值。而调用方
+ * （onMounted 的首次挂载 + play.value 变化的 watcher）可能在同一个 tick 内
+ * **连续触发两次** —— 此时 `art` 还是 null，第二次检查 `if (!art)` 依然通过，
+ * 于是两次都走完 import 并各自 `new Artplayer`，后一个覆盖前一个；
+ * 组件卸载时只 destroy 最后一个，前一个连同它的 DOM/<video> 永久残留。
+ *
+ * 因此：
+ * - `creating` 记录在途 Promise，并发调用直接复用同一次创建；
+ * - 创建完成后校验「是否已卸载 / 已有实例」，有则把自己这次新建的销毁掉。
+ */
+let creating: Promise<void> | null = null;
+/** 组件是否已卸载；卸载后不再允许创建 */
+let disposed = false;
+
 async function createPlayer(url: string | null): Promise<void> {
+  if (art) return;
+  if (creating) return creating;
+  creating = doCreatePlayer(url).finally(() => {
+    creating = null;
+  });
+  return creating;
+}
+
+async function doCreatePlayer(url: string | null): Promise<void> {
   const root = container.value;
   if (!root) return;
-  const [{ default: Artplayer }, { default: artplayerPluginDanmuku }] = await Promise.all([
-    import("artplayer"),
-    import("artplayer-plugin-danmuku"),
-  ]);
+  const [{ default: Artplayer }, { default: artplayerPluginDanmuku }] = await loadArtplayer();
+  // await 期间可能已卸载，或已被另一次创建抢先赋值 —— 都不该再建
+  if (disposed || art) return;
 
   const area = Math.max(0, 100 - settings.danmakuArea) / 2;
   const danmukuOpts: DanmukuOption = {
@@ -264,7 +319,9 @@ async function createPlayer(url: string | null): Promise<void> {
     emitter: false,
   };
 
-  art = new Artplayer({
+  // 先构造到局部变量：构造过程本身也会同步插 DOM，若发现这次不该建，
+  // 可以立刻 destroy(true) 把刚插进去的容器一并清掉（见下方校验）。
+  const instance = new Artplayer({
     container: root,
     url: url ?? "",
     poster: detail.value?.cover || undefined,
@@ -286,40 +343,49 @@ async function createPlayer(url: string | null): Promise<void> {
     plugins: [artplayerPluginDanmuku(danmukuOpts)],
   });
 
+  // 构造期间可能发生了卸载，或已有别的实例抢先挂上 —— 那就把这次新建的直接销毁，
+  // 否则它会成为「没有引用的孤儿」而永久占着一棵 DOM + <video>（本次要修的泄漏）。
+  if (disposed || art) {
+    instance.destroy(true);
+    return;
+  }
+  art = instance;
+
   // 按设置把弹幕显示 / 隐藏落到实处（构造时的 visible 只决定初始态）
   syncDanmakuVisibility();
   applyDanmakuAppearance();
 
   // 把 <video> 交给氛围光（ArtPlayer 的 video 就是它内部的播放元素）
-  ambilight.attach(art.video);
+  ambilight.attach(instance.video);
 
   // 空降助手：挂上跳过循环，并把已有片段写进进度条
-  sponsorSkip.attach(art);
+  sponsorSkip.attach(instance);
   syncSponsorHighlights();
 
   // 恢复上次的倍速
-  if (settings.biliPlaybackRate !== 1) art.playbackRate = settings.biliPlaybackRate;
+  if (settings.biliPlaybackRate !== 1) instance.playbackRate = settings.biliPlaybackRate;
 
-  // 音量 / 倍速变化写回设置（重开浮层不再复位；对标 PiliPlus 的 storage_pref）
-  art.on("video:volumechange", () => {
-    const v = art?.volume;
+  // 音量 / 倍速变化写回设置（重开浮层不再复位；对标 PiliPlus 的 storage_pref）。
+  // 这些回调只捕获不可变的 `instance`，不捕获可被覆盖的外层 `art`。
+  instance.on("video:volumechange", () => {
+    const v = instance.volume;
     if (typeof v === "number" && Number.isFinite(v)) settings.biliVolume = v;
   });
-  art.on("video:ratechange", () => {
-    const r = art?.playbackRate;
+  instance.on("video:ratechange", () => {
+    const r = instance.playbackRate;
     if (typeof r === "number" && Number.isFinite(r)) settings.biliPlaybackRate = r;
   });
 
   // 观看进度上报：播放中按时长节流，暂停时补一次（与番剧播放器同款节奏）
-  art.on("video:timeupdate", () => bili.tickProgress(currentSeconds()));
-  art.on("video:pause", () => bili.reportProgress(currentSeconds()));
+  instance.on("video:timeupdate", () => bili.tickProgress(instance.currentTime));
+  instance.on("video:pause", () => bili.reportProgress(instance.currentTime));
 
   // 媒体错误（多为 CDN 防盗链 403/503）——ArtPlayer 会自己重连几轮，
   // 但界面上一片「重新连接」看不出原因，这里显式提示并提供重试。
-  art.on("error", () => {
+  instance.on("error", () => {
     playerError.value = t("bili.playbackFailed");
   });
-  art.on("video:playing", () => {
+  instance.on("video:playing", () => {
     playerError.value = "";
   });
 }
@@ -517,6 +583,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  // 先置位：任何在途的 createPlayer 在 await 结束后都会看到它并放弃创建
+  disposed = true;
   window.removeEventListener("keydown", onKeydown);
   document.removeEventListener("pointerdown", onDocPointerDown, true);
   unwatchUrl?.();
@@ -538,7 +606,9 @@ onBeforeUnmount(() => {
   sponsorSkip.detach();
   dash?.destroy();
   dash = null;
-  art?.destroy(false);
+  // destroy(true)：连容器 innerHTML 一起清掉，避免 <video>/播放器 DOM 残留；
+  // 传 false 只加个 art-destroy 类，容器里的节点仍挂在文档树上。
+  art?.destroy(true);
   art = null;
 });
 
