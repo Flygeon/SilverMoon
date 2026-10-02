@@ -363,7 +363,10 @@ export const usePlayerStore = defineStore("player", () => {
   /** 过渡是否已为本曲触发过（避免 timeupdate 反复触发） */
   let mixTriggeredFor: string | null = null;
   /** 本次播放是否真的用上了 AutoMix（决定结束时要等过渡还是直接切） */
-  let usedAutoMix = false;
+  /** 预载进行中（避免 timeupdate 反复触发 prepareNext） */
+  let preparing: Promise<void> | null = null;
+  /** 本次是否被 __automix.forceMix() 强制放行 */
+  let forceAllowOnce = false;
   /** AutoMix 过渡交接期间，抑制 loadXxx 内部的 startPlayback */
   let suppressStart = false;
 
@@ -386,7 +389,6 @@ export const usePlayerStore = defineStore("player", () => {
    * - 过渡结束后把「下一曲」提升为当前曲，会话/歌词/封面等状态照常更新。
    */
   async function runMix(): Promise<boolean> {
-    const s = useSettingsStore();
     const cfg = mixSettings();
     if (!prepared) {
       mixLog("没有预载的下一曲，跳过过渡");
@@ -490,7 +492,7 @@ export const usePlayerStore = defineStore("player", () => {
     } finally {
       mixing.value = false;
       prepared = null;
-      usedAutoMix = false;
+      forceAllowOnce = false;
     }
   }
 
@@ -501,8 +503,20 @@ export const usePlayerStore = defineStore("player", () => {
    */
   function maybeAutoMix(): void {
     const s = useSettingsStore();
-    const forced = consumeForceMix();
-    if ((!s.autoMixEnabled && !forced) || mixing.value) return;
+    /*
+     * 强制过渡标记只在「本来就该判断过渡」的时刻消费。
+     *
+     * 早先在函数入口就 consumeForceMix()：而 timeupdate 每秒触发多次，
+     * 于是第一次进来就把标记吃掉了（哪怕当时离曲末还差几分钟），
+     * 随后 forceAllowOnce 一直为真 —— 等于把 AutoMix 悄悄打开了。
+     */
+    if (mixing.value) return;
+    if (!s.autoMixEnabled && !forceAllowOnce) {
+      // 未启用时才去问「是否有强制请求」；有则本次放行
+      if (!consumeForceMix()) return;
+      forceAllowOnce = true;
+      mixLog("收到强制过渡请求，本次放行");
+    }
     if (!audioEl.value || queue.value.length === 0) return;
     if (repeatMode.value === "one") return;
     const dur = duration.value;
@@ -512,10 +526,31 @@ export const usePlayerStore = defineStore("player", () => {
     const lead = cfg.durationSec + 2;
     const remain = dur - audioEl.value.currentTime;
     if (remain > lead) return;
+
+    /*
+     * 还没有预载好就先不标记「已触发」。
+     *
+     * 分析是异步的（本地曲要读文件+解码，在线曲还要下载），可能晚于窗口到达。
+     * 若此时就置位 mixTriggeredFor，之后每次 timeupdate 都会被去重挡掉，
+     * 结果这次过渡被静默跳过 —— 用户只看到一次硬切，日志里也看不出原因。
+     * 所以只有在「已准备好」或「已经太晚、必须放弃」时才落标记。
+     */
+    const tooLate = remain < 0.5;
+    if (!prepared && !tooLate) {
+      // 还没准备好，但还有时间：催一次预载，下一帧再判断。
+      // 不落 mixTriggeredFor，否则预载完成后就再也不会被触发了。
+      void prepareNext();
+      return;
+    }
+
     const token = song.value?.id ?? "";
     if (mixTriggeredFor === token) return;
     mixTriggeredFor = token;
-    mixLog("进入过渡窗口", { remain, lead, hasPrepared: !!prepared });
+    if (!prepared) {
+      mixLog("错过过渡窗口（预载未完成），本曲直接切换", { remain });
+      return;
+    }
+    mixLog("进入过渡窗口", { remain, lead, hasPrepared: true });
     void runMix();
   }
   /**
@@ -525,8 +560,19 @@ export const usePlayerStore = defineStore("player", () => {
    * 提前载入是为了让过渡那一刻不需要等网络 —— 否则会听到「淡出结束但下一曲没声」。
    */
   async function prepareNext(): Promise<void> {
+    // 去重：timeupdate 与 loadedmetadata 都可能触发，重复预载会重复分析
+    if (preparing) return preparing;
+    preparing = doPrepareNext().finally(() => {
+      preparing = null;
+    });
+    return preparing;
+  }
+
+  async function doPrepareNext(): Promise<void> {
     const s = useSettingsStore();
-    if (!s.autoMixEnabled && !consumeForceMix()) return;
+    // 注意：这里**不能** consumeForceMix()。强制过渡的标记由 maybeAutoMix 消费，
+    // 并通过 forceAllowOnce 告知本次是否放行，否则预载阶段就把它吃掉、强制失效。
+    if (!s.autoMixEnabled && !forceAllowOnce) return;
     if (queue.value.length === 0) return;
     const idx = nextQueueIndex();
     if (idx === null) return;
@@ -540,8 +586,6 @@ export const usePlayerStore = defineStore("player", () => {
       mixWarn("当前曲没有可分析的音频源，跳过 AutoMix");
       return;
     }
-    usedAutoMix = true;
-    const cfg = mixSettings();
 
     // 拉下一曲的播放地址（本地曲不需要联网）
     const src = await resolveQueueItemSrc(item);
