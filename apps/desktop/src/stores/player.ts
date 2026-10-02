@@ -342,6 +342,11 @@ export const usePlayerStore = defineStore("player", () => {
     // 全被 isActive() 丢弃了，只能按元素当前的真实状态补一次。
     playing.value = !el.paused;
     lastTickPos = el.currentTime;
+    // 立刻把纠正后的状态推给系统媒体控件与桌面歌词。
+    // 它们本来也会在下一次 timeupdate（≤250ms）自愈，但过渡刚结束时
+    // 封面/标题/进度会短暂显示上一首的信息，主动推一次更干净。
+    syncSmtc(true);
+    syncDesktopLyrics(true);
   }
 
   function ensureAudio(): HTMLAudioElement {
