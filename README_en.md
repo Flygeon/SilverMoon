@@ -6,13 +6,9 @@
 
 [简体中文](README.md) ｜ [English](README_en.md)
 
-Current version **v0.0.2**
-
 </div>
 
 SilverMoon (Chinese name **银月**) is a **monorepo**: the desktop app is built on **Electron + Vue 3 + TypeScript + Material Design 3** with its business backend still running as a standalone **Rust sidecar process**; the mobile app is a **Flutter** native implementation. All data stays local — no cloud sync, no mandatory account.
-
-> The Chinese name「银月」is used only in the repository and documents; **the UI always shows the English name SilverMoon** (window title, splash screen, installer shortcuts, etc.).
 
 > The project started as [LumiLuna](https://github.com/Flygeon/LumiLuna-Next), was renamed SilverMoon after a Tauri 2 → Electron port, and the desktop business logic (Vue front end + Rust backend) was carried over nearly untouched.
 
