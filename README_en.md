@@ -6,7 +6,10 @@
 
 [简体中文](README.md) ｜ [English](README_en.md)
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Flygeon/SilverMoon)
+
 </div>
+
 
 SilverMoon (Chinese name **银月**) is a **monorepo**: the desktop app is built on **Electron + Vue 3 + TypeScript + Material Design 3** with its business backend still running as a standalone **Rust sidecar process**; the mobile app is a **Flutter** native implementation. All data stays local — no cloud sync, no mandatory account.
 
