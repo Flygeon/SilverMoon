@@ -6,6 +6,8 @@
 
 [简体中文](README.md) ｜ [English](README_en.md)
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Flygeon/SilverMoon)
+
 </div>
 
 SilverMoon（中文名**银月**）是一个 **monorepo**：桌面端是 **Electron + Vue 3 + TypeScript + Material Design 3**，业务后端仍是独立的 **Rust sidecar 进程**；移动端是 **Flutter** 原生实现。数据全部留在本地，无云同步、不强制账号。
