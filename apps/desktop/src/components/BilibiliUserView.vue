@@ -12,7 +12,6 @@ import BilibiliCard from "@/components/BilibiliCard.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
-import { capabilities } from "@/capabilities";
 import { biliCount } from "@/utils/bilibili";
 import { translate } from "@shared/i18n";
 
@@ -34,10 +33,6 @@ function onKeydown(e: KeyboardEvent): void {
   if (!document.fullscreenElement) close();
 }
 
-function openInBrowser(): void {
-  if (bili.userMid) void capabilities.openUrl(`https://space.bilibili.com/${bili.userMid}`);
-}
-
 onMounted(() => window.addEventListener("keydown", onKeydown));
 onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 </script>
@@ -52,9 +47,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
         card?.name || t("bili.userHome")
       }}</span>
       <span class="spacer" />
-      <button class="head-btn" type="button" :title="t('bili.openBrowser')" @click="openInBrowser">
-        <span class="material-symbols-outlined">open_in_new</span>
-      </button>
+      <!-- 顶栏不放「在浏览器打开」：用户明确不需要这类跳转，不要再加回来 -->
     </header>
 
     <div class="content">

@@ -466,20 +466,13 @@ const metaItems = computed(() => {
       <span class="head-title" :title="title">{{ title }}</span>
       <span class="spacer" />
       <!--
-        这里刻意**不放**弹幕开关按钮。
-        artplayer-plugin-danmuku 自带一条控制栏（挂在 $controlsCenter，含 apd-toggle
-        开关与 apd-config 设置面板，可调透明度/字号/速度/区域/防重叠），功能完全覆盖。
-        再放一个顶栏按钮只会和它抢同一个状态：用户得先点我的按钮、再点播放器里的开关，
-        多此一举；两边状态也容易不一致。开关的唯一入口就是播放器控制栏。
-        （设置页那个「显示弹幕」总开关仍然保留，它是跨视频的偏好。）
+        顶栏刻意只保留「返回」。
+        曾经这里挤了三个按钮：
+          - 弹幕开关：插件自带控制栏（$controlsCenter 的 apd-toggle / apd-config）
+            已经完整覆盖，重复入口只会和它抢同一份状态，已删；
+          - 「在浏览器打开」（open_in_new）：用户明确不需要，已删 —— 不要再加回来；
+          - 分享：详情页信息区已有一个分享按钮（复制链接），顶栏这个同样是重复，已删。
       -->
-      <!--
-        分享：桌面端最实用的是把链接复制走，**不**打开浏览器。
-        原来这里是「在浏览器打开」，而它正是用户明确不需要的行为 —— 已改成复制链接。
-      -->
-      <button class="head-btn" type="button" :title="t('bili.share')" @click="bili.shareVideo()">
-        <span class="material-symbols-outlined">share</span>
-      </button>
     </header>
 
     <!-- 左栏（播放器 / 信息 / 评论） + 右栏（相关推荐）；窗口放不下时自动折成一栏 -->

@@ -771,7 +771,6 @@ export const messages = {
       playbackHint:
         "通常是 CDN 防盗链或网络问题。若刚更新过应用，请完全退出并重新启动（主进程改动需重启才生效）；也可以换个清晰度或点重试。",
       loadingDetail: "正在加载视频详情…",
-      openBrowser: "在浏览器打开",
       close: "返回",
       danmakuOn: "关闭弹幕",
       danmakuOff: "开启弹幕",
@@ -1602,7 +1601,6 @@ export const messages = {
       playbackHint:
         "Usually a CDN hotlink-protection or network issue. If you just updated the app, fully quit and restart it (main-process changes need a restart); you can also try another quality or retry.",
       loadingDetail: "Loading video details…",
-      openBrowser: "Open in browser",
       close: "Back",
       danmakuOn: "Hide danmaku",
       danmakuOff: "Show danmaku",

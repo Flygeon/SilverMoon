@@ -18,6 +18,32 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
+/**
+ * 当前是否有一个「抢占全局快捷键」的浮层开着。
+ *
+ * B 站视频详情 / UP 主主页、在线番剧播放器、媒体查看器等都是全屏浮层，里面自带
+ * ArtPlayer / <video>，它们自己也绑了空格（播放暂停）。而这些浮层**不经过路由**，
+ * 只是 DOM 上的 fixed 层，所以全局热键必须显式让位。
+ *
+ * 不让位的后果就是用户看到的：在 B 站视频页按空格，**后台音乐和视频一起暂停**。
+ *
+ * 判据取「可见的视频元素」：
+ * - ArtPlayer 的容器统一带 `.art-video-player` 类（B 站播放器、番剧播放器都用它）；
+ * - 媒体查看器（MediaViewer）用的是裸 `<video>`。
+ *
+ * 只认「有实际尺寸」的元素：B 站详情页即使没在播，ArtPlayer 容器也挂着，
+ * 此时让位同样合理（空格在手，用户想控制的一定是眼前这个播放器）。尺寸判断是为了
+ * 排除隐藏起来的播放器（例如 KeepAlive 缓存里移出文档的旧实例）。
+ */
+function hasForegroundMedia(): boolean {
+  if (typeof document === "undefined") return false;
+  const players = document.querySelectorAll<HTMLElement>(".art-video-player, video");
+  for (const el of players) {
+    if (el.offsetWidth > 0 && el.offsetHeight > 0) return true;
+  }
+  return false;
+}
+
 export function useDesktopChrome() {
   const settings = useSettingsStore();
   const player = usePlayerStore();
@@ -60,6 +86,10 @@ export function useDesktopChrome() {
     }
 
     if (!player.song) return;
+
+    // 前台有视频/番剧播放器浮层时让位：空格归它（它自己绑了 toggle），
+    // 否则会「后台音乐和视频同时暂停」。
+    if (hasForegroundMedia()) return;
 
     if (event.code === "Space") {
       event.preventDefault();
