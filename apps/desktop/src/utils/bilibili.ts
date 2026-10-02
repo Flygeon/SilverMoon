@@ -1472,7 +1472,9 @@ function parseDanmakuXml(xml: string): ArtDanmu[] {
       time,
       mode,
       color: `#${(colorInt & 0xffffff).toString(16).padStart(6, "0")}`,
-      border: true,
+      // 刻意不设 border：插件的 border 不是文字描边，而是给整条弹幕套
+      // 「1px 实线矩形 + 半透明黑底」（见 utils/danmaku.ts ArtDanmu.border 的说明）。
+      // 文字描边插件默认自带 text-shadow，无需这里开启。
     });
     // 超长弹幕列表对渲染无意义，截断避免卡顿
     if (out.length >= 8000) break;

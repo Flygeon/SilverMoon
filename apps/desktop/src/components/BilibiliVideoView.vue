@@ -421,9 +421,9 @@ function syncDanmakuVisibility(): void {
   else plugin.hide();
 }
 
-/** 点 UP 主头像 / 昵称进主页。 */
+/** 点 UP 主头像 / 昵称进主页（带当前播放位置，关浮层前会先上报进度）。 */
 function openUp(): void {
-  bili.openCurrentUp();
+  bili.openCurrentUp(currentSeconds());
 }
 
 function partLabel(index: number, fallback: string): string {
@@ -697,8 +697,11 @@ const metaItems = computed(() => {
 .bili-view {
   position: fixed;
   inset: 0;
-  /* 必须高于 BilibiliUserView(210)：从 UP 主页点开视频时，视频要盖在它上面，
-     关掉视频再回到 UP 主页，形成 主页 → 视频 的浮层栈 */
+  /* 必须高于 BilibiliUserView(210)。
+     两个方向各自成立：
+       - UP 主页 → 点视频：主页仍挂载，视频叠在它上面，关掉视频即回到主页；
+       - 视频详情 → 点 UP 头像：由 store.openUser 主动关掉视频浮层，
+         所以不会出现「UP 主页被压在视频底下、点了没反应」。 */
   z-index: 220;
   display: flex;
   flex-direction: column;

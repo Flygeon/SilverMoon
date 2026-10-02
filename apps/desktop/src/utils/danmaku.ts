@@ -49,6 +49,17 @@ export interface ArtDanmu {
   time: number;
   mode: 0 | 1 | 2;
   color: string;
+  /**
+   * 是否给这条弹幕加「框」。
+   *
+   * ⚠️ 名字有误导性：它**不是**文字描边，而是给整条弹幕套一个矩形边框 +
+   * 半透明黑底（插件源码：`style.border = '1px solid <color>';`
+   * `style.backgroundColor = 'rgb(0 0 0 / 50%)'`）。开启后屏幕上每个弹幕都变成
+   * 一个方块，非常难看。
+   *
+   * 文字描边插件**默认就有**（内置 `text-shadow` 四向描边），无需也不该由这里开启，
+   * 所以统一不传（`undefined` 即不加框）。
+   */
   border?: boolean;
 }
 
@@ -59,7 +70,7 @@ export function toArtDanmu(d: DanmakuEntry): ArtDanmu {
     time: d.time,
     mode: mapDanmakuMode(d.mode),
     color: colorHex(d.color),
-    border: true,
+    // 刻意不设 border：见 ArtDanmu.border 的说明（它是矩形框，不是描边）
   };
 }
 

@@ -1207,9 +1207,21 @@ export const useBiliStore = defineStore("bilibili", () => {
   const userTotal = ref(0);
   let userToken = 0;
 
-  /** 打开 UP 主主页（同时拉名片与首页投稿）。 */
+  /**
+   * 打开 UP 主主页（同时拉名片与首页投稿）。
+   *
+   * **会把视频浮层关掉**。两个浮层都是 `position: fixed; inset: 0`，之前只靠 z-index
+   * 分层（视频 220 > UP 主页 210）。从视频详情的 UP 头像点进来时 `current` 还在，
+   * 于是 UP 主页被**压在视频浮层底下**：看起来「点了没反应」，必须先在视频页点返回，
+   * 才露出下面那层 UP 主页 —— 而这正是用户报告的「要返回上级界面才显示、再点返回才
+   * 回到主页」的症状。
+   *
+   * 两者本来就是「从视频进主页」的顺序关系，不是需要叠加的两层，所以直接替换。
+   */
   async function openUser(mid: number): Promise<void> {
     if (!mid) return;
+    // 关掉视频浮层。进度已由 openCurrentUp 提前上报，这里传 0 避免重复打接口
+    if (current.value) closeVideo(0);
     const token = ++userToken;
     userMid.value = mid;
     userCard.value = null;
@@ -1290,9 +1302,17 @@ export const useBiliStore = defineStore("bilibili", () => {
   }
 
   /** 从视频详情里点 UP 头像 / 名字进主页。 */
-  function openCurrentUp(): void {
+  /**
+   * 从视频详情点 UP 头像进主页。
+   *
+   * `playedSeconds` 由视图传入：openUser 会关掉视频浮层，关之前要先把观看进度
+   * 上报一次，否则这一段观看记录会丢。
+   */
+  function openCurrentUp(playedSeconds = 0): void {
     const mid = detail.value?.owner.mid || current.value?.ownerMid || 0;
-    if (mid) void openUser(mid);
+    if (!mid) return;
+    if (playedSeconds > 0) reportProgress(playedSeconds);
+    void openUser(mid);
   }
 
   return {
