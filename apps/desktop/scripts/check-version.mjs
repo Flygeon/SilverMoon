@@ -2,12 +2,13 @@
 /**
  * 版本号一致性检查。
  *
- * 本项目的版本号同时声明在 **6 个地方**（Electron 打包、Rust sidecar、npm、
- * 仓库与应用的 README 各两份）。只改其中一处会出现很难发现的偏差：
+ * 本项目的版本号同时声明在多个地方（Electron 打包、Rust sidecar、npm，
+ * 以及应用的两份 README）。只改其中一处会出现很难发现的偏差：
  * 安装包名与「关于」里的版本不一致、sidecar 自报版本与宿主不同、
  * README 写着旧版本而 release 是新的。
  *
- * 这里把 6 处全部对齐校验，任何一处漂移都直接失败。CI 的 lint 作业会跑它。
+ * 这里把这些位置全部对齐校验，任何一处漂移都直接失败。CI 的 lint 作业会跑它。
+ * 仓库根的两份 README 不强制写版本号（写了就必须一致）。
  *
  * 单一真源仍是 `backend/silvermoon.config.json`（vite 与主进程都读它），
  * 其余位置都以它为准。
@@ -45,13 +46,13 @@ const sources = [
       ),
   },
   {
-    label: "README.md（仓库根）",
-    read: () => match(readRepo("README.md"), /当前版本 \*\*v([0-9.]+)\*\*/, "README.md"),
+    // 可选：写了就必须与真源一致，没写则跳过（根 README 的版本行由文档风格决定）
+    label: "README.md（仓库根，可选）",
+    read: () => matchOptional(readRepo("README.md"), /当前版本 \*\*v([0-9.]+)\*\*/),
   },
   {
-    label: "README_en.md（仓库根）",
-    read: () =>
-      match(readRepo("README_en.md"), /Current version \*\*v([0-9.]+)\*\*/, "README_en.md"),
+    label: "README_en.md（仓库根，可选）",
+    read: () => matchOptional(readRepo("README_en.md"), /Current version \*\*v([0-9.]+)\*\*/),
   },
   {
     label: "apps/desktop/README.md",
@@ -77,10 +78,24 @@ function match(text, re, what) {
   return m[1];
 }
 
+/**
+ * 可选位置：解析不到就返回 null（跳过校验），解析到就必须与真源一致。
+ *
+ * 仓库根的两份 README 是否写版本号由文档风格决定（上游已把这两行移除），
+ * 不该因此让 CI 失败；但只要写了，就必须是同一个版本。
+ */
+function matchOptional(text, re) {
+  const m = re.exec(text);
+  return m ? m[1] : null;
+}
+
 const found = [];
 for (const s of sources) {
   try {
-    found.push({ label: s.label, version: s.read() });
+    const version = s.read();
+    // 可选位置解析不到 → 跳过（不算漂移，也不计入处数）
+    if (version === null) continue;
+    found.push({ label: s.label, version });
   } catch (e) {
     console.error(`✗ ${s.label}: ${e.message}`);
     process.exitCode = 1;
