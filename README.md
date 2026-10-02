@@ -6,13 +6,9 @@
 
 [简体中文](README.md) ｜ [English](README_en.md)
 
-当前版本 **v0.0.2**
-
 </div>
 
 SilverMoon（中文名**银月**）是一个 **monorepo**：桌面端是 **Electron + Vue 3 + TypeScript + Material Design 3**，业务后端仍是独立的 **Rust sidecar 进程**；移动端是 **Flutter** 原生实现。数据全部留在本地，无云同步、不强制账号。
-
-> 中文名「银月」只用于项目与文档的描述；**软件界面内一律显示英文名 SilverMoon**（窗口标题、启动屏、安装快捷方式等）。
 
 > 项目起源于 [LumiLuna](https://github.com/Flygeon/LumiLuna-Next)，经历 Tauri 2 → Electron 的重构后更名 SilverMoon；桌面端的业务逻辑（Vue 前端 + Rust 后端）在那次迁移中基本原样保留。
 
