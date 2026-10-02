@@ -321,6 +321,29 @@ export const usePlayerStore = defineStore("player", () => {
     });
   }
 
+  /**
+   * 把一个 audio 元素的**当前状态**同步进 store。
+   *
+   * 为什么必须有这个函数（deck 提升的关键一步）：
+   * 新 deck 在「还不是当前元素」时就已加载完成并触发过 loadedmetadata，
+   * 但那次事件被 isActive() 闸掉了（否则下一曲的进度会污染界面）；
+   * 等它被提升为当前元素时，startPlayback 又被 skipStart 抑制，不会再设 src、
+   * 也就不会有第二次 loadedmetadata。于是 duration 永远停在 0 ——
+   * 界面上表现为剩余时间显示成 --1:0-26 这种负数。
+   *
+   * 所以提升后必须**主动**补一次同步，不能指望未来某个事件。
+   */
+  function syncFromElement(el: HTMLAudioElement): void {
+    if (audioEl.value !== el) return;
+    if (Number.isFinite(el.currentTime)) currentTime.value = el.currentTime;
+    // duration 在元数据就绪前是 NaN；只在有效时写入，避免把好值覆盖成 NaN
+    if (Number.isFinite(el.duration) && el.duration > 0) duration.value = el.duration;
+    // playing 同理：新元素的 play/pause 事件都是在"还不是当前元素"时触发的，
+    // 全被 isActive() 丢弃了，只能按元素当前的真实状态补一次。
+    playing.value = !el.paused;
+    lastTickPos = el.currentTime;
+  }
+
   function ensureAudio(): HTMLAudioElement {
     if (audioEl.value) return audioEl.value;
     const el = new Audio();
@@ -484,7 +507,18 @@ export const usePlayerStore = defineStore("player", () => {
       prepared = null;
       mixing.value = false;
       await playFromQueue(target, { skipStart: true });
-      mixLog("过渡完成，当前曲已切换", { index: target, deck: to.id });
+      /*
+       * 必须**排在 playFromQueue 之后**：loadXxx 内部会把 duration/currentTime
+       * 清零（它是为"从零起播"设计的），而我们这里是"已经在播了"，
+       * 所以要在它之后把新元素的真实值补回来。
+       */
+      syncFromElement(to.el);
+      mixLog("过渡完成，当前曲已切换", {
+        index: target,
+        deck: to.id,
+        duration: duration.value,
+        currentTime: currentTime.value,
+      });
       return true;
     } catch (e) {
       mixError("过渡失败，回退为直接切歌", e instanceof Error ? e.message : String(e));

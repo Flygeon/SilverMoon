@@ -135,8 +135,16 @@ const sourceBadge = computed(() => {
   };
 });
 
+/**
+ * 秒 → m:ss。
+ *
+ * 负数与 NaN 都要挡：这个函数被用作「剩余时间」的入参（duration - currentTime），
+ * 一旦 duration 尚未就绪（0）而 currentTime 已走了一段，差就是负数；
+ * Math.floor 对负数向下取整，会算出 -1:0-26 这种乱码。
+ * 即使上游状态暂时不完整，显示层也必须给出合理值。
+ */
 function formatTime(s: number) {
-  if (Number.isNaN(s)) return "0:00";
+  if (!Number.isFinite(s) || s < 0) return "0:00";
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
   return `${m}:${sec < 10 ? "0" : ""}${sec}`;
@@ -246,7 +254,11 @@ onBeforeUnmount(() => {
           </div>
           <div class="time-row">
             <span>{{ formatTime(player.currentTime) }}</span>
-            <span>-{{ formatTime(player.duration - player.currentTime) }}</span>
+            <!-- duration 未就绪时不显示「-0:00」这种误导性的剩余时间 -->
+            <span v-if="player.duration > 0" class="time-remain">
+              -{{ formatTime(player.duration - player.currentTime) }}
+            </span>
+            <span v-else class="time-remain">--:--</span>
           </div>
         </div>
 

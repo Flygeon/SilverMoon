@@ -1,0 +1,171 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+
+/**
+ * deck 提升后的状态同步测试。
+ *
+ * ## 这个 bug 长什么样
+ * 用户报：「切完歌时间显示 --1:0-26」。
+ *
+ * 复现出来的等价条件是 duration=0 而 currentTime=26：PlayerView 的剩余时间
+ * 写的是 -formatTime(duration - currentTime)，拿到 -(0-26) = -26 之后，
+ * Math.floor 对负数向下取整，算出 -1:0-26，再拼上模板里的 - 就成了 --1:0-26。
+ *
+ * 根因是 deck 提升漏了一步：新 deck 的 loadedmetadata / play / pause 事件
+ * 都是在「它还不是当前元素」时触发的，全被 isActive() 闸掉了；
+ * 而提升后 startPlayback 又被 skipStart 抑制，不会有第二次事件。
+ * 于是 duration 永远停在 0。
+ *
+ * 修法：提升后用 syncFromElement() 主动补一次 currentTime / duration / playing，
+ * 且必须排在 playFromQueue 之后（loadXxx 会把它们清零）。
+ */
+
+/** 复刻 PlayerView 原来的（有 bug 的）格式化 */
+function buggyFormatTime(s: number): string {
+  if (Number.isNaN(s)) return "0:00";
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${sec < 10 ? "0" : ""}${sec}`;
+}
+
+/** 复刻修好之后的格式化 */
+function fixedFormatTime(s: number): string {
+  if (!Number.isFinite(s) || s < 0) return "0:00";
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${sec < 10 ? "0" : ""}${sec}`;
+}
+
+describe("剩余时间不再显示成负数（显示层）", () => {
+  it("复现用户报的 --1:0-26", () => {
+    expect("-" + buggyFormatTime(0 - 26)).toBe("--1:0-26");
+  });
+
+  it("修好之后同样的输入给出 0:00", () => {
+    expect(fixedFormatTime(0 - 26)).toBe("0:00");
+  });
+
+  it("负数一律归零，不再产出带负号的片段", () => {
+    for (const s of [-1, -26, -65, -3661]) expect(fixedFormatTime(s)).toBe("0:00");
+  });
+
+  it("NaN / Infinity 也归零", () => {
+    expect(fixedFormatTime(NaN)).toBe("0:00");
+    expect(fixedFormatTime(Infinity)).toBe("0:00");
+    expect(fixedFormatTime(-Infinity)).toBe("0:00");
+  });
+
+  it("正常值不受影响", () => {
+    expect(fixedFormatTime(0)).toBe("0:00");
+    expect(fixedFormatTime(5)).toBe("0:05");
+    expect(fixedFormatTime(188)).toBe("3:08");
+  });
+});
+
+/** 复刻提升流程的状态收敛 */
+function makeState() {
+  return { currentTime: 0, duration: 0, playing: false, lastTickPos: 0 };
+}
+type State = ReturnType<typeof makeState>;
+
+/** loadXxx 内部会把「从零起播」的状态清零 */
+function loadSong(s: State) {
+  s.currentTime = 0;
+  s.duration = 0;
+}
+
+/** 修复新增的补同步 */
+function syncFromElement(
+  s: State,
+  el: { currentTime: number; duration: number; paused: boolean },
+) {
+  if (Number.isFinite(el.currentTime)) s.currentTime = el.currentTime;
+  if (Number.isFinite(el.duration) && el.duration > 0) s.duration = el.duration;
+  s.playing = !el.paused;
+  s.lastTickPos = el.currentTime;
+}
+
+describe("deck 提升后的状态同步（根因修复）", () => {
+  it("不补同步 → duration 停在 0（这就是原来的 bug）", () => {
+    const s = makeState();
+    loadSong(s);
+    expect(s.duration).toBe(0);
+    expect(0 - s.currentTime).toBeLessThan(0);
+  });
+
+  it("补同步后 duration / currentTime 正确收敛", () => {
+    const s = makeState();
+    const el = { currentTime: 26, duration: 214, paused: false };
+    loadSong(s);
+    syncFromElement(s, el);
+    expect(s.duration).toBe(214);
+    expect(s.currentTime).toBe(26);
+    expect(s.duration - s.currentTime).toBe(188);
+    expect(fixedFormatTime(s.duration - s.currentTime)).toBe("3:08");
+  });
+
+  it("顺序很重要：syncFromElement 必须在 loadXxx 之后", () => {
+    const s = makeState();
+    syncFromElement(s, { currentTime: 26, duration: 214, paused: false });
+    loadSong(s);
+    expect(s.duration).toBe(0); // 顺序反了就会失效
+  });
+
+  it("duration 为 NaN 时不覆盖已有值（元数据还没到）", () => {
+    const s = makeState();
+    s.duration = 100;
+    syncFromElement(s, { currentTime: 3, duration: NaN, paused: false });
+    expect(s.duration).toBe(100);
+    expect(s.currentTime).toBe(3);
+  });
+
+  it("duration 为 0 时不写入（直播/异常流）", () => {
+    const s = makeState();
+    syncFromElement(s, { currentTime: 26, duration: 0, paused: false });
+    expect(s.duration).toBe(0);
+  });
+
+  it("playing 按元素真实状态补正（淡化期间按暂停也不会不一致）", () => {
+    const s = makeState();
+    s.playing = false;
+    syncFromElement(s, { currentTime: 5, duration: 200, paused: false });
+    expect(s.playing).toBe(true);
+  });
+
+  it("元素已暂停时 playing 补成 false", () => {
+    const s = makeState();
+    s.playing = true;
+    syncFromElement(s, { currentTime: 5, duration: 200, paused: true });
+    expect(s.playing).toBe(false);
+  });
+
+  it("lastTickPos 一并复位，避免下一次 timeupdate 误计听歌时长", () => {
+    const s = makeState();
+    syncFromElement(s, { currentTime: 26, duration: 214, paused: false });
+    expect(s.lastTickPos).toBe(26);
+  });
+});
+
+/**
+ * 结构性护栏：确保接线真的存在。纯逻辑测试对「忘了调用」完全无感。
+ */
+describe("接线护栏（源码级）", () => {
+  const src = readFileSync(resolve(__dirname, "../../stores/player.ts"), "utf8");
+
+  it("定义了 syncFromElement 且会校验当前元素", () => {
+    expect(src).toMatch(/function syncFromElement\(/);
+    expect(src).toMatch(/if \(audioEl\.value !== el\) return;/);
+  });
+
+  it("deck 提升后调用 syncFromElement，且排在 playFromQueue 之后", () => {
+    const idx = src.indexOf("---- deck 提升");
+    expect(idx).toBeGreaterThan(-1);
+    const body = src.slice(idx, idx + 1600);
+    const callSync = body.indexOf("syncFromElement(to.el)");
+    const callPlay = body.indexOf("await playFromQueue(target, { skipStart: true })");
+    expect(callPlay).toBeGreaterThan(-1);
+    expect(callSync).toBeGreaterThan(-1);
+    expect(callSync).toBeGreaterThan(callPlay);
+  });
+});
