@@ -981,6 +981,22 @@ const metaItems = computed(() => {
 .bili-view.has-ambilight .player-area {
   background: transparent;
 }
+/*
+ * 右侧「相关推荐」原本是不透明卡片底（surface-container-low = #f6f7f9 / #131316），
+ * 整块把光晕挡在外面 —— 表现为「拖底的卡片还是不透明」。
+ * 开启氛围光时改用半透明底：既保留卡片的分组观感，又让光晕透上来。
+ *
+ * 用 color-mix 而不是直接 rgba()：这个底色跟随主题/皮肤种子色变化，
+ * 写死通道值会在换主题后偏色。
+ */
+.bili-view.has-ambilight .side {
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-low) 42%, transparent);
+}
+/*
+ * 卡片里的行式条目 hover/active 底色同理（surface-container-high/highest 也是不透明的），
+ * 但它们只在交互瞬间出现，保持不透明反而更清晰，故不动。
+ * 缩略图占位块（surface-container）留着 —— 那是图片没加载时的占位，透出光晕会脏。
+ */
 .art-container {
   position: absolute;
   inset: 0;
