@@ -1416,6 +1416,10 @@ export const usePlayerStore = defineStore("player", () => {
 
   async function playFromQueue(index: number, opts: { skipStart?: boolean } = {}) {
     if (index < 0 || index >= queue.value.length) return;
+    // 换歌了：上一轮为「旧下一曲」做的预载与去重标记都必须失效。
+    // 这是所有切歌路径的唯一汇聚点（手动点选/上下一首/随机/自动）。
+    // AutoMix 自身的交接（skipStart）不清，因为那时 prepared 正由 runMix 使用。
+    if (!opts.skipStart) invalidatePrepared("切换曲目");
     currentIndex.value = index;
     const item = queue.value[index];
     // AutoMix 过渡时 deck 已经在播下一曲：这里只需要把「状态」切过去，
@@ -1432,6 +1436,20 @@ export const usePlayerStore = defineStore("player", () => {
     } finally {
       suppressStart = false;
     }
+  }
+
+  /**
+   * 让「预载的下一曲」失效。
+   *
+   * 必须清理的场景：用户手动切歌、切随机模式、改队列。
+   * 此时 prepared.index 指向的可能已不是真正会播的下一首 ——
+   * 若继续用，AutoMix 会把**另一首歌**混进来（听起来像随机插入了一段别人的音乐）。
+   */
+  function invalidatePrepared(reason: string): void {
+    if (!prepared) return;
+    mixLog("预载的下一曲已失效（" + reason + "）", { index: prepared.index });
+    prepared = null;
+    mixTriggeredFor = null;
   }
 
   async function next() {
@@ -1499,12 +1517,15 @@ export const usePlayerStore = defineStore("player", () => {
     if (shuffleMode.value) {
       generateShuffleOrder();
     }
+    // 随机序变了 → 预载的「下一曲」多半不再是真正会播的那首
+    invalidatePrepared("切换随机播放");
   }
 
   function cycleRepeat() {
     const modes: RepeatMode[] = ["off", "all", "one"];
     const currentIdx = modes.indexOf(repeatMode.value);
     repeatMode.value = modes[(currentIdx + 1) % modes.length];
+    invalidatePrepared("切换循环模式");
   }
 
   function setQueue(entries: QueueItem[], startIndex = 0) {
@@ -1513,6 +1534,8 @@ export const usePlayerStore = defineStore("player", () => {
       generateShuffleOrder();
     }
     currentIndex.value = startIndex;
+    // 队列被整体替换：旧预载的 index 指向的已是另一个队列里的歌，必须失效
+    invalidatePrepared("替换播放队列");
   }
 
   // ---- 队列操作（音乐列表行内操作使用）----
