@@ -55,6 +55,7 @@ import { JsonStore } from "@/ipc/store";
 import { useSettingsStore } from "@/stores/settings";
 import { translate } from "@shared/i18n";
 import type { ArtDanmu } from "@/utils/danmaku";
+import { fetchSegments, type SbSegment, type SbStatus } from "@/utils/sponsorBlock";
 
 export type BiliStatus = "idle" | "loading" | "ready" | "error";
 
@@ -556,6 +557,8 @@ export const useBiliStore = defineStore("bilibili", () => {
       await loadResumePoint(video.bvid, activeCid.value);
       if (token !== openToken) return;
       await resolvePlay(token);
+      // 片段不阻塞起播：并行拉，回来后再参与跳过与进度条标记
+      void loadSponsorSegments();
     } catch (e) {
       if (token !== openToken) return;
       playError.value = cleanError(e);
@@ -583,6 +586,8 @@ export const useBiliStore = defineStore("bilibili", () => {
     await loadResumePoint(current.value?.bvid ?? "", cid);
     if (token !== openToken) return;
     await resolvePlay(openToken);
+    // 换分 P 要重新取片段（上游按 cid 过滤）
+    void loadSponsorSegments();
   }
 
   function closeVideo(playedSeconds = 0): void {
@@ -598,6 +603,7 @@ export const useBiliStore = defineStore("bilibili", () => {
     detailStatus.value = "idle";
     playError.value = "";
     resetDiscussions();
+    resetSponsor();
   }
 
   // -------------------------------------------------------- 评论 / 相关推荐
@@ -976,6 +982,55 @@ export const useBiliStore = defineStore("bilibili", () => {
       .finally(() => danmakuLoading.delete(cid));
     danmakuLoading.set(cid, task);
     return task;
+  }
+
+  // -------------------------------------------------------- 空降助手（SponsorBlock）
+
+  const sbSegments = ref<SbSegment[]>([]);
+  const sbStatus = ref<SbStatus>("idle");
+  const sbError = ref("");
+  /** 已自动跳过的片段 key：同一条只跳一次，否则用户手动拖回去会被立刻再弹走 */
+  const sbSkipped = ref<Set<string>>(new Set());
+  let sbToken = 0;
+
+  /**
+   * 拉当前分 P 的片段。
+   *
+   * 跟着 `activeCid` 走：上游按 cid 过滤，多分 P 视频切 P 后必须重新取。
+   * 关掉开关时清空，避免残留上一次的结果继续参与跳过。
+   */
+  async function loadSponsorSegments(): Promise<void> {
+    const st = useSettingsStore();
+    const v = current.value;
+    const cid = activeCid.value;
+    if (!st.sponsorBlockEnabled || !v || !cid) {
+      resetSponsor();
+      return;
+    }
+    const token = ++sbToken;
+    sbStatus.value = "loading";
+    sbError.value = "";
+    sbSkipped.value = new Set();
+    const res = await fetchSegments(v.bvid, cid, st.sponsorBlockServer);
+    if (token !== sbToken) return;
+    sbSegments.value = res.segments;
+    sbStatus.value = res.status;
+    sbError.value = res.error;
+  }
+
+  /** 标记某片段已跳过。 */
+  function markSkipped(key: string): void {
+    const next = new Set(sbSkipped.value);
+    next.add(key);
+    sbSkipped.value = next;
+  }
+
+  function resetSponsor(): void {
+    sbToken += 1;
+    sbSegments.value = [];
+    sbStatus.value = "idle";
+    sbError.value = "";
+    sbSkipped.value = new Set();
   }
 
   // -------------------------------------------------------- 发表评论
@@ -1387,6 +1442,14 @@ export const useBiliStore = defineStore("bilibili", () => {
     loadSubReplies,
     postReply,
     toggleReplyLike,
+    // 空降助手
+    sbSegments,
+    sbStatus,
+    sbError,
+    sbSkipped,
+    loadSponsorSegments,
+    markSkipped,
+    resetSponsor,
     replySending,
     related,
     relatedStatus,

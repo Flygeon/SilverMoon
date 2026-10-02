@@ -21,6 +21,7 @@ import SegmentedTabs from "@/components/SegmentedTabs.vue";
 import { capabilities } from "@/capabilities";
 import { formatSize } from "@/utils/format";
 import { activeSkinDoc, skinModeLock, skinSafeMode } from "@/utils/skinRuntime";
+import { SB_CATEGORIES } from "@/utils/sponsorBlock";
 import { translate } from "@shared/i18n";
 import type { FfmpegStatus, SkinEntry } from "@shared/types";
 
@@ -293,6 +294,13 @@ function sliderValue(e: Event): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
+/** 空降助手的分类勾选（对象里存每个分类的布尔值）。 */
+function toggleSponsorCategory(key: string): void {
+  const next = { ...settings.sponsorBlockCategories };
+  next[key] = next[key] !== true;
+  settings.sponsorBlockCategories = next;
+}
+
 /** 整数滑块写回（除歌词行距外的全部滑块） */
 function onSliderInt(e: Event, key: SliderIntKey) {
   const v = sliderValue(e);
@@ -329,6 +337,8 @@ type BoolSettingKey =
   | "danmakuEnabled"
   | "danmakuAntiOverlap"
   | "ambilightEnabled"
+  | "sponsorBlockEnabled"
+  | "sponsorBlockToast"
   | "webdavEnabled";
 
 /** 整数滑块对应的数值设置项键 */
@@ -1141,6 +1151,50 @@ function selectSection(id: string) {
           {{ t("settings.bilibiliLoginHint") }}
         </p>
 
+        <!-- 空降助手（SponsorBlock）：跳过赞助/广告段 -->
+        <template v-if="settings.bilibiliEnabled">
+          <label class="row switch-row">
+            <span class="row-label">{{ t("settings.sponsorBlock") }}</span>
+            <m3e-switch
+              :checked="settings.sponsorBlockEnabled"
+              @change="setSwitch('sponsorBlockEnabled', $event)"
+            />
+          </label>
+          <p class="hint">{{ t("settings.sponsorBlockHint") }}</p>
+
+          <template v-if="settings.sponsorBlockEnabled">
+            <m3e-form-field variant="filled" class="field">
+              <label slot="label">{{ t("settings.sponsorBlockServer") }}</label>
+              <input v-model="settings.sponsorBlockServer" type="text" spellcheck="false" />
+            </m3e-form-field>
+
+            <div class="row-label sponsor-cats-label">
+              <span>{{ t("settings.sponsorBlockCategories") }}</span>
+            </div>
+            <div class="sponsor-cats">
+              <m3e-filter-chip
+                v-for="c in SB_CATEGORIES"
+                :key="c.key"
+                class="chip"
+                :selected="settings.sponsorBlockCategories[c.key] === true"
+                @click.prevent="toggleSponsorCategory(c.key)"
+              >
+                <span class="dot" :style="{ background: c.color }" />
+                {{ c.short }}
+              </m3e-filter-chip>
+            </div>
+            <p class="hint">{{ t("settings.sponsorBlockCategoriesHint") }}</p>
+
+            <label class="row switch-row">
+              <span class="row-label">{{ t("settings.sponsorBlockToast") }}</span>
+              <m3e-switch
+                :checked="settings.sponsorBlockToast"
+                @change="setSwitch('sponsorBlockToast', $event)"
+              />
+            </label>
+          </template>
+        </template>
+
         <!-- 氛围光（ambient light）：默认关闭，参数可调 -->
         <template v-if="settings.bilibiliEnabled">
           <label class="row switch-row">
@@ -1674,6 +1728,29 @@ function selectSection(id: string) {
   text-align: right;
   font-size: var(--md-sys-typescale-body-small-size);
   color: var(--md-sys-color-on-surface-variant);
+}
+
+/* ---- 空降助手：分类勾选 ---- */
+.sponsor-cats-label {
+  margin-top: 12px;
+}
+.sponsor-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+.sponsor-cats .chip {
+  --m3e-chip-container-height: 32px;
+}
+/* 分类色点：与进度条上的刻痕同色，方便用户对上号 */
+.sponsor-cats .dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: middle;
 }
 
 /* 开关改用 @m3e/web 的 m3e-switch（视觉令牌见 tokens/theme.css），此处只管点击区域 */

@@ -305,6 +305,13 @@ export const messages = {
         "启用后视频页显示「B站」分段：推荐流、搜索、扫码登录与在线播放（ArtPlayer + B 站弹幕）。接口来自 B 站网页端公开接口，数据仅供个人学习使用。",
       bilibiliEnable: "启用 B 站视频",
       bilibiliLoginHint: "在「视频 → B站 → 我的」里扫码登录。登录后推荐更个性化，播放可达 1080P。",
+      sponsorBlock: "空降助手（跳过广告）",
+      sponsorBlockHint:
+        "识别并自动跳过视频里的赞助 / 广告等片段。数据来自社区众包的 BilibiliSponsorBlock 服务；开启后会把当前视频的 bvid 与 cid 发往该服务。进度条上会用彩色刻痕标出片段位置。",
+      sponsorBlockServer: "服务端地址",
+      sponsorBlockCategories: "要跳过的片段类型",
+      sponsorBlockCategoriesHint: "默认只跳「赞助/恰饭」。其余类型是社区另外标注的内容，按需勾选。",
+      sponsorBlockToast: "跳过时提示",
       ambilight: "氛围光",
       ambilightHint:
         "把视频画面的颜色模糊成光晕铺在播放器四周（参考 youtube-ambilight）。默认关闭：它需要持续对视频帧做降采样与模糊，会占用一些 GPU。",
@@ -1247,6 +1254,14 @@ export const messages = {
       bilibiliEnable: "Enable Bilibili",
       bilibiliLoginHint:
         "Scan the QR code in Videos → Bilibili → Account. Signing in improves recommendations and unlocks 1080P.",
+      sponsorBlock: "SponsorBlock (skip ads)",
+      sponsorBlockHint:
+        "Detects and automatically skips sponsor/ad segments. Data comes from the community-run BilibiliSponsorBlock service; enabling this sends the current video bvid and cid to that service. Segments are marked with colored ticks on the progress bar.",
+      sponsorBlockServer: "Server address",
+      sponsorBlockCategories: "Segment types to skip",
+      sponsorBlockCategoriesHint:
+        "Only sponsor is on by default. The other types are separate community annotations — enable as needed.",
+      sponsorBlockToast: "Show a toast when skipping",
       ambilight: "Ambient light",
       ambilightHint:
         "Blurs the video's colors into a glow around the player (inspired by youtube-ambilight). Off by default: it continuously downsamples and blurs video frames, which costs some GPU.",

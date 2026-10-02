@@ -29,6 +29,8 @@ import {
 import { BiliDashSession } from "@/utils/biliDash";
 import { applyTimeOffset, type ArtDanmu } from "@/utils/danmaku";
 import { useAmbilight } from "@/composables/useAmbilight";
+import { useSponsorSkip } from "@/composables/useSponsorSkip";
+import { SB_CATEGORY_MAP } from "@/utils/sponsorBlock";
 import { translate } from "@shared/i18n";
 
 const emit = defineEmits<{ (e: "login"): void }>();
@@ -42,6 +44,48 @@ const container = ref<HTMLDivElement | null>(null);
 // ---- 氛围光（ambient light）----
 const ambilightCanvas = ref<HTMLCanvasElement | null>(null);
 const viewRef = ref<HTMLElement | null>(null);
+
+// ---- 空降助手（SponsorBlock）----
+/**
+ * 自动跳过 + 进度条标记。
+ *
+ * 进度条上的广告段由 ArtPlayer 自带的 `highlight` 绘制（彩色刻痕 + 悬浮说明），
+ * 不自己画 DOM —— 全屏切换与进度条重排都交给它管。
+ */
+const sponsorSkip = useSponsorSkip({
+  enabled: computed(() => settings.sponsorBlockEnabled),
+  categories: computed(() => settings.sponsorBlockCategories),
+  toast: computed(() => settings.sponsorBlockToast),
+  segments: computed(() => bili.sbSegments),
+  skipped: computed(() => bili.sbSkipped),
+  markSkipped: (key) => bili.markSkipped(key),
+  activeCid: computed(() => bili.activeCid),
+  onSkipped: (seg) => {
+    const meta = SB_CATEGORY_MAP[seg.category];
+    bili.notice = `已跳过${meta?.short ?? "片段"}（${fmtClock(seg.start)} - ${fmtClock(seg.end)}）`;
+  },
+});
+
+/**
+ * 把片段写进 ArtPlayer 的进度条刻度。
+ *
+ * ArtPlayer 的 highlight 只在 video:loadedmetadata 时重绘一次，而片段是**异步**到的
+ * （通常晚于元数据），所以改完 option 必须手动 emit 一次让它重画。
+ */
+function syncSponsorHighlights(): void {
+  if (!art) return;
+  art.option.highlight = sponsorSkip.highlights.value;
+  // 只有拿到元数据、duration 有效时百分比才算得出来
+  if (Number.isFinite(art.duration) && art.duration > 0) {
+    art.emit("video:loadedmetadata");
+  }
+}
+
+/** 秒 → m:ss（提示文案用）。 */
+function fmtClock(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
 
 const ambilight = useAmbilight(
   {
@@ -249,6 +293,10 @@ async function createPlayer(url: string | null): Promise<void> {
   // 把 <video> 交给氛围光（ArtPlayer 的 video 就是它内部的播放元素）
   ambilight.attach(art.video);
 
+  // 空降助手：挂上跳过循环，并把已有片段写进进度条
+  sponsorSkip.attach(art);
+  syncSponsorHighlights();
+
   // 恢复上次的倍速
   if (settings.biliPlaybackRate !== 1) art.playbackRate = settings.biliPlaybackRate;
 
@@ -390,6 +438,7 @@ let unwatchUrl: (() => void) | null = null;
 let unwatchDanmakuOpts: (() => void) | null = null;
 let unwatchDanmakuSwitch: (() => void) | null = null;
 let unwatchAmbilight: (() => void) | null = null;
+let unwatchSponsorMarks: (() => void) | null = null;
 
 /** 关闭浮层：直接改 store 状态（不经过 emit 中转，避免多一层出错点） */
 function close(): void {
@@ -417,6 +466,14 @@ onMounted(() => {
   window.addEventListener("keydown", onKeydown);
   document.addEventListener("pointerdown", onDocPointerDown, true);
   if (hasSource.value) void mountSource();
+
+  // 片段是异步到的：拿到后写进进度条刻度。
+  // ArtPlayer 只在 video:loadedmetadata 时重绘 highlight，所以要主动推一次。
+  unwatchSponsorMarks = watch(
+    () => sponsorSkip.highlights.value,
+    () => syncSponsorHighlights(),
+    { deep: true },
+  );
 
   // 画布铺满整个视图，不需要测量任何区域（尺寸由 CSS 百分比给）
   // 弹幕外观改动实时生效（不必重开视频）
@@ -470,12 +527,15 @@ onBeforeUnmount(() => {
   unwatchDanmakuSwitch = null;
   unwatchAmbilight?.();
   unwatchAmbilight = null;
+  unwatchSponsorMarks?.();
+  unwatchSponsorMarks = null;
 
   // 卸载（切页 / 关应用）前把进度落一次，否则这一段观看记录会丢
   bili.reportProgress(currentSeconds());
   bili.stopHeartbeat();
   danmakuGen += 1;
   ambilight.attach(null);
+  sponsorSkip.detach();
   dash?.destroy();
   dash = null;
   art?.destroy(false);

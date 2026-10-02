@@ -207,6 +207,36 @@ const DEFAULTS = {
   ambilightSaturation: 140,
   /** 光晕亮度 0-200（100 = 原样） */
   ambilightBrightness: 100,
+  /**
+   * 空降助手（SponsorBlock）：跳过 B 站视频里的赞助/广告等片段。
+   *
+   * 数据来自社区众包的 BilibiliSponsorBlock 服务（默认 https://www.bsbsb.top）。
+   * 默认关闭：开启后会把当前视频的 bvid/cid 发给该第三方服务。
+   */
+  sponsorBlockEnabled: false,
+  /** 服务端地址（可换成自建 / 镜像实例） */
+  sponsorBlockServer: "https://www.bsbsb.top",
+  /**
+   * 每个分类是否参与跳过。
+   *
+   * 默认只开「赞助/恰饭」——那才是用户说的广告。开场动画、三连提醒这些是社区标注的
+   * 其他类型片段，全开会跳得莫名其妙，交给用户自己勾。
+   */
+  sponsorBlockCategories: {
+    sponsor: true,
+    selfpromo: false,
+    exclusive_access: false,
+    interaction: false,
+    poi_highlight: false,
+    intro: false,
+    outro: false,
+    preview: false,
+    filler: false,
+    music_offtopic: false,
+    padding: false,
+  } as Record<string, boolean>,
+  /** 跳过时是否给提示 */
+  sponsorBlockToast: true,
   /** Bangumi 官方 Access Token（在 https://next.bgm.tv/demo/access-token 获取；与 pixivRefreshToken 同款本地保存） */
   bangumiToken: "",
   /** 当前连接的 Bangumi 用户名（token 校验成功后写入，收藏接口按它查询） */
@@ -301,6 +331,12 @@ export const useSettingsStore = defineStore("settings", () => {
   const ambilightOpacity = ref(DEFAULTS.ambilightOpacity);
   const ambilightSaturation = ref(DEFAULTS.ambilightSaturation);
   const ambilightBrightness = ref(DEFAULTS.ambilightBrightness);
+  const sponsorBlockEnabled = ref(DEFAULTS.sponsorBlockEnabled);
+  const sponsorBlockServer = ref(DEFAULTS.sponsorBlockServer);
+  const sponsorBlockCategories = ref<Record<string, boolean>>({
+    ...DEFAULTS.sponsorBlockCategories,
+  });
+  const sponsorBlockToast = ref(DEFAULTS.sponsorBlockToast);
   const bangumiToken = ref(DEFAULTS.bangumiToken);
   const bangumiUsername = ref(DEFAULTS.bangumiUsername);
   const bangumiSyncedAt = ref(DEFAULTS.bangumiSyncedAt);
@@ -402,6 +438,10 @@ export const useSettingsStore = defineStore("settings", () => {
     ambilightOpacity,
     ambilightSaturation,
     ambilightBrightness,
+    sponsorBlockEnabled,
+    sponsorBlockServer,
+    sponsorBlockCategories,
+    sponsorBlockToast,
     bangumiToken,
     bangumiUsername,
     bangumiSyncedAt,
