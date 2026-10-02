@@ -162,7 +162,7 @@ const metaParts = computed(() => {
               class="status-chip"
               :disabled="saving"
               :selected="currentStatus === s.cat"
-              @click="pickStatus(s.cat)"
+              @click.prevent="pickStatus(s.cat)"
             >
               <span
                 v-if="saving && currentStatus === s.cat"

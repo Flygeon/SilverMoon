@@ -285,7 +285,7 @@ onMounted(() => {
               :key="s"
               class="chip"
               :selected="rankSort === s"
-              @click="pickRank(s)"
+              @click.prevent="pickRank(s)"
             >
               {{ t("novel.rank_" + s) }}
             </m3e-filter-chip>

@@ -366,7 +366,7 @@ function backToHome() {
           :key="s.value"
           class="chip"
           :selected="searchSort === s.value"
-          @click="changeSort(s.value)"
+          @click.prevent="changeSort(s.value)"
         >
           {{ s.label() }}
         </m3e-filter-chip>
@@ -503,7 +503,7 @@ function backToHome() {
               :key="m.value"
               class="chip"
               :selected="rankMode === m.value"
-              @click="pickRank(m.value)"
+              @click.prevent="pickRank(m.value)"
             >
               {{ m.label() }}
             </m3e-filter-chip>

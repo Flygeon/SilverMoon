@@ -16,11 +16,9 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type Artplayer from "artplayer";
 import type { Option as DanmukuOption } from "artplayer-plugin-danmuku";
 import BilibiliComments from "@/components/BilibiliComments.vue";
-import ChipRadio from "@/components/ChipRadio.vue";
 import BilibiliRelatedList from "@/components/BilibiliRelatedList.vue";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
-import { capabilities } from "@/capabilities";
 import {
   biliCount,
   biliDuration,
@@ -447,14 +445,6 @@ function onDocPointerDown(e: PointerEvent): void {
   coinOpen.value = false;
 }
 
-/** 清晰度选项（chip 用）。 */
-const qualityOptions = computed(() =>
-  qualities.value.map((q) => ({
-    value: q,
-    label: play.value ? biliFormatLabel(play.value, q) : String(q),
-  })),
-);
-
 const metaItems = computed(() => {
   const d = detail.value;
   if (!d) return [] as string[];
@@ -633,14 +623,21 @@ const metaItems = computed(() => {
 
             <div v-if="qualities.length" class="block">
               <div class="block-label">{{ t("bili.quality") }}</div>
-              <!-- ChipRadio：裸 m3e-filter-chip 会自己翻转 selected，配合 Vue 的
-                   @click 会造成「点两次才切换」 -->
-              <ChipRadio
-                :model-value="bili.activeQn"
-                aria-label="清晰度"
-                :options="qualityOptions"
-                @update:model-value="bili.selectQuality(Number($event))"
-              />
+              <div class="chips">
+                <!-- @click.prevent 是必需的：m3e-filter-chip 的 handleClick 开头是
+                     「if (e.defaultPrevented) return;」，不 preventDefault 它就会自己翻转
+                     selected；而 Vue 的 @click 先执行，于是第一下被翻回未选中 →
+                     表现为「点两次才切换清晰度」 -->
+                <m3e-filter-chip
+                  v-for="q in qualities"
+                  :key="q"
+                  class="chip"
+                  :selected="q === bili.activeQn"
+                  @click.prevent="bili.selectQuality(q)"
+                >
+                  {{ biliFormatLabel(play!, q) }}
+                </m3e-filter-chip>
+              </div>
             </div>
 
             <div v-if="showParts" class="block">

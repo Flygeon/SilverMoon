@@ -65,7 +65,7 @@ function clearSearch() {
         :key="s.key"
         class="chip"
         :selected="library.sortBy === s.key"
-        @click="pickSort(s.key)"
+        @click.prevent="pickSort(s.key)"
       >
         {{ s.label }}
         <span

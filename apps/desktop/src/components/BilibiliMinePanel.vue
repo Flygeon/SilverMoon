@@ -14,7 +14,6 @@
  */
 import { computed, ref, watch } from "vue";
 import BilibiliCard from "@/components/BilibiliCard.vue";
-import ChipRadio from "@/components/ChipRadio.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
@@ -62,14 +61,6 @@ function openView(target: "history" | "favorites"): void {
 function back(): void {
   view.value = null;
 }
-
-/** 收藏夹 chip 的选项（值用 id，文案带条数）。 */
-const favOptions = computed(() =>
-  bili.favFolders.map((f) => ({
-    value: f.id,
-    label: `${f.title}（${biliCount(f.mediaCount)}）`,
-  })),
-);
 
 /**
  * 切换收藏夹。
@@ -281,15 +272,20 @@ watch(
         </div>
 
         <!-- 收藏夹选择：多收藏夹时给一排 chip。
-            用 ChipRadio 而不是裸 m3e-filter-chip：后者的点击处理会把 selected 自己翻转，
-             而 Vue 的 @click 先执行 → 第一下会被组件翻回未选中，必须点两次才切过去 -->
-        <ChipRadio
-          v-if="bili.favFolders.length > 1"
-          :model-value="bili.favMediaId"
-          aria-label="收藏夹"
-          :options="favOptions"
-          @update:model-value="switchFolder"
-        />
+             注意 @click.prevent 不是可有可无：m3e-filter-chip 的 handleClick 开头是
+             「if (e.defaultPrevented) return;」，不 preventDefault 它会自己把 selected
+             翻转，而 Vue 的 @click 先执行 → 第一下被翻回未选中，必须点两次才切过去 -->
+        <div v-if="bili.favFolders.length > 1" class="folders">
+          <m3e-filter-chip
+            v-for="f in bili.favFolders"
+            :key="f.id"
+            class="chip"
+            :selected="f.id === bili.favMediaId"
+            @click.prevent="switchFolder(f.id)"
+          >
+            {{ f.title }}（{{ biliCount(f.mediaCount) }}）
+          </m3e-filter-chip>
+        </div>
 
         <div v-if="bili.favVideos.length" class="grid">
           <BilibiliCard

@@ -697,7 +697,7 @@ function selectSection(id: string) {
             :key="p"
             class="chip"
             :selected="settings.minFileSizeMb === p"
-            @click="applySize(p)"
+            @click.prevent="applySize(p)"
           >
             {{ p === 0 ? t("settings.minSizeOff") : `${p} MB` }}
           </m3e-filter-chip>
@@ -815,7 +815,7 @@ function selectSection(id: string) {
               :key="k"
               class="chip"
               :selected="settings.lyricFont === k"
-              @click="settings.lyricFont = k"
+              @click.prevent="settings.lyricFont = k"
             >
               {{ t("settings.lyricFont_" + k) }}
             </m3e-filter-chip>
@@ -955,7 +955,7 @@ function selectSection(id: string) {
               :key="k"
               class="chip"
               :selected="settings.desktopLyricsAnimation === k"
-              @click="settings.desktopLyricsAnimation = k"
+              @click.prevent="settings.desktopLyricsAnimation = k"
             >
               {{ t("settings.desktopLyricsAnim_" + k) }}
             </m3e-filter-chip>

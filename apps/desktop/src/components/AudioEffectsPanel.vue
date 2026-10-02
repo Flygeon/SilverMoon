@@ -228,7 +228,7 @@ const frequencyLabel = (hz: number) => (hz >= 1000 ? `${(hz / 1000).toFixed(0)}k
             :key="p.id"
             class="chip"
             :selected="isActive(p.id)"
-            @click="applyPreset(p.id)"
+            @click.prevent="applyPreset(p.id)"
           >
             {{ p.name }}
           </m3e-filter-chip>

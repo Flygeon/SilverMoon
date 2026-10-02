@@ -419,7 +419,7 @@ function backFromEpisodes() {
             :key="s.value"
             class="chip"
             :selected="sort === s.value"
-            @click="changeSort(s.value)"
+            @click.prevent="changeSort(s.value)"
           >
             {{ s.label }}
           </m3e-filter-chip>

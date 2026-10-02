@@ -64,7 +64,7 @@ const roadIndex = ref(0);
             :key="ri"
             class="road-chip"
             :selected="roadIndex === ri"
-            @click="roadIndex = ri"
+            @click.prevent="roadIndex = ri"
           >
             {{ r.name }}
           </m3e-filter-chip>
