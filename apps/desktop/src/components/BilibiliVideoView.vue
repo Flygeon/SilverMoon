@@ -12,7 +12,7 @@
  * - 弹幕走 B 站 `list.so`（XML），映射成 ArtPlayer 弹幕格式（utils/bilibili.ts）。
  * - 清晰度 / 分 P 切换在下方信息区；store 重取 playurl 后这里重新挂源。
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type Artplayer from "artplayer";
 import type { Option as DanmukuOption } from "artplayer-plugin-danmuku";
 import BilibiliComments from "@/components/BilibiliComments.vue";
@@ -41,6 +41,9 @@ const container = ref<HTMLDivElement | null>(null);
 
 // ---- 氛围光（ambient light）----
 const ambilightCanvas = ref<HTMLCanvasElement | null>(null);
+const viewRef = ref<HTMLElement | null>(null);
+const playerAreaRef = ref<HTMLElement | null>(null);
+const sideRef = ref<HTMLElement | null>(null);
 const ambilight = useAmbilight(
   {
     enabled: computed(() => settings.ambilightEnabled),
@@ -54,21 +57,57 @@ const ambilight = useAmbilight(
 );
 
 /**
+ * 光晕的几何。
+ *
+ * 要覆盖的三个区域分属不同父级，没法用一个 DOM 祖先把它们框起来：
+ * - 顶栏 `.head` 是视图根的直接子元素；
+ * - 播放器在 `.content > .main > .player-area`；
+ * - 右侧相关推荐是 `.main` 的**兄弟** `.side`。
+ *
+ * 所以这里在视图根下放一片绝对定位的画布，用「测量出的像素矩形」去对齐它们的并集：
+ * 上边贴顶栏上沿，下边取播放器与侧栏的较大者，左右取两者的并集。
+ * 画布再按 spread 向外扩一圈，模糊边缘就自然盖过这三块。
+ */
+const glowRect = ref({ left: 0, top: 0, width: 0, height: 0 });
+
+/** 量一次三块区域的并集（相对视图根）。 */
+function measureGlow(): void {
+  const view = viewRef.value;
+  const head = view?.querySelector<HTMLElement>(".head");
+  const player = playerAreaRef.value;
+  const side = sideRef.value;
+  if (!view || !head || !player) return;
+  const v = view.getBoundingClientRect();
+  const h = head.getBoundingClientRect();
+  const p = player.getBoundingClientRect();
+  const s = side?.getBoundingClientRect();
+  // 三块取并集：顶栏通常通栏，所以它的右边界也要算进来，
+  // 否则光晕到侧栏右沿就断了，顶栏右侧会露白。
+  const left = Math.min(h.left, p.left) - v.left;
+  const top = Math.min(h.top, p.top) - v.top;
+  const right = Math.max(h.right, p.right, s?.right ?? p.right) - v.left;
+  const bottom = Math.max(h.bottom, p.bottom, s?.bottom ?? p.bottom) - v.top;
+  glowRect.value = { left, top, width: right - left, height: bottom - top };
+}
+
+/**
  * 光晕外观。
  *
  * 三层组合（对应参考项目 projector + filter 的分工）：
  * - `blur()`：把 48px 宽的小画布抹成一片柔和的色块；
  * - `saturate()/brightness()`：让颜色更「亮眼」，否则糊完会发灰；
- * - 负 inset + `opacity`：把画布拉伸到比播放器更大并压暗，让光晕只作为背景存在。
+ * - `opacity`：压暗，让光晕只作为背景存在。
  */
 const ambilightStyle = computed(() => {
-  const s = Math.max(0, settings.ambilightSpread);
-  // canvas 是 replaced element：只给 inset 不会拉伸（会退回固有尺寸 48×27），
-  // 必须显式给 width/height 百分比，再用 left/top + translate 居中。
-  const size = 100 + s * 2;
+  const r = glowRect.value;
+  // 外扩：相对区域的短边按百分比换算成像素，视觉上「扩一圈」
+  const spread = Math.max(0, settings.ambilightSpread) / 100;
+  const pad = Math.round(Math.min(r.width, r.height) * spread);
   return {
-    width: `${size}%`,
-    height: `${size}%`,
+    left: `${r.left - pad}px`,
+    top: `${r.top - pad}px`,
+    width: `${r.width + pad * 2}px`,
+    height: `${r.height + pad * 2}px`,
     opacity: String(Math.max(0, Math.min(100, settings.ambilightOpacity)) / 100),
     filter: [
       `blur(${Math.max(0, settings.ambilightBlur)}px)`,
@@ -77,6 +116,7 @@ const ambilightStyle = computed(() => {
     ].join(" "),
   };
 });
+
 const descExpanded = ref(false);
 
 /** 媒体加载失败提示（ArtPlayer 会自动重连，这里负责把原因讲清楚并给条退路） */
@@ -378,6 +418,9 @@ let unwatchUrl: (() => void) | null = null;
 let unwatchDanmakuOpts: (() => void) | null = null;
 let unwatchDanmakuSwitch: (() => void) | null = null;
 let unwatchAmbilight: (() => void) | null = null;
+let unwatchGlowLayout: (() => void) | null = null;
+/** 视图尺寸变化时重量氛围光区域 */
+let glowObserver: ResizeObserver | null = null;
 
 /** 关闭浮层：直接改 store 状态（不经过 emit 中转，避免多一层出错点） */
 function close(): void {
@@ -405,6 +448,14 @@ onMounted(() => {
   window.addEventListener("keydown", onKeydown);
   document.addEventListener("pointerdown", onDocPointerDown, true);
   if (hasSource.value) void mountSource();
+
+  // 氛围光区域测量：窗口缩放、布局折行（左右栏变上下）都会改变并集位置。
+  // 只观察根与顶栏即可 —— 播放器/侧栏的尺寸变化必然引起它们重排。
+  measureGlow();
+  if (typeof ResizeObserver !== "undefined" && viewRef.value) {
+    glowObserver = new ResizeObserver(() => measureGlow());
+    glowObserver.observe(viewRef.value);
+  }
   // 弹幕外观改动实时生效（不必重开视频）
   unwatchDanmakuOpts = watch(
     () => [
@@ -419,9 +470,19 @@ onMounted(() => {
   // 氛围光：开启时若播放器已就绪，补一次 attach（开关可能晚于播放器创建才打开）
   unwatchAmbilight = watch(
     () => settings.ambilightEnabled,
-    (on) => {
-      if (on) ambilight.attach(art?.video ?? null);
+    async (on) => {
+      if (!on) return;
+      // 先让画布挂上并量好区域，再把 <video> 交给它，避免首帧画在错误尺寸上
+      await nextTick();
+      measureGlow();
+      ambilight.attach(art?.video ?? null);
     },
+  );
+
+  // 相关推荐是异步加载的，回来前后侧栏高度不同 → 并集区域要重量一次
+  unwatchGlowLayout = watch(
+    () => bili.related.length,
+    () => void nextTick(measureGlow),
   );
 
   // 总开关：开着的时候把弹幕装回来（关掉时由 hide() 隐藏，但列表也需要清）
@@ -453,6 +514,10 @@ onBeforeUnmount(() => {
   unwatchDanmakuSwitch = null;
   unwatchAmbilight?.();
   unwatchAmbilight = null;
+  unwatchGlowLayout?.();
+  unwatchGlowLayout = null;
+  glowObserver?.disconnect();
+  glowObserver = null;
   // 卸载（切页 / 关应用）前把进度落一次，否则这一段观看记录会丢
   bili.reportProgress(currentSeconds());
   bili.stopHeartbeat();
@@ -512,7 +577,21 @@ const metaItems = computed(() => {
 </script>
 
 <template>
-  <div class="bili-view">
+  <div ref="viewRef" class="bili-view" :class="{ 'has-ambilight': settings.ambilightEnabled }">
+    <!--
+      氛围光画布：**一片**共用背景，覆盖「顶栏 + 播放器 + 右侧相关推荐」。
+      三者分属不同父级（顶栏在 .content 之外、侧栏是 .main 的兄弟），所以不能挂在
+      播放器里 —— 那样会被 .content 的 overflow 裁掉，也够不到顶栏。
+      这里放在视图根节点下，用测量出的像素区域定位（见 measureGlow）。
+    -->
+    <canvas
+      v-if="settings.ambilightEnabled"
+      ref="ambilightCanvas"
+      class="ambilight"
+      aria-hidden="true"
+      :style="ambilightStyle"
+    />
+
     <!-- 顶栏（用原生 button：浮层里的操作必须 100% 可点，不依赖自定义元素的事件转发） -->
     <header class="head lm-glass">
       <button class="head-btn" type="button" :title="t('bili.close')" @click="close">
@@ -534,17 +613,7 @@ const metaItems = computed(() => {
     <div class="content">
       <div class="main">
         <!-- 播放器 -->
-        <div class="player-area" :class="{ 'has-ambilight': settings.ambilightEnabled }">
-          <!-- 氛围光：把视频帧降采样到小画布，再靠 CSS blur 铺开。
-               放在播放器**之下**（z-index 更低），模糊边缘溢出到四周形成光晕。
-               关闭时不渲染，省掉一张画布与合成层。 -->
-          <canvas
-            v-if="settings.ambilightEnabled"
-            ref="ambilightCanvas"
-            class="ambilight"
-            aria-hidden="true"
-            :style="ambilightStyle"
-          />
+        <div ref="playerAreaRef" class="player-area">
           <div ref="container" class="art-container" />
           <div v-if="bili.playStatus === 'loading'" class="player-overlay">
             <m3e-loading-indicator class="lm-loading" />
@@ -740,7 +809,7 @@ const metaItems = computed(() => {
       </div>
 
       <!-- 右栏：相关推荐（sticky，长评论区滚动时始终可见） -->
-      <aside class="side">
+      <aside ref="sideRef" class="side">
         <BilibiliRelatedList
           :videos="bili.related"
           :status="bili.relatedStatus"
@@ -879,32 +948,38 @@ const metaItems = computed(() => {
  * - will-change/transform: translateZ(0)：把它提升为独立合成层，
  *   避免每帧重绘整个播放器区域（不加的话模糊会连带父层一起重算，明显掉帧）。
  */
+/*
+ * 氛围光画布：视图根下的一片绝对定位背景，覆盖「顶栏 + 播放器 + 右侧相关推荐」。
+ * 位置与尺寸由内联 style 给（测量出的像素矩形 + 外扩）。
+ */
 .ambilight {
   position: absolute;
-  /* 0 即可：.player-area.has-ambilight 建了层叠上下文，
-     播放器 .art-container 是 1，画布自然在它下面 */
   z-index: 0;
-  left: 50%;
-  top: 50%;
   display: block;
-  /* 尺寸由内联 style 给（100% + 2×外扩）；canvas 是 replaced element，
-     只给 inset 不会拉伸，会退回 48×27 的固有尺寸 */
-  transform: translate(-50%, -50%);
   pointer-events: none;
   user-select: none;
   will-change: filter;
 }
-/*
- * 开启氛围光时：父级底色交给光晕本身（黑底会把光晕盖住）。
- * 同时给容器建层叠上下文，让「画布在下、播放器在上」稳定成立 ——
- * 只靠画布的 z-index:-1 在无层叠上下文的父级里会掉到父级背景之下。
- */
-.player-area.has-ambilight {
-  background: transparent;
+/* 画布在下、三块内容在上：视图根建层叠上下文，内容层抬到 1 */
+.bili-view.has-ambilight {
   isolation: isolate;
 }
-.player-area.has-ambilight .art-container {
+.bili-view.has-ambilight .head,
+.bili-view.has-ambilight .content {
+  position: relative;
   z-index: 1;
+}
+/*
+ * 顶栏原本是 lm-glass（半透明 + backdrop-filter）。氛围光在它下面时，
+ * 半透明底会把光晕压得几乎看不见；开氛围光时改用更透的底，
+ * 让顶栏也「吃到」光晕，同时保留发丝边与拖拽区。
+ */
+.bili-view.has-ambilight .head {
+  background: color-mix(in srgb, var(--lm-scrim-surface) 45%, transparent);
+}
+/* 播放器黑底会盖住身后的光晕：开启时交给光晕，边框留视频自己 */
+.bili-view.has-ambilight .player-area {
+  background: transparent;
 }
 .art-container {
   position: absolute;
