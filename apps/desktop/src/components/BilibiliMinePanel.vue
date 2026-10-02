@@ -14,6 +14,7 @@
  */
 import { computed, ref, watch } from "vue";
 import BilibiliCard from "@/components/BilibiliCard.vue";
+import ChipRadio from "@/components/ChipRadio.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
@@ -60,6 +61,28 @@ function openView(target: "history" | "favorites"): void {
 
 function back(): void {
   view.value = null;
+}
+
+/** 收藏夹 chip 的选项（值用 id，文案带条数）。 */
+const favOptions = computed(() =>
+  bili.favFolders.map((f) => ({
+    value: f.id,
+    label: `${f.title}（${biliCount(f.mediaCount)}）`,
+  })),
+);
+
+/**
+ * 切换收藏夹。
+ *
+ * 先把列表清空并置 loading，再拉新夹：否则上一个夹的内容会短暂留在屏幕上，
+ * 用户会以为「切了但没变」。
+ */
+function switchFolder(id: string | number): void {
+  const mediaId = Number(id);
+  if (mediaId === bili.favMediaId) return;
+  bili.favVideos = [];
+  bili.favEnd = false;
+  void bili.loadFavorites(true, mediaId);
 }
 
 /** 收藏加载失败重试：收藏夹列表本身也可能没拉到，一起重来。 */
@@ -257,18 +280,16 @@ watch(
           <span class="section-sub">{{ favSubtitle }}</span>
         </div>
 
-        <!-- 收藏夹选择：多收藏夹时给一排 chip -->
-        <div v-if="bili.favFolders.length > 1" class="folders">
-          <m3e-filter-chip
-            v-for="f in bili.favFolders"
-            :key="f.id"
-            class="chip"
-            :selected="f.id === bili.favMediaId"
-            @click="bili.loadFavorites(true, f.id)"
-          >
-            {{ f.title }}（{{ biliCount(f.mediaCount) }}）
-          </m3e-filter-chip>
-        </div>
+        <!-- 收藏夹选择：多收藏夹时给一排 chip。
+            用 ChipRadio 而不是裸 m3e-filter-chip：后者的点击处理会把 selected 自己翻转，
+             而 Vue 的 @click 先执行 → 第一下会被组件翻回未选中，必须点两次才切过去 -->
+        <ChipRadio
+          v-if="bili.favFolders.length > 1"
+          :model-value="bili.favMediaId"
+          aria-label="收藏夹"
+          :options="favOptions"
+          @update:model-value="switchFolder"
+        />
 
         <div v-if="bili.favVideos.length" class="grid">
           <BilibiliCard

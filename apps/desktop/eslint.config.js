@@ -100,6 +100,11 @@ export default [
       "src/components/BilibiliUserView.vue",
       "src/components/BilibiliReplyComposer.vue",
       "src/components/BilibiliSearchHistory.vue",
+      // 通用单选 chip 组：图标经 m3e-filter-chip 的原生 slot 投影。
+      // 漏了这条，`eslint --fix` 会把 slot="icon" 改写成 <template #icon>，
+      // 而后者作用在自定义元素上会让 @vitejs/plugin-vue 在编译期直接崩
+      // （Cannot read properties of undefined (reading 'type')）。
+      "src/components/ChipRadio.vue",
       "src/components/AudioEffectsPanel.vue",
       "src/components/LibraryToolbar.vue",
       "src/components/NovelBqgView.vue",

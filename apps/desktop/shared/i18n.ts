@@ -327,7 +327,7 @@ export const messages = {
         "可选。填入手动登录后获取的 Refresh Token 可恢复会话，无需每次扫码 / WebView 登录。仅在本地保存。",
       danmaku: "弹幕",
       danmakuHint:
-        "总开关，同时作用于在线番剧与 B 站视频（B 站用站内弹幕，无需任何凭证）。番剧弹幕来自 DanDanPlay 开放 API，可选填 api.dandanplay.net 申请的 AppId 与 AppSecret（不填也能用，但高频会触发频率限制）。",
+        "总开关，同时作用于在线番剧与 B 站视频（B 站用站内弹幕，无需任何凭证）。单部视频的开关与透明度 / 字号 / 速度 / 显示区域都在播放器控制栏里调，这里只管跨视频的默认偏好。番剧弹幕来自 DanDanPlay 开放 API，可选填 api.dandanplay.net 申请的 AppId 与 AppSecret（不填也能用，但高频会触发频率限制）。",
       danmakuEnable: "显示弹幕",
       danmakuAppId: "AppId",
       danmakuAppSecret: "AppSecret",
@@ -1262,7 +1262,7 @@ export const messages = {
         "Optional. Paste a Refresh Token obtained after a manual login to restore the session without re-logging in each time. Stored locally only.",
       danmaku: "Danmaku",
       danmakuHint:
-        "Master switch for both online anime and Bilibili videos (Bilibili uses its own danmaku and needs no credentials). Anime danmaku comes from the DanDanPlay open API; AppId/AppSecret from api.dandanplay.net are optional (works without them, but rate-limited).",
+        "Master switch for both online anime and Bilibili videos (Bilibili uses its own danmaku and needs no credentials). Per-video toggling and opacity / size / speed / area live in the player's own control bar; this is the cross-video default. Anime danmaku comes from the DanDanPlay open API; AppId/AppSecret from api.dandanplay.net are optional (works without them, but rate-limited).",
       danmakuEnable: "Show danmaku",
       danmakuAppId: "AppId",
       danmakuAppSecret: "AppSecret",

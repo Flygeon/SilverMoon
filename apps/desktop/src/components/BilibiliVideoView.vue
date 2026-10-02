@@ -16,6 +16,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type Artplayer from "artplayer";
 import type { Option as DanmukuOption } from "artplayer-plugin-danmuku";
 import BilibiliComments from "@/components/BilibiliComments.vue";
+import ChipRadio from "@/components/ChipRadio.vue";
 import BilibiliRelatedList from "@/components/BilibiliRelatedList.vue";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
@@ -39,7 +40,7 @@ const t = (key: string) => translate(settings.lang, key);
 
 const container = ref<HTMLDivElement | null>(null);
 const descExpanded = ref(false);
-const danmakuOn = ref(settings.danmakuEnabled);
+
 /** 媒体加载失败提示（ArtPlayer 会自动重连，这里负责把原因讲清楚并给条退路） */
 const playerError = ref("");
 
@@ -420,20 +421,6 @@ function syncDanmakuVisibility(): void {
   if (!plugin?.show || !plugin?.hide) return;
   if (settings.danmakuEnabled) plugin.show();
   else plugin.hide();
-  danmakuOn.value = settings.danmakuEnabled;
-}
-
-async function toggleDanmaku(): Promise<void> {
-  const next = !settings.danmakuEnabled;
-  // 写回设置：这样设置页的「弹幕」开关与顶栏按钮始终一致，而且能持久化
-  settings.danmakuEnabled = next;
-  syncDanmakuVisibility();
-  if (next) await reloadDanmaku();
-}
-
-function openInBrowser(): void {
-  const bvid = detail.value?.bvid || bili.current?.bvid;
-  if (bvid) void capabilities.openUrl(`https://www.bilibili.com/video/${bvid}`);
 }
 
 /** 点 UP 主头像 / 昵称进主页。 */
@@ -460,6 +447,14 @@ function onDocPointerDown(e: PointerEvent): void {
   coinOpen.value = false;
 }
 
+/** 清晰度选项（chip 用）。 */
+const qualityOptions = computed(() =>
+  qualities.value.map((q) => ({
+    value: q,
+    label: play.value ? biliFormatLabel(play.value, q) : String(q),
+  })),
+);
+
 const metaItems = computed(() => {
   const d = detail.value;
   if (!d) return [] as string[];
@@ -480,17 +475,20 @@ const metaItems = computed(() => {
       </button>
       <span class="head-title" :title="title">{{ title }}</span>
       <span class="spacer" />
-      <button
-        class="head-btn"
-        type="button"
-        :class="{ off: !danmakuOn }"
-        :title="danmakuOn ? t('bili.danmakuOff') : t('bili.danmakuOn')"
-        @click="toggleDanmaku"
-      >
-        <span class="material-symbols-outlined">subtitles</span>
-      </button>
-      <button class="head-btn" type="button" :title="t('bili.openBrowser')" @click="openInBrowser">
-        <span class="material-symbols-outlined">open_in_new</span>
+      <!--
+        这里刻意**不放**弹幕开关按钮。
+        artplayer-plugin-danmuku 自带一条控制栏（挂在 $controlsCenter，含 apd-toggle
+        开关与 apd-config 设置面板，可调透明度/字号/速度/区域/防重叠），功能完全覆盖。
+        再放一个顶栏按钮只会和它抢同一个状态：用户得先点我的按钮、再点播放器里的开关，
+        多此一举；两边状态也容易不一致。开关的唯一入口就是播放器控制栏。
+        （设置页那个「显示弹幕」总开关仍然保留，它是跨视频的偏好。）
+      -->
+      <!--
+        分享：桌面端最实用的是把链接复制走，**不**打开浏览器。
+        原来这里是「在浏览器打开」，而它正是用户明确不需要的行为 —— 已改成复制链接。
+      -->
+      <button class="head-btn" type="button" :title="t('bili.share')" @click="bili.shareVideo()">
+        <span class="material-symbols-outlined">share</span>
       </button>
     </header>
 
@@ -635,17 +633,14 @@ const metaItems = computed(() => {
 
             <div v-if="qualities.length" class="block">
               <div class="block-label">{{ t("bili.quality") }}</div>
-              <div class="chips">
-                <m3e-filter-chip
-                  v-for="q in qualities"
-                  :key="q"
-                  class="chip"
-                  :selected="q === bili.activeQn"
-                  @click="bili.selectQuality(q)"
-                >
-                  {{ biliFormatLabel(play!, q) }}
-                </m3e-filter-chip>
-              </div>
+              <!-- ChipRadio：裸 m3e-filter-chip 会自己翻转 selected，配合 Vue 的
+                   @click 会造成「点两次才切换」 -->
+              <ChipRadio
+                :model-value="bili.activeQn"
+                aria-label="清晰度"
+                :options="qualityOptions"
+                @update:model-value="bili.selectQuality(Number($event))"
+              />
             </div>
 
             <div v-if="showParts" class="block">

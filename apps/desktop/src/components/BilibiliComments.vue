@@ -10,9 +10,16 @@
  */
 import { computed, ref } from "vue";
 import BilibiliReplyComposer from "@/components/BilibiliReplyComposer.vue";
+import ChipRadio from "@/components/ChipRadio.vue";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
-import { BILI_REPLY_HOT, BILI_REPLY_TIME, biliCount, type BiliReply } from "@/utils/bilibili";
+import {
+  BILI_REPLY_HOT,
+  BILI_REPLY_TIME,
+  biliCount,
+  type BiliReply,
+  type BiliReplySort,
+} from "@/utils/bilibili";
 import { translate } from "@shared/i18n";
 
 const emit = defineEmits<{ (e: "login"): void }>();
@@ -61,18 +68,15 @@ function subMore(r: BiliReply): boolean {
         <span v-if="bili.replyTotal" class="tabular-nums">{{ biliCount(bili.replyTotal) }}</span>
         {{ t("bili.commentUnit") }}
       </h3>
-      <!-- 用 m3e-filter-chip：自带选中态语义（aria-pressed），也免去自己维护 .active -->
-      <div class="sorts">
-        <m3e-filter-chip
-          v-for="s in sorts"
-          :key="s.value"
-          class="sort-chip"
-          :selected="bili.replySort === s.value"
-          @click="bili.setReplySort(s.value)"
-        >
-          {{ s.label }}
-        </m3e-filter-chip>
-      </div>
+      <!-- ChipRadio：裸 m3e-filter-chip 会自己翻转 selected，配合 Vue 的 @click
+           会造成「点两次才切换」 -->
+      <ChipRadio
+        class="sorts"
+        :model-value="bili.replySort"
+        aria-label="评论排序"
+        :options="sorts"
+        @update:model-value="bili.setReplySort($event as BiliReplySort)"
+      />
     </div>
 
     <div v-if="bili.replyStatus === 'loading' && !bili.replies.length" class="state">

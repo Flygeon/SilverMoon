@@ -71,7 +71,9 @@ const confirmClear = ref(false);
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-top: 6px;
+  /* 上接搜索栏、下接结果区 / 空状态：两侧都要留白，否则会和 EmptyState 的上边框
+     贴在一起（EmptyState 自带 padding，但它是同级块，margin 不会自动产生） */
+  margin: 6px 0 20px;
 }
 .head {
   display: flex;
