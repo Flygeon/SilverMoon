@@ -42,8 +42,7 @@ const container = ref<HTMLDivElement | null>(null);
 // ---- 氛围光（ambient light）----
 const ambilightCanvas = ref<HTMLCanvasElement | null>(null);
 const viewRef = ref<HTMLElement | null>(null);
-const playerAreaRef = ref<HTMLElement | null>(null);
-const sideRef = ref<HTMLElement | null>(null);
+
 const ambilight = useAmbilight(
   {
     enabled: computed(() => settings.ambilightEnabled),
@@ -57,57 +56,30 @@ const ambilight = useAmbilight(
 );
 
 /**
- * 光晕的几何。
- *
- * 要覆盖的三个区域分属不同父级，没法用一个 DOM 祖先把它们框起来：
- * - 顶栏 `.head` 是视图根的直接子元素；
- * - 播放器在 `.content > .main > .player-area`；
- * - 右侧相关推荐是 `.main` 的**兄弟** `.side`。
- *
- * 所以这里在视图根下放一片绝对定位的画布，用「测量出的像素矩形」去对齐它们的并集：
- * 上边贴顶栏上沿，下边取播放器与侧栏的较大者，左右取两者的并集。
- * 画布再按 spread 向外扩一圈，模糊边缘就自然盖过这三块。
- */
-const glowRect = ref({ left: 0, top: 0, width: 0, height: 0 });
-
-/** 量一次三块区域的并集（相对视图根）。 */
-function measureGlow(): void {
-  const view = viewRef.value;
-  const head = view?.querySelector<HTMLElement>(".head");
-  const player = playerAreaRef.value;
-  const side = sideRef.value;
-  if (!view || !head || !player) return;
-  const v = view.getBoundingClientRect();
-  const h = head.getBoundingClientRect();
-  const p = player.getBoundingClientRect();
-  const s = side?.getBoundingClientRect();
-  // 三块取并集：顶栏通常通栏，所以它的右边界也要算进来，
-  // 否则光晕到侧栏右沿就断了，顶栏右侧会露白。
-  const left = Math.min(h.left, p.left) - v.left;
-  const top = Math.min(h.top, p.top) - v.top;
-  const right = Math.max(h.right, p.right, s?.right ?? p.right) - v.left;
-  const bottom = Math.max(h.bottom, p.bottom, s?.bottom ?? p.bottom) - v.top;
-  glowRect.value = { left, top, width: right - left, height: bottom - top };
-}
-
-/**
  * 光晕外观。
  *
  * 三层组合（对应参考项目 projector + filter 的分工）：
  * - `blur()`：把 48px 宽的小画布抹成一片柔和的色块；
  * - `saturate()/brightness()`：让颜色更「亮眼」，否则糊完会发灰；
  * - `opacity`：压暗，让光晕只作为背景存在。
+ *
+ * **画布铺满整个视图**，而不是只包住播放器或「顶栏+播放器+侧栏」的并集。
+ * 沉浸感的关键就在这里：只要光在某处断掉，那里就会出现一条接缝，
+ * 顶栏 / 侧栏 / 评论区就会被看成一块块独立的卡片。铺满之后整页落在同一片光上，
+ * 中间没有间隙。参考项目也是把光晕当整页背景在铺。
+ *
+ * `spread` 在这里是「向外多铺多少」：铺满仍要外扩一圈，是为了让 `blur()` 的边缘
+ * 落在视口之外 —— 否则四周会出现一圈被模糊拉暗的暗角。
  */
 const ambilightStyle = computed(() => {
-  const r = glowRect.value;
-  // 外扩：相对区域的短边按百分比换算成像素，视觉上「扩一圈」
-  const spread = Math.max(0, settings.ambilightSpread) / 100;
-  const pad = Math.round(Math.min(r.width, r.height) * spread);
+  const spread = Math.max(0, settings.ambilightSpread);
+  // canvas 是 replaced element：必须显式给宽高，只给 inset 不会拉伸
+  const size = 100 + spread * 2;
   return {
-    left: `${r.left - pad}px`,
-    top: `${r.top - pad}px`,
-    width: `${r.width + pad * 2}px`,
-    height: `${r.height + pad * 2}px`,
+    left: `${-spread}%`,
+    top: `${-spread}%`,
+    width: `${size}%`,
+    height: `${size}%`,
     opacity: String(Math.max(0, Math.min(100, settings.ambilightOpacity)) / 100),
     filter: [
       `blur(${Math.max(0, settings.ambilightBlur)}px)`,
@@ -418,9 +390,6 @@ let unwatchUrl: (() => void) | null = null;
 let unwatchDanmakuOpts: (() => void) | null = null;
 let unwatchDanmakuSwitch: (() => void) | null = null;
 let unwatchAmbilight: (() => void) | null = null;
-let unwatchGlowLayout: (() => void) | null = null;
-/** 视图尺寸变化时重量氛围光区域 */
-let glowObserver: ResizeObserver | null = null;
 
 /** 关闭浮层：直接改 store 状态（不经过 emit 中转，避免多一层出错点） */
 function close(): void {
@@ -449,13 +418,7 @@ onMounted(() => {
   document.addEventListener("pointerdown", onDocPointerDown, true);
   if (hasSource.value) void mountSource();
 
-  // 氛围光区域测量：窗口缩放、布局折行（左右栏变上下）都会改变并集位置。
-  // 只观察根与顶栏即可 —— 播放器/侧栏的尺寸变化必然引起它们重排。
-  measureGlow();
-  if (typeof ResizeObserver !== "undefined" && viewRef.value) {
-    glowObserver = new ResizeObserver(() => measureGlow());
-    glowObserver.observe(viewRef.value);
-  }
+  // 画布铺满整个视图，不需要测量任何区域（尺寸由 CSS 百分比给）
   // 弹幕外观改动实时生效（不必重开视频）
   unwatchDanmakuOpts = watch(
     () => [
@@ -472,17 +435,10 @@ onMounted(() => {
     () => settings.ambilightEnabled,
     async (on) => {
       if (!on) return;
-      // 先让画布挂上并量好区域，再把 <video> 交给它，避免首帧画在错误尺寸上
+      // 画布 v-if 刚挂上时还没有上下文，等一帧再接管 <video>
       await nextTick();
-      measureGlow();
       ambilight.attach(art?.video ?? null);
     },
-  );
-
-  // 相关推荐是异步加载的，回来前后侧栏高度不同 → 并集区域要重量一次
-  unwatchGlowLayout = watch(
-    () => bili.related.length,
-    () => void nextTick(measureGlow),
   );
 
   // 总开关：开着的时候把弹幕装回来（关掉时由 hide() 隐藏，但列表也需要清）
@@ -514,10 +470,7 @@ onBeforeUnmount(() => {
   unwatchDanmakuSwitch = null;
   unwatchAmbilight?.();
   unwatchAmbilight = null;
-  unwatchGlowLayout?.();
-  unwatchGlowLayout = null;
-  glowObserver?.disconnect();
-  glowObserver = null;
+
   // 卸载（切页 / 关应用）前把进度落一次，否则这一段观看记录会丢
   bili.reportProgress(currentSeconds());
   bili.stopHeartbeat();
@@ -579,10 +532,10 @@ const metaItems = computed(() => {
 <template>
   <div ref="viewRef" class="bili-view" :class="{ 'has-ambilight': settings.ambilightEnabled }">
     <!--
-      氛围光画布：**一片**共用背景，覆盖「顶栏 + 播放器 + 右侧相关推荐」。
-      三者分属不同父级（顶栏在 .content 之外、侧栏是 .main 的兄弟），所以不能挂在
-      播放器里 —— 那样会被 .content 的 overflow 裁掉，也够不到顶栏。
-      这里放在视图根节点下，用测量出的像素区域定位（见 measureGlow）。
+      氛围光画布：铺满整个视图的一片共用背景。
+      挂在视图根节点下（而不是播放器里）的原因：
+        - 挂在播放器里会被 .content 的 overflow 裁掉，也够不到顶栏与侧栏；
+        - 铺满之后顶栏 / 播放器 / 侧栏 / 评论区都落在同一片光上，中间没有接缝。
     -->
     <canvas
       v-if="settings.ambilightEnabled"
@@ -613,7 +566,7 @@ const metaItems = computed(() => {
     <div class="content">
       <div class="main">
         <!-- 播放器 -->
-        <div ref="playerAreaRef" class="player-area">
+        <div class="player-area">
           <div ref="container" class="art-container" />
           <div v-if="bili.playStatus === 'loading'" class="player-overlay">
             <m3e-loading-indicator class="lm-loading" />
@@ -809,7 +762,7 @@ const metaItems = computed(() => {
       </div>
 
       <!-- 右栏：相关推荐（sticky，长评论区滚动时始终可见） -->
-      <aside ref="sideRef" class="side">
+      <aside class="side">
         <BilibiliRelatedList
           :videos="bili.related"
           :status="bili.relatedStatus"
@@ -960,42 +913,88 @@ const metaItems = computed(() => {
   user-select: none;
   will-change: filter;
 }
-/* 画布在下、三块内容在上：视图根建层叠上下文，内容层抬到 1 */
+/*
+ * ============ 氛围光沉浸模式 ============
+ *
+ * 目标是「一片连续的氛围表面」：顶栏、播放器、右侧相关推荐、底部评论区全部融为
+ * 一体，中间没有卡片间隙、没有描边。
+ *
+ * 关键认识：视图根的底色原本是**不透明**的 `--md-sys-color-surface`。
+ * 光晕画布在它下面，所以只靠「把某几块调透明」是不够的 —— 只要还有任何一层不透明
+ * surface 挡在画布与内容之间，就会出现色块边界。因此这里统一做三件事：
+ *   1. 根底色置空，整页真正「透」到光晕上；
+ *   2. 所有内容分区的卡片底与发丝描边一律去掉（顶栏/侧栏/评论输入框/评论楼中楼）；
+ *   3. 需要区分层级的地方改用**留白**而不是底色与描边。
+ */
 .bili-view.has-ambilight {
   isolation: isolate;
+  /*
+   * 根底保留一层主题色，而不是置空。两个原因：
+   * 1. 画布铺满视图，但 blur() 会在最外圈把画面拉暗；有底色垫底，边缘过渡更自然；
+   * 2. 这是 position: fixed 的全屏浮层 —— 根若透明，浮层之外会透出下层 App（串页）。
+   * 让内容「融进光里」靠的是把各分区的卡片底与描边全部摊平，而不是把根抠空。
+   */
+  background: var(--md-sys-color-surface);
 }
 .bili-view.has-ambilight .head,
 .bili-view.has-ambilight .content {
   position: relative;
   z-index: 1;
 }
-/*
- * 顶栏原本是 lm-glass（半透明 + backdrop-filter）。氛围光在它下面时，
- * 半透明底会把光晕压得几乎看不见；开氛围光时改用更透的底，
- * 让顶栏也「吃到」光晕，同时保留发丝边与拖拽区。
- */
+
+/* ---- 顶栏：去掉 lm-glass 底色、底部分隔线与毛玻璃，纯粹让光透上来 ---- */
 .bili-view.has-ambilight .head {
-  background: color-mix(in srgb, var(--lm-scrim-surface) 45%, transparent);
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-bottom-color: transparent;
 }
-/* 播放器黑底会盖住身后的光晕：开启时交给光晕，边框留视频自己 */
+
+/* ---- 播放器：黑底会盖住光晕，交给光晕自己 ---- */
 .bili-view.has-ambilight .player-area {
   background: transparent;
 }
+
 /*
- * 右侧「相关推荐」原本是不透明卡片底（surface-container-low = #f6f7f9 / #131316），
- * 整块把光晕挡在外面 —— 表现为「拖底的卡片还是不透明」。
- * 开启氛围光时改用半透明底：既保留卡片的分组观感，又让光晕透上来。
+ * ---- 右侧相关推荐 / 评论输入框 / 评论区：全部去卡片底与描边 ----
  *
- * 用 color-mix 而不是直接 rgba()：这个底色跟随主题/皮肤种子色变化，
- * 写死通道值会在换主题后偏色。
+ * 这几块原本各自是 surface-container-low + inset 发丝描边（也就是你看到的卡片边）。
+ * 沉浸模式下统一摊平：只保留 padding 与外层间距来表达分组。
  */
+/* .side 在本组件内；.composer / .comments 在子组件里，必须 :deep() 穿透 scoped */
 .bili-view.has-ambilight .side {
-  background: color-mix(in srgb, var(--md-sys-color-surface-container-low) 42%, transparent);
+  background: transparent;
+  box-shadow: none;
 }
+.bili-view.has-ambilight :deep(.composer) {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* 评论区的顶部分隔线也去掉：它会在光晕中间划一道横线 */
+.bili-view.has-ambilight :deep(.comments) {
+  border-top-color: transparent;
+}
+
 /*
- * 卡片里的行式条目 hover/active 底色同理（surface-container-high/highest 也是不透明的），
- * 但它们只在交互瞬间出现，保持不透明反而更清晰，故不动。
- * 缩略图占位块（surface-container）留着 —— 那是图片没加载时的占位，透出光晕会脏。
+ * 楼中楼（回复）原本是 surface-container 底 + 圆角，会形成嵌套卡片。
+ * 沉浸模式下改为左侧竖线缩进 —— 既表达从属关系，又不切碎光晕。
+ */
+.bili-view.has-ambilight :deep(.comments .subs) {
+  background: transparent;
+  padding-left: 12px;
+  border-left: 2px solid color-mix(in srgb, var(--md-sys-color-outline-variant) 55%, transparent);
+  border-radius: 0;
+}
+
+/* 评论项之间靠留白分隔（不再有卡片） */
+.bili-view.has-ambilight :deep(.comments .list) {
+  gap: 20px;
+}
+
+/*
+ * 缩略图占位与时长角标保持原样：它们是内容本身（图片占位/时间信息），
+ * 不是分区卡片，透出光晕反而更脏。
  */
 .art-container {
   position: absolute;
