@@ -301,6 +301,9 @@ watch(
     await nextTick();
     for (const el of lineRefs.value) {
       if (!el) continue;
+      // 换歌是「重新就位」而不是「过渡」：先压掉 opacity / filter 的过渡，否则新歌词
+      // 会从上一首的明暗档位淡过来。压一帧后恢复（同原实现的 no-transition 手法）。
+      el.classList.add("no-transition");
       el.style.transform = "";
       el.style.opacity = "";
       el.style.filter = "";
@@ -308,6 +311,11 @@ watch(
         w.style.removeProperty("--word-float");
       }
     }
+    // 强制回流，让上面清空的样式先落地，再恢复过渡（否则会被合并成一次带动画的变更）
+    void containerRef.value?.offsetHeight;
+    requestAnimationFrame(() => {
+      for (const el of lineRefs.value) el?.classList.remove("no-transition");
+    });
   },
 );
 
@@ -486,6 +494,22 @@ function bgFirst(line: LyricLine): boolean {
   cursor: pointer;
   transform-origin: left center;
   will-change: transform, filter, opacity;
+  /*
+   * 只给 opacity / filter 加过渡，**刻意不含 transform**：
+   * - transform 由 rAF 里的弹簧逐帧积分，目标突变时速度是连续的，再加 CSS 过渡
+   *   等于把两套缓动叠在一起（二阶滞回），反而拖后腿；
+   * - opacity / filter 是**离散档位**（按与当前行的距离取值），切行瞬间所有可见行
+   *   同时跳一档。没有过渡的话就是整屏一次硬切，正是「唱完切下一句很生硬」的来源。
+   * 参数对齐 AMLL 的 .lyricLineWrapper（opacity / filter 各 0.4s ease）。
+   */
+  transition:
+    opacity 0.4s ease,
+    filter 0.4s ease;
+}
+
+/* 换歌瞬间就位：不走过渡（与 transform 的弹簧无关，这里专治 opacity / filter） */
+.lyric-item.no-transition {
+  transition: none !important;
 }
 
 .lyric-item.active {
