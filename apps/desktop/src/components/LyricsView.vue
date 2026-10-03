@@ -1,26 +1,34 @@
 <script setup lang="ts">
 /**
- * 歌词视图 —— 1:1 复刻《音乐播放器参考》的 UpdateLyricsLayout / GetLyricsLayout。
+ * 歌词视图 —— 每行绝对定位 + **独立弹簧位移**（对齐 AMLL 的滚动模型）。
  *
- * 关键点（与参考实现一致，勿改为容器滚动）：
- * - 每行绝对定位，靠各自的 translateY 位移，而不是滚动容器。
- *   容器 scrollTo 只能整体平移，做不出参考里「每行独立缓动 + 逐行错开」
- *   的 Apple Music 波浪感。
- * - 位移量按行实际 offsetHeight 累加（GetLyricsLayout），因此双语歌词、
- *   不同字号都能精确对齐。
- * - 切行时按与当前行的距离错开 (n*70 - n*10) ms 依次启动，形成级联。
- * - 过渡曲线 cubic-bezier(.19,.11,0,1) 0.7s，模糊量随距离线性增长。
+ * 关键点（勿改为容器滚动）：
+ * - 每行绝对定位，靠各自的 translateY 位移，而不是滚动容器。容器 scrollTo 只能整体
+ *   平移，做不出 Apple Music 里「每行独立缓动 + 逐行错开」的波浪感。
+ * - 位移量按行实际 offsetHeight 累加，因此双语歌词、不同字号都能精确对齐。
+ * - 切行时按与当前行的距离错开启动，形成级联。
+ *
+ * 相对早先版本的改动（对齐 AMLL）：
+ * - 位移由 CSS transition + setTimeout 级联改为**弹簧物理积分**：目标位置突变时速度
+ *   连续，切行不会有一顿一顿的重启感；跳转 / 间奏自动切慢速档。
+ * - 行高、模糊、透明度的计算都缓存，样式只在数值真的变化时写。
+ * - 模糊加上限并跳过视口外的行，避免几十层高斯卷积。
+ * - 逐字填充复用已缓存的词元素，不再每帧 querySelectorAll。
+ * - 支持对唱右对齐（line.duet）与背景和声子行（line.bg）。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { usePlayerStore } from "@/stores/player";
 import { useSettingsStore, type LyricFontKey } from "@/stores/settings";
 import { translate } from "@shared/i18n";
+import { getPosYSpringPolicy, Spring } from "@/utils/spring";
+import { SeekDetector } from "@/utils/seekDetector";
+import type { LyricLine } from "@shared/types";
 
 const player = usePlayerStore();
 const settings = useSettingsStore();
 
 /** 副行文本：按设置的模式取翻译或罗马音（无则空串） */
-function subText(line: { translation?: string; romaji?: string }): string {
+function subText(line: LyricLine): string {
   return settings.lyricSubMode === "translation" ? (line.translation ?? "") : (line.romaji ?? "");
 }
 
@@ -44,99 +52,236 @@ const lyricFontFamily = computed(() => LYRIC_FONTS[settings.lyricFont] ?? LYRIC_
  */
 const lyricsOffset = () => (containerRef.value ? containerRef.value.clientHeight / 2.6 : 240);
 
-const timers: number[] = [];
+/** 模糊上限（px）：对齐 AMLL 的 min(5, blur)，避免远行拖垮 GPU */
+const MAX_BLUR = 5;
+/** 超出此距离的行不再施加模糊（容器遮罩已经让它们不可见） */
+const BLUR_DISTANCE_LIMIT = 6;
+
+/** 间奏三点：主体时长低于此值（秒）不显示——进退场都放不下，会在屏幕上闪一下 */
+const DOTS_MIN_DURATION = 0.91;
+/** 三点进入「呼吸」模式的时长下限（秒），与 AMLL 的 3s 一致 */
+const DOTS_BREATHE_DURATION = 3.0;
 
 function t(key: string) {
   return translate(settings.lang, key);
 }
 
-function setLineRef(el: any, index: number) {
-  if (el) lineRefs.value[index] = el;
+function setLineRef(el: Element | null, index: number) {
+  if (el) lineRefs.value[index] = el as HTMLDivElement;
 }
 
-/** 第 to 行相对当前行 now 的目标位移（复刻 GetLyricsLayout） */
+// ---- 每行的运行时状态（弹簧 + 级联延迟 + 上一次写入的样式值）----
+
+interface RowRuntime {
+  spring: Spring;
+  /** 级联启动剩余延迟（秒）：>0 时先停在原处，到点再设目标 */
+  delay: number;
+  /** 待应用的目标位移 */
+  target: number;
+  /** 是否已设过目标（首帧要直接就位） */
+  primed: boolean;
+}
+
+let rows: RowRuntime[] = [];
+/** 缓存的行高（px）：只在 dirty 时重测，避免每帧读 offsetHeight 触发重排 */
+let heights: number[] = [];
+let heightsDirty = true;
+
+/** 缓存的位移（第 to 行相对当前行的目标位移） */
 function getLayout(now: number, to: number): number {
-  const lines = lineRefs.value;
   const lineGap = settings.lyricLineGap;
   let res = 0;
   if (to > now) {
-    for (let i = now; i < to; i++) {
-      res += (lines[i]?.offsetHeight ?? 0) + lineGap;
-    }
+    for (let i = now; i < to; i++) res += (heights[i] ?? 0) + lineGap;
   } else {
-    for (let i = now; i > to; i--) {
-      res -= (lines[i - 1]?.offsetHeight ?? 0) + lineGap;
-    }
+    for (let i = now; i > to; i--) res -= (heights[i - 1] ?? 0) + lineGap;
   }
   return res + lyricsOffset();
 }
 
-function clearTimers() {
-  while (timers.length) clearTimeout(timers.pop()!);
+function measureHeights(): void {
+  const n = player.lyrics.length;
+  const next = new Array<number>(n);
+  for (let i = 0; i < n; i++) next[i] = lineRefs.value[i]?.offsetHeight ?? 0;
+  heights = next;
+  heightsDirty = false;
 }
 
-/**
- * 复刻 UpdateLyricsLayout。
- * @param animate 0 = 立即就位（换歌/初始化），1 = 带级联动效
- */
-function updateLayout(index: number, animate: 0 | 1 = 1) {
-  const lines = lineRefs.value;
-  if (!lines.length) return;
-  clearTimers();
-
-  for (let i = 0; i < lines.length; i++) {
-    const el = lines[i];
-    if (!el) continue;
-
-    const distance = Math.abs(i - index);
-    el.style.filter = settings.lyricBlur ? `blur(${distance}px)` : "none";
-    el.style.opacity = i === index ? "1" : String(Math.max(0.22, 1 - distance * 0.22));
-
-    const position = getLayout(index, i);
-
-    // 距离当前行越远启动越晚；超过 10 行的直接同步归位，避免长尾卡顿
-    let n = i - index + 1;
-    if (n > 10) n = 0;
-    const delay = (n * 70 - n * 10) * animate;
-
-    if (delay <= 0) {
-      el.style.transform = `translateY(${position}px)`;
-    } else {
-      timers.push(
-        window.setTimeout(() => {
-          el.style.transform = `translateY(${position}px)`;
-        }, delay),
-      );
-    }
+/** 保证 rows 与歌词行数对齐（新增的行直接就位，不响应历史位置） */
+function syncRows(): void {
+  const n = player.lyrics.length;
+  if (rows.length > n) rows = rows.slice(0, n);
+  while (rows.length < n) {
+    rows.push({ spring: new Spring(0), delay: 0, target: 0, primed: false });
   }
 }
 
-/** 换歌/首次渲染：关闭过渡直接就位，避免所有行从 0 位一起飞入 */
-async function resetLayout() {
-  lineRefs.value = [];
-  await nextTick();
-  const lines = lineRefs.value;
-  lines.forEach((el) => el?.classList.add("no-transition"));
-  updateLayout(Math.max(0, player.activeLine), 0);
-  // 强制回流后再恢复过渡，否则会被合并成一次带动画的变更
-  void containerRef.value?.offsetHeight;
-  requestAnimationFrame(() => {
-    lines.forEach((el) => el?.classList.remove("no-transition"));
-  });
+// ---- 逐字填充：缓存当前行的词元素，避免每帧 querySelectorAll ----
+
+let activeWords: HTMLElement[] = [];
+let activeBgWords: HTMLElement[] = [];
+/** 缓存的填充进度，避免同值重复写样式 */
+let lastFill = new WeakMap<HTMLElement, number>();
+
+function refreshWordEls(): void {
+  const idx = player.activeLine;
+  const el = idx >= 0 ? lineRefs.value[idx] : null;
+  activeWords = el ? Array.from(el.querySelectorAll<HTMLElement>(".word")) : [];
+  activeBgWords = el ? Array.from(el.querySelectorAll<HTMLElement>(".bg-word")) : [];
+}
+
+/**
+ * 按播放位置推进逐字填充。
+ *
+ * 时间源必须是 audioEl.currentTime（实时播放位置），而不是 4Hz 的 currentTime ref
+ * ——后者会让填充按 ~250ms 阶梯跳动，产生顿感。background-position-x = 100 - 填充%。
+ */
+function updateWordFill(): void {
+  if (!settings.wordLyrics) return;
+  const idx = player.activeLine;
+  const line = player.lyrics[idx];
+  if (!line?.units?.length) return;
+  const now = player.audioEl?.currentTime ?? player.currentTime;
+  fillUnits(line.units, activeWords, now);
+  if (line.bg?.units?.length) fillUnits(line.bg.units, activeBgWords, now);
+}
+
+function fillUnits(units: { start: number; end: number }[], els: HTMLElement[], now: number): void {
+  for (let i = 0; i < units.length; i++) {
+    const el = els[i];
+    if (!el) continue;
+    const u = units[i];
+    let pct = 0;
+    if (now >= u.end) pct = 100;
+    else if (now > u.start) pct = ((now - u.start) / (u.end - u.start)) * 100;
+    const rounded = Math.round(pct * 100) / 100;
+    if (lastFill.get(el) === rounded) continue;
+    lastFill.set(el, rounded);
+    el.style.backgroundPosition = `${(100 - rounded).toFixed(2)}% 0`;
+    el.classList.toggle("sung", now >= u.end);
+  }
+}
+
+// ---- 主循环 ----
+
+let rafId = 0;
+let lastFrame = 0;
+let lastActive = -2;
+const seekDetector = new SeekDetector();
+
+/** 行是否处于视口内（含上下各留一行余量） */
+function inViewport(y: number, h: number, containerH: number): boolean {
+  return y + h >= -40 && y <= containerH + 40;
+}
+
+function rafLoop(ts: number): void {
+  rafId = requestAnimationFrame(rafLoop);
+  const dt = lastFrame ? Math.min((ts - lastFrame) / 1000, 0.1) : 0;
+  lastFrame = ts;
+
+  const lines = player.lyrics;
+  const activeIdx = player.activeLine;
+  if (activeIdx !== lastActive) {
+    lastActive = activeIdx;
+    heightsDirty = true;
+    // 当前行 DOM 结构会随 active 变化（整行文本 ↔ 逐词 span），需重新取词元素
+    void nextTick(refreshWordEls);
+  }
+  if (heightsDirty) measureHeights();
+  syncRows();
+
+  const containerH = containerRef.value?.clientHeight ?? 0;
+  const mediaTime = player.audioEl?.currentTime ?? player.currentTime;
+  const seeking = seekDetector.detect(mediaTime, player.playing);
+  const now = activeIdx >= 0 ? activeIdx : 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const row = rows[i];
+    const el = lineRefs.value[i];
+    if (!row || !el) continue;
+    const line = lines[i];
+
+    const target = getLayout(now, i);
+    if (!row.primed) {
+      row.spring.setPosition(target);
+      row.primed = true;
+      row.target = target;
+      row.delay = 0;
+    } else if (target !== row.target) {
+      row.target = target;
+      if (seeking) {
+        // 跳转：不排队列，直接换慢速弹簧追过去
+        row.delay = 0;
+        row.spring.updateParams(getPosYSpringPolicy(true, !!line.instrumental));
+        row.spring.setTargetPosition(target);
+      } else {
+        // 级联：距离当前行越远启动越晚；超过 10 行直接同步，避免长尾
+        let n = i - activeIdx + 1;
+        if (n > 10) n = 0;
+        row.delay = n > 0 ? n * 0.06 : 0;
+        const prevIdx = lines[i - 1]?.time;
+        const intervalMs = prevIdx !== undefined ? (line.time - prevIdx) * 1000 : undefined;
+        row.spring.updateParams(getPosYSpringPolicy(false, !!line.instrumental, intervalMs));
+      }
+    }
+
+    if (row.delay > 0) {
+      row.delay -= dt;
+    } else {
+      row.spring.setTargetPosition(target);
+    }
+    row.spring.update(dt);
+
+    const y = row.spring.getCurrentPosition();
+    el.style.transform = `translateY(${y.toFixed(2)}px)`;
+
+    const distance = Math.abs(i - activeIdx);
+    const visible = inViewport(y, heights[i] ?? 0, containerH);
+    // 视口外的行不参与合成（AMLL 用的是 1e-4，几乎不可见但保留元素）
+    const opacity = !visible ? 0 : i === activeIdx ? 1 : Math.max(0.22, 1 - distance * 0.22);
+    if (el.style.opacity !== String(opacity)) el.style.opacity = String(opacity);
+
+    // 模糊：加到上限就停；焦点行 / 视口外 / 过远的行都不施加
+    const blur =
+      settings.lyricBlur && visible && i !== activeIdx && distance <= BLUR_DISTANCE_LIMIT
+        ? Math.min(MAX_BLUR, distance)
+        : 0;
+    const filter = blur ? `blur(${blur}px)` : "none";
+    if (el.style.filter !== filter) el.style.filter = filter;
+  }
+
+  updateWordFill();
+}
+
+// ---- 生命周期与失效 ----
+
+/** 行高 / 位移目标失效，等下一帧重算 */
+function invalidateHeights(): void {
+  heightsDirty = true;
 }
 
 watch(
-  () => player.activeLine,
-  async (idx) => {
-    if (idx < 0) return;
+  () => player.lyrics,
+  async () => {
+    // 换歌：清空运行态，所有行下一帧直接就位（primed=false → setPosition），
+    // 不会从 0 位一起飞入。
+    rows = [];
+    activeWords = [];
+    activeBgWords = [];
+    lastFill = new WeakMap<HTMLElement, number>();
+    heightsDirty = true;
+    seekDetector.reset();
+    // v-for 按 index 复用元素，旧的内联 transform / 滤镜会残留一帧；先清掉再让 rAF 重写
     await nextTick();
-    updateLayout(idx, 1);
+    for (const el of lineRefs.value) {
+      if (!el) continue;
+      el.style.transform = "";
+      el.style.opacity = "";
+      el.style.filter = "";
+    }
   },
 );
 
-watch(() => player.lyrics, resetLayout);
-
-// 字号/行高/行间距/翻译字号/翻译间距改变会影响每行高度，需要重新计算位移
 watch(
   () => [
     settings.lyricFontSize,
@@ -144,63 +289,58 @@ watch(
     settings.lyricLineGap,
     settings.lyricTranslationSize,
     settings.lyricTranslationGap,
+    settings.lyricSubMode,
+    settings.wordLyrics,
   ],
-  async () => {
-    await nextTick();
-    updateLayout(Math.max(0, player.activeLine), 0);
+  () => {
+    heightsDirty = true;
+    void nextTick(refreshWordEls);
   },
 );
 
 let ro: ResizeObserver | null = null;
 
-onMounted(async () => {
-  await resetLayout();
-  ro = new ResizeObserver(() => updateLayout(Math.max(0, player.activeLine), 0));
+onMounted(() => {
+  heightsDirty = true;
+  ro = new ResizeObserver(() => invalidateHeights());
   if (containerRef.value) ro.observe(containerRef.value);
   rafId = requestAnimationFrame(rafLoop);
 });
 
 onBeforeUnmount(() => {
-  clearTimers();
   ro?.disconnect();
   cancelAnimationFrame(rafId);
 });
 
 const hasLyrics = computed(() => player.lyrics.length > 0);
 
-// ---- Apple Music 式逐字填充 + 逐字弹跳 ----
-// 固定结构渐变 + 移动 background-position（比每帧改渐变 stop 平滑省资源）。
-// 关键：时间源用 audioEl.currentTime（实时播放位置），而非 4Hz 的 currentTime
-// ref——后者会让填充按 ~250ms 阶梯跳动，产生「顿感」。
-// background-position-x = (100 - 填充%)，100% 全暗 → 0% 全亮。
-// 逐字弹跳也在这里按同一平滑时间切换 .current 类（弹簧 scale），与填充同步。
-// rAF 只改 style/class，不触发 Vue 重渲染。
+// ---- 间奏三点：分档 ----
 
-function updateWordFill() {
-  if (!settings.wordLyrics) return;
-  const idx = player.activeLine;
-  const line = player.lyrics[idx];
-  if (!line?.units?.length) return;
-  const lineEl = lineRefs.value[idx];
-  const words = lineEl?.querySelectorAll<HTMLElement>(".word");
-  if (!words?.length) return;
-  const t = player.audioEl?.currentTime ?? player.currentTime;
-  line.units.forEach((u, i) => {
-    const el = words[i];
-    if (!el) return;
-    let pct = 0;
-    if (t >= u.end) pct = 100;
-    else if (t > u.start) pct = ((t - u.start) / (u.end - u.start)) * 100;
-    el.style.backgroundPosition = `${(100 - pct).toFixed(2)}% 0`;
-    // Apple Music 式：唱完的字上浮并保持，直到行结束（下一行激活后随行重置）
-    el.classList.toggle("sung", t >= u.end);
-  });
+/** 三点行的总时长（秒） */
+function dotsDuration(line: LyricLine): number {
+  const u = line.units;
+  if (!u?.length) return 0;
+  return u[u.length - 1].end - u[0].start;
 }
 
-let rafId = 0;
-function rafLoop() {
-  rafId = requestAnimationFrame(rafLoop);
-  updateWordFill();
+/**
+ * 三点行的呈现档位：
+ * - `hidden`：时长太短（< 0.91s），进退场都放不下，不显示；
+ * - `hold`：不够一个呼吸周期（< 3s），错峰淡入后常亮；
+ * - `breathe`：完整呼吸循环。
+ */
+function dotsClass(line: LyricLine): string {
+  if (!line.instrumental) return "";
+  const d = dotsDuration(line);
+  if (d < DOTS_MIN_DURATION) return "dots-hidden";
+  return d < DOTS_BREATHE_DURATION ? "dots-hold" : "dots-breathe";
+}
+
+/** 和声子行是否排在主行之前（按首词时间判断，与 AMLL 的 isBgFirst 同口径） */
+function bgFirst(line: LyricLine): boolean {
+  const bgStart = line.bg?.units?.[0]?.start ?? line.time;
+  const mainStart = line.units?.[0]?.start ?? line.time;
+  return bgStart < mainStart;
 }
 </script>
 
@@ -210,9 +350,16 @@ function rafLoop() {
       <div
         v-for="(line, i) in player.lyrics"
         :key="i"
-        :ref="(el) => setLineRef(el, i)"
+        :ref="(el) => setLineRef(el as Element | null, i)"
         class="lyric-item"
-        :class="{ active: i === player.activeLine, instrumental: line.instrumental }"
+        :class="[
+          {
+            active: i === player.activeLine,
+            instrumental: line.instrumental,
+            duet: line.duet,
+          },
+          i === player.activeLine ? dotsClass(line) : '',
+        ]"
         :style="{
           fontSize: settings.lyricFontSize + 'px',
           lineHeight: settings.lyricLineHeight,
@@ -220,12 +367,36 @@ function rafLoop() {
         }"
         @click="player.seekToLyric(i)"
       >
+        <!-- 背景和声子行：默认在主行下方；首词更早时排到上方（AMLL 的 isBgFirst） -->
+        <p
+          v-if="line.bg && bgFirst(line)"
+          class="lyric-bg"
+          :class="{ 'with-words': settings.wordLyrics && i === player.activeLine }"
+        >
+          <template v-if="settings.wordLyrics && i === player.activeLine && line.bg.units?.length">
+            <span v-for="(u, wi) in line.bg.units" :key="wi" class="bg-word">{{ u.text }}</span>
+          </template>
+          <template v-else>{{ line.bg.text }}</template>
+        </p>
+
         <p class="lyric-text" :class="{ pop: i === player.activeLine }">
           <template v-if="settings.wordLyrics && i === player.activeLine && line.units?.length">
             <span v-for="(u, wi) in line.units" :key="wi" class="word">{{ u.text }}</span>
           </template>
           <template v-else>{{ line.text }}</template>
         </p>
+
+        <p
+          v-if="line.bg && !bgFirst(line)"
+          class="lyric-bg"
+          :class="{ 'with-words': settings.wordLyrics && i === player.activeLine }"
+        >
+          <template v-if="settings.wordLyrics && i === player.activeLine && line.bg.units?.length">
+            <span v-for="(u, wi) in line.bg.units" :key="wi" class="bg-word">{{ u.text }}</span>
+          </template>
+          <template v-else>{{ line.bg.text }}</template>
+        </p>
+
         <p
           v-if="subText(line)"
           class="lyric-translation"
@@ -286,8 +457,6 @@ function rafLoop() {
   cursor: pointer;
   transform-origin: left center;
   will-change: transform, filter, opacity;
-  /* Apple Music 参考曲线，勿改 */
-  transition: all 0.7s cubic-bezier(0.19, 0.11, 0, 1);
 }
 
 .lyric-item.active {
@@ -297,9 +466,10 @@ function rafLoop() {
   --word-unsung: rgba(255, 255, 255, 0.35);
 }
 
-/* 换歌瞬间就位，不走过渡 */
-.lyric-item.no-transition {
-  transition: none !important;
+/* 对唱行：靠右对齐（AMLL 的 .lyricDuetLine） */
+.lyric-item.duet {
+  text-align: right;
+  transform-origin: right center;
 }
 
 .lyric-text {
@@ -307,12 +477,25 @@ function rafLoop() {
   text-shadow: 0 1px 12px rgba(0, 0, 0, 0.35);
 }
 
+/* 背景和声子行：更小、更暗，与主行形成层级（AMLL 的 .lyricBgLine） */
+.lyric-bg {
+  font-size: 0.7em;
+  font-weight: 500;
+  opacity: 0.4;
+  letter-spacing: 0.4px;
+  word-wrap: break-word;
+}
+.lyric-item.active .lyric-bg {
+  opacity: 0.55;
+}
+
 /* 逐字填充：Apple Music 式。
  * 固定结构渐变（sung→unsung 47%/53% 软边）+ 移动 background-position，
  * 比每帧改渐变 stop 更平滑省资源。非当前行整行纯文本渲染。
  * 唱完的字 translateY 上浮并保持（不回弹），直到行结束随行重置。
  */
-.word {
+.word,
+.bg-word {
   display: inline-block;
   white-space: pre; /* 保留英文词间空格（空格已并入词尾） */
   transition: transform 0.5s cubic-bezier(0.34, 1.2, 0.64, 1);
@@ -332,8 +515,28 @@ function rafLoop() {
   -webkit-background-clip: text;
   background-clip: text;
 }
+/* 和声子行沿用同一套填充，但用自己更暗的配色 */
+.lyric-item.active .bg-word {
+  color: transparent;
+  background-image: linear-gradient(
+    to right,
+    var(--word-sung) 0%,
+    var(--word-sung) 47%,
+    var(--word-unsung) 53%,
+    var(--word-unsung) 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  background-position: 100% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  opacity: 0.55;
+}
 .lyric-item.active .word.sung {
   transform: translateY(-2px);
+}
+.lyric-item.active .bg-word.sung {
+  transform: translateY(-1.5px);
 }
 
 /* 前奏/间奏三点：放大一点，不影响其他歌词尺寸（scale 不改布局） */
@@ -346,10 +549,66 @@ function rafLoop() {
   transform: translateY(-2px) scale(1.5);
 }
 
+/*
+ * 三点分档（对齐 AMLL 的 InterludeDots 状态机）：
+ * - hidden：时长不足 0.91s，进退场都放不下，不显示；
+ * - hold：不足 3s，错峰淡入后常亮；
+ * - breathe：按 ~4s 周期做 1.25↔0.4 的呼吸缩放。
+ * 入场先静默 500ms，给上一行上移留出视觉缓冲（AMLL 的 ENTER_HOLD_MS）。
+ */
+.lyric-item.instrumental .word {
+  opacity: 0;
+}
+.lyric-item.active.dots-hidden .word {
+  opacity: 0;
+}
+.lyric-item.active.dots-hold .word {
+  animation: dots-enter 0.75s ease-out forwards;
+}
+.lyric-item.active.dots-breathe .word {
+  animation:
+    dots-enter 0.75s ease-out forwards,
+    dots-breathe 4s ease-in-out 1.25s infinite;
+}
+.lyric-item.active.dots-hold .word:nth-child(2) {
+  animation-delay: 0.58s;
+}
+.lyric-item.active.dots-hold .word:nth-child(3) {
+  animation-delay: 0.66s;
+}
+.lyric-item.active.dots-breathe .word:nth-child(2) {
+  animation-delay: 0.58s, 1.33s;
+}
+.lyric-item.active.dots-breathe .word:nth-child(3) {
+  animation-delay: 0.66s, 1.41s;
+}
+/* 只动 opacity：.word 的 transform 已经被 scale(1.5) / sung 上浮占用，
+ * 在动画里改 transform 会把三点的放大效果抹掉 */
+@keyframes dots-enter {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 0.9;
+  }
+}
+@keyframes dots-breathe {
+  0%,
+  100% {
+    opacity: 0.9;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
 /* 行级入场弹簧：切到当前行时一次 scale 回弹（单次动画，不顿） */
 .lyric-text.pop {
   transform-origin: left center;
   animation: lyric-pop 0.5s cubic-bezier(0.34, 1.2, 0.64, 1);
+}
+.lyric-item.duet .lyric-text.pop {
+  transform-origin: right center;
 }
 @keyframes lyric-pop {
   from {

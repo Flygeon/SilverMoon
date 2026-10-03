@@ -130,9 +130,10 @@ export function applyPreciseWordTimes(lines: LyricLine[], precise: PreciseLine[]
     if (!line?.units?.length) continue;
     const n = line.units.length;
     if (!p.times.length || p.times.length !== n) continue; // 数量不符则保留粗排
-    const texts = line.units.map((u) => u.text);
-    line.units = texts.map((text, i) => ({
-      text,
+    // 保留原文与 obscene 标记（只换时间）：漏掉标志会让遮蔽在 FFT 精排后失效
+    const src = line.units;
+    line.units = src.map((u, i) => ({
+      ...u,
       start: p.times[i],
       end: p.times[i + 1] ?? p.end,
     }));

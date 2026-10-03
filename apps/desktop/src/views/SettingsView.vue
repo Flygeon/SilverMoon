@@ -13,6 +13,7 @@ import {
   type DesktopLyricsToolbar,
   type DesktopLyricsDoubleClick,
 } from "@/stores/settings";
+import type { ObsceneMode } from "@/utils/obscene";
 import { useSkinsStore } from "@/stores/skins";
 import { useBangumiCollectStore } from "@/stores/bangumiCollect";
 import { useLibraryStore } from "@/stores/library";
@@ -64,6 +65,8 @@ function t(key: string) {
 }
 
 const LYRIC_FONT_KEYS: LyricFontKey[] = ["system", "sans", "serif", "kai", "yuan"];
+/** 不雅用语遮蔽档位（AMLL 的 amll:obscene） */
+const OBSCENE_MODES: ObsceneMode[] = ["off", "partial", "full"];
 const LYRICS_ANIMATIONS: DesktopLyricsAnimation[] = ["fade", "slide", "scale", "glow"];
 
 /**
@@ -849,6 +852,23 @@ function selectSection(id: string) {
           />
         </label>
         <p class="hint">{{ t("settings.detectInstrumentalHint") }}</p>
+        <div class="row">
+          <div class="row-label">
+            <span>{{ t("settings.obsceneMask") }}</span>
+          </div>
+          <div class="presets inline">
+            <m3e-filter-chip
+              v-for="m in OBSCENE_MODES"
+              :key="m"
+              class="chip"
+              :selected="settings.obsceneMask === m"
+              @click.prevent="settings.obsceneMask = m"
+            >
+              {{ t("settings.obsceneMode_" + m) }}
+            </m3e-filter-chip>
+          </div>
+        </div>
+        <p class="hint">{{ t("settings.obsceneMaskHint") }}</p>
         <div class="row">
           <div class="row-label">
             <span>{{ t("settings.lyricFont") }}</span>

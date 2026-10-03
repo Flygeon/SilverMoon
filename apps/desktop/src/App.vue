@@ -44,6 +44,7 @@ function pushDesktopLyricsState() {
       text: l.text,
       translation: l.translation,
       romaji: l.romaji,
+      bg: l.bg?.text,
     })),
     currentTime: player.currentTime,
     playing: player.playing,

@@ -59,6 +59,12 @@ const translationText = computed(() => {
   const tr = current.value?.translation;
   return tr && tr !== mainText.value ? tr : "";
 });
+/** 当前行的背景和声（AMLL 的 x-bg 子行；与主行同屏显示） */
+const bgText = computed(() => {
+  if (!settings.desktopLyricsShowTranslation) return "";
+  const bg = current.value?.bg;
+  return bg && bg !== mainText.value ? bg : "";
+});
 
 /** 控制栏是否可见（always 模式 / click 模式且已展开） */
 const toolbarVisible = computed(
@@ -215,6 +221,7 @@ onBeforeUnmount(() => {
       <Transition :name="'dl-' + settings.desktopLyricsAnimation" mode="out-in">
         <div :key="currentIndex" class="line-stack">
           <p class="line current">{{ mainText }}</p>
+          <p v-if="bgText" class="line bg-vocal">{{ bgText }}</p>
           <p v-if="translationText" class="line translation">{{ translationText }}</p>
         </div>
       </Transition>
@@ -337,6 +344,12 @@ html {
 .line.translation {
   font-size: 0.62em;
   opacity: 0.82;
+  font-weight: 500;
+}
+/* 背景和声子行：比翻译更小更暗，与主行形成层级 */
+.line.bg-vocal {
+  font-size: 0.55em;
+  opacity: 0.6;
   font-weight: 500;
 }
 

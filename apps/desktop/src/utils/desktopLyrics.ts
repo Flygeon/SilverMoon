@@ -22,6 +22,8 @@ export interface DesktopLyricLine {
   text: string;
   translation?: string;
   romaji?: string;
+  /** 背景和声子行文本（无则空）——桌面歌词窗口按副行展示 */
+  bg?: string;
 }
 
 export interface DesktopLyricsState {

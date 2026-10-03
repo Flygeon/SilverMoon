@@ -19,6 +19,7 @@ import {
 } from "@/utils/preciseLyrics";
 import { translate } from "@shared/i18n";
 import { applyPreciseWordTimes, getPreciseWordTimes } from "@/utils/wordAnalysis";
+import { maskObsceneUnits } from "@/utils/obscene";
 import { DualDeck } from "@/utils/dualDeck";
 import { audioEffectEngine } from "@/utils/audioEffects";
 import { planMix, type AutoMixSettings, type MixPlan } from "@/utils/autoMixEngine";
@@ -237,8 +238,52 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   const lyrics = ref<LyricLine[]>([]);
+  /**
+   * 未遮蔽的歌词原文。
+   *
+   * 遮蔽是有损的（原文被 `*` 替换后无法还原），所以必须留一份原始副本：
+   * 用户中途切换遮蔽模式时要能重新派生，而不是在已遮蔽的文本上二次遮蔽。
+   */
+  const lyricsRaw = ref<LyricLine[]>([]);
   const activeLine = ref(-1);
   const coverColors = ref<string[]>([]);
+
+  /**
+   * 歌词的唯一写入口：写入原文，并按当前设置派生遮蔽后的展示文本。
+   *
+   * 遮蔽放在这里（渲染前）而不是组件里，原因见 utils/obscene.ts：遮蔽会改变字形宽度，
+   * 在渲染时才换字会让逐字填充的行程与实测宽度错位。同时保证主歌词视图与桌面歌词
+   * 窗口拿到的是同一份文本。
+   */
+  function setLyrics(lines: LyricLine[]): void {
+    lyricsRaw.value = lines;
+    let shown = lines;
+    try {
+      shown = maskObsceneUnits(lines, useSettingsStore().obsceneMask);
+    } catch {
+      // 设置未就绪（纯函数单测 / 启动早期）：保持原文，不影响播放
+    }
+    lyrics.value = shown;
+    if (song.value) song.value.lyrics = shown;
+  }
+
+  /** 遮蔽模式变化：用原文重新派生（歌词不变时也会调） */
+  function refreshObsceneMask(): void {
+    if (!lyricsRaw.value.length) return;
+    setLyrics(lyricsRaw.value);
+  }
+
+  // 遮蔽模式是展示层设置：改了要立刻用**原文**重算，不能在已遮蔽的文本上二次遮蔽。
+  // settings store 在模块初始化时可能还没建好，所以 watch 放到 try 里。
+  try {
+    const st = useSettingsStore();
+    watch(
+      () => st.obsceneMask,
+      () => refreshObsceneMask(),
+    );
+  } catch {
+    // 无 Pinia 实例（纯函数单测）：跳过，遮蔽功能降级为不生效
+  }
 
   /** Windows SMTC 状态推送节流：上次同步时间戳（毫秒） */
   let lastSmtcSync = 0;
@@ -793,6 +838,7 @@ export const usePlayerStore = defineStore("player", () => {
         text: l.text,
         translation: l.translation,
         romaji: l.romaji,
+        bg: l.bg?.text,
       })),
       currentTime: currentTime.value,
       playing: playing.value,
@@ -865,7 +911,10 @@ export const usePlayerStore = defineStore("player", () => {
       );
       // 防止分析完成时已切歌：当前歌曲仍是同一首才应用
       if (precise && song.value?.id === meta.id) {
+        // 就地改写原文（lines 与 lyricsRaw 同引用），再重新派生一次展示文本：
+        // 遮蔽生效时 lyrics 是另一份数组，不重派生就会留着旧的逐字时间轴。
         applyPreciseWordTimes(lines, precise);
+        if (lyricsRaw.value === lines) setLyrics(lines);
       }
     } finally {
       wordAnalysisInflight.delete(key);
@@ -983,8 +1032,7 @@ export const usePlayerStore = defineStore("player", () => {
       // 本地 LRC 那条链路本来就有三点标记，这里补上同一套，免得两边表现不一致。
       applied = insertInterludeDots(applied, { tailEnd: (song.value.durationMs ?? 0) / 1000 });
     }
-    lyrics.value = applied;
-    song.value.lyrics = applied;
+    setLyrics(applied);
     updateActiveLine();
     lyricsSource.value = result.source;
     lyricFallbackReason.value = null;
@@ -1137,8 +1185,7 @@ export const usePlayerStore = defineStore("player", () => {
     if (next === "local") {
       showLyricNotice(`${translate(lang, "player.lyricSourceSwitched")}${labels[next]}`);
       // 切回本地歌词（含 FFT 精排）
-      lyrics.value = localLyrics.value;
-      song.value.lyrics = localLyrics.value;
+      setLyrics(localLyrics.value);
       updateActiveLine();
       lyricsSource.value = "local";
       lyricFallbackReason.value = null;
@@ -1206,7 +1253,7 @@ export const usePlayerStore = defineStore("player", () => {
     // 听歌时长统计：开始新会话（自动 flush 旧会话）
     beginSession(song.value);
     activeLine.value = -1;
-    lyrics.value = parsed;
+    setLyrics(parsed);
     coverColors.value = [];
     currentTime.value = 0;
     duration.value = 0;
@@ -1339,7 +1386,7 @@ export const usePlayerStore = defineStore("player", () => {
       beginSession(song.value);
       activeLine.value = -1;
       // 与 loadSong 一致：歌词挂在 store 的 lyrics ref 上，LyricsView 读它
-      lyrics.value = parsed;
+      setLyrics(parsed);
       // 新歌：清空歌词来源状态，等待本次 QQ 尝试结果
       lyricsSource.value = null;
       lyricFallbackReason.value = null;
@@ -1437,7 +1484,7 @@ export const usePlayerStore = defineStore("player", () => {
       // 听歌时长统计：开始新会话
       beginSession(song.value);
       activeLine.value = -1;
-      lyrics.value = parsed;
+      setLyrics(parsed);
       lyricsSource.value = null;
       lyricFallbackReason.value = null;
       lyricFallbackDetail.value = null;
@@ -1778,6 +1825,8 @@ export const usePlayerStore = defineStore("player", () => {
     shuffleMode,
     repeatMode,
     lyrics,
+    lyricsRaw,
+    setLyrics,
     activeLine,
     coverColors,
     currentLyric,

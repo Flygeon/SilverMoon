@@ -7,6 +7,7 @@ import { applySkin } from "@/utils/skinLoader";
 import { activePrepared, activeSkinDoc, skinModeLock, skinSafeMode } from "@/utils/skinRuntime";
 import type { MusicServer, OnlinePlaylistEntry } from "@shared/types";
 import type { LyricSourcePref } from "@/utils/preciseLyrics";
+import type { ObsceneMode } from "@/utils/obscene";
 
 export type ThemeMode = "system" | "light" | "dark";
 export type PdfReadMode = "single" | "dual" | "scroll";
@@ -87,6 +88,11 @@ const DEFAULTS = {
   lyricSourcePrefs: {} as Record<string, LyricSourcePref>,
   /** 自动识别前奏/间奏：隐藏作词/作曲/编曲为三点，长间奏插入三点 */
   detectInstrumental: true,
+  /**
+   * 不雅用语遮蔽（AMLL TTML 的 amll:obscene）：
+   * off 不遮蔽 / partial 保留首尾字符 / full 全部遮蔽为 *。
+   */
+  obsceneMask: "off" as ObsceneMode,
   /** 播放器背景：动态模糊 / AMLL 网格渐变 / 仅图片模糊 / 关闭 */
   playerBg: "animated" as PlayerBgMode,
   lyricBlur: true,
@@ -316,6 +322,7 @@ export const useSettingsStore = defineStore("settings", () => {
   const amllLyricBase = ref(DEFAULTS.amllLyricBase);
   const lyricSourcePrefs = ref<Record<string, LyricSourcePref>>({ ...DEFAULTS.lyricSourcePrefs });
   const detectInstrumental = ref(DEFAULTS.detectInstrumental);
+  const obsceneMask = ref<ObsceneMode>(DEFAULTS.obsceneMask);
   const playerBg = ref<PlayerBgMode>(DEFAULTS.playerBg);
   const lyricBlur = ref(DEFAULTS.lyricBlur);
   const scanDirs = ref<string[]>([...DEFAULTS.scanDirs]);
@@ -436,6 +443,7 @@ export const useSettingsStore = defineStore("settings", () => {
     amllLyricBase,
     lyricSourcePrefs,
     detectInstrumental,
+    obsceneMask,
     playerBg,
     lyricBlur,
     scanDirs,
