@@ -84,6 +84,27 @@ describe("toAmllLyricBundle", () => {
     const romaji = toAmllLyricLines(lines, { subMode: "romaji" });
     expect(romaji[1].translatedLyric).toBe("");
     expect(romaji[1].romanLyric).toBe("ro2");
+
+    // 「只显示原文」：两条副行都留空，AMLL 才不会渲染出任何副行
+    const original = toAmllLyricLines(lines, { subMode: "none" });
+    expect(original[0].translatedLyric).toBe("");
+    expect(original[0].romanLyric).toBe("");
+    // 主歌词本身不受影响
+    expect(original[0].words[0].word).toBe("A");
+  });
+
+  it("和声子行也跟随 none：只显示原文时不渲染和声行的翻译 / 音译", () => {
+    const lines = [
+      line({
+        time: 1,
+        text: "main",
+        bg: { text: "bg", translation: "bgt", romaji: "bgr" },
+      }),
+    ];
+    const { lines: out } = toAmllLyricBundle(lines, { subMode: "none" });
+    expect(out[1].isBG).toBe(true);
+    expect(out[1].translatedLyric).toBe("");
+    expect(out[1].romanLyric).toBe("");
   });
 
   it("关闭逐字后每行压成单个词元（走 AMLL 的非逐词渲染）", () => {

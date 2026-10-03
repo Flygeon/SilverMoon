@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, defineAsyncComponent, onMounted, onBeforeUnmount } from "vue";
 import { usePlayerStore } from "@/stores/player";
-import { useSettingsStore } from "@/stores/settings";
+import { useSettingsStore, type LyricSubMode } from "@/stores/settings";
 import { useNeteaseStore } from "@/stores/netease";
 import { useRouter } from "vue-router";
 import { translate } from "@shared/i18n";
@@ -95,12 +95,28 @@ const canShowComments = computed(() => netease.loggedIn && neteaseSongId.value !
 /** 当前歌曲是否有翻译/罗马音副行（无则切换按钮置灰） */
 const hasSubLine = computed(() => player.lyrics.some((l) => l.translation || l.romaji));
 
-/** 副行显示模式按钮：翻译 ⇄ 罗马音 */
-const subModeLabel = computed(() =>
-  settings.lyricSubMode === "translation" ? t("player.translation") : t("player.romaji"),
+/** 副行显示模式按钮：原文 → 翻译 → 罗马音 循环（原文 = 不显示副行） */
+const SUB_MODE_ORDER: LyricSubMode[] = ["translation", "romaji", "none"];
+const subModeLabel = computed(
+  () =>
+    ({
+      none: t("player.original"),
+      translation: t("player.translation"),
+      romaji: t("player.romaji"),
+    })[settings.lyricSubMode],
+);
+/** 当前模式对应的图标（与 i18n 标签同源，避免两处各判一次） */
+const subModeIcon = computed(
+  () =>
+    ({
+      none: "subtitles_off",
+      translation: "translate",
+      romaji: "abc",
+    })[settings.lyricSubMode],
 );
 function cycleSubMode() {
-  settings.lyricSubMode = settings.lyricSubMode === "translation" ? "romaji" : "translation";
+  const i = SUB_MODE_ORDER.indexOf(settings.lyricSubMode);
+  settings.lyricSubMode = SUB_MODE_ORDER[(i + 1) % SUB_MODE_ORDER.length];
 }
 
 function t(key: string) {
@@ -384,9 +400,7 @@ onBeforeUnmount(() => {
                       :title="t('player.lyricSubModeSwitch')"
                       @click="cycleSubMode"
                     >
-                      <span class="material-symbols-outlined">
-                        {{ settings.lyricSubMode === "translation" ? "translate" : "abc" }}
-                      </span>
+                      <span class="material-symbols-outlined">{{ subModeIcon }}</span>
                       {{ subModeLabel }}
                     </button>
                   </div>

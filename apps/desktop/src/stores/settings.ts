@@ -19,8 +19,12 @@ export type ReaderFontKey = "system" | "serif" | "sans" | "kai" | "yuan";
 export type LyricFontKey = "system" | "sans" | "serif" | "kai" | "yuan";
 /** 播放器背景模式：animated 动态模糊 / amll AMLL 网格渐变 / image 仅图片模糊 / off 不启用 */
 export type PlayerBgMode = "animated" | "amll" | "image" | "off";
-/** 歌词副行显示模式：翻译 / 罗马音 */
-export type LyricSubMode = "translation" | "romaji";
+/**
+ * 歌词副行显示模式：原文 / 翻译 / 罗马音。
+ *
+ * `none` 表示**只显示原文**（不渲染副行）。播放器右上角的副行按钮在这三档间循环。
+ */
+export type LyricSubMode = "none" | "translation" | "romaji";
 /**
  * 歌词渲染引擎：
  * - `native`：项目自研歌词视图（对齐 AMLL 语义的弹簧滚动 + 逐字填充）；
@@ -63,17 +67,19 @@ const DEFAULTS = {
   /** 已删除的内置皮肤 id（删除即记忆，不再播种复活） */
   hiddenBuiltinSkins: [] as string[],
   lang: "zh" as "zh" | "en",
-  lyricFontSize: 30,
-  lyricLineHeight: 2.5,
+  /** 歌词字号（px） */
+  lyricFontSize: 35,
+  /** 行内行高（font-size 的倍数） */
+  lyricLineHeight: 1.8,
   /** 行间间距：相邻歌词行之间的竖直间距（px） */
-  lyricLineGap: 20,
+  lyricLineGap: 27,
   /** 歌词字体 */
   lyricFont: "system" as LyricFontKey,
   /** 歌词翻译字号（相对主歌词字号的百分比） */
-  lyricTranslationSize: 62,
+  lyricTranslationSize: 65,
   /** 歌词与翻译之间的间距（px） */
-  lyricTranslationGap: 4,
-  /** 歌词副行显示：翻译 / 罗马音 */
+  lyricTranslationGap: 1,
+  /** 歌词副行显示：原文（不显示副行）/ 翻译 / 罗马音 */
   lyricSubMode: "translation" as LyricSubMode,
   /** 逐字歌词（Apple Music 式逐字填充 + 唱完上浮） */
   wordLyrics: true,

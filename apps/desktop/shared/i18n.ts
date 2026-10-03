@@ -65,7 +65,7 @@ export const messages = {
       translation: "翻译",
       romaji: "罗马音",
       both: "双栏",
-      lyricSubModeSwitch: "点击切换歌词副行：翻译 / 罗马音",
+      lyricSubModeSwitch: "点击切换歌词副行：原文（不显示副行）/ 翻译 / 罗马音",
       lyricSourceAmll: "AMLL 逐字",
       lyricSourceAmllHint:
         "歌词来自 AMLL TTML DB（社区维护的逐字歌词库，含翻译 / 音译 / 背景和声）",
@@ -1111,7 +1111,7 @@ export const messages = {
       translation: "Translation",
       romaji: "Romaji",
       both: "Both",
-      lyricSubModeSwitch: "Click to switch lyric sub-line: translation / romaji",
+      lyricSubModeSwitch: "Click to switch lyric sub-line: original only / translation / romaji",
       lyricSourceAmll: "AMLL word-timed",
       lyricSourceAmllHint:
         "Lyrics from AMLL TTML DB (a community-maintained word-timed library with translations / romanization / background vocals)",

@@ -19,6 +19,7 @@ import type {
   LyricWord as AmllLyricWord,
 } from "@applemusic-like-lyrics/core";
 import type { BgVocal, LyricLine, WordUnit } from "@shared/types";
+import type { LyricSubMode } from "@/stores/settings";
 
 /** 转换选项 */
 export interface AmllAdapterOptions {
@@ -28,12 +29,13 @@ export interface AmllAdapterOptions {
    */
   wordLevel?: boolean;
   /**
-   * 副行显示模式：translation 只给翻译、romaji 只给音译。
+   * 副行显示模式：none 只显示原文、translation 只给翻译、romaji 只给音译。
    *
    * AMLL 会把 translatedLyric 与 romanLyric **同时**渲染成两行副行；
-   * 项目惯用的是二选一（与自研视图一致），所以这里按模式只填其中一条。
+   * 项目惯用的是一次只显示一条（与自研视图一致），所以这里按模式只填其中一条，
+   * none 则两条都留空 = 只显示原文。
    */
-  subMode?: "translation" | "romaji";
+  subMode?: LyricSubMode;
 }
 
 /** 转换结果：AMLL 歌词行 + 「AMLL 行下标 → 项目行下标」映射 */
@@ -97,7 +99,7 @@ function bgToAmllLine(
   lineTimeSec: number,
   lineEndSec: number,
   wordLevel: boolean,
-  subMode: "translation" | "romaji",
+  subMode: LyricSubMode,
 ): AmllLyricLine {
   const ownStart = bg.units?.[0]?.start ?? lineTimeSec;
   const ownEnd = bg.units?.length ? bg.units[bg.units.length - 1].end : lineEndSec;
@@ -127,7 +129,7 @@ export function toAmllLyricBundle(
   options: AmllAdapterOptions = {},
 ): AmllLyricBundle {
   const wordLevel = options.wordLevel ?? true;
-  const subMode = options.subMode ?? "translation";
+  const subMode: LyricSubMode = options.subMode ?? "translation";
   const out: AmllLyricLine[] = [];
   const indexMap: number[] = [];
 
