@@ -21,8 +21,9 @@ import { usePlayerStore } from "@/stores/player";
 import { useSettingsStore, type LyricFontKey } from "@/stores/settings";
 import { translate } from "@shared/i18n";
 import { getPosYSpringPolicy, Spring } from "@/utils/spring";
+import { wordFloatOffsetEm } from "@/utils/wordFloat";
 import { SeekDetector } from "@/utils/seekDetector";
-import type { LyricLine } from "@shared/types";
+import type { LyricLine, WordUnit } from "@shared/types";
 
 const player = usePlayerStore();
 const settings = useSettingsStore();
@@ -118,16 +119,32 @@ function syncRows(): void {
 
 // ---- 逐字填充：缓存当前行的词元素，避免每帧 querySelectorAll ----
 
-let activeWords: HTMLElement[] = [];
-let activeBgWords: HTMLElement[] = [];
+/** 一个词元素与它对应的词数据（DOM 顺序与 units 顺序一致） */
+interface WordEntry {
+  el: HTMLElement;
+  unit: WordUnit;
+}
+
+let activeWords: WordEntry[] = [];
+let activeBgWords: WordEntry[] = [];
 /** 缓存的填充进度，避免同值重复写样式 */
 let lastFill = new WeakMap<HTMLElement, number>();
+/** 缓存的上浮位移（em），同理 */
+let lastFloat = new WeakMap<HTMLElement, number>();
 
 function refreshWordEls(): void {
   const idx = player.activeLine;
   const el = idx >= 0 ? lineRefs.value[idx] : null;
-  activeWords = el ? Array.from(el.querySelectorAll<HTMLElement>(".word")) : [];
-  activeBgWords = el ? Array.from(el.querySelectorAll<HTMLElement>(".bg-word")) : [];
+  const line = idx >= 0 ? player.lyrics[idx] : undefined;
+  const build = (selector: string, units?: WordUnit[]): WordEntry[] => {
+    if (!el || !units?.length) return [];
+    return Array.from(el.querySelectorAll<HTMLElement>(selector))
+      .map((node, i) => ({ el: node, unit: units[i] }))
+      .filter((e) => e.unit);
+  };
+  // .bg-word 不会命中 .word（类名逐 token 匹配），两者互不干扰
+  activeWords = build(".word", line?.units);
+  activeBgWords = build(".bg-word", line?.bg?.units);
 }
 
 /**
@@ -142,23 +159,30 @@ function updateWordFill(): void {
   const line = player.lyrics[idx];
   if (!line?.units?.length) return;
   const now = player.audioEl?.currentTime ?? player.currentTime;
-  fillUnits(line.units, activeWords, now);
-  if (line.bg?.units?.length) fillUnits(line.bg.units, activeBgWords, now);
+  fillUnits(activeWords, now, false);
+  // 和声行的上浮幅度是主行的两倍（AMLL 的 `if (isBG) up *= 2`）
+  if (line.bg?.units?.length) fillUnits(activeBgWords, now, true);
 }
 
-function fillUnits(units: { start: number; end: number }[], els: HTMLElement[], now: number): void {
-  for (let i = 0; i < units.length; i++) {
-    const el = els[i];
-    if (!el) continue;
-    const u = units[i];
+function fillUnits(entries: WordEntry[], now: number, isBg: boolean): void {
+  for (const { el, unit } of entries) {
+    // ---- 逐字填充 ----
     let pct = 0;
-    if (now >= u.end) pct = 100;
-    else if (now > u.start) pct = ((now - u.start) / (u.end - u.start)) * 100;
+    if (now >= unit.end) pct = 100;
+    else if (now > unit.start) pct = ((now - unit.start) / (unit.end - unit.start)) * 100;
     const rounded = Math.round(pct * 100) / 100;
-    if (lastFill.get(el) === rounded) continue;
-    lastFill.set(el, rounded);
-    el.style.backgroundPosition = `${(100 - rounded).toFixed(2)}% 0`;
-    el.classList.toggle("sung", now >= u.end);
+    if (lastFill.get(el) !== rounded) {
+      lastFill.set(el, rounded);
+      el.style.backgroundPosition = `${(100 - rounded).toFixed(2)}% 0`;
+    }
+
+    // ---- 主词上浮（对齐 AMLL createFloatAnimation）----
+    const up = wordFloatOffsetEm(unit, now, isBg);
+    const roundedUp = Math.round(up * 1000) / 1000;
+    if (lastFloat.get(el) !== roundedUp) {
+      lastFloat.set(el, roundedUp);
+      el.style.setProperty("--word-float", `${roundedUp}em`);
+    }
   }
 }
 
@@ -269,15 +293,20 @@ watch(
     activeWords = [];
     activeBgWords = [];
     lastFill = new WeakMap<HTMLElement, number>();
+    lastFloat = new WeakMap<HTMLElement, number>();
     heightsDirty = true;
     seekDetector.reset();
-    // v-for 按 index 复用元素，旧的内联 transform / 滤镜会残留一帧；先清掉再让 rAF 重写
+    // v-for 按 index 复用元素，旧的内联 transform / 滤镜会残留一帧；先清掉再让 rAF 重写。
+    // 词上的 --word-float 同理：不清掉的话，新歌第一帧会沿用上一首的浮起高度。
     await nextTick();
     for (const el of lineRefs.value) {
       if (!el) continue;
       el.style.transform = "";
       el.style.opacity = "";
       el.style.filter = "";
+      for (const w of Array.from(el.querySelectorAll<HTMLElement>(".word, .bg-word"))) {
+        w.style.removeProperty("--word-float");
+      }
     }
   },
 );
@@ -498,7 +527,13 @@ function bgFirst(line: LyricLine): boolean {
 .bg-word {
   display: inline-block;
   white-space: pre; /* 保留英文词间空格（空格已并入词尾） */
-  transition: transform 0.5s cubic-bezier(0.34, 1.2, 0.64, 1);
+  /*
+   * 上浮位移由 JS 逐帧写入 --word-float，对齐 AMLL 的 createFloatAnimation：
+   * 词一开始就起浮、到词末浮满（ease-out），结束时停在最大位移。
+   * 刻意不加 transition —— 位移本身就是时间驱动的连续量，再加一层过渡
+   * 等于做二阶滞回，会拖后腿并且与填充进度脱节。
+   */
+  transform: translateY(var(--word-float, 0em));
 }
 .lyric-item.active .word {
   color: transparent;
@@ -532,21 +567,15 @@ function bgFirst(line: LyricLine): boolean {
   background-clip: text;
   opacity: 0.55;
 }
-.lyric-item.active .word.sung {
-  transform: translateY(-2px);
-}
-.lyric-item.active .bg-word.sung {
-  transform: translateY(-1.5px);
-}
-
-/* 前奏/间奏三点：放大一点，不影响其他歌词尺寸（scale 不改布局） */
+/*
+ * 前奏/间奏三点：放大一点，不影响其他歌词尺寸（scale 不改布局）。
+ * 三点的位移不参与上浮（AMLL 的 InterludeDots 只做缩放/呼吸，没有 translateY），
+ * 所以这里不引用 --word-float，与上面 .word 的规则按选择器优先级并存。
+ */
 .lyric-item.active.instrumental .word {
   transform-origin: center;
   transform: scale(1.5);
   margin: 0 4px; /* 放大后相邻点不重叠 */
-}
-.lyric-item.active.instrumental .word.sung {
-  transform: translateY(-2px) scale(1.5);
 }
 
 /*
