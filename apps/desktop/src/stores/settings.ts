@@ -21,6 +21,13 @@ export type LyricFontKey = "system" | "sans" | "serif" | "kai" | "yuan";
 export type PlayerBgMode = "animated" | "amll" | "image" | "off";
 /** 歌词副行显示模式：翻译 / 罗马音 */
 export type LyricSubMode = "translation" | "romaji";
+/**
+ * 歌词渲染引擎：
+ * - `native`：项目自研歌词视图（对齐 AMLL 语义的弹簧滚动 + 逐字填充）；
+ * - `amll`：直接嵌入 AMLL 官方 `DomLyricPlayer`（AGPL-3.0-only），拿到行缩放、强调辉光、注音、
+ *   滚轮浏览等本项目自研层还没实现的表现，动效参数由下面的 amll* 设置项控制。
+ */
+export type LyricEngine = "native" | "amll";
 /** 预设分享码偏好：仅中文 / 仅原版 / 两者同时输出 */
 export type ShareCodePreference = "chinese" | "original" | "both";
 /** 桌面歌词切换动画方案 */
@@ -70,6 +77,27 @@ const DEFAULTS = {
   lyricSubMode: "translation" as LyricSubMode,
   /** 逐字歌词（Apple Music 式逐字填充 + 唱完上浮） */
   wordLyrics: true,
+  /**
+   * 歌词渲染引擎：native 自研 / amll 直接使用 AMLL 的 DomLyricPlayer。
+   *
+   * 默认 native：AMLL 会为每行建模并逐行 ResizeObserver 测量、用 WAAPI 调度动画，
+   * 行数多时开销高于自研视图（后者只给选中行渲染逐词 span）。AMLL 引擎适合想要
+   * 完整表现（行缩放、强调辉光、注音、滚轮浏览）的用户。
+   *
+   * 依赖上两者只差随行的歌词视图代码与 AMLL 样式表（动态 import，约 11KB）；
+   * AMLL core 本身早因 AMLL 背景被入口预加载（见 vite.config.ts 的说明），不算额外成本。
+   */
+  lyricEngine: "native" as LyricEngine,
+  /** AMLL 引擎：非当前行缩放（凸显当前行） */
+  amllEnableScale: true,
+  /** AMLL 引擎：隐藏已唱过的行 */
+  amllHidePassedLines: false,
+  /** AMLL 引擎：文字渐变动画宽度（以主歌词字号为单位；0.5 ≈ iPad，1 ≈ Android） */
+  amllWordFadeWidth: 0.5,
+  /** AMLL 引擎：当前行垂直对齐位置（组件高度的 0~1 比例） */
+  amllAlignPosition: 0.35,
+  /** AMLL 引擎：启用物理弹簧滚动（关闭退回 CSS transition，低配机器更省） */
+  amllEnableSpring: true,
   /** 更精确的逐字歌词：播放时按 AMLL → QQ → 酷狗 → [登录网易云后 Meting] → 本地回退链取逐字歌词 */
   preciseLyrics: false,
   /**
@@ -317,6 +345,12 @@ export const useSettingsStore = defineStore("settings", () => {
   const lyricTranslationGap = ref(DEFAULTS.lyricTranslationGap);
   const lyricSubMode = ref<LyricSubMode>(DEFAULTS.lyricSubMode);
   const wordLyrics = ref(DEFAULTS.wordLyrics);
+  const lyricEngine = ref<LyricEngine>(DEFAULTS.lyricEngine);
+  const amllEnableScale = ref(DEFAULTS.amllEnableScale);
+  const amllHidePassedLines = ref(DEFAULTS.amllHidePassedLines);
+  const amllWordFadeWidth = ref(DEFAULTS.amllWordFadeWidth);
+  const amllAlignPosition = ref(DEFAULTS.amllAlignPosition);
+  const amllEnableSpring = ref(DEFAULTS.amllEnableSpring);
   const preciseLyrics = ref(DEFAULTS.preciseLyrics);
   const amllLyricsEnabled = ref(DEFAULTS.amllLyricsEnabled);
   const amllLyricBase = ref(DEFAULTS.amllLyricBase);
@@ -438,6 +472,12 @@ export const useSettingsStore = defineStore("settings", () => {
     lyricTranslationGap,
     lyricSubMode,
     wordLyrics,
+    lyricEngine,
+    amllEnableScale,
+    amllHidePassedLines,
+    amllWordFadeWidth,
+    amllAlignPosition,
+    amllEnableSpring,
     preciseLyrics,
     amllLyricsEnabled,
     amllLyricBase,

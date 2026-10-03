@@ -8,6 +8,7 @@ import {
   type ThemeMode,
   type PlayerBgMode,
   type LyricFontKey,
+  type LyricEngine,
   type ShareCodePreference,
   type DesktopLyricsAnimation,
   type DesktopLyricsToolbar,
@@ -65,6 +66,8 @@ function t(key: string) {
 }
 
 const LYRIC_FONT_KEYS: LyricFontKey[] = ["system", "sans", "serif", "kai", "yuan"];
+/** 歌词渲染引擎：native 自研 / amll 直接使用 AMLL 官方组件 */
+const LYRIC_ENGINES: LyricEngine[] = ["native", "amll"];
 /** 不雅用语遮蔽档位（AMLL 的 amll:obscene） */
 const OBSCENE_MODES: ObsceneMode[] = ["off", "partial", "full"];
 const LYRICS_ANIMATIONS: DesktopLyricsAnimation[] = ["fade", "slide", "scale", "glow"];
@@ -94,6 +97,7 @@ const dlDoubleClickTabs = opts(["none", "toggle"] as DesktopLyricsDoubleClick[],
 const playerBgTabs = opts(["animated", "amll", "image", "off"] as PlayerBgMode[], (v) =>
   t("settings.playerBg_" + v),
 );
+const lyricEngineTabs = opts(LYRIC_ENGINES, (v) => t("settings.lyricEngine_" + v));
 const musicViewTabs = opts(["grid", "list"] as const, (v) => t("settings.musicViewMode_" + v));
 const shareCodeTabs = opts(["chinese", "original", "both"] as ShareCodePreference[], (v) =>
   t("settings.shareCodePreference_" + v),
@@ -316,9 +320,24 @@ function onSliderLineHeight(e: Event) {
   if (v != null) settings.lyricLineHeight = Math.round(v * 10) / 10;
 }
 
+/** AMLL 对齐位置滑块（0~100 的百分比 → 0.0~1.0 的比例） */
+function onSliderAmllAlignPosition(e: Event) {
+  const v = sliderValue(e);
+  if (v != null) settings.amllAlignPosition = Math.round(v) / 100;
+}
+
+/** AMLL 渐变宽度滑块（0~1，0.05 步进，保留两位小数） */
+function onSliderAmllWordFadeWidth(e: Event) {
+  const v = sliderValue(e);
+  if (v != null) settings.amllWordFadeWidth = Math.round(v * 100) / 100;
+}
+
 /** 布尔设置项键（供 setSwitch 复用，避免每个开关重复写事件表达式） */
 type BoolSettingKey =
   | "wordLyrics"
+  | "amllEnableScale"
+  | "amllHidePassedLines"
+  | "amllEnableSpring"
   | "preciseLyrics"
   | "amllLyricsEnabled"
   | "detectInstrumental"
@@ -815,6 +834,71 @@ function selectSection(id: string) {
     <m3e-card v-if="activeSection === 'settings-playback'" class="card" variant="outlined">
       <div slot="content">
         <h3>{{ t("settings.lyrics") }}</h3>
+        <div class="row">
+          <div class="row-label">
+            <span>{{ t("settings.lyricEngine") }}</span>
+          </div>
+          <SegmentedTabs v-model="settings.lyricEngine" bare :tabs="lyricEngineTabs" />
+        </div>
+        <p class="hint">{{ t("settings.lyricEngineHint") }}</p>
+
+        <!-- AMLL 引擎专属动效设置：仅在选用 AMLL 时展示，避免与自研视图的选项混在一起 -->
+        <template v-if="settings.lyricEngine === 'amll'">
+          <label class="row switch-row">
+            <span class="row-label">{{ t("settings.amllEnableScale") }}</span>
+            <m3e-switch
+              :checked="settings.amllEnableScale"
+              @change="setSwitch('amllEnableScale', $event)"
+            />
+          </label>
+          <p class="hint">{{ t("settings.amllEnableScaleHint") }}</p>
+
+          <label class="row switch-row">
+            <span class="row-label">{{ t("settings.amllHidePassedLines") }}</span>
+            <m3e-switch
+              :checked="settings.amllHidePassedLines"
+              @change="setSwitch('amllHidePassedLines', $event)"
+            />
+          </label>
+
+          <label class="row switch-row">
+            <span class="row-label">{{ t("settings.amllEnableSpring") }}</span>
+            <m3e-switch
+              :checked="settings.amllEnableSpring"
+              @change="setSwitch('amllEnableSpring', $event)"
+            />
+          </label>
+          <p class="hint">{{ t("settings.amllEnableSpringHint") }}</p>
+
+          <div class="row">
+            <div class="row-label">
+              <span>{{ t("settings.amllWordFadeWidth") }}</span>
+            </div>
+            <m3e-slider
+              :min="0.05"
+              :max="1"
+              :step="0.05"
+              @input="onSliderAmllWordFadeWidth($event)"
+            >
+              <m3e-slider-thumb :value="settings.amllWordFadeWidth" />
+            </m3e-slider>
+            <span class="value tabular-nums">{{ settings.amllWordFadeWidth.toFixed(2) }}em</span>
+          </div>
+          <p class="hint">{{ t("settings.amllWordFadeWidthHint") }}</p>
+
+          <div class="row">
+            <div class="row-label">
+              <span>{{ t("settings.amllAlignPosition") }}</span>
+            </div>
+            <m3e-slider :min="10" :max="90" @input="onSliderAmllAlignPosition($event)">
+              <m3e-slider-thumb :value="Math.round(settings.amllAlignPosition * 100)" />
+            </m3e-slider>
+            <span class="value tabular-nums"
+              >{{ Math.round(settings.amllAlignPosition * 100) }}%</span
+            >
+          </div>
+        </template>
+
         <label class="row switch-row">
           <span class="row-label">{{ t("settings.wordLyrics") }}</span>
           <m3e-switch :checked="settings.wordLyrics" @change="setSwitch('wordLyrics', $event)" />

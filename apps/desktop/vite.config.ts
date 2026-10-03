@@ -57,6 +57,11 @@ export default defineConfig(async () => ({
         // anime-player（artplayer + 弹幕插件）只有进番剧播放页才会拉。
         manualChunks(id) {
           if (!id.includes("node_modules")) return undefined;
+          // CSS 不能并进 amll-bg：入口 chunk 会静态引用 amll-bg（Rollup 把 ESM 互操作
+          // 助手放在了那个块里），AMLL 的 style.css 一旦落进去就会被 index.html 预加载，
+          // 「只有切到 AMLL 引擎才加载 AMLL 样式」的按需加载随之失效。
+          // 让 Vite 自己把 CSS 分给动态 import 它的组件。
+          if (id.endsWith(".css")) return undefined;
           if (id.includes("@applemusic-like-lyrics") || /@pixi\//.test(id)) return "amll-bg";
           if (id.includes("artplayer")) return "anime-player";
           if (id.includes("pdfjs")) return "pdf-viewer";

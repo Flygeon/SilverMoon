@@ -196,6 +196,20 @@ export const messages = {
       lyricFont_yuan: "圆体",
       lyricTranslationSize: "歌词翻译字号",
       lyricTranslationGap: "歌词与翻译间距",
+      lyricEngine: "歌词动效引擎",
+      lyricEngineHint:
+        "自研引擎：项目自己的弹簧滚动 + 逐字填充，逐行开销更低；AMLL 引擎：直接引用 AMLL 官方歌词组件，动效最完整（行缩放、强调辉光、注音、滚轮浏览）。",
+      lyricEngine_native: "自研",
+      lyricEngine_amll: "AMLL",
+      amllEnableScale: "歌词行缩放",
+      amllEnableScaleHint: "非当前行轻微缩小以凸显当前行，性能影响很小。",
+      amllHidePassedLines: "隐藏已唱过的行",
+      amllEnableSpring: "物理弹簧滚动",
+      amllEnableSpringHint: "关闭后改用 CSS transition，效果更单一但对低配机器更友好。",
+      amllWordFadeWidth: "逐字渐变宽度",
+      amllWordFadeWidthHint:
+        "以主歌词字号为单位：0.5 接近 Apple Music for iPad，1 接近 Android，越小渐变越硬。",
+      amllAlignPosition: "当前行位置",
       wordLyrics: "逐字歌词",
       wordLyricsHint: "逐字填充 + 唱完上浮（Apple Music 风格）。关闭则整行歌词一次性高亮。",
       preciseLyrics: "更精确的逐字歌词",
@@ -1231,6 +1245,22 @@ export const messages = {
       lyricFont_yuan: "Rounded",
       lyricTranslationSize: "Lyric Translation Size",
       lyricTranslationGap: "Lyric-Translation Spacing",
+      lyricEngine: "Lyric animation engine",
+      lyricEngineHint:
+        "Built-in: our own spring scrolling and word-by-word fill, cheaper per line. AMLL: embeds the official AMLL lyric component for the fullest effect set (line scaling, emphasis glow, ruby, wheel scrolling).",
+      lyricEngine_native: "Built-in",
+      lyricEngine_amll: "AMLL",
+      amllEnableScale: "Line scaling",
+      amllEnableScaleHint:
+        "Slightly shrinks non-active lines to emphasize the current one; negligible cost.",
+      amllHidePassedLines: "Hide passed lines",
+      amllEnableSpring: "Physics spring scrolling",
+      amllEnableSpringHint:
+        "When off, falls back to CSS transitions: simpler motion, friendlier to low-end machines.",
+      amllWordFadeWidth: "Word fade width",
+      amllWordFadeWidthHint:
+        "In units of the main lyric font size: 0.5 approximates Apple Music for iPad, 1 approximates Android; smaller values harden the gradient edge.",
+      amllAlignPosition: "Active line position",
       wordLyrics: "Word-by-word lyrics",
       wordLyricsHint:
         "Fill each word with a gradient and lift it up when sung (Apple Music style). Off = highlight the whole line at once.",

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from "vue";
+import { ref, computed, defineAsyncComponent, onMounted, onBeforeUnmount } from "vue";
 import { usePlayerStore } from "@/stores/player";
 import { useSettingsStore } from "@/stores/settings";
 import { useNeteaseStore } from "@/stores/netease";
@@ -11,6 +11,14 @@ import PlayerControlIcon from "@/components/PlayerControlIcon.vue";
 import AudioEffectsPanel from "@/components/AudioEffectsPanel.vue";
 import CommentsPanel from "@/components/CommentsPanel.vue";
 import { formatDuration } from "@/utils/format";
+
+/**
+ * AMLL 引擎的歌词视图按需加载。
+ *
+ * 它带来一份歌词视图代码与 AMLL 的样式表（AMLL core 本身已因背景单独成块）；
+ * 默认（native 引擎）不该为这两笔买单，所以只在用户真的切到 amll 时才加载。
+ */
+const AmllLyricsView = defineAsyncComponent(() => import("@/components/AmllLyricsView.vue"));
 
 const player = usePlayerStore();
 const settings = useSettingsStore();
@@ -393,7 +401,8 @@ onBeforeUnmount(() => {
       <!-- 右栏：歌词 / 队列 / 音效内容（切换控件已移入底部控制栏功能面板） -->
       <div class="right-col">
         <div class="right-content">
-          <LyricsView v-if="rightTab === 'lyrics'" />
+          <AmllLyricsView v-if="rightTab === 'lyrics' && settings.lyricEngine === 'amll'" />
+          <LyricsView v-else-if="rightTab === 'lyrics'" />
           <AudioEffectsPanel v-else-if="rightTab === 'effects'" />
           <div v-else-if="player.queue.length" class="queue-list">
             <button

@@ -18,8 +18,9 @@
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { usePlayerStore } from "@/stores/player";
-import { useSettingsStore, type LyricFontKey } from "@/stores/settings";
+import { useSettingsStore } from "@/stores/settings";
 import { translate } from "@shared/i18n";
+import { lyricFontFamily } from "@/utils/lyricFont";
 import { getPosYSpringPolicy, Spring } from "@/utils/spring";
 import { wordFloatOffsetEm } from "@/utils/wordFloat";
 import { SeekDetector } from "@/utils/seekDetector";
@@ -36,16 +37,8 @@ function subText(line: LyricLine): string {
 const containerRef = ref<HTMLDivElement | null>(null);
 const lineRefs = ref<HTMLDivElement[]>([]);
 
-/** 歌词字体栈（与阅读器字体一致） */
-const LYRIC_FONTS: Record<LyricFontKey, string> = {
-  system:
-    '"SarasaGothicSC-Regular","SFPro-Regular","Helvetica Neue","Microsoft YaHei",system-ui,sans-serif',
-  sans: '"Helvetica Neue","Microsoft YaHei","Hiragino Sans GB",sans-serif',
-  serif: 'Georgia,"Songti SC","SimSun",serif',
-  kai: '"KaiTi","STKaiti","Kai",cursive',
-  yuan: '"Yuanti SC","YouYuan","Microsoft JhengHei UI",sans-serif',
-};
-const lyricFontFamily = computed(() => LYRIC_FONTS[settings.lyricFont] ?? LYRIC_FONTS.system);
+/** 歌词字体栈（两套引擎共用，见 utils/lyricFont.ts） */
+const lyricFont = computed(() => lyricFontFamily(settings.lyricFont));
 
 /**
  * 当前行停靠高度。参考用 innerHeight/3.5；这里按容器高度计算以适应分栏布局。
@@ -400,7 +393,7 @@ function bgFirst(line: LyricLine): boolean {
         :style="{
           fontSize: settings.lyricFontSize + 'px',
           lineHeight: settings.lyricLineHeight,
-          fontFamily: lyricFontFamily,
+          fontFamily: lyricFont,
         }"
         @click="player.seekToLyric(i)"
       >
