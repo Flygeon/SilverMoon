@@ -6,7 +6,7 @@ import { useSettingsStore } from "@/stores/settings";
 import { useNeteaseStore } from "@/stores/netease";
 import { useAudioEffectsStore } from "@/stores/audioEffects";
 // parseLrc 由 @/utils/lyricTimeline 提供（原先定义在本文件，已移出供歌词源复用）
-import { META_RE, parseLrc } from "@/utils/lyricTimeline";
+import { META_RE, insertInterludeDots, parseLrc } from "@/utils/lyricTimeline";
 import { resolveKugouUrl } from "@/utils/kugou";
 import { lrcGet, lrcSet, needsProxiedCover, resolveCover } from "@/utils/onlineCache";
 import { emitDesktopLyricsState } from "@/utils/desktopLyrics";
@@ -974,10 +974,14 @@ export const usePlayerStore = defineStore("player", () => {
   }): boolean {
     if (!song.value || !result.lines.length) return false;
     let applied = result.lines;
+    const st = useSettingsStore();
     // 与 LRC 流程一致：开启「自动识别前奏/间奏」时隐藏作词/作曲等元数据行
-    if (useSettingsStore().detectInstrumental) {
+    if (st.detectInstrumental) {
       const filtered = result.lines.filter((l) => !META_RE.test(l.text));
       if (filtered.length) applied = filtered;
+      // 云端歌词只给真实歌词行，长前奏 / 长间奏 / 结尾器乐段会留下大片空白；
+      // 本地 LRC 那条链路本来就有三点标记，这里补上同一套，免得两边表现不一致。
+      applied = insertInterludeDots(applied, { tailEnd: (song.value.durationMs ?? 0) / 1000 });
     }
     lyrics.value = applied;
     song.value.lyrics = applied;

@@ -18,6 +18,8 @@
  * 桩写法对齐同目录的 `bilibiliQrLogin.test.ts`：`@/ipc/store` / `@/capabilities`
  * 打掉；文件首行声明 jsdom 环境（`parseAmllTtml` 需要 DOMParser）。
  */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AMLL_DEFAULT_BASE,
@@ -117,6 +119,95 @@ beforeEach(() => {
   amllClearCache();
 });
 
+/** AMLL 官方仓库（packages/ttml/tests/fixtures）里的两个真实夹具，覆盖本项目要处理的特殊标记。 */
+// vitest 的 root 是 apps/desktop（见 vite.config.ts），用 cwd 定位即可；
+// 不能用 import.meta.url —— jsdom 环境下它不是 file: 协议。
+const FIXTURE_DIR = resolve(process.cwd(), "src/utils/__fixtures__");
+const readFixture = (name: string): string => readFileSync(resolve(FIXTURE_DIR, name), "utf8");
+
+describe("parseAmllTtml 特殊标记（对齐 AMLL packages/ttml 的行为）", () => {
+  it("tts:ruby 注音：取基文本，注音不进正文与 units", () => {
+    // 真实夹具（ruby-test-song.ttml）：<span tts:ruby="container"> 包 base + textContainer
+    const lines = parseAmllTtml(readFixture("ruby-test-song.ttml"));
+
+    expect(lines).toHaveLength(1);
+    // 「これは」+「所詮」的 base —— 注音（しょ / せ / ん）不混进正文
+    expect(lines[0].text).toBe("これは所詮");
+    expect(lines[0].text).not.toContain("しょ");
+    expect(lines[0].text).not.toContain("せん");
+    // ruby 容器自身没有 begin/end（时间在注音上），退回行时间与行结束时间
+    expect(lines[0].units?.map((u) => u.text)).toEqual(["これは", "所", "詮"]);
+    expect(lines[0].units?.[1]).toEqual({ text: "所", start: 27, end: 28 });
+  });
+
+  it("amll:obscene / amll:empty-beat 不会污染歌词文本", () => {
+    // AMLL 官方夹具：<span amll:obscene="true">これ</span> 与 <span amll:empty-beat="5">テスト</span>
+    const lines = parseAmllTtml(readFixture("complex-test-song.ttml"));
+    const first = lines.find((l) => l.text.includes("これ"));
+
+    expect(first?.text).toBe("これは テスト");
+    // 这两个属性只影响渲染（遮蔽 / 占位节拍），不该被当成文字或时间
+    expect(first?.text).not.toContain("obscene");
+    expect(first?.text).not.toContain("empty-beat");
+    expect(first?.units?.every((u) => Number.isFinite(u.start) && Number.isFinite(u.end))).toBe(
+      true,
+    );
+  });
+
+  it("x-bg 自带的翻译 / 音译归到主行，不会挤进正文、也不顶掉主行翻译", () => {
+    // 夹具里的写法：主行翻译在前，<span ttm:role="x-bg"><span>(背景)</span>
+    // <span ttm:role="x-translation">Background</span><span ttm:role="x-roman">haikei</span></span>
+    const lines = parseAmllTtml(readFixture("complex-test-song.ttml"));
+    const bgLine = lines.find((l) => l.text.includes("コーラス"));
+
+    expect(bgLine).toBeDefined();
+    // 和声以括号形式并入正文（本项目 LyricLine 没有背景行栏位），而不是被丢弃
+    expect(bgLine?.text).toContain("(背景)");
+    // 该夹具的主行翻译只写在 <head> 的 sidecar 里（按 L3 关联），而和声自带的翻译是
+    // 内联在 <p> 里的 "Background"。正确行为是：sidecar 的主行翻译优先，内联的和声
+    // 翻译不能把它顶掉；和声的注音也不混进正文。
+    expect(bgLine?.text).not.toContain("haikei");
+    expect(bgLine?.text).not.toContain("Background");
+  });
+
+  it("主行没有翻译时，和声自带的翻译才作为兜底补上", () => {
+    const lines = parseAmllTtml(
+      [
+        '<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata">',
+        '<body><div><p begin="1s" end="4s">',
+        '<span begin="1s" end="2s">主</span><span begin="2s" end="3s">词</span>',
+        '<span ttm:role="x-bg" begin="3s" end="4s"><span begin="3s" end="4s">(和声)</span>',
+        '<span ttm:role="x-translation">backing</span></span>',
+        "</p></div></body></tt>",
+      ].join(""),
+    );
+
+    expect(lines[0].text).toBe("主词(和声)");
+    // 主行自己没有翻译 → 用和声的兜底（总比副行空着强）
+    expect(lines[0].translation).toBe("backing");
+  });
+
+  it("ttm:agent（含对唱的 v2）只是演唱者区分，逐字时间轴照常解析", () => {
+    // 对唱在 TTML 里只是 ttm:agent 指向不同演唱者，不影响解析出的时间轴
+    const lines = parseAmllTtml(
+      [
+        '<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata">',
+        '<head><metadata><ttm:agent type="person" xml:id="v1"/>',
+        '<ttm:agent type="person" xml:id="v2"/></metadata></head>',
+        "<body><div>",
+        '<p begin="1s" end="3s" ttm:agent="v1"><span begin="1s" end="2s">君</span><span begin="2s" end="3s">の</span></p>',
+        '<p begin="3s" end="5s" ttm:agent="v2"><span begin="3s" end="4s">僕</span><span begin="4s" end="5s">の</span></p>',
+        "</div></body></tt>",
+      ].join(""),
+    );
+
+    expect(lines).toHaveLength(2);
+    expect(lines[0].text).toBe("君の");
+    expect(lines[1].text).toBe("僕の");
+    expect(lines[0].time).toBeLessThan(lines[1].time);
+    expect(lines[1].units?.[0]).toEqual({ text: "僕", start: 3, end: 4 });
+  });
+});
 describe("parseAmllTime TTML 时间写法 → 毫秒", () => {
   it("00:01.500 / 1.5s / 01:02.25 / 裸秒数 都换算正确", () => {
     expect(parseAmllTime("00:01.500")).toBe(1500);

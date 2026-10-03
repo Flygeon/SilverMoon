@@ -175,6 +175,45 @@ export function buildLyricSequence(rawLines: LyricLine[], detectInstrumental = t
   return out;
 }
 
+/**
+ * 给「已带完整时间轴」的云端歌词补间奏三点（AMLL / QQ / 酷狗 通用）。
+ *
+ * 这些官方时间轴里只有真实歌词行，长前奏、长间奏、结尾的器乐段都会留下大片空白；
+ * 本地 LRC 那条链路本来就由 buildLyricSequence 补点，云端链路过去是直接把解析结果
+ * 铺上去，于是同一首歌用云端歌词时中间会「卡住不动」。
+ *
+ * 判定口径与 buildLyricSequence 一致：行距减去**估算演唱时长**后的纯停顿超过阈值才插。
+ * 已有 `instrumental` 标记的行原样保留（不重复插点），阈值外的普通行距不插。
+ * 返回新数组，不改动入参。
+ */
+export function insertInterludeDots(
+  lines: LyricLine[],
+  opts: { threshold?: number; tailEnd?: number } = {},
+): LyricLine[] {
+  if (!lines.length) return [];
+  const threshold = opts.threshold ?? INSTRUMENTAL_THRESHOLD;
+  const out: LyricLine[] = [lines[0]];
+  for (let i = 0; i < lines.length - 1; i++) {
+    const cur = lines[i];
+    const next = lines[i + 1];
+    if (!cur.instrumental && !next.instrumental) {
+      const gap = next.time - cur.time;
+      const sing = Math.min(gap, singingEstimate(cur.text));
+      if (gap - sing >= threshold) out.push(makeDotsLine(cur.time + sing, next.time));
+    }
+    out.push(next);
+  }
+  // 结尾器乐段：最后一行唱完到整首结束之间也要补点（tailEnd 由调用方给音频时长）
+  const last = lines[lines.length - 1];
+  const tailEnd = opts.tailEnd ?? 0;
+  if (tailEnd > 0 && !last.instrumental) {
+    const gap = tailEnd - last.time;
+    const sing = Math.min(gap, singingEstimate(last.text));
+    if (gap - sing >= threshold) out.push(makeDotsLine(last.time + sing, tailEnd));
+  }
+  return out;
+}
+
 // ---- LRC 解析（从 player.ts 移入，供歌词源复用）----
 
 /**

@@ -26,6 +26,7 @@ import { TtlCache } from "./ttlCache";
 /** TTML 命名空间（与 AMLL packages/ttml/src/constants.ts 一致） */
 const NS_TTM = "http://www.w3.org/ns/ttml#metadata";
 const NS_ITUNES = "http://music.apple.com/lyric-ttml-internal";
+const NS_TTS = "http://www.w3.org/ns/ttml#styling";
 
 /** 默认基地址：AMLL 官方仓库的 jsDelivr 镜像（带 CORS、有 br 压缩） */
 export const AMLL_DEFAULT_BASE = "https://cdn.jsdelivr.net/gh/amll-dev/amll-ttml-db@main";
@@ -201,6 +202,7 @@ export function parseAmllTime(raw: string | null | undefined): number {
 const PREFIX: Record<string, string> = {
   [NS_TTM]: "ttm",
   [NS_ITUNES]: "itunes",
+  [NS_TTS]: "tts",
   xml: "xml",
 };
 
@@ -232,6 +234,25 @@ function isFormattingWhitespace(raw: string): boolean {
   return raw.includes("\n") && raw.trim() === "";
 }
 
+/**
+ * ruby（注音 / 振假名）容器判定：AMLL 规范用 `tts:ruby="container"` 包住 base + textContainer。
+ *
+ * 本项目没有注音栏位，只取 base 文本（唱的是 base，注音只是读音提示）。如果照常把
+ * textContainer 里的注音当普通 span 处理，它就会混进正文与 units，屏幕上变成
+ * 「これは 所 しょ 詮 せ ん」这种读起来莫名其妙的样子（AMLL 官方解析器同样只取 base）。
+ */
+function rubyAttrOf(el: Element): string {
+  return attr(el, NS_TTS, "ruby") ?? "";
+}
+
+/** 从 ruby 容器里取 base 文本（取不到时退回容器全部文本，至少不丢字） */
+function rubyBaseText(el: Element): string {
+  for (const child of Array.from(el.getElementsByTagName("span"))) {
+    if (rubyAttrOf(child) === "base") return child.textContent ?? "";
+  }
+  return el.textContent ?? "";
+}
+
 /** 单个词（来自 <span begin end>，含背景和声的词） */
 interface WordToken {
   text: string;
@@ -247,6 +268,14 @@ interface LineTokens {
   romaji: string;
   /** 没有 span 的逐行歌词：整行一个词 */
   fallback: boolean;
+  /**
+   * 背景和声（x-bg）自己的翻译 / 音译。
+   *
+   * AMLL 的数据模型里和声是一段独立的 backgroundVocal（有自己的翻译与音译），
+   * 本项目 LyricLine 没有这一栏，所以只在主行没有对应内容时才兜底补上——
+   * 直接写主行的 translation 会把主行的翻译挤掉。
+   */
+  bg: { translation: string; romaji: string } | null;
 }
 
 /** 取词尾是否带空白（词间空格的唯一真相，决定 units 拼接时补不补空格） */
@@ -260,6 +289,7 @@ const EMPTY_LINE: LineTokens = {
   translation: "",
   romaji: "",
   fallback: false,
+  bg: null,
 };
 
 /** 拼接词序列为整行文本（词自带空白就保留，避免英文单词粘在一起） */
@@ -318,6 +348,10 @@ function parseChildren(parent: Element): LineTokens {
       // 背景和声：AMLL 渲染成主行下方的子行，本项目 LyricLine 没有该栏位，
       // 折中成「括号内容接在主行后面」，并把整段合成一个词（逐字填充仍连贯）。
       const inner = parseChildren(el);
+      // 和声是「子行」：它的翻译 / 音译不该和主行抢同一个栏位。先暂存到 state.bg，
+      // 由调用方在主行没有翻译时才合并（与 AMLL 的 backgroundVocal 结构一致）。
+      state.bg ??= { translation: "", romaji: "" };
+      const bgInner = state.bg;
       const bgText = (inner.words.length ? joinWords(inner.words) : inner.text).trim();
       if (bgText) {
         // 规范要求作者自带半角括号、机器人也会补，所以只在这个文件确实没写时才补，
@@ -329,19 +363,21 @@ function parseChildren(parent: Element): LineTokens {
         state.words.push({ text: wrapped, startMs: start, endMs: end });
         state.text += wrapped;
       }
-      if (!state.translation && inner.translation) state.translation = inner.translation;
-      if (!state.romaji && inner.romaji) state.romaji = inner.romaji;
+      // 和声自带的翻译 / 音译**只在主行完全没有时才兜底**：主行的翻译经常写在 <head>
+      // 的 sidecar 里、要到 processLineElement 才合并进来，这里若直接写 state.translation，
+      // 就会把主行的翻译挤掉（真实夹具 complex-test-song 的 L3 就是这种写法）。
+      bgInner.translation ||= inner.translation;
+      bgInner.romaji ||= inner.romaji;
       continue;
     }
 
-    // 普通词 span：有 begin/end 就是逐字，没有就把整段文字当一个词。
-    // 空白折叠成单个空格但**不 trim**：英文歌词里词首/词尾的空格就是词间分隔，
-    // 去掉就会让 units 拼接（.word 是 white-space:pre）粘成一片。
+    // ruby（注音）容器：只取 base，注音不进正文与 units（见 rubyBaseText 的说明）。
+    // 容器自身通常没有 begin/end，时间落在注音上，所以用行时间兜底而不是返回 0。
+    const isRubyContainer = rubyAttrOf(el) === "container";
     const begin = parseAmllTime(attr(el, "xml", "begin"));
     const end = parseAmllTime(attr(el, "xml", "end"));
-    const text = (el.textContent ?? "")
-      .replace(/\s+/g, " ")
-      .replace(/^\s+|\s+$/g, (m) => (m ? " " : ""));
+    const raw = isRubyContainer ? rubyBaseText(el) : (el.textContent ?? "");
+    const text = raw.replace(/\s+/g, " ").replace(/^\s+|\s+$/g, (m) => (m ? " " : ""));
     if (text) {
       state.text += text;
       state.words.push({ text, startMs: begin, endMs: end });
@@ -356,6 +392,9 @@ function toLyricLine(tokens: LineTokens, beginMs: number, endMs: number): LyricL
   const text = (tokens.fallback ? tokens.text : joinWords(tokens.words) || tokens.text).trim();
   if (!text) return null;
   const line: LyricLine = { time: beginMs / 1000, text };
+  // 这里只写**主行自己**的翻译 / 音译。和声的翻译兜底必须等 <head> sidecar 合并之后
+  // 再做（见 processLineElement）：主行翻译常写在 sidecar 里，若在这里先填上和声的，
+  // 后面 sidecar 就会因为「已有翻译」而被跳过，屏幕上只剩和声那句。
   if (tokens.translation) line.translation = tokens.translation;
   if (tokens.romaji) line.romaji = tokens.romaji;
   // 只有「真的逐字」才有意义：一个词一行时给 units 反而让填充动画退化成整行高亮
@@ -444,6 +483,13 @@ export function parseAmllTtml(ttml: string, host?: { DOMParser: typeof DOMParser
     if (side) {
       if (!line.translation && side.translation) line.translation = side.translation;
       if (!line.romaji && side.romaji) line.romaji = side.romaji;
+    }
+    // 和声的翻译 / 音译最后兜底：主行自己没写、<head> sidecar 也没有时，才用它，
+    // 免得主行那侧留空、副行白白空着（AMLL 里和声自带翻译，本项目没有子行栏位）。
+    const bg = tokens.bg;
+    if (bg) {
+      if (!line.translation && bg.translation) line.translation = bg.translation;
+      if (!line.romaji && bg.romaji) line.romaji = bg.romaji;
     }
     lines.push(line);
   });
