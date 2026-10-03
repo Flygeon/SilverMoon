@@ -47,6 +47,7 @@ The desktop app ships a much more detailed document of its own: [中文](apps/de
 
 - **Apple Music–style player**: fluid animated background, cover-driven color extraction, word-by-word karaoke lyrics
 - **Word-by-word lyrics**: official timelines from QQ Music QRC / Kugou KRC, NetEase yrc / AMLL TTML, plus a Web Worker + FFT (spectral flux) local-analysis fallback
+- **AMLL word-by-word lyrics source**: pulls from the AMLL TTML DB (a community-maintained Apple Music–style word-by-word library with translations, romanization and background vocals), placed first in the fallback chain — AMLL → QQ → Kugou → Meting → local — with a configurable mirror base URL
 - **Audio effects engine**: 10-band EQ + bass boost + reverb + stereo width; presets can be saved, imported/exported and shared as compact codes (LLFX3)
 - **Desktop lyrics**: a separate transparent always-on-top window with mouse pass-through, 4 transition animations, position memory and lock
 - **SMTC (Windows system media controls)**: taskbar media flyout, media keys, cover art

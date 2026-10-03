@@ -1,8 +1,9 @@
 /**
  * 「更精确的逐字歌词」匹配编排。
  *
- * 流程（回退链）：优先尝试用户偏好的来源（默认 QQ）→ 失败回退另一云端来源（QQ ⇄ 酷狗）
+ * 流程（回退链）：优先尝试用户偏好的来源，默认 **AMLL TTML DB** → QQ 音乐 → 酷狗音乐
  * → 已登录网易云时追加 Meting API → 全部云端失败则交由调用方回退本地歌词。
+ * AMLL 那一源可以在设置里关掉（amllLyricsEnabled），关掉后自动跳过。
  * 每个来源：搜索歌曲名（忽略括号内信息）→ 过滤「同名 + 时长差 ≤ ±1 秒」→ 按时长差升序
  * 取前 N 个候选 → 逐个拉取逐字歌词：优先含逐字数据的候选；全无逐字则回退首个逐行结果。
  *
@@ -12,6 +13,8 @@
 import { qqSearchSongs, qqFetchLyrics, type QqSongInfo } from "./qqMusic";
 import { kgSearchSongs, kgFetchLyrics, type KgSongInfo } from "./kgMusic";
 import { metingSearch } from "./meting";
+import { amllSearchSongs, amllFetchLyrics, AMLL_DEFAULT_BASE, type AmllTtmlSong } from "./amllTtml";
+import { useSettingsStore } from "@/stores/settings";
 import { lrcGet, lrcSet } from "./onlineCache";
 import { parseLrc, filterInstrumentalPlaceholder } from "./lyricTimeline";
 import { hasWordLevel } from "./qrc";
@@ -19,7 +22,7 @@ import { TtlCache } from "./ttlCache";
 import type { LyricLine, OnlineSong } from "@shared/types";
 
 /** 云端歌词来源 */
-export type LyricSource = "qq" | "kg" | "meting";
+export type LyricSource = "amll" | "qq" | "kg" | "meting";
 /** 歌词来源偏好（含本地） */
 export type LyricSourcePref = LyricSource | "local";
 
@@ -65,6 +68,7 @@ export type PreciseLyricsResult =
   | { ok: false; reason: QqFallbackReason; detail?: string };
 
 const SOURCE_LABEL: Record<LyricSource, string> = {
+  amll: "AMLL TTML DB",
   qq: "QQ 音乐",
   kg: "酷狗音乐",
   meting: "Meting API",
@@ -91,6 +95,101 @@ interface TryContext {
   title: string;
   durationMs: number;
   artist?: string;
+}
+
+/**
+ * 尝试 AMLL TTML DB 来源（社区维护的逐字歌词库，默认第一优先）。
+ *
+ * 与 QQ / 酷狗的区别：TTML 文件本身没有「时长」字段，索引里也没有，所以无法像那两家
+ * 一样先按时长筛候选。这里改成「先按标题挑候选 → 下第一份 → 用 TTML 里估出的曲长
+ * 与本地音频比对」。差太多（超过 3 秒）才继续试下一个候选，避免同名不同版本（翻唱 /
+ * Live）拿错歌词 —— 那比拿不到歌词更让人困惑。
+ *
+ * 只有 1 秒容差的那两家不一样：AMLL 的 TTML 是人工打轴的，`<body dur>` 常常是
+ * 「最后一个字唱完」的时间而不是音频总长，用它跟音频时长严格比对会大面积误杀。
+ */
+const AMLL_DURATION_TOLERANCE_MS = 3000;
+
+async function tryAmllSource(opts: TryContext, base?: string): Promise<PreciseLyricsResult> {
+  const keyword = stripBrackets(opts.title);
+  let songs: AmllTtmlSong[];
+  try {
+    songs = await amllSearchSongs(keyword, base);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      ok: false,
+      reason: "search-failed",
+      detail: `${SOURCE_LABEL.amll} 搜索失败: ${msg}`,
+    };
+  }
+  if (!songs.length) {
+    return { ok: false, reason: "no-match", detail: `${SOURCE_LABEL.amll}：无搜索结果` };
+  }
+
+  const titleNorm = normalizeTitle(opts.title);
+  // 索引里同一条歌词会给出多个别名（含 (Live) / 日文译名等），任一命中即可
+  const sameName = songs.filter((s) =>
+    (s.titles.length ? s.titles : [s.title]).some((t) => normalizeTitle(t) === titleNorm),
+  );
+  if (!sameName.length) {
+    return {
+      ok: false,
+      reason: "no-match",
+      detail: `${SOURCE_LABEL.amll}：搜索 ${songs.length} 条，同名 0 条`,
+    };
+  }
+
+  // 同名时长度相同性未知，按索引顺序试前几个；命中时长接近的就直接用
+  const candidates = sameName.slice(0, MAX_CANDIDATES);
+  let tried = 0;
+  let lastDetail = "";
+  let firstOk: LyricLine[] | null = null;
+  for (const song of candidates) {
+    tried++;
+    let lines: LyricLine[] | null = null;
+    try {
+      lines = await amllFetchLyrics(song, base);
+    } catch (e) {
+      lastDetail = e instanceof Error ? e.message : String(e);
+      continue;
+    }
+    if (!lines?.length) continue;
+    // 时长校验：TTML 估不出时长（0）时不做判断，直接接受
+    const ttmlMs = lines[lines.length - 1].time * 1000 + 1000;
+    const diff = Math.abs(ttmlMs - opts.durationMs);
+    if (!opts.durationMs || ttmlMs <= 0 || diff <= AMLL_DURATION_TOLERANCE_MS) {
+      return {
+        ok: true,
+        source: "amll",
+        lines,
+        songId: song.id,
+        songTitle: song.title,
+        wordLevel: true,
+        fromCache: false,
+      };
+    }
+    lastDetail = `时长差 ${Math.round(diff / 1000)}s，跳过`;
+    firstOk ??= lines;
+  }
+
+  if (firstOk) {
+    // 全部候选都因为时长差被跳过时，仍然接受第一个：有歌词总比回退 FFT 强
+    return {
+      ok: true,
+      source: "amll",
+      lines: firstOk,
+      songId: candidates[0].id,
+      songTitle: candidates[0].title,
+      wordLevel: true,
+      fromCache: false,
+    };
+  }
+  return {
+    ok: false,
+    reason: "no-lyrics",
+    detail: `${SOURCE_LABEL.amll}：尝试 ${tried} 个候选均无可用歌词${lastDetail ? `（${lastDetail}）` : ""}`,
+  };
 }
 
 /**
@@ -195,7 +294,12 @@ async function tryMetingSource(opts: TryContext): Promise<PreciseLyricsResult> {
 }
 
 /** 尝试单个来源：搜索 → 同名+时长匹配 → 逐字优先取词 */
-async function trySource(source: LyricSource, opts: TryContext): Promise<PreciseLyricsResult> {
+async function trySource(
+  source: LyricSource,
+  opts: TryContext,
+  amllBase?: string,
+): Promise<PreciseLyricsResult> {
+  if (source === "amll") return tryAmllSource(opts, amllBase);
   if (source === "meting") return tryMetingSource(opts);
   const keyword = stripBrackets(opts.title); // 搜索词同样忽略括号内信息
   let candidates: (QqSongInfo | KgSongInfo)[];
@@ -292,6 +396,19 @@ export interface PreciseLyricsOptions {
   force?: boolean;
   /** 已登录网易云账号：QQ/酷狗均失败后追加 Meting API 歌词回退 */
   fallbackToMeting?: boolean;
+  /**
+   * AMLL TTML DB 的基地址（来自设置项 amllLyricBase）。
+   *
+   * 允许用户换成社区镜像 / 自建：jsDelivr 在国内偶发不可达，换镜像比等 CDN 恢复现实。
+   */
+  amllBase?: string;
+  /**
+   * 是否启用 AMLL 源。缺省读设置（amllLyricsEnabled）。
+   *
+   * 显式传入只是为了**测试**可以绕开 store：store 在单测环境里没有 Pinia 实例，
+   * 直接读会抛错；生产路径一律传 undefined，让这里读设置。
+   */
+  amllEnabled?: boolean;
 }
 
 /**
@@ -303,7 +420,26 @@ export async function fetchCloudLyrics(opts: PreciseLyricsOptions): Promise<Prec
   if (!title || !opts.durationMs || !Number.isFinite(opts.durationMs)) {
     return { ok: false, reason: "missing-info" };
   }
-  const key = `${normalizeTitle(title)}|${Math.round(opts.durationMs)}|${opts.preferredSource ?? "auto"}|${opts.fallbackToMeting ? "meting" : "no-meting"}`;
+  // AMLL 是否启用：设置项是唯一真源，测试可以显式覆盖。store 未就绪（例如纯函数单测）
+  // 时退化为「启用」，与设置默认值一致，不会因为拿不到 store 就悄悄关掉一个默认功能。
+  let amllEnabled = opts.amllEnabled;
+  if (amllEnabled === undefined) {
+    try {
+      amllEnabled = useSettingsStore().amllLyricsEnabled !== false;
+    } catch {
+      amllEnabled = true;
+    }
+  }
+  const amllBase =
+    opts.amllBase ??
+    (() => {
+      try {
+        return useSettingsStore().amllLyricBase || AMLL_DEFAULT_BASE;
+      } catch {
+        return AMLL_DEFAULT_BASE;
+      }
+    })();
+  const key = `${normalizeTitle(title)}|${Math.round(opts.durationMs)}|${opts.preferredSource ?? "auto"}|${opts.fallbackToMeting ? "meting" : "no-meting"}|${amllEnabled ? amllBase : "no-amll"}`;
   const cached = resultCache.get(key);
   if (cached && !opts.force) {
     if (!cached.ok) {
@@ -312,21 +448,33 @@ export async function fetchCloudLyrics(opts: PreciseLyricsOptions): Promise<Prec
     return cached.ok ? { ...cached, fromCache: true } : cached;
   }
 
-  const base: LyricSource[] = [];
-  const preferred = opts.preferredSource;
-  if (preferred) base.push(preferred);
-  if (preferred !== "qq") base.push("qq");
-  if (preferred !== "kg" && !base.includes("kg")) base.push("kg");
-  if (opts.fallbackToMeting && !base.includes("meting")) base.push("meting");
-  const order = base;
+  // 回退顺序：AMLL → QQ → 酷狗 →（登录网易云时）Meting。
+  // 用户手动选过的来源排最前（preferredSource），其余按默认顺序补齐。
+  //
+  // 开关（amllLyricsEnabled）是**唯一真源**，关掉就必须一个 AMLL 请求都不发：用户手动
+  // 选过 AMLL 时偏好会被记忆下来（settings.lyricSourcePrefs），如果这里只拦默认链，
+  // 那条记忆会让「关了开关」形同虚设。
+  const preferAmll = opts.preferredSource === "amll" && amllEnabled;
+  const order: LyricSource[] = [];
+  if (opts.preferredSource && (opts.preferredSource !== "amll" || preferAmll)) {
+    order.push(opts.preferredSource);
+  }
+  if (amllEnabled && !order.includes("amll")) order.push("amll");
+  if (!order.includes("qq")) order.push("qq");
+  if (!order.includes("kg")) order.push("kg");
+  if (opts.fallbackToMeting && !order.includes("meting")) order.push("meting");
 
   let lastFailure: PreciseLyricsResult | null = null;
   for (const source of order) {
-    const r = await trySource(source, {
-      title,
-      durationMs: opts.durationMs,
-      artist: opts.artist,
-    });
+    const r = await trySource(
+      source,
+      {
+        title,
+        durationMs: opts.durationMs,
+        artist: opts.artist,
+      },
+      amllBase,
+    );
     if (r.ok) {
       resultCache.set(key, r);
       return r;

@@ -317,6 +317,7 @@ function onSliderLineHeight(e: Event) {
 type BoolSettingKey =
   | "wordLyrics"
   | "preciseLyrics"
+  | "amllLyricsEnabled"
   | "detectInstrumental"
   | "desktopLyricsEnabled"
   | "desktopLyricsShowNext"
@@ -824,6 +825,22 @@ function selectSection(id: string) {
           />
         </label>
         <p class="hint">{{ t("settings.preciseLyricsHint") }}</p>
+        <label class="row switch-row">
+          <span class="row-label">{{ t("settings.amllLyrics") }}</span>
+          <m3e-switch
+            :checked="settings.amllLyricsEnabled"
+            @change="setSwitch('amllLyricsEnabled', $event)"
+          />
+        </label>
+        <p class="hint">{{ t("settings.amllLyricsHint") }}</p>
+        <!-- 地址框仅在源开启时展示：关掉 AMLL 后该地址不会被使用，避免误导 -->
+        <m3e-form-field v-if="settings.amllLyricsEnabled" variant="filled" class="field">
+          <label slot="label">{{ t("settings.amllLyricBase") }}</label>
+          <input v-model="settings.amllLyricBase" type="text" spellcheck="false" />
+        </m3e-form-field>
+        <p v-if="settings.amllLyricsEnabled" class="hint">
+          {{ t("settings.amllLyricBaseHint") }}
+        </p>
         <label class="row switch-row">
           <span class="row-label">{{ t("settings.detectInstrumental") }}</span>
           <m3e-switch

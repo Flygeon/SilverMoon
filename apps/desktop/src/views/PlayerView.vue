@@ -107,6 +107,14 @@ function isWebDavItem(item: unknown): item is { path: string } {
 const sourceBadge = computed(() => {
   const switchHint = t("player.lyricSwitchHint");
   if (!settings.preciseLyrics || !player.lyricsSource) return null;
+  // AMLL 是回退链的第一档：命中它是「最优结果」，不是回退，所以放在最前面判。
+  // 说明文案里点明数据源（AMLL TTML DB）与「设置里可关」，省得用户看到陌生缩写去翻设置。
+  if (player.lyricsSource === "amll") {
+    return {
+      text: t("player.lyricSourceAmll"),
+      hint: `${t("player.lyricSourceAmllHint")} · ${switchHint}`,
+    };
+  }
   if (player.lyricsSource === "qq") {
     return {
       text: t("player.lyricSourceQq"),

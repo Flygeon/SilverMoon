@@ -66,6 +66,9 @@ export const messages = {
       romaji: "罗马音",
       both: "双栏",
       lyricSubModeSwitch: "点击切换歌词副行：翻译 / 罗马音",
+      lyricSourceAmll: "AMLL 逐字",
+      lyricSourceAmllHint:
+        "歌词来自 AMLL TTML DB（社区维护的逐字歌词库，含翻译 / 音译 / 背景和声）",
       lyricSourceQq: "QQ 逐字",
       lyricSourceQqHint: "歌词来自 QQ 音乐官方卡拉 OK 逐字时间轴",
       lyricSourceKg: "酷狗逐字",
@@ -74,7 +77,7 @@ export const messages = {
       lyricSourceMetingHint: "歌词来自 Meting API（网易云）",
       lyricSourceLocal: "本地歌词",
       lyricSourceSwitched: "已切换歌词来源：",
-      lyricSwitchHint: "点击切换歌词来源（QQ → 酷狗 → Meting → 本地）",
+      lyricSwitchHint: "点击切换歌词来源（AMLL → QQ → 酷狗 → Meting → 本地）",
       lyricFallbackToast: "云端歌词未匹配，已回退本地歌词",
       "lyricReason_missing-info": "缺少歌曲标题或时长",
       "lyricReason_search-failed": "搜索失败（网络或接口异常）",
@@ -197,7 +200,13 @@ export const messages = {
       wordLyricsHint: "逐字填充 + 唱完上浮（Apple Music 风格）。关闭则整行歌词一次性高亮。",
       preciseLyrics: "更精确的逐字歌词",
       preciseLyricsHint:
-        "开启后按 QQ 音乐 → 酷狗音乐 → 本地歌词的顺序获取逐字歌词（同名且时长差不超过 1 秒的官方卡拉 OK 时间轴），登录网易云账号后会额外回退 Meting API 歌词；需要联网；播放器右上角徽标可点击手动切换来源，并记住你的选择。",
+        "开启后按 AMLL TTML DB → QQ 音乐 → 酷狗音乐 → 本地歌词 的顺序获取逐字歌词（同名且时长差不超过 1 秒的官方卡拉 OK 时间轴），登录网易云账号后会额外回退 Meting API 歌词；需要联网；播放器右上角徽标可点击手动切换来源，并记住你的选择。",
+      amllLyrics: "AMLL 逐字歌词源",
+      amllLyricsHint:
+        "AMLL TTML DB 是社区维护的 Apple Music 风格逐字歌词库（含逐字时间轴、翻译、音译与背景和声），默认作为第一优先来源；关闭后按 QQ → 酷狗 → Meting → 本地 回退。需要联网。",
+      amllLyricBase: "AMLL TTML DB 地址",
+      amllLyricBaseHint:
+        "默认走 jsDelivr 镜像；访问不畅可换成社区镜像或自建（如 https://amll.mirror.dimeta.top/api/db），仅影响歌词文件下载。",
       detectInstrumental: "自动识别前奏/间奏",
       detectInstrumentalHint: "将开头作词/作曲/编曲信息替换为三点前奏，长间奏插入三点等待。",
       playback: "播放器",
@@ -1083,6 +1092,9 @@ export const messages = {
       romaji: "Romaji",
       both: "Both",
       lyricSubModeSwitch: "Click to switch lyric sub-line: translation / romaji",
+      lyricSourceAmll: "AMLL word-timed",
+      lyricSourceAmllHint:
+        "Lyrics from AMLL TTML DB (a community-maintained word-timed library with translations / romanization / background vocals)",
       lyricSourceQq: "QQ word-timed",
       lyricSourceQqHint: "Lyrics from QQ Music official karaoke word-timed track",
       lyricSourceKg: "Kugou word-timed",
@@ -1091,7 +1103,7 @@ export const messages = {
       lyricSourceMetingHint: "Lyrics from Meting API (NetEase)",
       lyricSourceLocal: "Local lyrics",
       lyricSourceSwitched: "Lyric source switched: ",
-      lyricSwitchHint: "Click to switch lyric source (QQ → Kugou → Meting → Local)",
+      lyricSwitchHint: "Click to switch lyric source (AMLL → QQ → Kugou → Meting → Local)",
       lyricFallbackToast: "No cloud lyrics matched; fell back to local lyrics",
       "lyricReason_missing-info": "missing song title or duration",
       "lyricReason_search-failed": "search failed (network or API error)",
@@ -1218,7 +1230,13 @@ export const messages = {
         "Fill each word with a gradient and lift it up when sung (Apple Music style). Off = highlight the whole line at once.",
       preciseLyrics: "Precise word-by-word lyrics",
       preciseLyricsHint:
-        "When enabled, the player fetches official word-timed lyrics (same title, duration ±1s) in order: QQ Music → Kugou → local lyrics; after signing in to NetEase, Meting API is used as an extra fallback. Requires network; click the badge in the player to switch sources manually — your choice is remembered per song.",
+        "When enabled, the player fetches word-timed lyrics (same title, duration ±1s) in order: AMLL TTML DB → QQ Music → Kugou → local lyrics; after signing in to NetEase, Meting API is used as an extra fallback. Requires network; click the badge in the player to switch sources manually — your choice is remembered per song.",
+      amllLyrics: "AMLL word-timed lyrics source",
+      amllLyricsHint:
+        "AMLL TTML DB is a community-maintained, Apple Music-style word-timed lyrics library (word-level timeline plus translations, romanization and background vocals). It is the first-priority source by default; when disabled, fallback follows QQ → Kugou → Meting → local. Requires network.",
+      amllLyricBase: "AMLL TTML DB URL",
+      amllLyricBaseHint:
+        "jsDelivr mirror by default; if it is slow or unreachable, switch to a community mirror or your own host (e.g. https://amll.mirror.dimeta.top/api/db). Only affects lyrics file downloads.",
       detectInstrumental: "Auto-detect intro & interlude",
       detectInstrumentalHint:
         "Replace leading credits (作词/作曲/编曲) with a 3-dot intro and insert 3-dot waits for long interludes.",

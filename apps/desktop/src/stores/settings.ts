@@ -69,8 +69,20 @@ const DEFAULTS = {
   lyricSubMode: "translation" as LyricSubMode,
   /** 逐字歌词（Apple Music 式逐字填充 + 唱完上浮） */
   wordLyrics: true,
-  /** 更精确的逐字歌词：播放时按 QQ → 酷狗 → [登录网易云后 Meting] → 本地回退链取逐字歌词 */
+  /** 更精确的逐字歌词：播放时按 AMLL → QQ → 酷狗 → [登录网易云后 Meting] → 本地回退链取逐字歌词 */
   preciseLyrics: false,
+  /**
+   * AMLL TTML DB 逐字歌词源开关。默认开启：它是回退链里质量最高的一档
+   * （Apple Music 风格逐字时间轴，自带翻译/音译/背景和声），且上游是社区 CDN，
+   * 命中失败会自然落到 QQ 逐字，不会有副作用，所以不必让用户先手动开启。
+   */
+  amllLyricsEnabled: true,
+  /**
+   * AMLL TTML DB 基地址。默认走 jsDelivr 主镜像；jsDelivr 在部分网络下不通，
+   * 故开放为可配置项（社区镜像 / 自建均可，例如 https://amll.mirror.dimeta.top/api/db），
+   * 仅影响歌词文件下载，不影响其它网络请求。
+   */
+  amllLyricBase: "https://cdn.jsdelivr.net/gh/amll-dev/amll-ttml-db@main",
   /** 各歌曲手动选择的歌词来源偏好（key = 归一化标题|时长ms，值 = qq/kg/meting/local） */
   lyricSourcePrefs: {} as Record<string, LyricSourcePref>,
   /** 自动识别前奏/间奏：隐藏作词/作曲/编曲为三点，长间奏插入三点 */
@@ -300,6 +312,8 @@ export const useSettingsStore = defineStore("settings", () => {
   const lyricSubMode = ref<LyricSubMode>(DEFAULTS.lyricSubMode);
   const wordLyrics = ref(DEFAULTS.wordLyrics);
   const preciseLyrics = ref(DEFAULTS.preciseLyrics);
+  const amllLyricsEnabled = ref(DEFAULTS.amllLyricsEnabled);
+  const amllLyricBase = ref(DEFAULTS.amllLyricBase);
   const lyricSourcePrefs = ref<Record<string, LyricSourcePref>>({ ...DEFAULTS.lyricSourcePrefs });
   const detectInstrumental = ref(DEFAULTS.detectInstrumental);
   const playerBg = ref<PlayerBgMode>(DEFAULTS.playerBg);
@@ -418,6 +432,8 @@ export const useSettingsStore = defineStore("settings", () => {
     lyricSubMode,
     wordLyrics,
     preciseLyrics,
+    amllLyricsEnabled,
+    amllLyricBase,
     lyricSourcePrefs,
     detectInstrumental,
     playerBg,

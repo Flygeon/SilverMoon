@@ -907,9 +907,21 @@ export const usePlayerStore = defineStore("player", () => {
 
   /**
    * 歌词来源状态：仅当「更精确的逐字歌词」开启且当前歌曲完成一次尝试后才有值。
-   * - "qq" / "kg" / "meting"：已应用对应云端歌词；"local"：已回退本地歌词（原因见 lyricFallbackReason）。
+   * - "amll" / "qq" / "kg" / "meting"：已应用对应云端歌词；
+   * - "local"：已回退本地歌词（原因见 lyricFallbackReason）。
+   *
+   * 类型直接取 LyricSourcePref，不再重复写一份字面量联合：回退链加一档来源时
+   * 这里若漏改，TS 会在 switchLyricSource 的 Record 处报错，但徽标分支未必——
+   * 复用同一个来源别名能把「加来源」这件事收敛到一处。
    */
-  const lyricsSource = ref<"qq" | "kg" | "meting" | "local" | null>(null);
+  const lyricsSource = ref<LyricSourcePref | null>(null);
+  /** 控制台日志里的来源名（Record 保证新增来源时必须补键，避免日志显示 undefined） */
+  const LYRIC_SRC_LABEL: Record<LyricSource, string> = {
+    amll: "AMLL",
+    qq: "QQ",
+    kg: "酷狗",
+    meting: "Meting",
+  };
   const lyricFallbackReason = ref<QqFallbackReason | null>(null);
   /** 回退的详细错误（徽标悬停展示，便于免 DevTools 排查） */
   const lyricFallbackDetail = ref<string | null>(null);
@@ -973,7 +985,10 @@ export const usePlayerStore = defineStore("player", () => {
     lyricsSource.value = result.source;
     lyricFallbackReason.value = null;
     lyricFallbackDetail.value = null;
-    const srcLabel = result.source === "qq" ? "QQ" : result.source === "kg" ? "酷狗" : "Meting";
+    // 来源 → 日志标签：三元表达式在加第三、第四个来源时可读性会崩，改查表。
+    // 取局部表而不是 utils 里的 SOURCE_LABEL：那份是匹配失败 detail 用的内部常量
+    // （未导出），且这里是纯日志文案，不值得为此把 utils 的内部细节提升为公开接口。
+    const srcLabel = LYRIC_SRC_LABEL[result.source];
     console.info(
       `[逐字歌词] 命中${srcLabel}：${result.songTitle}（${srcLabel} id=${result.songId}，${applied.length} 行，${result.wordLevel ? "含逐字时间轴" : "仅逐行"}，${result.fromCache ? "来自缓存" : "在线获取"}）`,
     );
@@ -981,9 +996,9 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   /**
-   * 「更精确的逐字歌词」编排（回退链 QQ → 酷狗 → [登录网易云后追加 Meting] → 本地）：
+   * 「更精确的逐字歌词」编排（回退链 AMLL → QQ → 酷狗 → [登录网易云后追加 Meting] → 本地）：
    * - 设置关闭 → 保持原流程（FFT 精排），不显示来源徽标；
-   * - 开启 → 按用户偏好（手动切换的记忆）或默认 QQ 优先，依次尝试云端逐字歌词，
+   * - 开启 → 按用户偏好（手动切换的记忆）或默认 AMLL 优先，依次尝试云端逐字歌词，
    *   成功则替换当前歌词、标记来源并跳过 FFT；全部失败则提示回退原因并走 FFT 回退。
    * 串行编排避免云端结果与 FFT 结果互相覆盖的竞态。
    */
@@ -1025,11 +1040,16 @@ export const usePlayerStore = defineStore("player", () => {
     if (qqLyricsInflight.has(key)) return; // 进行中，结果到达时统一处理
     qqLyricsInflight.add(key);
     try {
-      // 用户偏好：local = 直接本地；qq/kg/meting = 对应来源优先的回退链
+      // 用户偏好：local = 直接本地；amll/qq/kg/meting = 对应来源优先的回退链
       const prefKey = lyricPrefKey(meta);
       const pref = prefKey ? settings.lyricSourcePrefs[prefKey] : undefined;
       // 已退出网易云时，历史 meting 偏好不再作为首选（自动回到默认回退链）
-      const effectivePref = pref === "meting" && !neteaseLoggedIn ? undefined : pref;
+      const metingMiss = pref === "meting" && !neteaseLoggedIn;
+      // 同理：历史 amll 偏好也要受「设置里关掉 AMLL」约束。utils 里的开关判断只作用于
+      // 默认回退顺序（preferredSource 会先入队，早于那次检查），所以在调用点补一道，
+      // 否则用户关掉 AMLL 后，之前手动切到过 AMLL 的歌仍会继续请求 AMLL。
+      const amllMiss = pref === "amll" && !settings.amllLyricsEnabled;
+      const effectivePref = metingMiss || amllMiss ? undefined : pref;
       if (effectivePref === "local") {
         lyricsSource.value = "local";
         lyricFallbackReason.value = null; // 主动选择，非回退
@@ -1044,6 +1064,10 @@ export const usePlayerStore = defineStore("player", () => {
         durationMs: meta.durationMs,
         preferredSource: effectivePref,
         fallbackToMeting: neteaseLoggedIn,
+        // AMLL TTML DB 基地址来自设置（社区镜像 / 自建），空串时 utils 内部回退默认基地址。
+        // 注意：amllLyricsEnabled 开关**不在这里判** —— fetchCloudLyrics 内部读设置决定是否
+        // 走 AMLL，调用点重复判断反而会让两条链路的开关语义有机会分叉。
+        amllBase: settings.amllLyricBase,
       });
       // 防止完成时已切歌：当前歌曲仍是同一首才应用
       if (song.value?.id !== meta.id) {
@@ -1071,25 +1095,35 @@ export const usePlayerStore = defineStore("player", () => {
 
   /**
    * 手动切换歌词来源（播放器徽标点击）：
-   * 未登录网易云：qq → kg → local → qq；已登录：qq → kg → meting → local → qq。
+   * 未登录网易云：amll → qq → kg → local → amll；
+   * 已登录：amll → qq → kg → meting → local → amll。
    * 记忆偏好（下次播放同一歌曲默认使用该来源），切云端时强制重新获取。
+   *
+   * 循环起点与自动回退链保持一致（AMLL 打头、local 收尾）：cur 为空时（首次点切换）
+   * 从 amll 起算，正好把「下一档」指到 QQ，而不是又原地切回 AMLL。
    */
   async function switchLyricSource() {
     const meta = lastLyricMeta.value;
     const settings = useSettingsStore();
     const neteaseLoggedIn = settings.neteaseEnabled && useNeteaseStore().loggedIn;
     if (!meta || !song.value || !settings.preciseLyrics || !meta.durationMs) return;
-    const order: LyricSourcePref[] = neteaseLoggedIn
-      ? ["qq", "kg", "meting", "local"]
-      : ["qq", "kg", "local"];
-    const cur = lyricsSource.value ?? "qq";
-    const next = order[(order.indexOf(cur as LyricSourcePref) + 1) % order.length];
+    // 关掉 AMLL 时手动循环也要跳过它：否则用户会「切到一个已经在设置里关掉的来源」，
+    // 且 utils 只在默认回退顺序里判开关，手动 preferredSource 会绕过它。
+    // order 恒以 qq 打头、local 收尾，不会出现空数组或切不到本地的情况。
+    const order: LyricSourcePref[] = (["amll", "qq", "kg"] as LyricSourcePref[])
+      .filter((s) => s !== "amll" || settings.amllLyricsEnabled)
+      .concat(neteaseLoggedIn ? ["meting", "local"] : ["local"]);
+    // lyricsSource 已是 LyricSourcePref，无需再断言；"local" 也在 order 里，必然命中。
+    // cur 若已不在 order 中（例如刚关掉 AMLL），indexOf 得 -1 → 落到 order[0]，是期望行为。
+    const cur: LyricSourcePref = lyricsSource.value ?? "amll";
+    const next = order[(order.indexOf(cur) + 1) % order.length];
     const prefKey = lyricPrefKey(meta);
     if (prefKey) {
       settings.lyricSourcePrefs[prefKey] = next; // 记忆偏好
     }
     const lang = settings.lang;
     const labels: Record<LyricSourcePref, string> = {
+      amll: translate(lang, "player.lyricSourceAmll"),
       qq: translate(lang, "player.lyricSourceQq"),
       kg: translate(lang, "player.lyricSourceKg"),
       meting: translate(lang, "player.lyricSourceMeting"),
@@ -1131,6 +1165,8 @@ export const usePlayerStore = defineStore("player", () => {
         preferredSource: next,
         force: true,
         fallbackToMeting: neteaseLoggedIn,
+        // 同上：AMLL 基地址透传，开关由 utils 内部读设置
+        amllBase: settings.amllLyricBase,
       });
       if (song.value?.id !== meta.id) return;
       if (result.ok) {
