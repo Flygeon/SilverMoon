@@ -17,6 +17,7 @@ import type Artplayer from "artplayer";
 import type { Option as DanmukuOption } from "artplayer-plugin-danmuku";
 import BilibiliComments from "@/components/BilibiliComments.vue";
 import BilibiliRelatedList from "@/components/BilibiliRelatedList.vue";
+import BilibiliAiSummary from "@/components/BilibiliAiSummary.vue";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
 import {
@@ -152,6 +153,40 @@ const qualities = computed(() => play.value?.qualities ?? []);
 const parts = computed(() => detail.value?.parts ?? []);
 const showParts = computed(() => parts.value.length > 1);
 const title = computed(() => detail.value?.title || bili.current?.title || t("bili.title"));
+
+// ---------------------------------------------------------------- AI 总结
+/**
+ * 「AI 总结」按钮与内联面板。
+ *
+ * 按钮是否出现交给 store 的 aiActionVisible（开关 + 有 bvid/cid）；未登录时点它 store 会
+ * 直接给「请先登录」而**不发请求** —— 上游结论接口必须登录，白跑一次要多吃一次风控。
+ * 面板显隐只看 store 状态，组件本身不缓存结论（切视频时由 store 的 resetAiSummary 清空）。
+ */
+/** 面板是否被用户手动收起（只收起视图，不清 store 里的结论，避免重复打上游） */
+const aiCollapsed = ref(false);
+const showAiPanel = computed(
+  () =>
+    !aiCollapsed.value &&
+    (bili.aiStatus === "loading" || !!bili.aiError || bili.aiSummary !== null),
+);
+
+function openAi(): void {
+  if (bili.aiStatus === "loading") return;
+  // 展开中再点一次＝收起
+  if (showAiPanel.value) {
+    aiCollapsed.value = true;
+    return;
+  }
+  aiCollapsed.value = false;
+  // 收起后再展开直接复用已有结论；只有「没结论」或「上次失败要重试」才真的发请求
+  if (bili.aiSummary === null) void bili.loadAiSummary();
+}
+
+/** 点 AI 章节：跳到对应时间点（播放器没就绪时忽略，按钮仍可见但点了无效）。 */
+function seekTo(seconds: number): void {
+  if (!art || !Number.isFinite(seconds)) return;
+  art.currentTime = Math.max(0, seconds);
+}
 
 function readThemeColor(): string {
   const v = getComputedStyle(document.documentElement)
@@ -729,7 +764,30 @@ const metaItems = computed(() => {
           </div>
 
           <template v-else-if="detail">
-            <h2 class="title">{{ detail.title }}</h2>
+            <div class="title-row">
+              <h2 class="title">{{ detail.title }}</h2>
+              <!-- AI 总结入口：开关关掉 / 无 cid 时整个按钮不出现（v-if 走 store 的 computed） -->
+              <m3e-button
+                v-if="bili.aiActionVisible"
+                class="ai-btn"
+                :variant="showAiPanel ? 'tonal' : 'text'"
+                size="small"
+                :disabled="bili.aiStatus === 'loading'"
+                @click="openAi"
+              >
+                <span slot="icon" class="material-symbols-outlined">summarize</span>
+                {{ showAiPanel ? t("bili.aiSummary") : t("bili.aiSummaryOpen") }}
+              </m3e-button>
+            </div>
+
+            <BilibiliAiSummary
+              v-if="showAiPanel"
+              class="ai-block"
+              :summary="bili.aiSummary"
+              :error="bili.aiError"
+              :loading="bili.aiStatus === 'loading'"
+              @seek="seekTo"
+            />
             <div class="submeta">
               <span v-for="(m, i) in metaItems" :key="i">{{ i > 0 ? "· " : "" }}{{ m }}</span>
             </div>
@@ -1170,6 +1228,23 @@ const metaItems = computed(() => {
   align-items: center;
   gap: 10px;
   color: var(--md-sys-color-on-surface-variant);
+}
+
+.title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.title-row .title {
+  flex: 1;
+  min-width: 0;
+}
+.ai-btn {
+  flex: none;
+  margin-top: 2px;
+}
+.ai-block {
+  margin: 12px 0 4px;
 }
 
 .title {

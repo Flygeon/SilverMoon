@@ -66,6 +66,7 @@ The desktop app ships a much more detailed document of its own: [中文](apps/de
 - **Online novels** — Wenku8 login and online bookshelf, BQG source, online reading and reading statistics
 - **Online anime** — rule-based aggregated search with source switching, seasonal pages, Bangumi details and collection sync; ArtPlayer playback + DanDanPlay danmaku + HLS
 - **Bilibili video** — recommendation feed / search / QR login, video details and comments, UP profile and uploads, history and favorites, like / coin / favorite; streams are fetched over **DASH + MSE** and muxed client-side, sharing the danmaku stack with anime
+- **Bilibili anti-fraud & dynamics** — auto re-check comment / dynamic visibility after posting (visible, self-only or hidden), a dynamics feed with publishing, optional hiding of goods-promoting dynamics and comments, and one-click **AI video summary** with chapter outline on the video page
 
 **🎨 Appearance & extensibility**
 

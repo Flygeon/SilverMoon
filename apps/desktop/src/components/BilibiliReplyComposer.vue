@@ -4,6 +4,8 @@
  *
  * 未登录时不显示输入框，只给一条「去登录」的提示（父级负责打开登录弹窗）。
  * 发送成功后清空并退出回复态；内容为空 / 发送中则禁用按钮。
+ * 正文含商品推广链接且设置里打开了「发布前二次确认」时，先弹窗确认再发（带货评论
+ * 容易被上游折叠，多发一步确认能避免用户事后才发现评论不见了）。
  */
 import { computed, ref, watch } from "vue";
 import { useBiliStore } from "@/stores/bilibili";
@@ -32,7 +34,42 @@ function cancelReply(): void {
   replyTo.value = null;
 }
 
-async function send(): Promise<void> {
+/**
+ * 商品推广链接特征（与参考项目 PiliPlus 的带货识别口径一致）。
+ *
+ * 只认「高能带货短链 + 淘宝/天猫商品页」这两种：B 站带货评论不外传这两类链接，
+ * 放宽（比如任何 http 链接都拦）会把正常分享视频链接的评论也拦下来，得不偿失。
+ */
+const GOODS_RE = /(https?:\/\/)?(gaoneng\.bilibili\.com\/tetris|item\.(taobao|tmall)\.com)/i;
+
+function hasGoodsLink(s: string): boolean {
+  return GOODS_RE.test(s);
+}
+
+/** 二次确认弹窗的方法（m3e-dialog 没有 v-model，只能拿实例调）。 */
+interface M3eDialog extends HTMLElement {
+  show(): Promise<void>;
+  hide(returnValue?: string): Promise<void>;
+}
+const confirmDialog = ref<M3eDialog | null>(null);
+/** 待确认的发送任务；null 表示没有挂起的发送 */
+let pending: (() => Promise<void>) | null = null;
+/**
+ * 本次交互是否点了「仍然发送」。
+ *
+ * m3e-dialog 在**程序化** hide() 时也会派发 cancel 事件（见 TextPrompt.vue 的同一坑），
+ * 所以必须用这个标记把「用户取消」和「确认后关闭」区分开：否则点确认时 cancel 先把
+ * pending 清掉，onConfirmClosed 拿不到任务，表现为「点了确认却什么都没发」。
+ */
+let confirmed = false;
+
+/**
+ * 真正发送（抽出来是因为它可能被二次确认延后执行）。
+ *
+ * 延后期间用户可能已经切了视频 / 改了内容：这里重新取一次当前文本与回复目标，
+ * 与点击确认那一刻的界面保持一致，避免把旧内容发出去。
+ */
+async function doSend(): Promise<void> {
   if (!canSend.value) return;
   const target = replyTo.value;
   const ok = await bili.postReply(
@@ -44,6 +81,40 @@ async function send(): Promise<void> {
     text.value = "";
     replyTo.value = null;
   }
+}
+
+async function send(): Promise<void> {
+  if (!canSend.value) return;
+  // 命中带货链接且开关打开时先弹窗确认：这类评论容易被上游折叠 / 判定为推广
+  if (settings.biliAntiGoodsPublish && hasGoodsLink(text.value)) {
+    pending = doSend;
+    confirmed = false;
+    await confirmDialog.value?.show();
+    return;
+  }
+  await doSend();
+}
+
+/** 确认发送：置位后关弹窗，真正发送交给 onConfirmClosed（避开 hide 的 async 竞态）。 */
+function confirmSend(): void {
+  confirmed = true;
+  void confirmDialog.value?.hide();
+}
+
+/** 取消（按钮 / Esc / 点遮罩）：丢掉挂起的发送，但保留草稿让用户改掉链接重发。 */
+function cancelSend(): void {
+  // 程序化 hide() 也会派发 cancel：已确认时不能把它当成取消
+  if (confirmed) return;
+  pending = null;
+  void confirmDialog.value?.hide();
+}
+
+/** 弹窗真正关闭后执行一次发送；取消路径 pending 已被清空，自然什么都不做。 */
+async function onConfirmClosed(): Promise<void> {
+  const job = confirmed ? pending : null;
+  confirmed = false;
+  pending = null;
+  if (job) await job();
 }
 
 /** 切换视频时清掉草稿与回复目标，避免把上一条视频的回复发到下一条上。 */
@@ -109,6 +180,28 @@ defineExpose({ replyToComment, cancelReply });
         {{ t("bili.scanLogin") }}
       </m3e-button>
     </div>
+
+    <!-- 带货链接二次确认：这类评论发出后容易被折叠，先让用户确认一次 -->
+    <Teleport to="body">
+      <m3e-dialog
+        ref="confirmDialog"
+        class="goods-confirm"
+        @cancel="cancelSend"
+        @closed="onConfirmClosed"
+      >
+        <span slot="header">{{ t("bili.antiGoodsConfirmTitle") }}</span>
+        <p class="goods-tip">{{ t("bili.antiGoodsConfirmHint") }}</p>
+        <p class="goods-quote">{{ text }}</p>
+        <div slot="actions" end>
+          <m3e-button variant="text" size="small" @click="cancelSend">
+            {{ t("bili.cancelReply") }}
+          </m3e-button>
+          <m3e-button variant="filled" size="small" @click="confirmSend">
+            {{ t("bili.antiGoodsConfirmOk") }}
+          </m3e-button>
+        </div>
+      </m3e-dialog>
+    </Teleport>
   </div>
 </template>
 
@@ -218,5 +311,26 @@ defineExpose({ replyToComment, cancelReply });
 }
 .login-hint .material-symbols-outlined {
   font-size: 18px;
+}
+
+/* ---- 带货链接二次确认弹窗 ---- */
+.goods-confirm {
+  --m3e-dialog-min-width: 400px;
+}
+.goods-tip {
+  margin: 0;
+  font-size: var(--md-sys-typescale-body-small-size);
+  line-height: 1.6;
+  color: var(--md-sys-color-on-surface-variant);
+}
+.goods-quote {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  border-radius: var(--lm-shape-card-inner);
+  background: var(--md-sys-color-surface-container);
+  font-size: var(--md-sys-typescale-body-small-size);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 </style>

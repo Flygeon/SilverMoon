@@ -333,6 +333,12 @@ type BoolSettingKey =
   | "bqgNovelEnabled"
   | "onlineAnimeEnabled"
   | "bilibiliEnabled"
+  | "biliAntifraudEnabled"
+  | "biliDynAntifraudEnabled"
+  | "biliAntiGoodsDyn"
+  | "biliAntiGoodsReply"
+  | "biliAiSummaryEnabled"
+  | "biliAntiGoodsPublish"
   | "onlinePixivEnabled"
   | "danmakuEnabled"
   | "danmakuAntiOverlap"
@@ -1218,6 +1224,63 @@ function selectSection(id: string) {
         <p v-if="settings.bilibiliEnabled" class="hint">
           {{ t("settings.bilibiliLoginHint") }}
         </p>
+
+        <!-- 反诈 / 带货过滤 / AI 总结：仅在启用 B 站视频后才有意义 -->
+        <template v-if="settings.bilibiliEnabled">
+          <label class="row switch-row">
+            <span class="row-label">{{ t("settings.biliAntifraud") }}</span>
+            <m3e-switch
+              :checked="settings.biliAntifraudEnabled"
+              @change="setSwitch('biliAntifraudEnabled', $event)"
+            />
+          </label>
+          <p class="hint">{{ t("settings.biliAntifraudHint") }}</p>
+
+          <label class="row switch-row">
+            <span class="row-label">{{ t("settings.biliDynAntifraud") }}</span>
+            <m3e-switch
+              :checked="settings.biliDynAntifraudEnabled"
+              @change="setSwitch('biliDynAntifraudEnabled', $event)"
+            />
+          </label>
+          <p class="hint">{{ t("settings.biliDynAntifraudHint") }}</p>
+
+          <label class="row switch-row">
+            <span class="row-label">{{ t("settings.biliAntiGoodsDyn") }}</span>
+            <m3e-switch
+              :checked="settings.biliAntiGoodsDyn"
+              @change="setSwitch('biliAntiGoodsDyn', $event)"
+            />
+          </label>
+          <p class="hint">{{ t("settings.biliAntiGoodsDynHint") }}</p>
+
+          <label class="row switch-row">
+            <span class="row-label">{{ t("settings.biliAntiGoodsReply") }}</span>
+            <m3e-switch
+              :checked="settings.biliAntiGoodsReply"
+              @change="setSwitch('biliAntiGoodsReply', $event)"
+            />
+          </label>
+          <p class="hint">{{ t("settings.biliAntiGoodsReplyHint") }}</p>
+
+          <label class="row switch-row">
+            <span class="row-label">{{ t("settings.biliAiSummary") }}</span>
+            <m3e-switch
+              :checked="settings.biliAiSummaryEnabled"
+              @change="setSwitch('biliAiSummaryEnabled', $event)"
+            />
+          </label>
+          <p class="hint">{{ t("settings.biliAiSummaryHint") }}</p>
+
+          <label class="row switch-row">
+            <span class="row-label">{{ t("settings.biliAntiGoodsPublish") }}</span>
+            <m3e-switch
+              :checked="settings.biliAntiGoodsPublish"
+              @change="setSwitch('biliAntiGoodsPublish', $event)"
+            />
+          </label>
+          <p class="hint">{{ t("settings.biliAntiGoodsPublishHint") }}</p>
+        </template>
 
         <!-- 空降助手（SponsorBlock）：跳过赞助/广告段 -->
         <template v-if="settings.bilibiliEnabled">

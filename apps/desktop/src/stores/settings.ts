@@ -126,6 +126,27 @@ const DEFAULTS = {
   onlineAnimeEnabled: false,
   /** 实验性：B 站视频（推荐流 / 搜索 / 扫码登录 / 解析播放，仅桌面端） */
   bilibiliEnabled: false,
+  /**
+   * 发评反诈：评论发出后自动复查是否公开可见。
+   *
+   * 默认关闭——复查要求登录，且会多发一次上游请求；需要的用户可在设置里打开。
+   */
+  biliAntifraudEnabled: false,
+  /** 发布动态反诈：动态发出后自动复查是否公开可见（同样需要登录） */
+  biliDynAntifraudEnabled: false,
+  /** 屏蔽带货动态：动态流里隐藏挂了商品/带货卡片的动态 */
+  biliAntiGoodsDyn: false,
+  /** 屏蔽带货评论：评论区隐藏带商品链接推广的评论 */
+  biliAntiGoodsReply: false,
+  /**
+   * 显示 AI 总结按钮。
+   *
+   * 默认开启（纯 UI 入口，不点不发请求），点击后才会拉取站内 AI 摘要；
+   * 上游要求登录，未登录时 store 会直接提示而不是白跑一次风控。
+   */
+  biliAiSummaryEnabled: true,
+  /** 带商品卡的动态发布前二次确认（默认关：只对挂商品卡的动态做拦截确认） */
+  biliAntiGoodsPublish: false,
   /** 实验性：在线图片（Pixiv，移植自 Pixez） */
   onlinePixivEnabled: false,
   /** Pixiv refresh token（仅在本地磁盘与设置中保存，用于恢复会话） */
@@ -308,6 +329,12 @@ export const useSettingsStore = defineStore("settings", () => {
   const bqgNovelEnabled = ref(DEFAULTS.bqgNovelEnabled);
   const onlineAnimeEnabled = ref(DEFAULTS.onlineAnimeEnabled);
   const bilibiliEnabled = ref(DEFAULTS.bilibiliEnabled);
+  const biliAntifraudEnabled = ref(DEFAULTS.biliAntifraudEnabled);
+  const biliDynAntifraudEnabled = ref(DEFAULTS.biliDynAntifraudEnabled);
+  const biliAntiGoodsDyn = ref(DEFAULTS.biliAntiGoodsDyn);
+  const biliAntiGoodsReply = ref(DEFAULTS.biliAntiGoodsReply);
+  const biliAiSummaryEnabled = ref(DEFAULTS.biliAiSummaryEnabled);
+  const biliAntiGoodsPublish = ref(DEFAULTS.biliAntiGoodsPublish);
   const onlinePixivEnabled = ref(DEFAULTS.onlinePixivEnabled);
   const pixivRefreshToken = ref(DEFAULTS.pixivRefreshToken);
   const pixivImageQuality = ref(DEFAULTS.pixivImageQuality);
@@ -420,6 +447,12 @@ export const useSettingsStore = defineStore("settings", () => {
     bqgNovelEnabled,
     onlineAnimeEnabled,
     bilibiliEnabled,
+    biliAntifraudEnabled,
+    biliDynAntifraudEnabled,
+    biliAntiGoodsDyn,
+    biliAntiGoodsReply,
+    biliAiSummaryEnabled,
+    biliAntiGoodsPublish,
     onlinePixivEnabled,
     pixivRefreshToken,
     pixivImageQuality,

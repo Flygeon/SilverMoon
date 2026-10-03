@@ -507,7 +507,21 @@ async function getJson(
   headers?: Record<string, string>,
   timeoutMs?: number,
 ): Promise<Record<string, unknown>> {
-  const res = await biliFetch(url, { headers: { ...baseHeaders(), ...headers } }, timeoutMs);
+  return fetchJson(url, { ...baseHeaders(), ...headers }, timeoutMs);
+}
+
+/**
+ * 发送请求并解出 JSON（不附带任何默认请求头）。
+ *
+ * 单独抽出来是为了让「发评反诈」的匿名视角能发一次**完全不带 Cookie**的请求：
+ * 带上自己的凭据去看自己的评论，看到的永远是自己可见的那一面，等于没查。
+ */
+async function fetchJson(
+  url: string,
+  headers: Record<string, string>,
+  timeoutMs?: number,
+): Promise<Record<string, unknown>> {
+  const res = await biliFetch(url, { headers }, timeoutMs);
   const text = await res.text();
   // 原来完全不看 HTTP 状态：上游 5xx / 412 挑战页 / 网关 HTML 一律被 decodeJson
   // 说成「B站返回了非 JSON 内容」，无法区分「网络坏 / 被风控 / 接口变了」。
@@ -558,6 +572,8 @@ function assertOk(json: Record<string, unknown>, what: string): void {
   };
   const hint = known[code];
   if (hint) throw new Error(`${what}失败：${hint}（code=${code}）`);
+  // 反诈复查要靠 code 判「shadow ban」（12022）；对外仍抛可读文案，但把 code 带上，
+  // 调用方用字符串 contains 判即可，不必再引一层错误类型。
   throw new Error(`${what}失败：${msg}（code=${code}）`);
 }
 
@@ -807,6 +823,14 @@ export interface BiliReply {
   isUp: boolean;
   /** 置顶（整体置顶 / UP 置顶） */
   isTop: boolean;
+  /**
+   * 是否挂了商品推广卡（带货评论）。
+   *
+   * 判据对齐参考项目 PiliPlus 的 `ReplyGrpc.needRemoveGoodGrpc`：评论正文里的链接
+   * 只要带 `extra.goods_*` 扩展字段，或者正文直接贴了高能带货短链，就算带货。
+   * 置顶评论同样要能判——「屏蔽带货评论」是全局策略，不该被置顶绕过。
+   */
+  isGoods: boolean;
   /** 楼中楼预览（上游一般给 3 条） */
   replies: BiliReply[];
 }
@@ -840,6 +864,36 @@ function replyAuthor(m: Record<string, unknown> | undefined): BiliReplyAuthor {
   };
 }
 
+/**
+ * 带货评论判据（对齐 PiliPlus `ReplyGrpc.needRemoveGoodGrpc`）。
+ *
+ * 两条来源都要看：新版带货评论把商品挂在正文链接的 `extra.goods_*` 扩展里，
+ * 老版则在正文里直接贴高能短链（`gaoneng.bilibili.com/tetris`）。只看其中的一条
+ * 会漏掉另一批，用户就会觉得「开关开了还是有广告」。
+ */
+function replyHasGoods(content: Record<string, unknown> | undefined): boolean {
+  if (!content) return false;
+  const urls = content.urls as Record<string, unknown> | undefined;
+  if (urls && typeof urls === "object") {
+    for (const entry of Object.values(urls)) {
+      const extra = (entry as Record<string, unknown> | undefined)?.extra as
+        Record<string, unknown> | undefined;
+      if (!extra) continue;
+      if (
+        extra.goods_cm_control !== undefined ||
+        extra.goods_item_id !== undefined ||
+        extra.goods_prefetched_cache !== undefined
+      ) {
+        return true;
+      }
+    }
+  }
+  return str(content.message).includes(GOODS_URL_PREFIX);
+}
+
+/** 高能带货短链前缀（PiliPlus `Constants.goodsUrlPrefix`）。 */
+const GOODS_URL_PREFIX = "https://gaoneng.bilibili.com/tetris";
+
 /** 单条评论归一化（一级与楼中楼同构）。`upMid` 用来标「UP 主本人」。 */
 function replyFromJson(raw: Record<string, unknown>, upMid: number): BiliReply {
   const control = raw.reply_control as Record<string, unknown> | undefined;
@@ -860,6 +914,7 @@ function replyFromJson(raw: Record<string, unknown>, upMid: number): BiliReply {
     liked: num(raw.action) === 1,
     isUp: upMid > 0 && num(raw.mid) === upMid,
     isTop: false,
+    isGoods: replyHasGoods(content),
     replies: subs
       .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
       .map((x) => replyFromJson(x, upMid)),
@@ -1879,4 +1934,434 @@ export async function biliLastPlay(
     seconds: num(d?.last_play_time) / 1000,
     cid: str(d?.last_play_cid),
   };
+}
+
+// ------------------------------------------------------------------ 发评反诈
+
+/** 评论可见性复查结果。语义与参考项目 PiliPlus 的弹窗文案一一对应。 */
+export interface BiliReplyCheckResult {
+  /** ok 正常 / hidden 不可见 / shadow 仅自己可见 / suspicious 状态可疑 / failed 复查失败 */
+  kind: "ok" | "hidden" | "shadow" | "suspicious" | "failed";
+  /** 给用户看的一句话结论（中文，含上游错误原文） */
+  detail: string;
+  /** 被复查的评论正文（弹窗里原样回显，方便用户核对） */
+  message: string;
+}
+
+/**
+ * 发评反诈：评论发出后复查它到底可不可见。
+ *
+ * 移植自 PiliPlus `lib/utils/reply_utils.dart` 的 `_checkReply`，判据是「同一批评论，
+ * 用**不带 cookie** 的匿名视角与**带 cookie** 的本人视角各找一遍」：
+ *   - 匿名视角能找到      → 评论真的公开可见（ok）；
+ *   - 只有本人视角能找到  → shadow ban（仅自己可见）；
+ *   - 两处都找不到        → 评论被吞（hidden）；
+ *   - 匿名看不到、但带上 cookie 的楼中楼接口报 12022 → 也是 shadow ban。
+ *
+ * 实现细节：上游没有「按 rpid 查评论」的公开接口，只能翻列表找，所以主列表用游标
+ * 分页（mode=2 时间序，刚发的评论在最前面，通常翻一页就够）。匿名视角用不带 cookie
+ * 的请求；这是整条链路的关键——带上自己的 SESSDATA 看什么都是可见的，等于没查。
+ */
+export async function biliCheckReplyVisibility(
+  aid: string,
+  rpid: string,
+  opts: { root?: string; parent?: string; message?: string } = {},
+): Promise<BiliReplyCheckResult> {
+  const root = opts.root && opts.root !== "0" ? opts.root : "";
+  try {
+    if (!root) {
+      // 一级评论：先匿名翻主列表（时间序，新评论在前）
+      const mine = await findInMainList(aid, rpid);
+      if (mine === "found") {
+        return {
+          kind: "ok",
+          detail: "无账号状态下找到了你的评论，评论正常！",
+          message: opts.message ?? "",
+        };
+      }
+      if (mine === "error") {
+        // 匿名列表都拉不动（风控 / 网络），结论不可信，别误导用户去申诉
+        return {
+          kind: "failed",
+          detail: "无法匿名获取评论区（可能被风控），稍后再试",
+          message: opts.message ?? "",
+        };
+      }
+      // 匿名找不到：再看「本人视角」的楼中楼接口
+      try {
+        const visible = await findInReplyList(aid, rpid, 1, true);
+        if (visible === "found") {
+          return {
+            kind: "shadow",
+            detail: "你的评论被 shadow ban（仅自己可见）！",
+            message: opts.message ?? "",
+          };
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.includes("12022")) {
+          return {
+            kind: "shadow",
+            detail: "你的评论被 shadow ban（仅自己可见）！",
+            message: opts.message ?? "",
+          };
+        }
+        // 12022 之外的上游错误同样说明「本人视角也读不到」→ 评论被吞
+        return { kind: "hidden", detail: `评论不可见（${msg}）`, message: opts.message ?? "" };
+      }
+      return { kind: "hidden", detail: "无法找到你的评论。", message: opts.message ?? "" };
+    }
+
+    // 楼中楼：先匿名翻完所有页，再本人视角翻一遍（与参考项目顺序一致）
+    for (let page = 1; page <= MAX_CHECK_PAGES; page++) {
+      const hit = await findInReplyList(aid, root, page, false, rpid);
+      if (hit === "found") {
+        return {
+          kind: "ok",
+          detail: "无账号状态下找到了你的评论，评论正常！",
+          message: opts.message ?? "",
+        };
+      }
+      if (hit === "empty") break;
+    }
+    for (let page = 1; page <= MAX_CHECK_PAGES; page++) {
+      const hit = await findInReplyList(aid, root, page, true, rpid);
+      if (hit === "found") {
+        return {
+          kind: "shadow",
+          detail: "你的评论被 shadow ban（仅自己可见）！",
+          message: opts.message ?? "",
+        };
+      }
+      if (hit === "empty") break;
+    }
+    return { kind: "hidden", detail: "评论不可见。", message: opts.message ?? "" };
+  } catch (e) {
+    return {
+      kind: "failed",
+      detail: e instanceof Error ? e.message : String(e),
+      message: opts.message ?? "",
+    };
+  }
+}
+
+/** 匿名视角最多翻的页数：够覆盖刚发出来的评论，又不会把风控刷爆。 */
+const MAX_CHECK_PAGES = 5;
+
+/** 在匿名主列表里找 rpid；返回 error 表示列表本身没拉到（结论不可信）。 */
+async function findInMainList(aid: string, rpid: string): Promise<"found" | "missing" | "error"> {
+  try {
+    const page = await biliReplies(aid, BILI_REPLY_TIME, "", 0);
+    return page.replies.some((r) => r.rpid === rpid) || page.top.some((r) => r.rpid === rpid)
+      ? "found"
+      : "missing";
+  } catch {
+    return "error";
+  }
+}
+
+/**
+ * 在某一楼的回复列表里找评论。
+ *
+ * `rpid` 为空时表示只判「这一页能不能拉到」（一级评论用的是本人楼中楼接口，
+ * 拉得到即说明评论存在）。
+ */
+async function findInReplyList(
+  aid: string,
+  root: string,
+  page: number,
+  withCookie: boolean,
+  rpid?: string,
+): Promise<"found" | "missing" | "empty"> {
+  const qs = new URLSearchParams({
+    oid: aid,
+    type: "1",
+    root,
+    pn: String(page),
+    ps: "20",
+    sort: "1",
+  });
+  // 关键：匿名视角必须**不带** Cookie，否则等于自己看自己，永远「可见」
+  // （Referer 仍要给，否则个人空间类风控会直接回 -352）
+  const url = `${API}/x/v2/reply/reply?${qs.toString()}`;
+  const json = withCookie
+    ? await getJson(url, spaceHeaders())
+    : await fetchJson(url, spaceHeaders());
+  assertOk(json, "复查评论");
+  const data = json.data as Record<string, unknown> | undefined;
+  if (!rpid) return "found";
+  const list = replyList(data?.replies, 0);
+  if (!list.length) return "empty";
+  return list.some((r) => r.rpid === rpid) ? "found" : "missing";
+}
+
+// ------------------------------------------------------------------ AI 视频总结
+
+/** AI 视频总结的章节条目（`timestamp` 为秒）。 */
+export interface BiliAiPart {
+  timestamp: number;
+  content: string;
+}
+
+export interface BiliAiOutline {
+  title: string;
+  parts: BiliAiPart[];
+}
+
+export interface BiliAiConclusion {
+  summary: string;
+  outline: BiliAiOutline[];
+}
+
+/**
+ * AI 视频总结（`/x/web-interface/view/conclusion/get`，需 WBI，且必须登录）。
+ *
+ * 上游把「接口成功」与「总结成功」拆成两层 code：HTTP 层 `code===0` 表示请求受理，
+ * 真正的结论在 `data.code`：0 有结果 / 1 还在生成（要用户稍后再试）。
+ * 直接把 1 当成失败会得到「不支持总结」的错误提示，用户会以为视频没这个功能。
+ */
+export async function biliAiConclusion(
+  bvid: string,
+  cid: string,
+  upMid?: number,
+): Promise<BiliAiConclusion> {
+  const params: Record<string, string | number> = { bvid, cid };
+  if (upMid && upMid > 0) params.up_mid = upMid;
+  const json = await wbiGet("/x/web-interface/view/conclusion/get", params);
+  assertOk(json, "获取 AI 总结");
+  const data = json.data as Record<string, unknown> | undefined;
+  const dataCode = num(data?.code);
+  if (dataCode === 1) throw new Error("AI处理中，请稍后再试");
+  if (dataCode !== 0) throw new Error("当前视频暂不支持AI视频总结");
+  const model = data?.model_result as Record<string, unknown> | undefined;
+  const outline = ((model?.outline as unknown[]) ?? [])
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+    .map((o) => ({
+      title: str(o.title),
+      parts: ((o.part_outline as unknown[]) ?? [])
+        .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+        .map((p) => ({ timestamp: num(p.timestamp), content: str(p.content) }))
+        .filter((p) => p.content),
+    }))
+    .filter((o) => o.title || o.parts.length);
+  return { summary: str(model?.summary), outline };
+}
+
+// ------------------------------------------------------------------ 动态流
+
+/** 动态附加卡片的类型（商品推广）。 */
+const DYN_ADDITIONAL_GOODS = "ADDITIONAL_TYPE_GOODS";
+
+/** 归一化后的动态条目（只保留桌面端动态页要展示的字段）。 */
+export interface BiliDynamic {
+  id: string;
+  /** 上游的 DYNAMIC_TYPE_*，用于区分纯文字 / 图文 / 转发 / 视频稿件 */
+  type: string;
+  author: { mid: number; name: string; face: string };
+  /** 发布时间的秒级时间戳 */
+  timestamp: number;
+  text: string;
+  images: string[];
+  /** 转发的原动态（没有则 null） */
+  orig: { name: string; text: string; images: string[] } | null;
+  /** 挂了商品推广卡（带货） */
+  goods: boolean;
+  goodsTitle: string;
+  goodsCover: string;
+  goodsUrl: string;
+  stats: { like: number; comment: number; forward: number };
+  /** 视频稿件动态的 bvid / 标题（非稿件为空串） */
+  bvid: string;
+  title: string;
+}
+
+export interface BiliDynamicPage {
+  items: BiliDynamic[];
+  /** 下一页游标；空串表示到底 */
+  offset: string;
+  hasMore: boolean;
+}
+
+function dynAuthor(m: Record<string, unknown> | undefined): BiliDynamic["author"] {
+  return {
+    mid: num(m?.mid),
+    name: str(m?.name),
+    face: biliImage(m?.face),
+  };
+}
+
+/** 从 `module_dynamic` 里抠出正文与图片（含 opus 新形态）。 */
+function dynTextAndImages(md: Record<string, unknown> | undefined): {
+  text: string;
+  images: string[];
+  bvid: string;
+  title: string;
+} {
+  const desc = md?.desc as Record<string, unknown> | undefined;
+  let text = str(desc?.text);
+  const major = md?.major as Record<string, unknown> | undefined;
+  const opus = major?.opus as Record<string, unknown> | undefined;
+  const images: string[] = [];
+  // opus 形态（新版动态）：正文在 summary.text，图片在 pics[].url
+  const opusSummary = opus?.summary as Record<string, unknown> | undefined;
+  if (!text) text = str(opusSummary?.text);
+  for (const p of ((opus?.pics as unknown[]) ?? []).filter(isRec)) {
+    const url = biliImage(p.url);
+    if (url) images.push(url);
+  }
+  // 图集形态：draw.items[].src
+  const draw = major?.draw as Record<string, unknown> | undefined;
+  for (const it of ((draw?.items as unknown[]) ?? []).filter(isRec)) {
+    const url = biliImage(it.src);
+    if (url) images.push(url);
+  }
+  // 视频稿件：只取 bvid 与标题，封面交给调用方按需拉详情
+  const archive = major?.archive as Record<string, unknown> | undefined;
+  return {
+    text: biliStripHtml(text),
+    images,
+    bvid: str(archive?.bvid),
+    title: biliStripHtml(str(archive?.title)),
+  };
+}
+
+function isRec(x: unknown): x is Record<string, unknown> {
+  return !!x && typeof x === "object";
+}
+
+/** 单条动态归一化。`orig` 递归解析（转发卡片）。 */
+function dynamicFromJson(raw: Record<string, unknown>): BiliDynamic {
+  const modules = raw.modules as Record<string, unknown> | undefined;
+  const md = modules?.module_dynamic as Record<string, unknown> | undefined;
+  const additional = md?.additional as Record<string, unknown> | undefined;
+  const stat = modules?.module_stat as Record<string, unknown> | undefined;
+  const parsed = dynTextAndImages(md);
+  const goods = additional?.type === DYN_ADDITIONAL_GOODS;
+  const goods_ = additional?.goods as Record<string, unknown> | undefined;
+  const text = parsed.text;
+  const images = parsed.images;
+  let orig: BiliDynamic["orig"] = null;
+  const rawOrig = raw.orig;
+  if (isRec(rawOrig)) {
+    const o = dynamicFromJson(rawOrig);
+    orig = { name: o.author.name, text: o.text, images: o.images };
+  }
+  const count = (key: string): number => {
+    const node = stat?.[key] as Record<string, unknown> | undefined;
+    return num(node?.count);
+  };
+  return {
+    id: str(raw.id_str),
+    type: str(raw.type),
+    author: dynAuthor(modules?.module_author as Record<string, unknown> | undefined),
+    timestamp: num((modules?.module_author as Record<string, unknown> | undefined)?.pub_ts),
+    text,
+    images,
+    orig,
+    // 自己挂了商品卡、或转发的原动态挂了商品卡，都属于带货动态
+    goods: goods || origGoods(rawOrig),
+    goodsTitle: biliStripHtml(str(goods_?.title)),
+    goodsCover: biliImage(goods_?.cover),
+    goodsUrl: str(goods_?.jump_url),
+    stats: { like: count("like"), comment: count("comment"), forward: count("forward") },
+    bvid: parsed.bvid,
+    title: parsed.title,
+  };
+}
+
+/** 原动态是否带货（只判附加卡片类型，够用且不误伤）。 */
+function origGoods(orig: unknown): boolean {
+  if (!isRec(orig)) return false;
+  const modules = orig.modules as Record<string, unknown> | undefined;
+  const md = modules?.module_dynamic as Record<string, unknown> | undefined;
+  const additional = md?.additional as Record<string, unknown> | undefined;
+  return additional?.type === DYN_ADDITIONAL_GOODS;
+}
+
+/**
+ * 关注动态流（`/x/polymer/web-dynamic/v1/feed/all`）。需要登录。
+ *
+ * 必须带 `Referer: https://t.bilibili.com/`：动态接口有 Referer 白名单，缺了直接
+ * 回 -352，看起来像被风控，实际补上就好（与项目里个人空间接口同一个坑）。
+ *
+ * 游标是**字符串** offset（不是页码），必须原样回填；页数判断只认 `has_more`。
+ */
+export async function biliDynamicFeed(offset = "", type = "all"): Promise<BiliDynamicPage> {
+  await biliEnsureDevice();
+  const qs = new URLSearchParams({
+    type,
+    page: "1",
+    offset,
+    // 上游要求这两个字段，否则部分卡片拿不到完整模块
+    timezone_offset: "-480",
+    features:
+      "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,decorationCard,onlyfansAssetsV2,ugcDelete,onlyfansQaCard",
+  });
+  const json = await getJson(
+    `${API}/x/polymer/web-dynamic/v1/feed/all?${qs.toString()}`,
+    DYN_HEADERS,
+  );
+  assertOk(json, "加载动态");
+  const data = json.data as Record<string, unknown> | undefined;
+  const items = ((data?.items as unknown[]) ?? []).filter(isRec).map(dynamicFromJson);
+  const next = str(data?.offset);
+  return { items, offset: next, hasMore: data?.has_more === true && !!next };
+}
+
+/** 动态接口的 Referer / Origin（缺了会被判定为跨站请求）。 */
+const DYN_HEADERS: Record<string, string> = {
+  Referer: "https://t.bilibili.com/",
+  Origin: "https://t.bilibili.com",
+};
+
+/** 单条动态详情（`/x/polymer/web-dynamic/v1/detail`）。发布后反诈要用它复查可见性。 */
+export async function biliDynamicDetail(id: string): Promise<BiliDynamic> {
+  const qs = new URLSearchParams({ id, timezone_offset: "-480" });
+  const json = await getJson(
+    `${API}/x/polymer/web-dynamic/v1/detail?${qs.toString()}`,
+    DYN_HEADERS,
+  );
+  assertOk(json, "加载动态详情");
+  const data = json.data as Record<string, unknown> | undefined;
+  const item = data?.item;
+  if (!isRec(item)) throw new Error("动态不存在或已被删除");
+  return dynamicFromJson(item);
+}
+
+/**
+ * 发布纯文字动态（`/x/dynamic/feed/create/dyn`）。
+ *
+ * `dyn_req` 是**内嵌 JSON 的表单字段**（不是请求体 JSON），少一层序列化上游一律回
+ * -400。返回新动态的 id_str，调用方用它做发布反诈复查。
+ */
+export async function biliDynamicPublish(text: string): Promise<string> {
+  const content = text.trim();
+  if (!content) throw new Error("动态内容不能为空");
+  await ensureCookies();
+  const dynReq = {
+    content: { contents: [{ raw_text: content, type: 1, biz_id: "" }] },
+  };
+  const body = new URLSearchParams({
+    dyn_req: JSON.stringify(dynReq),
+    csrf: biliCsrf(),
+    platform: "web",
+  }).toString();
+  const res = await biliFetch(
+    `${API}/x/dynamic/feed/create/dyn?platform=web&csrf=${encodeURIComponent(biliCsrf())}`,
+    {
+      method: "POST",
+      headers: {
+        ...baseHeaders(),
+        ...DYN_HEADERS,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body,
+    },
+  );
+  const text0 = await res.text();
+  if (!res.ok) throw new Error(`发布动态失败：HTTP ${res.status}（${text0.slice(0, 80)}）`);
+  const json = decodeJson(text0) as Record<string, unknown>;
+  assertOk(json, "发布动态");
+  const data = json.data as Record<string, unknown> | undefined;
+  return str(data?.id_str ?? data?.dyn_id_str ?? data?.dynamic_id);
 }

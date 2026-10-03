@@ -6,24 +6,32 @@
  * 登录态、推荐流、搜索词、正在看的视频都不会丢（配合 KeepAlive 的 DOM 缓存）。
  */
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import {
   BILI_ANONYMOUS,
   BILI_RELATION_NONE,
   BILI_REPLY_HOT,
   type BiliAccount,
+  type BiliAiConclusion,
   type BiliDetail,
+  type BiliDynamic,
   type BiliPlayUrl,
   type BiliQrStatus,
   type BiliRelation,
   type BiliReply,
+  type BiliReplyCheckResult,
   type BiliReplySort,
   type BiliUserCard,
   type BiliVideo,
   biliAddReply,
+  biliAiConclusion,
   biliApplyCookies,
+  biliCheckReplyVisibility,
   biliCoin,
   biliDanmaku,
+  biliDynamicDetail,
+  biliDynamicFeed,
+  biliDynamicPublish,
   biliFavFolders,
   biliFavFoldersAll,
   biliFavResources,
@@ -540,6 +548,8 @@ export const useBiliStore = defineStore("bilibili", () => {
     lastReported = -1;
     stopHeartbeat();
     resetDiscussions();
+    // 换视频必须清掉上一条的 AI 总结：否则新视频的详情页会先闪一眼旧总结
+    resetAiSummary();
     // 相关推荐只依赖 bvid，和详情/取流并行，别让它排在后面等
     void loadRelated(video.bvid);
     try {
@@ -604,6 +614,7 @@ export const useBiliStore = defineStore("bilibili", () => {
     playError.value = "";
     resetDiscussions();
     resetSponsor();
+    resetAiSummary();
   }
 
   // -------------------------------------------------------- 评论 / 相关推荐
@@ -624,6 +635,32 @@ export const useBiliStore = defineStore("bilibili", () => {
   const related = ref<BiliVideo[]>([]);
   const relatedStatus = ref<BiliStatus>("idle");
   let relatedToken = 0;
+
+  /**
+   * 被「屏蔽带货评论」过滤掉的条数（一级 + 楼中楼累计）。
+   *
+   * 过滤发生在写进 `replies` 之前，条数从那两个数组里看不出来，所以单独计数给 UI 提示用。
+   */
+  const replyBlockedCount = ref(0);
+
+  /** 该评论是否挂了商品推广卡片或商品短链（判定在 utils 层做，见 BiliReply.isGoods）。 */
+  function isGoodsReply(r: BiliReply): boolean {
+    if (!useSettingsStore().biliAntiGoodsReply) return false;
+    if (r.isGoods) replyBlockedCount.value += 1;
+    return r.isGoods;
+  }
+
+  /** 楼中楼专用的批量过滤：逐条走 isGoodsReply，顺便把计数累加起来。 */
+  function filterGoodsReplies(list: BiliReply[]): BiliReply[] {
+    const out: BiliReply[] = [];
+    for (const r of list) {
+      if (isGoodsReply(r)) continue;
+      // 楼中楼里通常还会有更深的 `replies` 预览；它们同样要过一遍，否则
+      // 一级评论被藏了、它的子回复预览还挂在别人楼里露出来。
+      out.push(r.replies.length ? { ...r, replies: filterGoodsReplies(r.replies) } : r);
+    }
+    return out;
+  }
 
   /** 评论挂在 aid 上：优先取当前推荐条目，其次详情（两者到达顺序不定） */
   function commentAid(): string {
@@ -647,6 +684,11 @@ export const useBiliStore = defineStore("bilibili", () => {
     subBusy.value = {};
     subEnds.value = {};
     replyOffset = "";
+    // 屏蔽计数与反诈结果都跟着「当前视频」走：换视频后提示条与弹窗若还留着上一条的
+    // 数字，用户会以为是新视频的情况（评论列表本身已经清空了）。
+    replyBlockedCount.value = 0;
+    antifraudResult.value = null;
+    antifraudChecking.value = false;
     related.value = [];
     relatedStatus.value = "idle";
     relation.value = null;
@@ -680,9 +722,12 @@ export const useBiliStore = defineStore("bilibili", () => {
       for (const r of merged) {
         if (seen.has(r.rpid)) continue;
         seen.add(r.rpid);
+        // 带货评论在入口处就挡掉：UI 与后续统计都不必再判一遍
+        if (isGoodsReply(r)) continue;
         unique.push(r);
       }
       replies.value = unique;
+      // 总数按上游给的来（过滤掉的是「不展示」而非「不存在」），没有上游值时才退回本地条数
       replyTotal.value = page.total || unique.length;
       replyOffset = page.nextOffset;
       replyEnd.value = page.isEnd || !page.nextOffset;
@@ -726,9 +771,10 @@ export const useBiliStore = defineStore("bilibili", () => {
     subBusy.value = { ...subBusy.value, [rpid]: true };
     try {
       const r = await biliReplyReplies(aid, rpid, page, upMidOf());
+      const list = filterGoodsReplies(r.replies);
       subReplies.value = {
         ...subReplies.value,
-        [rpid]: more ? [...(subReplies.value[rpid] ?? []), ...r.replies] : r.replies,
+        [rpid]: more ? [...(subReplies.value[rpid] ?? []), ...list] : list,
       };
       subEnds.value = { ...subEnds.value, [rpid]: r.isEnd };
     } catch (e) {
@@ -1049,8 +1095,23 @@ export const useBiliStore = defineStore("bilibili", () => {
     if (!text || replySending.value) return false;
     replySending.value = true;
     try {
-      await biliAddReply(aid, text, root, parent);
+      const rpid = await biliAddReply(aid, text, root, parent);
       notice.value = root ? "回复已发送" : "评论已发送";
+      // 发评反诈：发完先等上游审核落库（参考项目 CommAntifraud 取 8s），再自动复查
+      // 评论是否公开可见。这里刻意不 await —— 复查结果走弹窗，不该拖住「发送成功」。
+      if (useSettingsStore().biliAntifraudEnabled && rpid) {
+        // 捕获当前视频的 aid 与 rpid：8s 内用户可能已经切了视频，闭包里要的是
+        // 「发这条评论时的上下文」，而不是回调触发时的 current。
+        const myAid = aid;
+        const myRpid = rpid;
+        window.setTimeout(() => {
+          if (commentAid() !== myAid) {
+            // 已经换视频了：按当前 aid 查会查错对象，宁可跳过自动复查
+            return;
+          }
+          void checkReply(myRpid, root, text, false);
+        }, 8000);
+      }
       // 回复直接刷新当前楼，一级评论只做本地插入
       if (root) {
         // 展开态才有楼中楼列表；未展开时上游预览也不含新回复，统一重拉该楼第一页
@@ -1067,6 +1128,245 @@ export const useBiliStore = defineStore("bilibili", () => {
       return false;
     } finally {
       replySending.value = false;
+    }
+  }
+
+  // -------------------------------------------------------- 发评反诈
+  /**
+   * 评论可见性复查（对齐参考项目 PiliPlus 的 CommAntifraud）。
+   *
+   * 上游的「评论是否可见」没有直接接口，只能靠「未登录 / 已登录分别翻评论区看找
+   * 不找得到这条 rpid」反推，所以结果不是一个布尔值，而是 ok / hidden / shadow /
+   * suspicious / failed 几种状态（见 utils 的 biliCheckReplyVisibility）。
+   * `manual` 记录这次是用户主动点「复查」还是发评后的自动复查 —— 自动复查才需要
+   * 主动弹窗告知，手动复查的结果用户本来就在等。
+   */
+  const antifraudResult = ref<{
+    kind: BiliReplyCheckResult["kind"];
+    detail: string;
+    message: string;
+    manual: boolean;
+  } | null>(null);
+  const antifraudChecking = ref(false);
+
+  /** 手动复查触发过多少次（同一条重复点也不并发）。 */
+  let antifraudToken = 0;
+
+  async function checkReply(rpid: string, root = "", message = "", manual = false): Promise<void> {
+    const aid = commentAid();
+    if (!aid || !rpid) return;
+    const myToken = ++antifraudToken;
+    antifraudChecking.value = true;
+    try {
+      // 把评论原文一并交给 utils：上游复查逻辑要在弹窗里原样回显「查的是哪条」
+      const r = await biliCheckReplyVisibility(aid, rpid, { root, parent: "", message });
+      if (myToken !== antifraudToken) return;
+      antifraudResult.value = {
+        kind: r.kind,
+        detail: r.detail,
+        // 把评论原文带进结果：弹窗里要让用户对得上「查的是哪条」，光有 detail 不够
+        message: message || r.message,
+        manual,
+      };
+    } catch (e) {
+      // utils 契约上不抛（内部归 failed），这里兜一层，避免按钮卡在「检查中」
+      if (myToken !== antifraudToken) return;
+      antifraudResult.value = { kind: "failed", detail: cleanError(e), message, manual };
+    } finally {
+      if (myToken === antifraudToken) antifraudChecking.value = false;
+    }
+  }
+
+  function closeAntifraud(): void {
+    antifraudResult.value = null;
+  }
+
+  // -------------------------------------------------------- 动态流
+  /**
+   * 「动态」子页的列表状态。
+   *
+   * 上游是游标分页：字符串 `offset` 翻页（不是页码），空串表示第一页，必须把返回的
+   * offset 原样回传；`has_more` 与 offset 都要看 —— 只信其一偶尔会多打一次空请求。
+   */
+  const dynItems = ref<BiliDynamic[]>([]);
+  const dynStatus = ref<BiliStatus>("idle");
+  const dynError = ref("");
+  const dynEnd = ref(false);
+  const dynLoadingMore = ref(false);
+  const dynTotal = ref(0);
+  const dynPublishing = ref(false);
+  /**
+   * 被「屏蔽带货动态」挡下的条数。
+   *
+   * 过滤发生在写进列表之前，`dynItems.length` 体现不出来，所以单独计数供 UI 提示
+   * 「已屏蔽 N 条带货动态」—— 否则用户只会以为动态流莫名其妙变少了。
+   */
+  const dynBlockedCount = ref(0);
+  const dynNotice = ref("");
+  let dynOffset = "";
+  let dynToken = 0;
+
+  /** 一次性的操作反馈几秒后自动消失，避免长期占着顶部位置。 */
+  let dynNoticeTimer: number | null = null;
+  function setDynNotice(msg: string): void {
+    dynNotice.value = msg;
+    if (dynNoticeTimer !== null) window.clearTimeout(dynNoticeTimer);
+    dynNoticeTimer = window.setTimeout(() => {
+      dynNoticeTimer = null;
+      dynNotice.value = "";
+    }, 4000);
+  }
+
+  /** 按开关过滤带货动态，并把被挡下的条数累加进 dynBlockedCount。 */
+  function filterGoodsDynamics(list: BiliDynamic[]): BiliDynamic[] {
+    if (!useSettingsStore().biliAntiGoodsDyn) return list;
+    const kept: BiliDynamic[] = [];
+    let blocked = 0;
+    for (const d of list) {
+      if (d.goods) blocked += 1;
+      else kept.push(d);
+    }
+    if (blocked) dynBlockedCount.value += blocked;
+    return kept;
+  }
+
+  async function loadDynamics(refresh = true): Promise<void> {
+    const token = refresh ? ++dynToken : dynToken;
+    if (refresh) {
+      dynStatus.value = "loading";
+      dynError.value = "";
+      dynEnd.value = false;
+      dynOffset = "";
+      dynBlockedCount.value = 0;
+      dynNotice.value = "";
+    }
+    try {
+      const page = await biliDynamicFeed(refresh ? "" : dynOffset);
+      if (token !== dynToken) return;
+      const list = filterGoodsDynamics(page.items);
+      dynItems.value = refresh ? list : [...dynItems.value, ...list];
+      dynOffset = page.offset;
+      dynEnd.value = !page.hasMore || !page.offset;
+      dynTotal.value = dynItems.value.length;
+      dynStatus.value = "ready";
+    } catch (e) {
+      if (token !== dynToken) return;
+      dynError.value = cleanError(e);
+      // 已有内容时不要退回全屏错误态：保留旧列表，错误交给提示条
+      dynStatus.value = dynItems.value.length ? "ready" : "error";
+    }
+  }
+
+  async function loadMoreDynamics(): Promise<void> {
+    if (dynStatus.value === "loading" || dynLoadingMore.value || dynEnd.value) return;
+    dynLoadingMore.value = true;
+    try {
+      await loadDynamics(false);
+    } finally {
+      dynLoadingMore.value = false;
+    }
+  }
+
+  /** 发布动态；成功后把新动态插到列表头部。 */
+  async function publishDynamic(text: string): Promise<boolean> {
+    const body = text.trim();
+    if (!body || dynPublishing.value) return false;
+    const st = useSettingsStore();
+    // 未登录先拦下：否则上游只回一条风控错误，用户不知道要先登录
+    if (!biliIsLoggedIn()) {
+      setDynNotice(t("bili.dynNeedLogin"));
+      return false;
+    }
+    dynPublishing.value = true;
+    try {
+      const id = await biliDynamicPublish(body);
+      setDynNotice(t("bili.dynPublished"));
+      try {
+        // 拉详情拿到归一化后的完整条目；失败也不影响「已发布」这个事实
+        const item = await biliDynamicDetail(id);
+        dynItems.value = [item, ...dynItems.value];
+        dynTotal.value = dynItems.value.length;
+      } catch (e) {
+        console.warn("[bilibili] 新动态详情获取失败：", e);
+      }
+      // 发布动态反诈：上游审核落库有延迟，立刻查必然「查无此动态」，
+      // 所以延迟 5s 再查；用 setTimeout，不拖住 publishDynamic 的返回。
+      if (st.biliDynAntifraudEnabled && id) {
+        const checkId = id;
+        window.setTimeout(() => {
+          void checkDynamicVisibility(checkId, body);
+        }, 5000);
+      }
+      return true;
+    } catch (e) {
+      setDynNotice(cleanError(e));
+      return false;
+    } finally {
+      dynPublishing.value = false;
+    }
+  }
+
+  /** 发布后复查动态可见性：详情接口拿不到即视为不可见（发布者自己通常立刻可见）。 */
+  async function checkDynamicVisibility(id: string, message: string): Promise<void> {
+    if (!id) return;
+    let kind: BiliReplyCheckResult["kind"] = "hidden";
+    let detail = "";
+    try {
+      await biliDynamicDetail(id);
+      kind = "ok";
+    } catch (e) {
+      detail = cleanError(e);
+    }
+    antifraudResult.value = { kind, detail, message, manual: false };
+  }
+
+  // -------------------------------------------------------- AI 视频总结
+  const aiSummary = ref<BiliAiConclusion | null>(null);
+  const aiStatus = ref<BiliStatus>("idle");
+  const aiError = ref("");
+  let aiToken = 0;
+
+  /** 「AI 总结」按钮只在开关打开、且当前视频有 bvid/cid 时出现。 */
+  const aiActionVisible = computed(
+    () => useSettingsStore().biliAiSummaryEnabled && !!activeCid.value && !!current.value?.bvid,
+  );
+
+  /** 是否已经取到过总结（组件据此决定展开区是否已有内容）。 */
+  const aiSummaryLoaded = computed(() => aiSummary.value !== null);
+
+  function resetAiSummary(): void {
+    aiToken += 1;
+    aiSummary.value = null;
+    aiStatus.value = "idle";
+    aiError.value = "";
+  }
+
+  async function loadAiSummary(): Promise<void> {
+    const v = current.value;
+    const bvid = v?.bvid ?? "";
+    const cid = activeCid.value;
+    if (!bvid || !cid) return;
+    // 上游总结接口要登录态才稳定可用：未登录直接给「请先登录」，不发这一次必被风控的请求
+    if (!biliIsLoggedIn()) {
+      aiSummary.value = null;
+      aiStatus.value = "idle";
+      aiError.value = t("bili.aiSummaryLogin");
+      return;
+    }
+    const token = ++aiToken;
+    aiStatus.value = "loading";
+    aiError.value = "";
+    try {
+      // up_mid 可选：带上它，上游会优先命中 UP 主自己写的总结
+      const upMid = detail.value?.owner.mid || v?.ownerMid || 0;
+      const res = await biliAiConclusion(bvid, cid, upMid);
+      if (token !== aiToken) return;
+      aiSummary.value = res;
+      aiStatus.value = "ready";
+    } catch (e) {
+      if (token !== aiToken) return;
+      aiError.value = cleanError(e);
+      aiStatus.value = "error";
     }
   }
 
@@ -1511,5 +1811,32 @@ export const useBiliStore = defineStore("bilibili", () => {
     toggleFavorite,
     toggleFollow,
     shareVideo,
+    // 发评反诈
+    antifraudResult,
+    antifraudChecking,
+    checkReply,
+    closeAntifraud,
+    // 动态流
+    dynItems,
+    dynStatus,
+    dynError,
+    dynEnd,
+    dynLoadingMore,
+    dynTotal,
+    dynBlockedCount,
+    dynPublishing,
+    dynNotice,
+    loadDynamics,
+    loadMoreDynamics,
+    publishDynamic,
+    // AI 视频总结
+    aiSummary,
+    aiStatus,
+    aiError,
+    aiSummaryLoaded,
+    aiActionVisible,
+    loadAiSummary,
+    // 评论带货过滤
+    replyBlockedCount,
   };
 });

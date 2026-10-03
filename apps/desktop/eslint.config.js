@@ -95,6 +95,11 @@ export default [
       // B 站子选项卡：m3e-button / m3e-form-field 的 icon 槽
       "src/components/BilibiliOnlineView.vue",
       "src/components/BilibiliVideoView.vue",
+      // 动态子页 / AI 总结：m3e-button 的 icon 槽
+      "src/components/BilibiliDynamics.vue",
+      "src/components/BilibiliAiSummary.vue",
+      // 评论区：反诈弹窗的申诉按钮用 m3e-button 的 icon 槽
+      "src/components/BilibiliComments.vue",
       // 「我的」/ UP 主主页 / 评论输入框：同样是 m3e-button 的 icon 槽
       "src/components/BilibiliMinePanel.vue",
       "src/components/BilibiliUserView.vue",

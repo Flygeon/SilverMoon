@@ -14,6 +14,7 @@ import BilibiliVideoView from "@/components/BilibiliVideoView.vue";
 import BilibiliUserView from "@/components/BilibiliUserView.vue";
 import BilibiliMinePanel from "@/components/BilibiliMinePanel.vue";
 import BilibiliSearchHistory from "@/components/BilibiliSearchHistory.vue";
+import BilibiliDynamics from "@/components/BilibiliDynamics.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
@@ -24,10 +25,11 @@ const bili = useBiliStore();
 const settings = useSettingsStore();
 const t = (key: string) => translate(settings.lang, key);
 
-type InnerTab = "feed" | "search" | "mine";
+type InnerTab = "feed" | "dynamic" | "search" | "mine";
 const innerTab = ref<InnerTab>("feed");
 const innerTabs = computed(() => [
   { value: "feed" as InnerTab, label: t("bili.feed"), icon: "smart_display" },
+  { value: "dynamic" as InnerTab, label: t("bili.dynamicTab"), icon: "article" },
   { value: "search" as InnerTab, label: t("bili.search"), icon: "search" },
   { value: "mine" as InnerTab, label: t("bili.mine"), icon: "account_circle" },
 ]);
@@ -257,6 +259,14 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
           @action="bili.loadFeed(true)"
         />
       </template>
+
+      <!-- ============================ 动态 ============================ -->
+      <!--
+        只在切到「动态」时才挂载组件（v-else-if 分支本身按需渲染）：
+        否则一打开 B 站分段就会白拉一次动态接口。动态流数据在 store 里，
+        切走再回来由组件在 onMounted 里按需补齐。
+      -->
+      <BilibiliDynamics v-else-if="innerTab === 'dynamic'" @login="openLogin" />
 
       <!-- ============================ 搜索 ============================ -->
       <template v-else-if="innerTab === 'search'">

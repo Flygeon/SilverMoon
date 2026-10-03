@@ -8,7 +8,7 @@
  *   `/x/v2/reply/reply` 的完整列表，可继续「加载更多」。
  * - 展开态就存在 store 的 `subReplies[rpid]` 上（有值即展开），不再另立一套开关。
  */
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import BilibiliReplyComposer from "@/components/BilibiliReplyComposer.vue";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
@@ -48,12 +48,82 @@ function subExpanded(r: BiliReply): boolean {
 function subMore(r: BiliReply): boolean {
   return subExpanded(r) && bili.subEnds[r.rpid] === false;
 }
+
+// ---------------------------------------------------------------- 发评反诈
+/** 手动「复查」某条一级评论：只查这一条，结果同样落到 antifraudResult。 */
+function recheck(r: BiliReply): void {
+  void bili.checkReply(r.rpid, "", r.message, true);
+}
+
+/** 申诉页地址：B 站官方的评论申诉入口（复制 + 用系统浏览器打开）。 */
+const APPEAL_URL = "https://www.bilibili.com/h5/comment/appeal";
+
+/** 反诈弹窗的打开 / 关闭方法（m3e-dialog 没有 v-model，只能拿实例调）。 */
+interface M3eDialog extends HTMLElement {
+  show(): Promise<void>;
+  hide(returnValue?: string): Promise<void>;
+}
+const fraudDialog = ref<M3eDialog | null>(null);
+
+/** kind → 文案键。failed 只影响标题，detail 里带上游原话。 */
+const FRAUD_TITLE: Record<string, string> = {
+  ok: "bili.antifraudOk",
+  hidden: "bili.antifraudHidden",
+  shadow: "bili.antifraudShadow",
+  suspicious: "bili.antifraudSuspicious",
+  failed: "bili.antifraudFailed",
+};
+
+const fraudTitle = computed(() =>
+  bili.antifraudResult ? t(FRAUD_TITLE[bili.antifraudResult.kind] ?? "bili.antifraudFailed") : "",
+);
+
+/** ok / failed 没什么可申诉的；只有「被折叠 / shadow / 状态可疑」才给申诉入口。 */
+const fraudAppealable = computed(() => {
+  const kind = bili.antifraudResult?.kind;
+  return kind === "hidden" || kind === "shadow" || kind === "suspicious";
+});
+
+// 自动复查（发评后 8s 由 store 触发）也要弹窗，所以打开动作挂在结果变化上，
+// 而不是绑在某个按钮的 click 上；关闭统一走 store.closeAntifraud()。
+watch(
+  () => bili.antifraudResult,
+  async (r) => {
+    if (r) await fraudDialog.value?.show();
+    else await fraudDialog.value?.hide();
+  },
+);
+
+function closeFraud(): void {
+  bili.closeAntifraud();
+}
+
+/** 关掉后兜底收敛：Esc / 点遮罩同样要清掉结果，否则下次结果不变再也不弹。 */
+function onFraudClosed(): void {
+  if (bili.antifraudResult) bili.closeAntifraud();
+}
+
+/** 复制申诉链接并打开系统浏览器（与分享链接同一套做法）。 */
+async function appeal(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(APPEAL_URL);
+  } catch {
+    // 剪贴板不可用（无权限 / 非安全上下文）不该拦住跳转，继续打开即可
+  }
+  window.open(APPEAL_URL, "_blank");
+}
 </script>
 
 <template>
   <section class="comments">
     <!-- 评论输入框：未登录时这里显示「去登录」提示 -->
     <BilibiliReplyComposer ref="composer" @login="emit('login')" />
+
+    <!-- 复查进行中：结果要等两次翻页，先给个明确反馈（自动复查尤其需要） -->
+    <p v-if="bili.antifraudChecking" class="fraud-checking">
+      <m3e-loading-indicator class="lm-loading" />
+      {{ t("bili.antifraudChecking") }}
+    </p>
 
     <div class="bar">
       <h3 class="title">
@@ -140,6 +210,17 @@ function subMore(r: BiliReply): boolean {
               <span class="material-symbols-outlined">reply</span>
               {{ t("bili.replyAction") }}
             </button>
+            <!-- 手动复查：对单条评论再跑一次可见性判断（自动复查只发生在新评论发出后） -->
+            <button
+              class="act btn"
+              type="button"
+              :title="t('bili.antifraudManual')"
+              :disabled="bili.antifraudChecking"
+              @click="recheck(r)"
+            >
+              <span class="material-symbols-outlined">fact_check</span>
+              {{ t("bili.antifraudManual") }}
+            </button>
             <button
               v-if="!subExpanded(r) && r.replyCount"
               class="act btn"
@@ -199,6 +280,13 @@ function subMore(r: BiliReply): boolean {
       </li>
     </ul>
 
+    <!-- 带货评论被过滤时告知条数，否则评论区看起来只是「莫名其妙少了评论」 -->
+    <p v-if="bili.replyBlockedCount > 0" class="reply-blocked">
+      <span class="material-symbols-outlined">visibility_off</span>
+      <span>{{ t("bili.replyBlocked").replace("{n}", String(bili.replyBlockedCount)) }}</span>
+      <span class="reply-blocked-hint">{{ t("bili.replyBlockedHint") }}</span>
+    </p>
+
     <div v-if="bili.replies.length" class="more">
       <!-- 分页失败：列表保留，错误就近提示并可重试（不要顶掉已有内容） -->
       <p v-if="bili.replyStatus === 'error'" class="more-error">
@@ -216,6 +304,30 @@ function subMore(r: BiliReply): boolean {
       </button>
       <span v-else class="end">{{ t("bili.noMoreComments") }}</span>
     </div>
+
+    <!-- 发评反诈结果弹窗：自动复查（发评后 8s）与手动复查共用这一个 -->
+    <m3e-dialog ref="fraudDialog" class="fraud-dialog" @cancel="closeFraud" @closed="onFraudClosed">
+      <span slot="header">{{ t("bili.antifraud") }}</span>
+      <template v-if="bili.antifraudResult">
+        <p class="fraud-title">{{ fraudTitle }}</p>
+        <p v-if="bili.antifraudResult.detail" class="fraud-detail">
+          {{ bili.antifraudResult.detail }}
+        </p>
+        <!-- 回显被复查的评论原文：用户要能对上「查的是哪条」，光有结论不够 -->
+        <p v-if="bili.antifraudResult.message" class="fraud-quote">
+          {{ bili.antifraudResult.message }}
+        </p>
+      </template>
+      <div slot="actions" end>
+        <m3e-button v-if="fraudAppealable" variant="text" size="small" @click="appeal">
+          <span slot="icon" class="material-symbols-outlined">gavel</span>
+          {{ t("bili.antifraudAppeal") }}
+        </m3e-button>
+        <m3e-button variant="filled" size="small" @click="closeFraud">
+          {{ t("bili.antifraudClose") }}
+        </m3e-button>
+      </div>
+    </m3e-dialog>
   </section>
 </template>
 
@@ -262,9 +374,69 @@ function subMore(r: BiliReply): boolean {
   margin: 0;
   font-size: var(--md-sys-typescale-body-small-size);
   color: var(--md-sys-color-on-surface-variant);
+  /* 行内 loading indicator 默认高度会把这一行撑歪，压回文字大小 */
+  --m3e-loading-indicator-size: 16px;
 }
 .state.error {
   color: var(--md-sys-color-error);
+}
+
+/* ---- 发评反诈 ---- */
+.fraud-checking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--lm-shape-card-inner);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  font-size: var(--md-sys-typescale-body-small-size);
+}
+.fraud-dialog {
+  --m3e-dialog-min-width: 380px;
+}
+.fraud-title {
+  margin: 0;
+  font-size: var(--md-sys-typescale-body-medium-size);
+  font-weight: 500;
+  line-height: 1.6;
+}
+.fraud-detail {
+  margin: 8px 0 0;
+  font-size: var(--md-sys-typescale-body-small-size);
+  line-height: 1.6;
+  color: var(--md-sys-color-on-surface-variant);
+}
+.fraud-quote {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  border-radius: var(--lm-shape-card-inner);
+  background: var(--md-sys-color-surface-container);
+  font-size: var(--md-sys-typescale-body-small-size);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---- 带货评论过滤提示 ---- */
+.reply-blocked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--lm-shape-card-inner);
+  background: var(--md-sys-color-tertiary-container);
+  color: var(--md-sys-color-on-tertiary-container);
+  font-size: var(--md-sys-typescale-body-small-size);
+}
+.reply-blocked .material-symbols-outlined {
+  font-size: 16px;
+}
+.reply-blocked-hint {
+  opacity: 0.8;
 }
 
 .list {
