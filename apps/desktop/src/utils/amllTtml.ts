@@ -24,6 +24,9 @@
  */
 import type { LyricLine, WordUnit } from "@shared/types";
 import { TtlCache } from "./ttlCache";
+// lyricMatch 是叶子模块（不 import 任何项目内文件），这里引用不会成环。
+// 搜索粗筛与最终判等必须用同一套折叠规则，否则会出现「搜得到但判不过」的空转。
+import { foldTitle } from "./lyricMatch";
 
 /** TTML 命名空间（与 AMLL packages/ttml/src/constants.ts 一致） */
 const NS_TTM = "http://www.w3.org/ns/ttml#metadata";
@@ -51,13 +54,34 @@ export interface AmllTtmlSong {
   title: string;
   titles: string[];
   artists: string[];
+  /** Apple Music 曲目 id（索引里 2116/3291 条有，用于跨平台精确点名） */
+  appleMusicIds: string[];
+  /** Spotify 曲目 id（2069/3291 条有） */
+  spotifyIds: string[];
+  /** ISRC（2112/3291 条有），跨平台通用的录音唯一标识 */
+  isrcs: string[];
   /** raw-lyrics 目录下的文件名 */
   rawFile: string;
+  /**
+   * 文件名里的上传时间戳（毫秒）。索引按时间升序排列，所以它就是入库先后。
+   *
+   * 同名多版本时越靠后 = 越新近的投稿，通常也是维护得更好的一版；旧逻辑
+   * 无条件取第一条，等于永远优先最旧的打轴。取不到时为 0（排最前）。
+   */
+  uploadedAt: number;
 }
 
 interface RawIndexEntry {
   metadata?: [string, string[]][];
   rawLyricFile?: string;
+}
+
+/** 从 rawLyricFile（时间戳-作者-随机.ttml）里取上传时间戳（毫秒），取不到返回 0 */
+export function amllUploadedAt(rawFile: string): number {
+  const m = /^(\d{10,})/.exec(rawFile);
+  if (!m) return 0;
+  const ts = Number(m[1]);
+  return Number.isFinite(ts) ? ts : 0;
 }
 
 /**
@@ -70,11 +94,28 @@ const indexCache = new Map<string, { at: number; songs: AmllTtmlSong[] }>();
 /** 在途去重：并发搜索只下一次索引（同样按基地址分桶，否则换镜像时会复用旧镜像的在途请求） */
 const indexInflight = new Map<string, Promise<AmllTtmlSong[]>>();
 
-/** 歌词文件缓存：rawFile → 解析好的 LyricLine[]（成功 6h，失败 10min） */
-const lyricCache = new TtlCache<LyricLine[]>("amll-ttml", {
+/**
+ * 歌词文件缓存：rawFile → 解析结果（成功 6h / 失败 10min）。
+ *
+ * 与旧版的区别：**缓存里带上原始 TTML 文本与估出的曲长**。
+ *
+ * 1. 估时长（body dur / 最后一个 p end）以前要再解析一次 DOM；版本比对时每个候选都要
+ *    算一次时长，缓存文本能让「同一首歌反复播放」不再重复下载同样的大小。
+ * 2. `lines === null` 表示「下载成功但解析不出歌词行」，与「下载失败」区分开：
+ *    前者没必要重试，后者要继续试下一个候选。
+ */
+interface AmllLyricPayload {
+  /** 解析好的歌词行；null = 文件能下下来但没有可用歌词 */
+  lines: LyricLine[] | null;
+  /** 原始 TTML 文本（用于 amllTtmlDurationMs 估曲长），下载失败时为 null */
+  ttml: string | null;
+  /** 估算曲长（毫秒），0 = 估不出来（调用方据此跳过时长校验） */
+  durationMs: number;
+}
+const lyricCache = new TtlCache<AmllLyricPayload>("amll-ttml", {
   ttlMs: 10 * 60 * 1000,
   okTtlMs: 6 * 60 * 60 * 1000,
-  isOk: (lines) => lines.length > 0,
+  isOk: (p) => !!p.lines?.length,
   maxEntries: 256,
 });
 
@@ -107,6 +148,9 @@ function songFromEntry(entry: RawIndexEntry): AmllTtmlSong | null {
   const artists = (md.get("artists") ?? []).filter(Boolean);
   const ncmIds = (md.get("ncmMusicId") ?? []).filter(Boolean);
   const qqIds = (md.get("qqMusicId") ?? []).filter(Boolean);
+  const appleMusicIds = (md.get("appleMusicId") ?? []).filter(Boolean);
+  const spotifyIds = (md.get("spotifyId") ?? []).filter(Boolean);
+  const isrcs = (md.get("isrc") ?? []).filter(Boolean);
   return {
     id: ncmIds[0] ?? qqIds[0] ?? raw,
     ncmIds,
@@ -114,7 +158,11 @@ function songFromEntry(entry: RawIndexEntry): AmllTtmlSong | null {
     title: titles[0] ?? "",
     titles,
     artists,
+    appleMusicIds,
+    spotifyIds,
+    isrcs,
     rawFile: raw,
+    uploadedAt: amllUploadedAt(raw),
   };
 }
 
@@ -162,22 +210,99 @@ export function amllClearCache(): void {
   lyricCache.clear();
 }
 
+/** 粗筛最多返回的候选数：只做相关度截断，精确判等由调用方完成 */
+export const AMLL_SEARCH_MAX = 200;
+
 /**
- * 按歌名搜索 AMLL TTML DB。
+ * 粗筛用的「折叠」比较键。
  *
- * 匹配规则与其它歌词源一致：只用「歌名」，判等与归一化交给调用方
- * （preciseLyrics 用 normalizeTitle 统一比较，避免这里再写一套规则跑偏）。
+ * 直接复用 `lyricMatch.foldTitle`，保证搜索层与判分层对「什么算同一个写法」的口径
+ * 完全一致：小写 + 全角转半角 + 去掉所有空白与标点。
+ *
+ * 为什么要多这一档：includes 只处理「子串」关系，而真实歌名里的写法差异极大
+ * （索引里的 world.execute (me) ; vs 本地常写的 world.execute(me);、全角的 Ｉｄｏｌ
+ * vs Idol、Apple Music 的 ME! vs 大家写的 ME、日文名里的中点与波浪线等）。
+ * 折叠掉之后这些差异归零，能救回一批「明明有歌词却搜不到」的歌。
+ *
+ * 它会把 A-B 与 AB 视作同一个词，所以只用于**粗筛**；最终判等仍要过 preciseLyrics
+ * 的标题 + 艺人相似度评分，不能拿它当判等结果。
  */
-export async function amllSearchSongs(keyword: string, base?: string): Promise<AmllTtmlSong[]> {
-  const songs = await amllLoadIndex(base);
-  const want = keyword.trim().toLowerCase();
-  if (!want) return [];
-  const out: AmllTtmlSong[] = [];
-  for (const s of songs) {
-    if (s.titles.some((t) => t.trim().toLowerCase().includes(want))) out.push(s);
-    if (out.length >= 200) break; // 只做粗筛，精确匹配由调用方完成
+export const amllFoldTitle = foldTitle;
+
+/**
+ * 把查询词展开成「原文」与「折叠」两组。
+ *
+ * 调用方会同时传「原始标题」和「剥掉括注的标题」两种变体：有些歌名**本身整体被括号
+ * 包住**（索引里就有 （……醉鬼阿Q）（feat. 孙燕姿）），剥完变成空串，只用剥离后的
+ * 关键词搜索会一条都搜不到。
+ */
+function keywordForms(keyword: string | string[]): { raw: string[]; folded: string[] } {
+  const list = (Array.isArray(keyword) ? keyword : [keyword])
+    .map((k) => (k ?? "").trim().toLowerCase())
+    .filter(Boolean);
+  const raw: string[] = [];
+  const folded: string[] = [];
+  for (const k of list) {
+    if (!raw.includes(k)) raw.push(k);
+    const f = amllFoldTitle(k);
+    if (f && !folded.includes(f)) folded.push(f);
   }
-  return out;
+  return { raw, folded };
+}
+
+/** 单条候选的粗筛得分（0 = 与关键词无关）。分档保证「精确 > 前缀 > 包含」。 */
+function roughScore(titles: string[], raw: string[], folded: string[]): number {
+  let best = 0;
+  for (const t of titles) {
+    const lower = t.trim().toLowerCase();
+    if (!lower) continue;
+    const f = amllFoldTitle(t);
+    for (const w of raw) {
+      if (lower === w) best = Math.max(best, 300);
+      else if (lower.startsWith(w)) best = Math.max(best, 180);
+      else if (lower.includes(w)) best = Math.max(best, 90);
+    }
+    for (const w of folded) {
+      if (f === w) best = Math.max(best, 240);
+      else if (f.startsWith(w)) best = Math.max(best, 140);
+      else if (f.includes(w)) best = Math.max(best, 60);
+      // 反向包含：本地标签带了索引里没有的后缀（最典型的是「偶像【MV】」对「偶像」）。
+      // 旧实现只做「索引名包含关键词」，这类本地命名一条都搜不到。
+      else if (w.includes(f) && f.length >= 2) best = Math.max(best, 45);
+    }
+    if (best >= 300) break; // 已命中最高档，不必再看别名
+  }
+  return best;
+}
+
+/**
+ * 按歌名搜索 AMLL TTML DB（粗筛）。
+ *
+ * 与旧实现的区别：
+ * 1. 支持同时传多个关键词变体（原文 / 剥括注后的标题），任一命中即可；
+ * 2. 多一档「折叠」比较（忽略空白与标点），救回标点写法不同的歌名；
+ * 3. 结果按**相关度**排序后再截断。旧实现按索引顺序收满 200 条就 break
+ *    （长歌名会把短关键词的精确同名条目挤出候选），现在截断掉的只会是最不相关的。
+ *
+ * 判等与最终选择仍交给调用方（preciseLyrics 做标题 + 艺人评分），
+ * 这里只负责别把该有的候选漏掉。
+ */
+export async function amllSearchSongs(
+  keyword: string | string[],
+  base?: string,
+): Promise<AmllTtmlSong[]> {
+  const { raw, folded } = keywordForms(keyword);
+  if (!raw.length && !folded.length) return [];
+  const songs = await amllLoadIndex(base);
+  const scored: { song: AmllTtmlSong; score: number }[] = [];
+  for (const s of songs) {
+    const titles = s.titles.length ? s.titles : [s.title];
+    const score = roughScore(titles, raw, folded);
+    if (score > 0) scored.push({ song: s, score });
+  }
+  // 同分时新投稿优先：旧实现等于「最旧的打轴优先」，这里只在相关度相同时才用时间做次级排序
+  scored.sort((a, b) => b.score - a.score || b.song.uploadedAt - a.song.uploadedAt);
+  return scored.slice(0, AMLL_SEARCH_MAX).map((x) => x.song);
 }
 
 // ------------------------------------------------------------------ TTML 解析
@@ -617,12 +742,16 @@ export function parseAmllTtml(ttml: string, host?: { DOMParser: typeof DOMParser
 }
 
 /**
- * 下载并解析一条 AMLL 歌词。
+ * 下载并解析一条 AMLL 歌词（含原始文本与估出的曲长，供版本的时长比对使用）。
  *
  * 命中缓存直接返回；404 抛可读错误（调用方据此换下一个候选，而不是把「文件没了」
- * 当成「这首歌没有歌词」）。
+ * 当成「这首歌没有歌词」）。解析不出歌词行时不抛错，而是把 lines 置 null 缓存下来
+ * ——「文件在但没内容」重试多少次都是一样的结果。
  */
-export async function amllFetchLyrics(song: AmllTtmlSong, base?: string): Promise<LyricLine[]> {
+export async function amllFetchLyricsDetailed(
+  song: AmllTtmlSong,
+  base?: string,
+): Promise<AmllLyricPayload> {
   const root = amllNormalizeBase(base);
   const key = `${root}|${song.rawFile}`;
   const cached = lyricCache.get(key);
@@ -631,9 +760,27 @@ export async function amllFetchLyrics(song: AmllTtmlSong, base?: string): Promis
   const res = await amllFetch(`${root}/raw-lyrics/${song.rawFile}`);
   if (!res.ok) throw new Error(`AMLL 歌词下载失败：HTTP ${res.status}`);
   const text = await res.text();
-  const lines = parseAmllTtml(text);
-  lyricCache.set(key, lines);
-  return lines;
+  let lines: LyricLine[] | null = null;
+  try {
+    const parsed = parseAmllTtml(text);
+    lines = parsed.length ? parsed : null;
+  } catch {
+    // 坏文件不该让整首歌连候选都换不了：记成「无歌词」，继续看下一个候选
+    lines = null;
+  }
+  const payload: AmllLyricPayload = { lines, ttml: text, durationMs: amllTtmlDurationMs(text) };
+  lyricCache.set(key, payload);
+  return payload;
+}
+
+/**
+ * 下载并解析一条 AMLL 歌词，只要 LyricLine[]。
+ *
+ * 命中缓存直接返回；下载失败（404 / 网络）抛错，解析不出歌词返回空数组。
+ */
+export async function amllFetchLyrics(song: AmllTtmlSong, base?: string): Promise<LyricLine[]> {
+  const payload = await amllFetchLyricsDetailed(song, base);
+  return payload.lines ?? [];
 }
 
 /**

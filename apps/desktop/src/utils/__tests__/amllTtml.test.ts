@@ -588,9 +588,13 @@ describe("amllSearchSongs 索引筛选", () => {
     // rawLyricFile 为空 / JSON 坏行都被跳过，不能让整份索引不可用
     expect(await amllSearchSongs("无文件", TEST_BASE)).toEqual([]);
     expect(await amllSearchSongs("坏行-未闭合", TEST_BASE)).toEqual([]);
-    // 只有「1-a」这一条精确叫「夜曲」；别名匹配大小写不敏感
+    // 「夜曲 live」：别名里写了 Live 的那条（2-b）排最前并精确命中；1-a 只是被
+    // 「本地标签多带了后缀、索引名是其子串」这一档收录为**低分候选**（相关度 90 vs 240）。
+    // 粗筛放宽是有意的：调用方还要过 titleSimilarity + 艺人分做最终判等，
+    // 多收一个低分候选不影响正确性，但能救回「本地带后缀」的整类命名。
     expect((await amllSearchSongs("夜曲 live", TEST_BASE)).map((s) => s.rawFile)).toEqual([
       "2-b.ttml",
+      "1-a.ttml",
     ]);
 
     // 空关键词不返回任何候选
@@ -620,7 +624,11 @@ describe("amllFetchLyrics 下载并解析", () => {
     title: "夜曲",
     titles: ["夜曲"],
     artists: ["周杰伦"],
+    appleMusicIds: [],
+    spotifyIds: [],
+    isrcs: [],
     rawFile: "1-a.ttml",
+    uploadedAt: 0,
   };
 
   it("按 base + /raw-lyrics/<rawFile> 下载并解析成 LyricLine[]", async () => {
