@@ -209,6 +209,12 @@ export const messages = {
         "默认走 jsDelivr 镜像；访问不畅可换成社区镜像或自建（如 https://amll.mirror.dimeta.top/api/db），仅影响歌词文件下载。",
       detectInstrumental: "自动识别前奏/间奏",
       detectInstrumentalHint: "将开头作词/作曲/编曲信息替换为三点前奏，长间奏插入三点等待。",
+      obsceneMask: "不雅用语遮蔽",
+      obsceneMaskHint:
+        "AMLL TTML 标注的不雅用语（amll:obscene）显示方式；仅在歌词本身带该标注时生效。",
+      obsceneMode_off: "不遮蔽",
+      obsceneMode_partial: "保留首尾",
+      obsceneMode_full: "全部遮蔽",
       playback: "播放器",
       playerBg: "播放器背景",
       playerBgHint:
@@ -1240,6 +1246,12 @@ export const messages = {
       detectInstrumental: "Auto-detect intro & interlude",
       detectInstrumentalHint:
         "Replace leading credits (作词/作曲/编曲) with a 3-dot intro and insert 3-dot waits for long interludes.",
+      obsceneMask: "Explicit lyric masking",
+      obsceneMaskHint:
+        "How to display words marked explicit in AMLL TTML (amll:obscene). Only affects lyrics carrying that marker.",
+      obsceneMode_off: "Off",
+      obsceneMode_partial: "Keep first/last",
+      obsceneMode_full: "Full",
       playback: "Playback",
       playerBg: "Player Background",
       playerBgHint:

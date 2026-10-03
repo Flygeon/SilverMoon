@@ -14,8 +14,10 @@
  * 解析实现对齐 AMLL 官方解析器（packages/ttml/src/parser.ts）的语义：
  *   - 行时间取 `<p begin>`；逐字取子 `<span begin end>`；
  *   - `ttm:role="x-translation"` / `x-roman` 分别落到翻译 / 音译；
- *   - `ttm:role="x-bg"` 是背景和声，AMLL 渲染成一行的子行；本项目 LyricLine 没有
- *     这一栏，所以并入正文并用半角括号包住（保留时间轴，观感与 AMLL 一致）；
+ *   - `ttm:role="x-bg"` 是背景和声，落成 `line.bg` 子行（自己的正文 + 逐字时间轴）；
+ *   - `ttm:agent` 按 ttm:type 的交替状态机推导 `line.duet`（对唱行靠右）；
+ *   - `tts:ruby` 只取 base 文本，注音片段的时间作为该音节的起止；
+ *   - `amll:obscene` 记到词级 `WordUnit.obscene`，由渲染层在绘制前遮蔽；
  *   - 空格规则：AMLL 规范第 6 节——span 内自带空白才保留，纯排版换行/缩进不算；
  *   - 也支持 Apple Music 写在 `<head>` 里的整行翻译（`<translation><text for="L1">`），
  *     按 `itunes:key` 关联（真实文件里有约 7% 用这种写法）。
@@ -27,6 +29,8 @@ import { TtlCache } from "./ttlCache";
 const NS_TTM = "http://www.w3.org/ns/ttml#metadata";
 const NS_ITUNES = "http://music.apple.com/lyric-ttml-internal";
 const NS_TTS = "http://www.w3.org/ns/ttml#styling";
+/** AMLL 私有扩展命名空间（amll:obscene / amll:empty-beat / amll:meta 都挂在这里） */
+const NS_AMLL = "http://www.example.com/ns/amll";
 
 /** 默认基地址：AMLL 官方仓库的 jsDelivr 镜像（带 CORS、有 br 压缩） */
 export const AMLL_DEFAULT_BASE = "https://cdn.jsdelivr.net/gh/amll-dev/amll-ttml-db@main";
@@ -203,6 +207,7 @@ const PREFIX: Record<string, string> = {
   [NS_TTM]: "ttm",
   [NS_ITUNES]: "itunes",
   [NS_TTS]: "tts",
+  [NS_AMLL]: "amll",
   xml: "xml",
 };
 
@@ -253,11 +258,68 @@ function rubyBaseText(el: Element): string {
   return el.textContent ?? "";
 }
 
+/**
+ * ruby 容器内注音片段（`tts:ruby="text"`）覆盖的时间范围（毫秒）。
+ *
+ * **ruby 容器的 begin/end 通常挂在注音上、容器自身是空的**，所以不能拿容器属性当时间。
+ * AMLL 的做法是取所有注音片段的 min(begin) / max(end) 作为该音节的起止；否则这个字
+ * 会退回「行时间 → 行结束」，逐字填充变成「一个字亮了一整行」。
+ */
+function rubyTimeRange(el: Element): { startMs: number; endMs: number } | null {
+  let startMs = Infinity;
+  let endMs = -Infinity;
+  for (const child of Array.from(el.getElementsByTagName("span"))) {
+    if (rubyAttrOf(child) !== "text") continue;
+    const b = parseAmllTime(attr(child, "xml", "begin"));
+    const t = parseAmllTime(attr(child, "xml", "end"));
+    if (!b && !t) continue;
+    if (b && b < startMs) startMs = b;
+    if (t > endMs) endMs = t;
+  }
+  if (startMs === Infinity && endMs === -Infinity) return null;
+  return {
+    startMs: startMs === Infinity ? 0 : startMs,
+    endMs: endMs === -Infinity ? 0 : endMs,
+  };
+}
+
+/** 不雅用语标记（`amll:obscene`）：只有字面量 "true" 才算 */
+function obsceneAttrOf(el: Element): boolean {
+  return attr(el, NS_AMLL, "obscene") === "true";
+}
+
+/** 去掉和声正文最外层的半角 / 全角圆括号（TTML 的书写惯例，渲染时不该显示） */
+function stripBgBrackets(raw: string): string {
+  return raw
+    .replace(/^[(（]+/, "")
+    .replace(/[)）]+$/, "")
+    .trim();
+}
+
+/** 括号常被拆到相邻的 span 上：首词去前导括号、末词去尾随括号 */
+function stripEdgeBracketsFromWords(words: WordToken[]): WordToken[] {
+  if (!words.length) return words;
+  const out = words.map((w) => ({ ...w }));
+  out[0].text = out[0].text.replace(/^[(（]+/, "");
+  out[out.length - 1].text = out[out.length - 1].text.replace(/[)）]+$/, "");
+  return out.filter((w) => w.text.trim() !== "");
+}
+
 /** 单个词（来自 <span begin end>，含背景和声的词） */
 interface WordToken {
   text: string;
   startMs: number;
   endMs: number;
+  /** 不雅用语标记（amll:obscene），渲染前统一遮蔽 */
+  obscene?: boolean;
+}
+
+/** 背景和声子行（x-bg）的解析中间态 */
+interface BgTokens {
+  text: string;
+  words: WordToken[];
+  translation: string;
+  romaji: string;
 }
 
 /** 行的解析中间态 */
@@ -268,14 +330,8 @@ interface LineTokens {
   romaji: string;
   /** 没有 span 的逐行歌词：整行一个词 */
   fallback: boolean;
-  /**
-   * 背景和声（x-bg）自己的翻译 / 音译。
-   *
-   * AMLL 的数据模型里和声是一段独立的 backgroundVocal（有自己的翻译与音译），
-   * 本项目 LyricLine 没有这一栏，所以只在主行没有对应内容时才兜底补上——
-   * 直接写主行的 translation 会把主行的翻译挤掉。
-   */
-  bg: { translation: string; romaji: string } | null;
+  /** 背景和声子行（AMLL 的 backgroundVocal；没有就是 null） */
+  bg: BgTokens | null;
 }
 
 /** 取词尾是否带空白（词间空格的唯一真相，决定 units 拼接时补不补空格） */
@@ -291,6 +347,18 @@ const EMPTY_LINE: LineTokens = {
   fallback: false,
   bg: null,
 };
+
+/** 把词序列转成 units（≤1 个词不给 units：那样填充动画会退化成整行高亮） */
+function toWordUnits(words: WordToken[], beginMs: number, endMs: number): WordUnit[] | undefined {
+  if (words.length <= 1) return undefined;
+  return words.map((w) => ({
+    text: w.text,
+    // 没有独立时间（括号 / 连接词）就挂在行首，交给渲染层按顺序填充
+    start: (w.startMs || beginMs) / 1000,
+    end: (w.endMs || endMs || beginMs) / 1000,
+    ...(w.obscene ? { obscene: true } : {}),
+  }));
+}
 
 /** 拼接词序列为整行文本（词自带空白就保留，避免英文单词粘在一起） */
 function joinWords(words: WordToken[]): string {
@@ -345,42 +413,39 @@ function parseChildren(parent: Element): LineTokens {
       continue;
     }
     if (role === "x-bg") {
-      // 背景和声：AMLL 渲染成主行下方的子行，本项目 LyricLine 没有该栏位，
-      // 折中成「括号内容接在主行后面」，并把整段合成一个词（逐字填充仍连贯）。
+      // 背景和声：AMLL 把它当作**独立子行**（backgroundVocal），有自己完整的逐字时间轴，
+      // 挂在主行上/下方。本项目同样落成 `line.bg`，渲染层画成一条小字号子行——
+      // 早先版本把它合成「正文里加括号的一个词」，结果是整段和声一次性点亮、也没有层级。
       const inner = parseChildren(el);
-      // 和声是「子行」：它的翻译 / 音译不该和主行抢同一个栏位。先暂存到 state.bg，
-      // 由调用方在主行没有翻译时才合并（与 AMLL 的 backgroundVocal 结构一致）。
-      state.bg ??= { translation: "", romaji: "" };
-      const bgInner = state.bg;
-      const bgText = (inner.words.length ? joinWords(inner.words) : inner.text).trim();
-      if (bgText) {
-        // 规范要求作者自带半角括号、机器人也会补，所以只在这个文件确实没写时才补，
-        // 否则会出现「((和声))」这样的双层括号。
-        const wrapped = bgText.startsWith("(") && bgText.endsWith(")") ? bgText : `(${bgText})`;
-        const timed = inner.words.filter((w) => w.startMs > 0 || w.endMs > 0);
-        const start = timed.length ? Math.min(...timed.map((w) => w.startMs)) : 0;
-        const end = timed.length ? Math.max(...timed.map((w) => w.endMs)) : 0;
-        state.words.push({ text: wrapped, startMs: start, endMs: end });
-        state.text += wrapped;
+      const text = (inner.words.length ? joinWords(inner.words) : inner.text).trim();
+      if (text) {
+        // 规范要求作者自带半角括号、机器人也会补，所以这里统一剥掉，渲染时不显示括号。
+        // 括号可能被拆到相邻 span 上，所以先按整段剥、再逐词剥一次。
+        const words = stripEdgeBracketsFromWords(inner.words);
+        state.bg ??= { text: "", words: [], translation: "", romaji: "" };
+        const bg = state.bg;
+        bg.text = bg.text ? `${bg.text} ${stripBgBrackets(text)}` : stripBgBrackets(text);
+        bg.words.push(...words);
+        // 和声自带的翻译 / 音译归和声子行，**不占主行栏位**：主行翻译可能写在 <head>
+        // sidecar 里、要到后面才合并进来，这里若直接写 state.translation 会把主行挤掉。
+        if (inner.translation && !bg.translation) bg.translation = inner.translation;
+        if (inner.romaji && !bg.romaji) bg.romaji = inner.romaji;
       }
-      // 和声自带的翻译 / 音译**只在主行完全没有时才兜底**：主行的翻译经常写在 <head>
-      // 的 sidecar 里、要到 processLineElement 才合并进来，这里若直接写 state.translation，
-      // 就会把主行的翻译挤掉（真实夹具 complex-test-song 的 L3 就是这种写法）。
-      bgInner.translation ||= inner.translation;
-      bgInner.romaji ||= inner.romaji;
       continue;
     }
 
-    // ruby（注音）容器：只取 base，注音不进正文与 units（见 rubyBaseText 的说明）。
-    // 容器自身通常没有 begin/end，时间落在注音上，所以用行时间兜底而不是返回 0。
+    // ruby（注音）容器：只取 base 文本，注音不进正文与 units（唱的是 base，注音只是读音提示）。
+    // 时间取注音片段的 min/max —— 容器自身通常没有 begin/end。
     const isRubyContainer = rubyAttrOf(el) === "container";
-    const begin = parseAmllTime(attr(el, "xml", "begin"));
-    const end = parseAmllTime(attr(el, "xml", "end"));
+    const rubyRange = isRubyContainer ? rubyTimeRange(el) : null;
+    const begin = parseAmllTime(attr(el, "xml", "begin")) || rubyRange?.startMs || 0;
+    const end = parseAmllTime(attr(el, "xml", "end")) || rubyRange?.endMs || 0;
     const raw = isRubyContainer ? rubyBaseText(el) : (el.textContent ?? "");
     const text = raw.replace(/\s+/g, " ").replace(/^\s+|\s+$/g, (m) => (m ? " " : ""));
     if (text) {
+      const obscene = obsceneAttrOf(el) ? { obscene: true } : {};
       state.text += text;
-      state.words.push({ text, startMs: begin, endMs: end });
+      state.words.push({ text, startMs: begin, endMs: end, ...obscene });
     }
   }
 
@@ -392,22 +457,77 @@ function toLyricLine(tokens: LineTokens, beginMs: number, endMs: number): LyricL
   const text = (tokens.fallback ? tokens.text : joinWords(tokens.words) || tokens.text).trim();
   if (!text) return null;
   const line: LyricLine = { time: beginMs / 1000, text };
-  // 这里只写**主行自己**的翻译 / 音译。和声的翻译兜底必须等 <head> sidecar 合并之后
-  // 再做（见 processLineElement）：主行翻译常写在 sidecar 里，若在这里先填上和声的，
-  // 后面 sidecar 就会因为「已有翻译」而被跳过，屏幕上只剩和声那句。
+  // 这里只写**主行自己**的翻译 / 音译。和声的翻译不是「兜底给主行」，而是挂在 line.bg 上，
+  // 否则主行翻译（常写在 <head> sidecar 里）会被和声那句挤掉。
   if (tokens.translation) line.translation = tokens.translation;
   if (tokens.romaji) line.romaji = tokens.romaji;
-  // 只有「真的逐字」才有意义：一个词一行时给 units 反而让填充动画退化成整行高亮
-  if (tokens.words.length > 1) {
-    const units: WordUnit[] = tokens.words.map((w) => ({
-      text: w.text,
-      // 没有独立时间（括号 / 连接词）就挂在行首，交给渲染层按顺序填充
-      start: (w.startMs || beginMs) / 1000,
-      end: (w.endMs || endMs || beginMs) / 1000,
-    }));
-    line.units = units;
+  const units = toWordUnits(tokens.words, beginMs, endMs);
+  if (units) line.units = units;
+  // 背景和声子行：正文 + 自己的逐字时间轴（时间缺失时退回行的起止）
+  const bgTokens = tokens.bg;
+  const bgText = bgTokens ? stripBgBrackets(bgTokens.text) : "";
+  if (bgTokens && bgText) {
+    const bgUnits = toWordUnits(bgTokens.words, beginMs, endMs);
+    line.bg = {
+      text: bgText,
+      ...(bgUnits ? { units: bgUnits } : {}),
+      ...(bgTokens.translation ? { translation: bgTokens.translation } : {}),
+      ...(bgTokens.romaji ? { romaji: bgTokens.romaji } : {}),
+    };
   }
   return line;
+}
+
+// ---- 对唱推导（ttm:agent 交替状态机）----
+
+/** 演唱者类型：person / group / other */
+type AgentType = "person" | "group" | "other";
+
+/**
+ * 解析 head 里的 agent 表：xml:id → ttm:type。
+ *
+ * AMLL 约定 v1 = 非对唱、v2 = 对唱；Apple Music 还会出现 v3 / v4（各演唱者）
+ * 与 v1000（合唱）。语义只在 ttm:type 上，v 编号本身不携带信息。
+ */
+function parseAgents(doc: Document): Map<string, AgentType> {
+  const out = new Map<string, AgentType>();
+  for (const el of Array.from(doc.getElementsByTagNameNS(NS_TTM, "agent"))) {
+    const id = attr(el, "xml", "id");
+    if (!id) continue;
+    const type = (attr(el, NS_TTM, "type") ?? "person").toLowerCase();
+    out.set(id, type === "group" ? "group" : type === "other" ? "other" : "person");
+  }
+  return out;
+}
+
+/**
+ * 按 AMLL 的交替规则推导每一行是否对唱（逐行推进，必须按顺序调用）。
+ *
+ * 规则（packages/ttml/src/utils/amll-converter.ts:118-141）：
+ * - group（合唱）恒非对唱，且**不影响**交替状态；
+ * - 第一个登场的非 group 演唱者：other 判对唱，否则非对唱；
+ * - 之后同一演唱者保持状态，换人则翻转。
+ *
+ * 注意：本函数只看 ttm:type。若文件只写了 ttm:agent="v2" 而没声明对应的 agent 元素，
+ * 按 AMLL 自己的书写约定 v2 就是「对唱」，所以这里对缺声明的 v2 单独放行——
+ * 比 AMLL 原实现（缺声明一律当 person）更贴合它自己的约定。
+ */
+export function makeDuetResolver(agents: Map<string, AgentType>) {
+  let lastPersonId: string | null = null;
+  let lastPersonDuet = false;
+  return (agentId: string): boolean => {
+    const type = agents.get(agentId) ?? (agentId === "v2" ? "other" : "person");
+    if (type === "group") return false;
+    if (lastPersonId === null) {
+      lastPersonId = agentId;
+      lastPersonDuet = type === "other";
+      return lastPersonDuet;
+    }
+    if (lastPersonId === agentId) return lastPersonDuet;
+    lastPersonId = agentId;
+    lastPersonDuet = !lastPersonDuet;
+    return lastPersonDuet;
+  };
 }
 
 /** Apple Music 风格：<head> 里按 itunes:key 关联的整行翻译 / 音译 */
@@ -466,6 +586,8 @@ export function parseAmllTtml(ttml: string, host?: { DOMParser: typeof DOMParser
   const bodyDurMs = parseAmllTime(body.getAttribute("dur"));
 
   const lines: LyricLine[] = [];
+  /** 对唱交替状态机：必须按 <p> 出现顺序逐行推进 */
+  const resolveDuet = makeDuetResolver(parseAgents(doc));
   /** body 直属与 div 里的 <p> 都要收（真实文件基本都包在 <div> 里） */
   const paragraphs = Array.from(doc.getElementsByTagName("p"));
   paragraphs.forEach((p, index) => {
@@ -479,17 +601,13 @@ export function parseAmllTtml(ttml: string, host?: { DOMParser: typeof DOMParser
       (index === paragraphs.length - 1 ? bodyDurMs : beginMs);
     const line = toLyricLine(tokens, beginMs, endMs);
     if (!line) return;
+    // 对唱：读 ttm:agent 并推进交替状态机（缺省按 v1 口径参与交替）
+    const agentId = attr(p, NS_TTM, "agent");
+    if (agentId) line.duet = resolveDuet(agentId);
     const side = sidecar.get(itunesKeyOf(p));
     if (side) {
       if (!line.translation && side.translation) line.translation = side.translation;
       if (!line.romaji && side.romaji) line.romaji = side.romaji;
-    }
-    // 和声的翻译 / 音译最后兜底：主行自己没写、<head> sidecar 也没有时，才用它，
-    // 免得主行那侧留空、副行白白空着（AMLL 里和声自带翻译，本项目没有子行栏位）。
-    const bg = tokens.bg;
-    if (bg) {
-      if (!line.translation && bg.translation) line.translation = bg.translation;
-      if (!line.romaji && bg.romaji) line.romaji = bg.romaji;
     }
     lines.push(line);
   });

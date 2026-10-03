@@ -136,6 +136,30 @@ export interface WordUnit {
   text: string;
   start: number;
   end: number;
+  /**
+   * 不雅用语标记（AMLL TTML 的 amll:obscene）。
+   *
+   * 与 AMLL 一样挂在**词级**：解析时只记标志，遮蔽在渲染前统一做（见 maskObsceneUnits）。
+   * 放在渲染前是因为遮蔽会改变字形宽度——渲染时才换字会让逐字填充的行程与实测宽度错位。
+   */
+  obscene?: boolean;
+}
+
+/**
+ * 背景和声子行（AMLL TTML 的 ttm:role="x-bg"）。
+ *
+ * AMLL 把它当作一条独立的说明行挂在主行上/下方，有自己完整的逐字时间轴；本项目原来
+ * 把它合成「正文里加括号的一个词」，结果是整段和声一次性点亮、也没有视觉层级。
+ */
+export interface BgVocal {
+  /** 和声正文（不含包裹括号；括号只是 TTML 的书写惯例） */
+  text: string;
+  /** 和声自己的逐字时间轴（秒） */
+  units?: WordUnit[];
+  /** 和声自己的翻译（主行没有时才兜底显示） */
+  translation?: string;
+  /** 和声自己的音译 */
+  romaji?: string;
 }
 
 /** 歌词行 */
@@ -149,6 +173,14 @@ export interface LyricLine {
   units?: WordUnit[];
   /** 前奏/间奏的省略标记行（三点），不是真实歌词 */
   instrumental?: boolean;
+  /**
+   * 对唱行（AMLL TTML 的 ttm:agent 交替推导，本行靠右对齐）。
+   *
+   * 与 AMLL 一致：由 agent 的交替状态机在解析期算好，渲染层只读。
+   */
+  duet?: boolean;
+  /** 背景和声子行（可选） */
+  bg?: BgVocal;
 }
 
 /** FFmpeg 探测状态 */

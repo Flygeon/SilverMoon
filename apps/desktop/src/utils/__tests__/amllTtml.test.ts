@@ -126,7 +126,7 @@ const FIXTURE_DIR = resolve(process.cwd(), "src/utils/__fixtures__");
 const readFixture = (name: string): string => readFileSync(resolve(FIXTURE_DIR, name), "utf8");
 
 describe("parseAmllTtml 特殊标记（对齐 AMLL packages/ttml 的行为）", () => {
-  it("tts:ruby 注音：取基文本，注音不进正文与 units", () => {
+  it("tts:ruby 注音：取基文本，注音不进正文；音节时间取注音片段的 min/max", () => {
     // 真实夹具（ruby-test-song.ttml）：<span tts:ruby="container"> 包 base + textContainer
     const lines = parseAmllTtml(readFixture("ruby-test-song.ttml"));
 
@@ -135,77 +135,150 @@ describe("parseAmllTtml 特殊标记（对齐 AMLL packages/ttml 的行为）", 
     expect(lines[0].text).toBe("これは所詮");
     expect(lines[0].text).not.toContain("しょ");
     expect(lines[0].text).not.toContain("せん");
-    // ruby 容器自身没有 begin/end（时间在注音上），退回行时间与行结束时间
     expect(lines[0].units?.map((u) => u.text)).toEqual(["これは", "所", "詮"]);
-    expect(lines[0].units?.[1]).toEqual({ text: "所", start: 27, end: 28 });
+    // ruby 容器自身没有 begin/end，但注音片段有：取 min(begin)/max(end)。
+    // 「所」的注音是 27.690~27.820；若退回行时间就会变成 27~28（一个字亮一整行）。
+    expect(lines[0].units?.[1]).toEqual({ text: "所", start: 27.69, end: 27.82 });
+    // 「詮」有两段注音（せ + ん），取整体区间 27.820~27.950
+    expect(lines[0].units?.[2]).toEqual({ text: "詮", start: 27.82, end: 27.95 });
   });
 
-  it("amll:obscene / amll:empty-beat 不会污染歌词文本", () => {
+  it("amll:obscene / amll:empty-beat 不会污染歌词文本；obscene 记到词级", () => {
     // AMLL 官方夹具：<span amll:obscene="true">これ</span> 与 <span amll:empty-beat="5">テスト</span>
     const lines = parseAmllTtml(readFixture("complex-test-song.ttml"));
     const first = lines.find((l) => l.text.includes("これ"));
 
     expect(first?.text).toBe("これは テスト");
-    // 这两个属性只影响渲染（遮蔽 / 占位节拍），不该被当成文字或时间
+    // empty-beat 只是打轴辅助，不影响文本与时间；obscene 只记标志、不改文本
     expect(first?.text).not.toContain("obscene");
     expect(first?.text).not.toContain("empty-beat");
     expect(first?.units?.every((u) => Number.isFinite(u.start) && Number.isFinite(u.end))).toBe(
       true,
     );
+    // amll:obscene="true" 落在「これ」这个词上，由渲染前统一遮蔽
+    expect(first?.units?.[0]).toMatchObject({ text: "これ", obscene: true });
+    // 其余词不带标志
+    expect(first?.units?.[1]?.obscene).toBeUndefined();
   });
 
-  it("x-bg 自带的翻译 / 音译归到主行，不会挤进正文、也不顶掉主行翻译", () => {
-    // 夹具里的写法：主行翻译在前，<span ttm:role="x-bg"><span>(背景)</span>
-    // <span ttm:role="x-translation">Background</span><span ttm:role="x-roman">haikei</span></span>
+  it("x-bg 落成独立子行，主行不再内嵌括号正文", () => {
+    // 夹具写法：<span ttm:role="x-bg"><span>(背景)</span>
+    //   <span ttm:role="x-translation">Background</span><span ttm:role="x-roman">haikei</span></span>
     const lines = parseAmllTtml(readFixture("complex-test-song.ttml"));
     const bgLine = lines.find((l) => l.text.includes("コーラス"));
 
     expect(bgLine).toBeDefined();
-    // 和声以括号形式并入正文（本项目 LyricLine 没有背景行栏位），而不是被丢弃
-    expect(bgLine?.text).toContain("(背景)");
-    // 该夹具的主行翻译只写在 <head> 的 sidecar 里（按 L3 关联），而和声自带的翻译是
-    // 内联在 <p> 里的 "Background"。正确行为是：sidecar 的主行翻译优先，内联的和声
-    // 翻译不能把它顶掉；和声的注音也不混进正文。
-    expect(bgLine?.text).not.toContain("haikei");
-    expect(bgLine?.text).not.toContain("Background");
+    // 主行正文不含和声（AMLL 里和声是 backgroundVocal 子行，不是主行的一部分）
+    expect(bgLine?.text).toBe("コーラス です");
+    expect(bgLine?.text).not.toContain("背景");
+    // 和声落在 line.bg 上：正文剥掉书写用的括号。
+    // 该夹具的和声只有一个 span，按与主行相同的规则不给 units（一个词 = 整段点亮）
+    expect(bgLine?.bg?.text).toBe("背景");
+    expect(bgLine?.bg?.units).toBeUndefined();
+    // 和声自己的翻译 / 音译归和声子行，不占主行的副行
+    expect(bgLine?.bg?.translation).toBe("Background");
+    expect(bgLine?.bg?.romaji).toBe("haikei");
+    // 该夹具的主行翻译只写在 <head> 的 sidecar 里（按 L3 关联）：不能被和声那句顶掉
+    expect(bgLine?.translation).toContain("合唱");
   });
 
-  it("主行没有翻译时，和声自带的翻译才作为兜底补上", () => {
+  it("和声的翻译不会顶掉主行的翻译", () => {
     const lines = parseAmllTtml(
       [
         '<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata">',
         '<body><div><p begin="1s" end="4s">',
         '<span begin="1s" end="2s">主</span><span begin="2s" end="3s">词</span>',
+        '<span ttm:role="x-translation">主行翻译</span>',
         '<span ttm:role="x-bg" begin="3s" end="4s"><span begin="3s" end="4s">(和声)</span>',
         '<span ttm:role="x-translation">backing</span></span>',
         "</p></div></body></tt>",
       ].join(""),
     );
 
-    expect(lines[0].text).toBe("主词(和声)");
-    // 主行自己没有翻译 → 用和声的兜底（总比副行空着强）
-    expect(lines[0].translation).toBe("backing");
+    expect(lines[0].text).toBe("主词");
+    expect(lines[0].translation).toBe("主行翻译");
+    expect(lines[0].bg?.text).toBe("和声");
+    expect(lines[0].bg?.translation).toBe("backing");
   });
 
-  it("ttm:agent（含对唱的 v2）只是演唱者区分，逐字时间轴照常解析", () => {
-    // 对唱在 TTML 里只是 ttm:agent 指向不同演唱者，不影响解析出的时间轴
+  it("和声整段与逐词两种括号写法都能剥掉", () => {
+    // 写法 a：括号在整段首尾；写法 b：括号被拆到相邻 span 上
+    const whole = parseAmllTtml(
+      [
+        '<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata">',
+        '<body><div><p begin="1s" end="4s">',
+        '<span begin="1s" end="2s">主</span><span begin="2s" end="3s">词</span>',
+        '<span ttm:role="x-bg" begin="3s" end="4s"><span begin="3s" end="4s">（和声）</span></span>',
+        "</p></div></body></tt>",
+      ].join(""),
+    );
+    expect(whole[0].bg?.text).toBe("和声");
+
+    const split = parseAmllTtml(
+      [
+        '<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata">',
+        '<body><div><p begin="1s" end="5s">',
+        '<span begin="1s" end="2s">主</span><span begin="2s" end="3s">词</span>',
+        '<span ttm:role="x-bg" begin="3s" end="5s"><span begin="3s" end="4s">(oh </span>',
+        '<span begin="4s" end="5s">yeah)</span></span>',
+        "</p></div></body></tt>",
+      ].join(""),
+    );
+    expect(split[0].bg?.text).toBe("oh yeah");
+    expect(split[0].text).toBe("主词");
+  });
+
+  it("ttm:agent 推导对唱：交替翻转，group 恒非对唱且不打断交替", () => {
     const lines = parseAmllTtml(
       [
         '<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata">',
         '<head><metadata><ttm:agent type="person" xml:id="v1"/>',
-        '<ttm:agent type="person" xml:id="v2"/></metadata></head>',
+        '<ttm:agent type="person" xml:id="v2"/>',
+        '<ttm:agent type="group" xml:id="v1000"/></metadata></head>',
         "<body><div>",
         '<p begin="1s" end="3s" ttm:agent="v1"><span begin="1s" end="2s">君</span><span begin="2s" end="3s">の</span></p>',
         '<p begin="3s" end="5s" ttm:agent="v2"><span begin="3s" end="4s">僕</span><span begin="4s" end="5s">の</span></p>',
+        '<p begin="5s" end="7s" ttm:agent="v1"><span begin="5s" end="6s">また</span><span begin="6s" end="7s">ね</span></p>',
+        '<p begin="7s" end="9s" ttm:agent="v1000"><span begin="7s" end="8s">みんな</span><span begin="8s" end="9s">で</span></p>',
+        '<p begin="9s" end="11s" ttm:agent="v2"><span begin="9s" end="10s">さよ</span><span begin="10s" end="11s">なら</span></p>',
         "</div></body></tt>",
       ].join(""),
     );
 
-    expect(lines).toHaveLength(2);
-    expect(lines[0].text).toBe("君の");
-    expect(lines[1].text).toBe("僕の");
-    expect(lines[0].time).toBeLessThan(lines[1].time);
+    expect(lines).toHaveLength(5);
+    expect(lines.map((l) => l.text)).toEqual(["君の", "僕の", "またね", "みんなで", "さよなら"]);
+    // v1 首发非对唱；v2 换人翻转 → 对唱；v1 再换回 → 翻转回非对唱；
+    // group 恒非对唱且不参与交替；v2 与上一个非 group 演唱者（v1）不同 → 翻转 → 对唱
+    expect(lines.map((l) => l.duet)).toEqual([false, true, false, false, true]);
+    // 逐字时间轴不受影响
     expect(lines[1].units?.[0]).toEqual({ text: "僕", start: 3, end: 4 });
+  });
+
+  it("agent 没有 <ttm:agent> 声明时，v2 仍按 AMLL 约定判为对唱", () => {
+    const lines = parseAmllTtml(
+      [
+        '<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata">',
+        "<body><div>",
+        '<p begin="1s" end="3s" ttm:agent="v1"><span begin="1s" end="2s">A</span><span begin="2s" end="3s">B</span></p>',
+        '<p begin="3s" end="5s" ttm:agent="v2"><span begin="3s" end="4s">C</span><span begin="4s" end="5s">D</span></p>',
+        "</div></body></tt>",
+      ].join(""),
+    );
+
+    expect(lines.map((l) => l.duet)).toEqual([false, true]);
+  });
+
+  it("没有 ttm:agent 的行不写 duet（避免给纯独唱歌词加右对齐）", () => {
+    const lines = parseAmllTtml(
+      [
+        '<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata">',
+        "<body><div>",
+        '<p begin="1s" end="3s"><span begin="1s" end="2s">A</span><span begin="2s" end="3s">B</span></p>',
+        "</div></body></tt>",
+      ].join(""),
+    );
+
+    expect(lines[0].duet).toBeUndefined();
   });
 });
 describe("parseAmllTime TTML 时间写法 → 毫秒", () => {
@@ -257,22 +330,23 @@ describe("parseAmllTtml 逐字行 / 翻译 / 音译 / 背景和声", () => {
     expect(lines[0].translation).toBeUndefined();
     expect(lines[0].romaji).toBeUndefined();
 
-    // 第二行：翻译 / 音译各归各位，背景和声以带时间的括号词并入正文
+    // 第二行：翻译 / 音译各归各位；背景和声是**独立子行**（line.bg），不再内嵌进正文
     expect(lines[1].time).toBe(4);
-    expect(lines[1].text).toBe("唱吧(和声)");
+    expect(lines[1].text).toBe("唱吧");
     expect(lines[1].translation).toBe("唱吧");
     expect(lines[1].romaji).toBe("chang ba");
     expect(lines[1].units).toEqual([
       { text: "唱", start: 4, end: 4.5 },
       { text: "吧", start: 4.5, end: 5 },
-      { text: "(和声)", start: 5, end: 5.5 },
     ]);
-    // 正文里不该混进翻译 / 音译文本
+    // 和声落在子行：正文已剥掉书写用的括号
+    expect(lines[1].bg?.text).toBe("和声");
+    // 正文里不该混进翻译 / 音译 / 和声文本
     expect(lines[1].text).not.toContain("chang ba");
-    expect(lines[1].text).not.toBe("唱吧(和声)chang ba");
+    expect(lines[1].text).not.toContain("和声");
   });
 
-  it("已经带括号的背景和声不会出现双层括号", () => {
+  it("作者已带括号的和声不会出现双层括号（正文与子行都只留一层语义）", () => {
     const lines = parseAmllTtml(
       [
         '<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata">',
@@ -283,7 +357,9 @@ describe("parseAmllTtml 逐字行 / 翻译 / 音译 / 背景和声", () => {
       ].join(""),
     );
 
-    expect(lines[0].text).toBe("主词(oh)");
+    expect(lines[0].text).toBe("主词");
+    // 括号是 TTML 的书写惯例，渲染时由子行的视觉层级承担，不该出现在文本里
+    expect(lines[0].bg?.text).toBe("oh");
   });
 
   it("纯排版空白不产生空格：标签之间的换行 / 缩进不算歌词内容", () => {
@@ -555,9 +631,10 @@ describe("amllFetchLyrics 下载并解析", () => {
     expect(calls[calls.length - 1].url).toBe(`${TEST_BASE}/raw-lyrics/1-a.ttml`);
     expect(lines.map((l) => [l.time, l.text])).toEqual([
       [1.5, "Hello"],
-      [4, "唱吧(和声)"],
+      [4, "唱吧"],
     ]);
     expect(lines[1].translation).toBe("唱吧");
+    expect(lines[1].bg?.text).toBe("和声");
   });
 
   it("404 抛出可读错误（而不是返回空歌词）", async () => {

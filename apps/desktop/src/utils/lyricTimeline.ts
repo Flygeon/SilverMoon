@@ -88,6 +88,8 @@ export function attachRoughTimeline(lines: LyricLine[]): void {
 
 /** 纯停顿超过此秒数视为间奏，插入三点等待 */
 const INSTRUMENTAL_THRESHOLD = 3.0;
+/** 首行之前（前奏）的阈值更宽：开场就提示，短促停顿则不打扰 */
+const INTRO_THRESHOLD = 1.0;
 /**
  * 作词/作曲/编曲等元数据行（前奏信息，隐藏原文替换为三点）。
  * 兼容两种署名风格：完整「作词：」「作曲：」与 QQ 音乐逐字格式的「词：」「曲：」；
@@ -127,6 +129,108 @@ function makeDotsLine(start: number, end: number): LyricLine {
   };
 }
 
+/** 每行的 [start, end] 时间边界（秒） */
+interface LineBounds {
+  start: number;
+  end: number;
+}
+
+/**
+ * 求每行的真实时间边界。
+ *
+ * end 优先取**末字的结束时间**（官方逐字时间轴、以及粗排出来的 units 都覆盖行内演唱段），
+ * 这比「下一行起点」准得多；没有 units 才退回下一行起点，末行按字数估算。
+ * 再钳到不越过下一行起点：真实时间轴偶有标错 / 重叠，越界会吃掉后面的间奏判定。
+ */
+function resolveLineBounds(lines: LyricLine[], preferUnits: boolean): LineBounds[] {
+  return lines.map((l, i) => {
+    const nextStart = lines[i + 1]?.time;
+    const gapToNext = nextStart !== undefined ? nextStart - l.time : estimateLineEnd(l.text);
+    // 官方逐字时间轴：末字结束时间就是真实演唱结束点
+    const lastUnitEnd = l.units?.length ? l.units[l.units.length - 1].end : 0;
+    const singEnd = l.time + Math.min(gapToNext, singingEstimate(l.text));
+    const raw = preferUnits && lastUnitEnd > 0 ? lastUnitEnd : singEnd;
+    // 钳到不越过下一行起点：真实时间轴偶有标错 / 重叠，越界会吃掉后面的间奏判定
+    let end = raw;
+    if (nextStart !== undefined && end > nextStart) end = nextStart;
+    if (end < l.time) end = l.time;
+    return { start: l.time, end };
+  });
+}
+
+/** 纯停顿区间（秒）；anchor 是区间**之前**最后一行在数组里的下标，-1 表示首行之前 */
+interface InterludeSpan {
+  start: number;
+  end: number;
+  anchor: number;
+}
+
+/**
+ * 扫描纯停顿区间。
+ *
+ * 用「**前缀最大 end**」而不是相邻两行的间距：歌词行只保证按 start 升序，前一行的 end
+ * 未必是此前所有行里最晚的 end——对唱 / 和声这类行会与主行重叠，拿相邻间距去减可能得到
+ * 负数，长间奏就被漏判了（AMLL 的 calculateInterludes 就是这么扫的）。
+ *
+ * index -1 的那一轮落在「首行之前」，正好覆盖长前奏。
+ */
+function scanInterludes(
+  lines: LyricLine[],
+  opts: { threshold: number; preferUnits: boolean; leadingFrom: number },
+): InterludeSpan[] {
+  const bounds = resolveLineBounds(lines, opts.preferUnits);
+  const out: InterludeSpan[] = [];
+  let maxEnd = opts.leadingFrom;
+  for (let i = -1; i < bounds.length - 1; i++) {
+    if (i >= 0) maxEnd = Math.max(maxEnd, bounds[i].end);
+    const gapStart = maxEnd;
+    const gapEnd = Math.max(maxEnd, bounds[i + 1].start);
+    // 首行之前是「前奏」，用更宽的阈值（1s）：长前奏要在开场就提示，短促停顿则不必
+    const limit = i === -1 ? INTRO_THRESHOLD : opts.threshold;
+    if (gapEnd - gapStart < limit) continue;
+    // 已有三点行（instrumental）覆盖的区间不再插点：它自己就代表这段等待。
+    // 注意 bounds 已把它的 units 末字算进 maxEnd，所以下一段不会被重复计入。
+    if (i >= 0 && lines[i]?.instrumental) continue;
+    if (lines[i + 1]?.instrumental) continue;
+    out.push({ start: gapStart, end: gapEnd, anchor: i });
+  }
+  return out;
+}
+
+/**
+ * 把停顿区间作为三点行插进歌词序列（不改动入参）。
+ *
+ * @param preferUnits 行结束时间优先取 units 末字（官方逐字时间轴）而非演唱估算
+ * @param leadingFrom 首行之前那段停顿的起点（LRC 取元数据块起点，云端取 0）
+ * @param tailEnd     整首结束时间（秒）；给定时结尾器乐段也补点
+ */
+function withInterludes(
+  lines: LyricLine[],
+  opts: { threshold: number; preferUnits: boolean; leadingFrom: number; tailEnd?: number },
+): LyricLine[] {
+  const spans = scanInterludes(lines, opts);
+  const tailEnd = opts.tailEnd ?? 0;
+  if (tailEnd > 0) {
+    const last = lines[lines.length - 1];
+    const bounds = resolveLineBounds(lines, opts.preferUnits);
+    const singEnd = Math.max(bounds[bounds.length - 1]?.end ?? last.time, last.time);
+    if (!last.instrumental && tailEnd - singEnd >= opts.threshold) {
+      spans.push({ start: singEnd, end: tailEnd, anchor: lines.length - 1 });
+    }
+  }
+  if (!spans.length) return lines.slice();
+
+  const out: LyricLine[] = [];
+  let cursor = 0;
+  for (const span of spans) {
+    const upTo = span.anchor + 1; // 三点要排在 anchor 行之后
+    while (cursor < upTo) out.push(lines[cursor++]);
+    out.push(makeDotsLine(span.start, span.end));
+  }
+  while (cursor < lines.length) out.push(lines[cursor++]);
+  return out;
+}
+
 /**
  * 构建最终歌词序列：
  * - detectInstrumental=false：保留作词/作曲/编曲原文、不插点，仅附粗排 units
@@ -150,29 +254,20 @@ export function buildLyricSequence(rawLines: LyricLine[], detectInstrumental = t
   }
   if (!lyrics.length) return rawLines;
 
-  const out: LyricLine[] = [];
-  // 前奏：元数据块起点（或无元数据时 0）到首行真实歌词，超过 1s 显示三点
-  const introStart = meta.length ? meta[0].time : 0;
-  if (lyrics[0].time - introStart >= 1.0) {
-    out.push(makeDotsLine(introStart, lyrics[0].time));
-  }
-
+  // 先给每行附粗排 units（三点行依赖它算真实演唱结束点）
   for (let i = 0; i < lyrics.length; i++) {
     const line = lyrics[i];
-    const next = lyrics[i + 1];
-    const end = next ? next.time : line.time + Math.max(2, line.text.length * 0.4);
-    const gap = end - line.time;
-    // 行演唱时长 = 估算值（不超行距）；纯停顿 = 行距 - 演唱
-    const sing = Math.min(gap, singingEstimate(line.text));
-    const pause = Math.max(0, gap - sing);
+    const nextStart = lyrics[i + 1]?.time ?? line.time + estimateLineEnd(line.text);
+    const sing = Math.min(Math.max(0, nextStart - line.time), singingEstimate(line.text));
     line.units = buildRoughUnits(line.text, line.time, line.time + sing);
-    out.push(line);
-    // 纯停顿较长 → 间奏三点（跳过原歌词行的普通行距）
-    if (next && pause >= INSTRUMENTAL_THRESHOLD) {
-      out.push(makeDotsLine(line.time + sing, next.time));
-    }
   }
-  return out;
+  // 前奏起点：元数据块起点（隐藏作词/作曲后三点从那里开始），无元数据则从 0 起
+  const leadingFrom = meta.length ? meta[0].time : 0;
+  return withInterludes(lyrics, {
+    threshold: INSTRUMENTAL_THRESHOLD,
+    preferUnits: false,
+    leadingFrom,
+  });
 }
 
 /**
@@ -182,36 +277,24 @@ export function buildLyricSequence(rawLines: LyricLine[], detectInstrumental = t
  * 本地 LRC 那条链路本来就由 buildLyricSequence 补点，云端链路过去是直接把解析结果
  * 铺上去，于是同一首歌用云端歌词时中间会「卡住不动」。
  *
- * 判定口径与 buildLyricSequence 一致：行距减去**估算演唱时长**后的纯停顿超过阈值才插。
- * 已有 `instrumental` 标记的行原样保留（不重复插点），阈值外的普通行距不插。
- * 返回新数组，不改动入参。
+ * 与 LRC 链路共用同一套扫描（`withInterludes`），包括**首行之前的前奏**：
+ * 官方 TTML 常把第一句排在半分钟后，不补点开场就是长时间静止。
+ * 已有 `instrumental` 标记的行原样保留（不重复插点）。返回新数组，不改动入参。
+ *
+ * @param tailEnd 音频总时长（秒）；给定时结尾器乐段也补点
  */
 export function insertInterludeDots(
   lines: LyricLine[],
   opts: { threshold?: number; tailEnd?: number } = {},
 ): LyricLine[] {
   if (!lines.length) return [];
-  const threshold = opts.threshold ?? INSTRUMENTAL_THRESHOLD;
-  const out: LyricLine[] = [lines[0]];
-  for (let i = 0; i < lines.length - 1; i++) {
-    const cur = lines[i];
-    const next = lines[i + 1];
-    if (!cur.instrumental && !next.instrumental) {
-      const gap = next.time - cur.time;
-      const sing = Math.min(gap, singingEstimate(cur.text));
-      if (gap - sing >= threshold) out.push(makeDotsLine(cur.time + sing, next.time));
-    }
-    out.push(next);
-  }
-  // 结尾器乐段：最后一行唱完到整首结束之间也要补点（tailEnd 由调用方给音频时长）
-  const last = lines[lines.length - 1];
-  const tailEnd = opts.tailEnd ?? 0;
-  if (tailEnd > 0 && !last.instrumental) {
-    const gap = tailEnd - last.time;
-    const sing = Math.min(gap, singingEstimate(last.text));
-    if (gap - sing >= threshold) out.push(makeDotsLine(last.time + sing, tailEnd));
-  }
-  return out;
+  return withInterludes(lines, {
+    threshold: opts.threshold ?? INSTRUMENTAL_THRESHOLD,
+    // 云端歌词是官方逐字时间轴，用末字结束时间比演唱估算准
+    preferUnits: true,
+    leadingFrom: 0,
+    ...(opts.tailEnd ? { tailEnd: opts.tailEnd } : {}),
+  });
 }
 
 // ---- LRC 解析（从 player.ts 移入，供歌词源复用）----
