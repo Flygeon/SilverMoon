@@ -212,6 +212,62 @@ describe("parseAmllTtml 逐字行 / 翻译 / 音译 / 背景和声", () => {
     expect(lines[0].text).toBe("HelloWorld");
   });
 
+  it("词间空格是标签之间的纯文本节点时，也要挂到前一个词（真实库最常见的英文写法）", () => {
+    // 真实样本（That's When）：<span>You</span> <span>said</span> —— 空格既不在词内，
+    // 也不是排版空白，丢给行文本会让逐字渲染拼成 "Yousaid"。
+    const lines = parseAmllTtml(
+      [
+        '<tt xmlns="http://www.w3.org/ns/ttml">',
+        "<body><div>",
+        '<p begin="11.46s" end="13.77s">',
+        '<span begin="11.46s" end="11.82s">You</span> <span begin="11.82s" end="12.51s">said</span> <span begin="12.57s" end="13.08s">"I</span> <span begin="13.08s" end="13.77s">know"</span>',
+        "</p>",
+        "</div></body></tt>",
+      ].join(""),
+    );
+
+    expect(lines[0].text).toBe('You said "I know"');
+    // 逐字单元必须带着分隔空白，否则 .word 是 white-space:pre，渲染出来会粘成一片
+    expect(lines[0].units?.map((u) => u.text)).toEqual(["You ", "said ", '"I ', 'know"']);
+    expect(lines[0].units?.map((u) => u.text).join("")).toBe(lines[0].text);
+    // 时间轴不受影响
+    expect(lines[0].units?.[0]).toEqual({ text: "You ", start: 11.46, end: 11.82 });
+  });
+
+  it("词内自带空格与标签间空白混用：两种写法都保住分隔，且不叠加成双空格", () => {
+    // 词尾自带空白 + 紧随其后的标签间空白：不应再追加一个空格
+    const withTrailing = parseAmllTtml(
+      '<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="1s" end="4s"><span begin="1s" end="2s">Can</span><span begin="2s" end="3s"> you </span> <span begin="3s" end="4s">feel</span></p></div></body></tt>',
+    );
+    expect(withTrailing[0].text).toBe("Can you feel");
+    expect(withTrailing[0].units?.map((u) => u.text)).toEqual(["Can", " you ", "feel"]);
+    expect(withTrailing[0].units?.map((u) => u.text).join("")).toBe(withTrailing[0].text);
+
+    // 词自带**前置**空白（Geronimo 的写法）：分隔在词首，标签间空白另算
+    const withLeading = parseAmllTtml(
+      '<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="1s" end="4s"><span begin="1s" end="2s">Can</span><span begin="2s" end="3s"> you</span> <span begin="3s" end="4s">feel</span></p></div></body></tt>',
+    );
+    expect(withLeading[0].text).toBe("Can you feel");
+    expect(withLeading[0].units?.map((u) => u.text).join("")).toBe(withLeading[0].text);
+    // 逐字单元里不出现连续两个空格（否则 .word 是 pre，屏幕上会看到空档）
+    for (const u of withLeading[0].units ?? []) expect(u.text).not.toMatch(/ {2}/);
+  });
+
+  it("行首 / 行尾的标签间空白不产生多余空格", () => {
+    const lines = parseAmllTtml(
+      [
+        '<tt xmlns="http://www.w3.org/ns/ttml">',
+        "<body><div>",
+        '<p begin="1s" end="2s">',
+        ' <span begin="1s" end="1.5s">Solo</span> ',
+        "</p>",
+        "</div></body></tt>",
+      ].join(""),
+    );
+
+    // 行首空格没有前词可挂 → 不能变成一个空词；行尾空格 join 后被 trim
+    expect(lines[0].text).toBe("Solo");
+  });
   it("无 span 的整行歌词（逐行 TTML）也能出一行，且不生成退化的 units", () => {
     const lines = parseAmllTtml(
       '<tt xmlns="http://www.w3.org/ns/ttml"><body dur="00:10.000"><div><p begin="00:07.000" end="00:09.000">Just a plain line</p></div></body></tt>',

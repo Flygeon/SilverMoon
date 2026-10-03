@@ -249,6 +249,11 @@ interface LineTokens {
   fallback: boolean;
 }
 
+/** 取词尾是否带空白（词间空格的唯一真相，决定 units 拼接时补不补空格） */
+function endsWithSpace(word: WordToken): boolean {
+  return /\s$/.test(word.text);
+}
+
 const EMPTY_LINE: LineTokens = {
   text: "",
   words: [],
@@ -282,6 +287,17 @@ function parseChildren(parent: Element): LineTokens {
       const normalized = raw.replace(/\s+/g, " ");
       if (!normalized) continue;
       state.text += normalized;
+      // 词间空格的第二种写法（真实库里很常见）：空格是**标签之间的纯文本节点**，
+      // 例如 `<span>You</span> <span>said</span>`。它不属于任何词，只累加进整行文本的话
+      // units 拼接就会丢掉空格，逐字渲染出来是 "Yousaid"。按 AMLL 规范第 6 节
+      // （解析器的 endsWithSpace）把它挂到**前一个词**的词尾，才能既保住整行、也保住逐字。
+      if (normalized.trim() === "" && state.words.length) {
+        const last = state.words[state.words.length - 1];
+        // 词尾已经有空白就不重复追加（写法 a：空格写在 span 内部）
+        if (!endsWithSpace(last)) {
+          state.words[state.words.length - 1] = { ...last, text: `${last.text} ` };
+        }
+      }
       continue;
     }
     if (node.nodeType !== 1 /* ELEMENT_NODE */) continue;
@@ -318,10 +334,14 @@ function parseChildren(parent: Element): LineTokens {
       continue;
     }
 
-    // 普通词 span：有 begin/end 就是逐字，没有就把整段文字当一个词
+    // 普通词 span：有 begin/end 就是逐字，没有就把整段文字当一个词。
+    // 空白折叠成单个空格但**不 trim**：英文歌词里词首/词尾的空格就是词间分隔，
+    // 去掉就会让 units 拼接（.word 是 white-space:pre）粘成一片。
     const begin = parseAmllTime(attr(el, "xml", "begin"));
     const end = parseAmllTime(attr(el, "xml", "end"));
-    const text = (el.textContent ?? "").replace(/\s+/g, " ");
+    const text = (el.textContent ?? "")
+      .replace(/\s+/g, " ")
+      .replace(/^\s+|\s+$/g, (m) => (m ? " " : ""));
     if (text) {
       state.text += text;
       state.words.push({ text, startMs: begin, endMs: end });
