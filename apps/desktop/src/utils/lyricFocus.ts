@@ -1,15 +1,18 @@
 /**
- * 已读完歌词行的「失去焦点」过渡（对齐 AMLL 的 LyricLineGroup.setLineTransformations）。
+ * 已读完歌词行的「失去焦点」过渡（对齐 AMLL 的 LyricLineGroup / LyricLineEl）。
  *
- * AMLL 的模型：布局层给每一行算出**目标** top 与 scale，再交给两个彼此独立的弹簧
- * 逐帧补间（LyricLineGroup 的 posY 与 LyricLineEl 的 lineTransforms.scale），
- * 而不是一次性跳变。具体到「读完」这一档：
- * - 非当前行在**播放中**时缩到 97%（SCALE_ASPECT = 97，单位是百分比）；暂停时回到 100%，
- *   因为暂停时不该继续「收」下去；
- * - 背景和声行更小，75%；
- * - 已读完的行 top 更靠上（由布局按行高累加得出，见 LyricsView 的 getLayout）。
+ * AMLL 的真实模型（packages/core/src/lyric-player/base/*）：
  *
- * 这里只负责「目标值怎么取」这一层；补间由 LyricsView 的两个 Spring 完成。
+ * - **布局层只算一个统一的 viewportStartY**，每行纵坐标 = viewportStartY + 行高前缀和。
+ *   焦点行前进一行时，整摞歌词**刚性上移**「上一行行高 + 行距」，没有任何「已读行
+ *   额外再多上移一点」的项。观感里的「唱完往上走」就是这次刚性滚动本身。
+ * - **缩放在 LyricLineEl**：非当前行在播放中缩到 97%（SCALE_ASPECT），和声行 75%；
+ *   paused 时回到 100%。由 lineTransforms.scale 弹簧补间（mass 2 / damping 25 /
+ *   stiffness 100）。
+ * - **模糊在 LyricLineGroup 的 resolveBlurLevel**：按与焦点的行距分档，已读行比同
+ *   距离的未读行再糊一档，封顶 5px；焦点行不糊。
+ *
+ * 这里只负责「目标值怎么取」这一层；补间由 LyricsView 的 Spring 逐帧完成。
  */
 
 /** 当前行（焦点行）的缩放：满值 */
@@ -37,14 +40,86 @@ export const SCALE_SPRING_PARAMS = { mass: 2, damping: 25, stiffness: 100 } as c
 /** 背景和声行缩放的弹簧参数（对齐 AMLL 的 scaleForBGSpringParams） */
 export const SCALE_SPRING_PARAMS_BG = { mass: 1, damping: 20, stiffness: 50 } as const;
 
+/** 模糊上限（px）：对齐 AMLL render 里的 min(5, blur)，避免远行拖垮 GPU */
+export const LYRIC_MAX_BLUR = 5;
+
 /**
- * 已读完的行整体上移的比例（相对行高）。
+ * 某一行的模糊档位（px）。
  *
- * AMLL 里这一档是**布局层**完成的：左侧保留的那部分（行高 × 系数）由内容高度决定，
- * 所以这里取行高的一个比例作为额外上移量，参与 getLayout 的累加，
- * 于是它和普通行距一样会被 posY 弹簧平滑补间，不会跳变。
+ * 对齐 AMLL 的 resolveBlurLevel：
+ * - 关闭模糊时 0；焦点行不糊（0）；
+ * - 视口外的行直接给满档（AMLL 返回 5，不判断焦点——顺序上先判视口）；
+ * - 其余按与焦点的行距分档：**已读行比同距离的未读行再糊一档**
+ *   （AMLL：已读 1 + (距离 + 1) = 距离 + 2，未读 1 + 距离），所以唱过的行
+ *   往后退得更快，层次是「越往前越清楚」；
+ * - 档位封顶 LYRIC_MAX_BLUR。
  *
- * 取 0.22：与「缩小 3%」的视觉收束量相称——太小看不出「翻过去了」，
- * 太大会让相邻行挤在一起。
+ * 档位是离散的，平滑交给 .lyric-item 上 filter 的 0.4s 过渡（与 AMLL 同）。
  */
-export const PASSED_LINE_RISE_RATIO = 0.22;
+export function lyricLineBlur(
+  index: number,
+  activeIdx: number,
+  inViewport: boolean,
+  enabled: boolean,
+): number {
+  if (!enabled) return 0;
+  if (!inViewport) return LYRIC_MAX_BLUR;
+  if (index === activeIdx) return 0;
+  const distance = Math.abs(index - activeIdx);
+  const level = index < activeIdx ? distance + 2 : distance + 1;
+  return Math.min(LYRIC_MAX_BLUR, level);
+}
+
+/** 逐行级联的起步延迟（秒），对齐 AMLL 的 Duration.fromSecs(.05) */
+export const CASCADE_BASE_DELAY_SEC = 0.05;
+/** 每往下一行，延迟增量按此比例衰减（AMLL 的 1 / 1.05），使总延迟收敛 */
+export const CASCADE_DECAY = 1 / 1.05;
+
+/**
+ * 第 distanceBelow 行（0 = 焦点行）的级联启动延迟（秒）。
+ *
+ * AMLL 是逐行把 baseDelay 累加进 delay，且每过一行就把 baseDelay 乘 1/1.05，
+ * 因此远端行的延迟**单调递增但收敛**（上限约 1.05s），而不是无限增长，也绝不会
+ * 在中途掉回 0。旧实现写的是「超过 10 行直接置 0」：那会让更靠下的行反而比近处
+ * 的行先动，波浪散架，而且恰好在第 10 行边界上突兀。
+ */
+export function cascadeDelaySec(distanceBelow: number): number {
+  if (distanceBelow <= 0) return 0;
+  let delay = 0;
+  let base = CASCADE_BASE_DELAY_SEC;
+  for (let k = 0; k < distanceBelow; k++) {
+    delay += base;
+    base *= CASCADE_DECAY;
+  }
+  return delay;
+}
+
+/**
+ * 第 index 行相对焦点行的纵坐标（px）。
+ *
+ * 与 AMLL 一致：位置 = 行高前缀和 + 停靠偏移，**不含任何「已读行额外上移」的项**。
+ * 焦点行前进时，所有行的位移量完全相同（都等于 -(上一行行高 + 行距)），也就是
+ * 整摞歌词刚性滚动。一旦给已读行加上额外的上移量，每切一行那一摞就会被多顶上去
+ * 一截，且越靠上的已读行累计得越多——观感正是「突然往上一跳」。
+ *
+ * @param index 目标行下标
+ * @param activeIdx 当前焦点行下标
+ * @param heights 每行实测高度
+ * @param lineGap 行间间距
+ * @param offset 焦点行的停靠高度
+ */
+export function lineOffset(
+  index: number,
+  activeIdx: number,
+  heights: readonly number[],
+  lineGap: number,
+  offset: number,
+): number {
+  let res = 0;
+  if (index > activeIdx) {
+    for (let i = activeIdx; i < index; i++) res += (heights[i] ?? 0) + lineGap;
+  } else {
+    for (let i = activeIdx; i > index; i--) res -= (heights[i - 1] ?? 0) + lineGap;
+  }
+  return res + offset;
+}

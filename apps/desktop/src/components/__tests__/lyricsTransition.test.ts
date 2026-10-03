@@ -102,8 +102,36 @@ describe("LyricsView 的失去焦点过渡", () => {
     expect(SRC).toContain('const bgTransform = "scale("');
   });
 
-  it("已读完的行额外上移，参与位移累加（由 posY 弹簧补间，不跳变）", () => {
-    expect(SRC).toContain("PASSED_LINE_RISE_RATIO");
+  it("位移只按行高 + 行距累加，不含「已读行额外上移」（那会导致切行时整摞被顶一跳）", () => {
+    // AMLL 的布局层只有 viewportStartY + 行高前缀和这一个纵坐标来源
+    expect(SRC).toContain("lineOffset(");
+    expect(SRC).not.toContain("PASSED_LINE_RISE_RATIO");
+    expect(SRC).not.toMatch(/heights\[i[^\]]*\]\s*\*\s*0\.\d/);
+  });
+
+  it("级联延迟用收敛的级数，而不是「超过 N 行直接置 0」（那会让远端行反而先动）", () => {
+    expect(SRC).toContain("cascadeDelaySec(");
+    expect(SRC).not.toMatch(/if \(n > 10\) n = 0/);
+  });
+
+  it("弹簧参数整帧只算一次并推给所有行（逐行各算会让同一摞歌词被拉出形变）", () => {
+    // AMLL 的 updateSpringParams 按当前行的间隔取一次 policy，再推给所有 group
+    expect(SRC).toContain("posYPolicy");
+    expect(SRC).toMatch(/const posYPolicy = seeking/);
+    // 循环体里必须复用这一份，而不是按第 i 行自己的 interval 重算
+    expect(SRC).toContain("row.spring.updateParams(posYPolicy)");
+    expect(SRC).not.toMatch(/row\.spring\.updateParams\(getPosYSpringPolicy/);
+  });
+
+  it("视口判定留出与 AMLL 同量级的缓冲（否则离散档位在可见区域内切换）", () => {
+    // AMLL 的 motionBuffer = containerHeight * .4
+    expect(SRC).toMatch(/containerH \* 0\.4/);
+  });
+
+  it("已读行比同距离的未读行更糊（模糊由 lyricLineBlur 统一推导）", () => {
+    expect(SRC).toContain("lyricLineBlur(");
+    // 旧的实现是 min(5, distance)，已读行与未读行档位相同，丢掉了一档层次
+    expect(SRC).not.toMatch(/Math\.min\(MAX_BLUR, distance\)/);
   });
 
   it("缩放原点落在行元素上：默认左中，对唱行改到右中（否则缩放会横向漂移）", () => {

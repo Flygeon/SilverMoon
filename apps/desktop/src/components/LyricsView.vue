@@ -28,9 +28,11 @@ import { lyricFontFamily } from "@/utils/lyricFont";
 import { getPosYSpringPolicy, Spring } from "@/utils/spring";
 import { floatAnimationSpec } from "@/utils/wordFloat";
 import {
+  cascadeDelaySec,
+  lineOffset,
+  lyricLineBlur,
   lyricLineScale,
   LYRIC_SCALE_FOCUS,
-  PASSED_LINE_RISE_RATIO,
   SCALE_SPRING_PARAMS,
   SCALE_SPRING_PARAMS_BG,
 } from "@/utils/lyricFocus";
@@ -57,11 +59,6 @@ const lyricFont = computed(() => lyricFontFamily(settings.lyricFont));
  * 用 2.6 而非 3.5：整块歌词区在右栏偏上，除以 3.5 会把当前行顶到接近顶部。
  */
 const lyricsOffset = () => (containerRef.value ? containerRef.value.clientHeight / 2.6 : 240);
-
-/** 模糊上限（px）：对齐 AMLL 的 min(5, blur)，避免远行拖垮 GPU */
-const MAX_BLUR = 5;
-/** 超出此距离的行不再施加模糊（容器遮罩已经让它们不可见） */
-const BLUR_DISTANCE_LIMIT = 6;
 
 /** 间奏三点：主体时长低于此值（秒）不显示——进退场都放不下，会在屏幕上闪一下 */
 const DOTS_MIN_DURATION = 0.91;
@@ -115,27 +112,14 @@ let bgRefs: HTMLElement[][] = [];
 /**
  * 缓存的位移（第 to 行相对当前行的目标位移）。
  *
- * 已读完的行（下标小于当前行）在正常行距之上再上移行高的 PASSED_LINE_RISE_RATIO：
- * 这就是 AMLL 里「失去焦点」那一档的位置差。它参与**累加**而不是单独给某一行加一笔，
- * 因此：
- * - 越靠上的已读行被推得越高，与当前行之间腾出更多空间，观感是「唱过的部分整体上浮、
- *   把画面让给当前行」；
- * - 相邻已读行之间的距离也一并拉开，不会挤在一起。
+ * 与 AMLL 一致：只有「行高 + 行距」的累加，**没有逐行的额外抬升**。焦点行前进时
+ * 所有行的位移量相同，也就是整摞歌词刚性滚动——这正是「唱完往上走」的观感来源。
  *
- * 关键在于这只是**目标值**，由 posY 弹簧逐帧补间，所以切行时是平滑上移而不是跳变。
+ * 不要再给已读行加额外的上移量：那是**逐行累加**的，每切一行整摞就被多顶一截，
+ * 越靠上的已读行累计越多，表现就是切行瞬间「突然往上一跳」。
  */
 function getLayout(now: number, to: number): number {
-  const lineGap = settings.lyricLineGap;
-  let res = 0;
-  if (to > now) {
-    for (let i = now; i < to; i++) res += (heights[i] ?? 0) + lineGap;
-  } else {
-    for (let i = now; i > to; i--) {
-      const h = heights[i - 1] ?? 0;
-      res -= h + lineGap + h * PASSED_LINE_RISE_RATIO;
-    }
-  }
-  return res + lyricsOffset();
+  return lineOffset(to, now, heights, settings.lyricLineGap, lyricsOffset());
 }
 
 function measureHeights(): void {
@@ -316,9 +300,17 @@ let lastFrame = 0;
 let lastActive = -2;
 const seekDetector = new SeekDetector();
 
-/** 行是否处于视口内（含上下各留一行余量） */
+/**
+ * 行是否处于视口内。
+ *
+ * 余量取容器高度的 40%（对齐 AMLL 的 motionBuffer = containerHeight * .4），而不是
+ * 几十像素：opacity / 模糊都是**离散档位**，切换只靠 0.4s 过渡平滑。若判定边界贴着
+ * 容器边缘，量变发生在可见区域内，就会看到半透明区里「一下子变糊/变暗」。把边界推远
+ * 到屏幕外，档位切换就都发生在看不见的地方。
+ */
 function inViewport(y: number, h: number, containerH: number): boolean {
-  return y + h >= -40 && y <= containerH + 40;
+  const buffer = containerH * 0.4;
+  return y + h >= -buffer && y <= containerH + buffer;
 }
 
 function rafLoop(ts: number): void {
@@ -342,6 +334,22 @@ function rafLoop(ts: number): void {
   const seeking = seekDetector.detect(mediaTime, player.playing);
   const now = activeIdx >= 0 ? activeIdx : 0;
 
+  /*
+   * 位移弹簧的参数**整帧只算一次**，并且应用到所有行（对齐 AMLL 的 updateSpringParams：
+   * 它按当前行与上一行的时间差取一次 policy，再 setLinePosYSpringParams 推给所有 group）。
+   *
+   * 不能逐行按各自的 interval 去算：那样每行的刚度/阻尼都不同，同一摞歌词会以不同速度
+   * 追赶各自的目标，行与行之间被拉出形变，观感就是「一抖一抖」而不是整体平移。
+   * 间奏同理——AMLL 用全局的 isInterludeActive，这里取当前行是不是间奏三点。
+   */
+  const activeLine = activeIdx >= 0 ? lines[activeIdx] : undefined;
+  const prevLineTime = activeIdx > 0 ? lines[activeIdx - 1]?.time : undefined;
+  const activeIntervalMs =
+    activeLine && prevLineTime !== undefined ? (activeLine.time - prevLineTime) * 1000 : undefined;
+  const posYPolicy = seeking
+    ? getPosYSpringPolicy(true, !!activeLine?.instrumental)
+    : getPosYSpringPolicy(false, !!activeLine?.instrumental, activeIntervalMs);
+
   // 跳转：WAAPI 动画不跟播放器时间轴走，必须显式把它们对齐到新进度，
   // 否则拖完进度条后词的浮起高度与音频脱节。
   if (seeking && floatAnims.length) {
@@ -353,7 +361,6 @@ function rafLoop(ts: number): void {
     const row = rows[i];
     const el = lineRefs.value[i];
     if (!row || !el) continue;
-    const line = lines[i];
 
     const target = getLayout(now, i);
     if (!row.primed) {
@@ -373,16 +380,12 @@ function rafLoop(ts: number): void {
       if (seeking) {
         // 跳转：不排队列，直接换慢速弹簧追过去
         row.delay = 0;
-        row.spring.updateParams(getPosYSpringPolicy(true, !!line.instrumental));
+        row.spring.updateParams(posYPolicy);
         row.spring.setTargetPosition(target);
       } else {
-        // 级联：距离当前行越远启动越晚；超过 10 行直接同步，避免长尾
-        let n = i - activeIdx + 1;
-        if (n > 10) n = 0;
-        row.delay = n > 0 ? n * 0.06 : 0;
-        const prevIdx = lines[i - 1]?.time;
-        const intervalMs = prevIdx !== undefined ? (line.time - prevIdx) * 1000 : undefined;
-        row.spring.updateParams(getPosYSpringPolicy(false, !!line.instrumental, intervalMs));
+        // 级联：下方行逐行错开启动，增量按 1/1.05 衰减，总延迟收敛（AMLL 同此）
+        row.delay = cascadeDelaySec(i - activeIdx);
+        row.spring.updateParams(posYPolicy);
       }
     }
 
@@ -437,11 +440,8 @@ function rafLoop(ts: number): void {
     const opacity = !visible ? 0 : i === activeIdx ? 1 : Math.max(0.22, 1 - distance * 0.22);
     if (el.style.opacity !== String(opacity)) el.style.opacity = String(opacity);
 
-    // 模糊：加到上限就停；焦点行 / 视口外 / 过远的行都不施加
-    const blur =
-      settings.lyricBlur && visible && i !== activeIdx && distance <= BLUR_DISTANCE_LIMIT
-        ? Math.min(MAX_BLUR, distance)
-        : 0;
+    // 模糊：与 AMLL 同样按行距分档，已读行比同距离的未读行再糊一档
+    const blur = lyricLineBlur(i, activeIdx, visible, settings.lyricBlur);
     const filter = blur ? "blur(" + blur + "px)" : "none";
     if (el.style.filter !== filter) el.style.filter = filter;
   }
