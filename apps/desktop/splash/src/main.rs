@@ -17,8 +17,10 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod animation;
 mod handshake;
 mod pathfind;
+mod prefs;
 mod theme;
 mod window;
 
@@ -35,6 +37,99 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use handshake::{Handshake, CONNECT_TIMEOUT, FADE_MS, READY_TIMEOUT};
 
 use pathfind::{pick_electron, ELECTRON_EXE};
+
+/// 应用数据目录名（与 `backend/silvermoon.config.json` 的 identifier 一致）。
+/// 用于定位 `%APPDATA%\<identifier>\settings.json`。
+const APP_IDENTIFIER: &str = "cn.cool.silvermoon";
+
+/// 读应用设置里的主题偏好（`settings.json` 的 `settings.theme`）。
+///
+/// 与 `electron/config.ts` 的 `dataDir()` 对齐：`%APPDATA%\<identifier>`。
+/// 读不到就返回 None，由调用方回退系统亮暗 —— 启动器绝不因为读不到设置而失败。
+fn read_theme_pref() -> Option<&'static str> {
+    let appdata = std::env::var("APPDATA").ok()?;
+    let path = std::path::Path::new(&appdata)
+        .join(APP_IDENTIFIER)
+        .join("settings.json");
+    let text = std::fs::read_to_string(path).ok()?;
+    prefs::theme_from_settings(&text)
+}
+
+/// 读系统亮暗（Windows「应用模式」）。任何失败都当作亮色（系统默认）。
+fn system_is_dark() -> bool {
+    use windows::Win32::Foundation::ERROR_SUCCESS;
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ, REG_DWORD,
+    };
+
+    unsafe {
+        let subkey: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let value: Vec<u16> = "AppsUseLightTheme"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let mut key = HKEY::default();
+        if RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            windows::core::PCWSTR(subkey.as_ptr()),
+            0,
+            KEY_READ,
+            &mut key,
+        ) != ERROR_SUCCESS
+        {
+            return false;
+        }
+
+        let mut kind = REG_DWORD;
+        let mut buf = [0u8; 4];
+        let mut size = buf.len() as u32;
+        let status = RegQueryValueExW(
+            key,
+            windows::core::PCWSTR(value.as_ptr()),
+            None,
+            Some(&mut kind),
+            Some(buf.as_mut_ptr()),
+            Some(&mut size),
+        );
+        let _ = RegCloseKey(key);
+
+        // AppsUseLightTheme == 0 表示深色
+        status == ERROR_SUCCESS && size >= 4 && u32::from_le_bytes(buf) == 0
+    }
+}
+
+/// 调试入口：把若干动画帧渲染成 BMP 后退出（仅 debug 构建）。
+///
+/// 用法：`silvermoon-splash.exe --dump-frame=D:\\out\\f`
+/// 会输出 `f0.bmp`..`f7.bmp`，用于在**不依赖窗口截图**的前提下检查绘制结果。
+/// 这在 Wine 下尤其重要：`xwd` 抓分层窗口不可靠，而这里拿的是 GDI 真实像素。
+#[cfg(debug_assertions)]
+fn dump_frames(arg: &str) {
+    let base = arg.trim_start_matches("--dump-frame=");
+    // 亮/暗各出一组，方便对比主题
+    for (label, palette) in [
+        ("light", theme::Palette::LIGHT),
+        ("dark", theme::Palette::DARK),
+    ] {
+        for i in 0..8u64 {
+            let elapsed = i * (animation::PERIOD_MS / 8);
+            let path = format!("{base}-{label}-{i}.bmp");
+            match window::dump_frame_to_bmp(&path, theme::WIN_W, theme::WIN_H, elapsed, palette) {
+                Ok(()) => println!("wrote {path}"),
+                Err(e) => eprintln!("dump 失败 {path}: {e}"),
+            }
+        }
+    }
+}
+
+/// 决定 splash 的亮/暗：**跟随应用设置**，设置缺失才跟系统。
+fn resolve_mode() -> prefs::Mode {
+    prefs::resolve(read_theme_pref(), system_is_dark())
+}
 
 /// 握手通道。
 ///
@@ -100,6 +195,14 @@ fn locate_electron() -> (std::path::PathBuf, std::path::PathBuf) {
 }
 
 fn main() {
+    // debug 构建支持 `--dump-frame=<前缀>`：渲染动画帧后退出，便于检查绘制。
+    // 放在最前，避免走窗口/管道流程。
+    #[cfg(debug_assertions)]
+    if let Some(arg) = std::env::args().find(|a| a.starts_with("--dump-frame=")) {
+        dump_frames(&arg);
+        return;
+    }
+
     // 先解析 Electron 位置（发布布局与直觉不同，见 locate_electron 的说明）
     let (electron_exe, app_root) = locate_electron();
 
@@ -117,8 +220,9 @@ fn main() {
     };
     *handshake_slot().lock().unwrap() = Some(hs);
 
-    // 2) 显示 splash
-    let hwnd = match window::create(theme::WIN_W, theme::WIN_H) {
+    // 2) 显示 splash（亮/暗跟随应用设置，与主界面首屏连续）
+    let mode = resolve_mode();
+    let hwnd = match window::create(theme::WIN_W, theme::WIN_H, mode) {
         Ok(h) => h,
         Err(e) => {
             eprintln!("[splash] 窗口创建失败：{e}；将直接启动主程序");

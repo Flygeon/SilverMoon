@@ -48,6 +48,11 @@
 
     ${If} ${FileExists} "$R9"
       ; ---- 桌面快捷方式：改指启动器 ----
+      ;
+      ; 第 4 个参数是**图标来源**，这里也用 $R9（启动器自己）。
+      ; 之所以能这么做，是因为启动器 exe 里已经内嵌了应用图标
+      ; （见 splash/build.rs）—— 否则快捷方式会是一个空白方块。
+      ; 实机反馈过「安装后桌面快捷方式没图标」，根因就是此前启动器没有图标资源。
       ${If} ${FileExists} "$newDesktopLink"
         Delete "$newDesktopLink"
       ${EndIf}

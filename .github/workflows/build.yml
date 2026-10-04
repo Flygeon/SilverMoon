@@ -112,14 +112,17 @@ jobs:
         working-directory: apps/desktop/splash
         run: cargo fmt --check
 
-      # 启动器路径解析的单元测试。
+      # 启动器**纯逻辑**（路径解析 / 主题解析 / 动画数学）的单元测试。
       #
-      # 关键：`splash/src/pathfind.rs` 被刻意写成**无平台依赖的纯逻辑**，
-      # 所以能在 Linux 上用 rustc --test 直接跑**二进制里同一份代码**。
-      # 这拦的是「发布版布局」缺陷 —— 启动器曾经假设与 SilverMoon.exe 同级，
-      # 而 electron-builder 的 extraResources 实际放进 resources/，
-      # 导致装出来的应用打不开；当时 CI 全绿，因为没人解包安装包看布局。
-      - name: Launcher path resolution tests
+      # 关键：这些模块被刻意写成无平台依赖（挂在只服务测试的 lib target 上），
+      # 于是能在 Linux 上用 `cargo test --lib` 跑**与发布二进制同一份代码**。
+      # 它们拦的都是「只在发布版暴露」的缺陷：
+      #   * 启动器曾假设与 SilverMoon.exe 同级，而 extraResources 实际放进
+      #     resources/ → 装出来的应用打不开；
+      #   * splash 亮/暗要跟随应用设置，而设置里 theme 与 readerTheme 并存，
+      #     子串匹配会读错键。
+      # 以上两类当时 CI 全绿却带着缺陷发布。
+      - name: Launcher logic tests (path / theme / animation)
         run: npm run verify:splash-paths
 
       # NSIS 脚本只在 Windows 打包时才被编译；等到那时才发现语法错误就是 ~12 分钟一轮。

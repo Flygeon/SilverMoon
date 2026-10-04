@@ -33,11 +33,34 @@ silvermoon-splash.exe   ← 原生，毫秒级出窗口（MD3 自绘动画）
 | C# WinForms 压缩单文件 | **64.7 MB** | 首次运行需解压，**反而拖慢启动** |
 | C# WinForms + 裁剪 | ❌ | `NETSDK1175: 启用剪裁时，不支持 Windows 窗体` |
 | C# WinForms + NativeAOT | ❌ | AOT 内部启用裁剪，撞同一条限制 |
-| **Rust + windows-rs** | **0.33 MB** | ✅ 已验证为合法 Windows GUI PE |
+| **Rust + windows-rs** | **0.48 MB** | ✅ 已验证为合法 Windows GUI PE（含内嵌图标） |
 
 结论：WinForms 无法 AOT（.NET 硬限制），只能选 153MB 或 65MB；而压缩单文件的
 首次解压开销**正好抵消它要盖住的那段等待**，自相矛盾。Rust 静态链接、双击即出画面，
 且仓库已有 Rust 工具链与 CI 缓存，零新增基建。
+
+## 2.5 视觉：跟随主题 + SilverMoon 逐字动画
+
+启动器在 Electron 起来**之前**就要决定亮/暗，所以自己去读应用设置：
+
+```text
+%APPDATA%\cn.cool.silvermoon\settings.json   →  settings.theme
+```
+
+取值语义与 `src/stores/settings.ts` 的 `ThemeMode`（`system|light|dark`）一致；
+`system` 或读不到时回退注册表 `AppsUseLightTheme`。颜色取自 `theme.css` 的
+`:root`（浅色）与 `[data-theme="dark"]`（深色），保证 splash 与首屏连续。
+
+> 坑：设置里 `theme` 与 **`readerTheme`** 并存（本仓实测）。任何「搜 `"theme"`
+> 子串」的取巧写法都会读错键。必须真正解析 JSON 并走 `settings.theme` 路径 ——
+> 回归测试见 `prefs.rs` 的 `does_not_confuse_reader_theme`。
+
+中央动画复刻自一个 React/styled-components 版 Loader（用户提供）：
+「SilverMoon」10 个字母依次发光上浮（相位差 0.1s、周期 2s），
+外加 7 颗呼吸的星点与一圈渐变高光。原版文字是 `LAUNCHING`，本应用改为产品名。
+
+数学部分（每个字母在各时刻的不透明度/缩放/位移/模糊）抽在 `animation.rs`，
+是纯函数，因此能在 Linux 上跑真实单元测试；绘制层只负责按结果画 GDI。
 
 ## 3. 握手协议
 
