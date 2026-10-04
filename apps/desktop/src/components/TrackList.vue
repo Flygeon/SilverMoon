@@ -10,7 +10,7 @@ import { usePlayerStore } from "@/stores/player";
 import { useSettingsStore } from "@/stores/settings";
 import { capabilities } from "@/capabilities";
 import { openContextMenu } from "@/composables/useContextMenu";
-import { openMusicTagDialog } from "@/composables/useMusicTagDialog";
+import { localTagTarget, openMusicTagDialog } from "@/composables/useMusicTagDialog";
 import { translate } from "@shared/i18n";
 import { formatDuration } from "@/utils/format";
 import type { MediaEntry } from "@shared/types";
@@ -100,12 +100,7 @@ function onMenuSelect(id: string, item: MediaEntry, index: number) {
       void capabilities.revealInExplorer(item.path);
       break;
     case "write-tags":
-      openMusicTagDialog({
-        kind: "local",
-        fileId: item.id,
-        path: item.path,
-        label: titleOf(item),
-      });
+      openMusicTagDialog(localTagTarget(item));
       break;
     default:
       break;

@@ -1285,7 +1285,21 @@ export interface MusicTagCover {
 
 /** 「写音乐标签」的目标 */
 export type MusicTagTarget =
-  | { kind: "local"; fileId: string; path: string; label: string }
+  | {
+      kind: "local";
+      fileId: string;
+      path: string;
+      label: string;
+      /**
+       * 库内列表项的艺人/专辑/时长。
+       *
+       * 只为「逐字歌词」的时长匹配服务：本地文件标签里的时长由 Rust 侧解析，
+       * 在这里带过去可以避免为了匹配再读一次文件；缺省时按无时长兜底搜索。
+       */
+      artist?: string | null;
+      album?: string | null;
+      durationMs?: number | null;
+    }
   | { kind: "online"; song: OnlineSong; label: string };
 
 /** 聚合搜索返回的归一化候选 */

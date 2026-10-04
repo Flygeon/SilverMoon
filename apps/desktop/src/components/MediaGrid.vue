@@ -12,7 +12,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useLibraryStore } from "@/stores/library";
 import { useSettingsStore } from "@/stores/settings";
 import { capabilities } from "@/capabilities";
-import { openContextMenu } from "@/composables/useContextMenu";
+import { openContextMenu, type MenuItem } from "@/composables/useContextMenu";
+import { localTagTarget, openMusicTagDialog } from "@/composables/useMusicTagDialog";
 import { TYPE_ICONS, formatDuration, formatResolution, formatSize } from "@/utils/format";
 import { translate } from "@shared/i18n";
 import type { MediaEntry } from "@shared/types";
@@ -50,15 +51,24 @@ function t(key: string) {
   return translate(settings.lang, key);
 }
 
-/** 右键卡片：定位到文件位置 */
+/**
+ * 右键卡片菜单。
+ *
+ * 网格是所有媒体类型共用的，因此菜单按类型给：音频多一个「写音乐标签」——
+ * 本地音乐的网格视图此前没有任何写标签入口（列表视图 TrackList 有），
+ * 用户右键本地歌曲找不到那个选项，就是这个缺口。
+ */
 function onContextMenu(e: MouseEvent, item: MediaEntry) {
-  openContextMenu(
-    e,
-    [{ id: "reveal", label: t("context.revealInExplorer"), icon: "folder_open" }],
-    (id) => {
-      if (id === "reveal") void capabilities.revealInExplorer(item.path);
-    },
-  );
+  const items: MenuItem[] = [
+    { id: "reveal", label: t("context.revealInExplorer"), icon: "folder_open" },
+  ];
+  if (item.type === "audio") {
+    items.push({ id: "write-tags", label: t("musicTag.menu"), icon: "sell" });
+  }
+  openContextMenu(e, items, (id) => {
+    if (id === "reveal") void capabilities.revealInExplorer(item.path);
+    else if (id === "write-tags") openMusicTagDialog(localTagTarget(item));
+  });
 }
 
 const GAP_X = 16;

@@ -10,7 +10,7 @@
  * 返回结构化结果（PreciseLyricsResult），调用方据此展示来源徽标/回退提示并记录日志。
  * 结果进程内缓存：成功 1h / 失败 10min（键含来源顺序，手动切换后自动失效）。
  */
-import { qqSearchSongs, qqFetchLyrics, type QqSongInfo } from "./qqMusic";
+import { qqSearchSongs, qqFetchLyricsDetailed, type QqSongInfo } from "./qqMusic";
 import { kgSearchSongs, kgFetchLyrics, type KgSongInfo } from "./kgMusic";
 import { metingSearch } from "./meting";
 import {
@@ -498,16 +498,24 @@ async function trySource(
   for (const c of matched) {
     tried++;
     let lines: LyricLine[] | null = null;
+    // QQ 的逐字性必须由来源显式给出：它有一条 **LRC 兜底轨**，经 parseLrc 会带上
+    // 粗排 units，`hasWordLevel(lines)` 会把逐行误判成逐字，进而让写标签把伪时间轴
+    // 写成增强型 LRC。酷狗 KRC 的 units 是官方数据，按词元数判断成立。
+    let qqWordLevel = false;
     try {
-      lines =
-        source === "qq"
-          ? await qqFetchLyrics(c as QqSongInfo)
-          : await kgFetchLyrics(c as KgSongInfo);
+      if (source === "qq") {
+        const hit = await qqFetchLyricsDetailed(c as QqSongInfo);
+        lines = hit?.lines ?? null;
+        qqWordLevel = hit?.wordLevel ?? false;
+      } else {
+        lines = await kgFetchLyrics(c as KgSongInfo);
+      }
     } catch {
       continue; // 单候选失败不影响其它候选
     }
     if (!lines?.length) continue;
-    if (hasWordLevel(lines)) {
+    const wordLevel = source === "qq" ? qqWordLevel : hasWordLevel(lines);
+    if (wordLevel) {
       return {
         ok: true,
         source,

@@ -498,3 +498,253 @@ npm run build:renderer && npm run build:main && npm run verify:music-tags
 ```
 另需 grep 确认全仓不再出现 `musicTagApiUrl` / `musicTagApi` / `Music Tag Web`（文档与 changelog 除外）。
 
+
+---
+
+# 追加契约 v3：本地右键入口 + 逐字歌词写标签
+
+> 状态：**已实现并冻结**（2026-10-04）。
+> 起因（用户原话）：「本地音乐右键没有写音乐标签的选项」+「能不能复用我的歌词获取服务，
+> 写标签可以获取各个源的逐字歌词」。
+
+## 15. 缺陷：本地音乐右键缺「写音乐标签」
+
+### 根因
+
+写标签功能（v2）只把菜单项接在**列表视图**与**在线歌曲**上：
+
+| 入口 | 文件 | v2 状态 |
+|---|---|---|
+| 本地 · 列表视图 | `src/components/TrackList.vue` | ✅ 有 |
+| 本地 · 网格视图（**默认**） | `src/components/MediaGrid.vue` | ❌ 只有「在资源管理器中显示」 |
+| 在线歌曲（网格/列表） | `src/views/MusicView.vue` → `onSongContext` | ✅ 有 |
+
+`MediaGrid` 是图片/视频/音乐/书籍**共用**组件，v2 只在 `TrackList` 里加菜单，
+于是默认的网格视图下右键本地歌曲看不到该选项。
+
+### 修法
+
+1. `MediaGrid.onContextMenu` 按类型给菜单：`item.type === "audio"` 时追加
+   `{ id: "write-tags", label: t("musicTag.menu"), icon: "sell" }`；其它类型保持只有「显示」。
+2. 新增 `localTagTarget(item)`（`src/composables/useMusicTagDialog.ts`）作为**唯一**的
+   本地目标构造函数，`MediaGrid` 与 `TrackList` 都改走它，避免两处手抄字段漂移。
+
+### 接口（冻结）
+
+```ts
+/** 本地曲目 → 写标签目标（各入口共用） */
+export function localTagTarget(item: MediaEntry): Extract<MusicTagTarget, { kind: "local" }>;
+```
+
+`MusicTagTarget` 的 local 分支新增三个**可选**字段，只服务逐字歌词的时长匹配：
+
+```ts
+| {
+    kind: "local";
+    fileId: string;
+    path: string;
+    label: string;
+    artist?: string | null;    // 新增
+    album?: string | null;     // 新增
+    durationMs?: number | null; // 新增（±1s 匹配依赖它）
+  }
+```
+
+回归测试：`src/components/__tests__/localMusicTagEntry.test.ts`
+（含「非音频不给写标签」与两入口都走 `localTagTarget` 的源码断言）。
+
+## 16. 逐字歌词：为什么是「增强型 LRC」
+
+写标签最终只能落到**一个纯文本歌词字段**（taglib `setLyrics` → USLT / 内嵌歌词），
+放不下 TTML / QRC / KRC 这些富格式。因此把逐字时间轴编码成**增强型 LRC**：
+
+```
+[00:12.34]<00:12.34>原<00:12.61>谅<00:12.88>我<00:13.20>
+```
+
+- 网易云 / QQ 音乐桌面版、foobar2000（Lyric Show 3）、MusicBee、AMLL 都认
+  `<mm:ss.xx>` 词级标记 → **别的播放器也吃到逐字**；
+- 不认的播放器当普通 LRC，去掉标记后照常按行显示（优雅降级）；
+- 本项目的 `parseLrc` 同样识别它，写完立刻回放即逐字。
+
+精度取**厘秒**（2 位小数）：这是增强型 LRC 的事实标准，第三方识别率最高。
+末词补一个**空文本收尾标记** `<end>`，回读才能拿到正确尾音时长。
+
+### 冻结接口：`src/utils/wordLevelLrc.ts`
+
+```ts
+/** 逐字时间轴 → 增强型 LRC 文本（无逐字的行写普通 LRC；空串=无可用歌词） */
+export function serializeWordLevelLrc(lines: LyricLine[]): string;
+/** 秒 → mm:ss.xx（厘秒，四舍五入，不产生 60 进位错误） */
+export function formatLrcTime(total: number): string;
+/** 一行是否有真正的逐字时间轴（判据：词元数 > 1） */
+export function hasWordUnits(line: Pick<LyricLine, "units">): boolean;
+export function hasAnyWordUnits(lines: LyricLine[]): boolean;
+export function isWordLevelLyrics(lines: LyricLine[]): boolean;
+/** 剥掉所有行上的 units（返回新数组）——写标签前必须做，见 §19 的 ⚠️ */
+export function stripWordUnits(lines: LyricLine[]): LyricLine[];
+/** `<mm:ss.xx>` 词级标记 → 秒（两位小数按厘秒、三位按毫秒） */
+export function wordTagSeconds(minutes: string, seconds: string, fraction?: string): number;
+```
+
+### `parseLrc` 的签名扩展（`src/utils/lyricTimeline.ts`）
+
+```ts
+export function parseLrc(
+  text: string,
+  detectInstrumental?: boolean,  // 既有
+  attachRoughUnits?: boolean,    // 新增，默认 true（保持既有行为）
+): LyricLine[];
+```
+
+- 解析 `<mm:ss.xx>` 词级标记，套到对应行的 `units`（**覆盖**粗排）；
+  仅当「词元拼接 == 清洗后的行文本」时套用，避免尾部括号译文被剥离导致逐字宽度错位；
+  词级时间戳非单调（脏数据）时整行放弃，退回粗排。
+- `attachRoughUnits=false` 时**不**给没有官方词级时间轴的行附粗排 units。
+
+> ⚠️ **这个参数是必须的，不是可选的洁癖**：粗排 units 是渲染用的近似，每行都有。
+> 写标签时若用 `units.length > 1` 判断「有没有逐字」，逐行 LRC 会被误判成逐字，
+> 把伪时间轴以增强型 LRC 固化进用户文件、别的播放器按错误时间轴点亮。
+> 因此**所有「取词 → 写标签」链路传 `attachRoughUnits=false`**：
+> - `src/utils/musicTagWordLyrics.ts` 的 NetEase 逐行兜底；
+> - `src/utils/qqMusic.ts` `parseTrack` 的 LRC 兜底轨（`parseLrc(plain, false, false)`）。
+
+## 17. 逐字取词：`src/utils/musicTagWordLyrics.ts`
+
+两条入口，各源能力**如实降级**：
+
+```ts
+/** 按对话框选中的候选取词 */
+export function fetchWordLyricsForCandidate(
+  result: MusicTagSearchResult,
+): Promise<{ lines: LyricLine[]; source: LyricSource | "netease-ylrc"; wordLevel: boolean } | null>;
+
+/** 按歌名+时长走「更精确的逐字歌词」回退链（AMLL → QQ → 酷狗 → Meting） */
+export function fetchWordLyricsByMeta(
+  meta: { title: string; artist?: string; durationMs?: number },
+): Promise<{ hit: { lines: LyricLine[]; source: LyricSource | "netease-ylrc"; songTitle: string }; wordLevel: boolean } | null>;
+
+/** 网易云 yrc 逐字轨解析（绝对毫秒，区别于 KRC 的相对行首） */
+export function parseNeteaseYrc(text: string): LyricLine[];
+
+/** 取到的歌词 → 写进标签文件的文本（走增强型 LRC） */
+export function toTagLyricsText(lines: LyricLine[], wordLevel: boolean): string;
+```
+
+> ⚠️ **`wordLevel` 是调用方对「这份歌词是否官方逐字」的显式担保，不能从 units 反推。**
+> `parseLrc` 给每行附的**粗排** units 同样满足「≥2 个词元」，反推会把伪时间轴写成
+> 增强型 LRC 固化进用户文件。这个坑在开发中真实出现过：`preciseLyrics` 的 **Meting 分支**
+> 返回的是**逐行**结果（`wordLevel: false`），但行上带着粗排 units，于是逐行歌词被
+> 序列化成了增强型 LRC。
+>
+> 因此 `toTagLyricsText(lines, false)` 会先经 `stripWordUnits()` 剥掉 units 再序列化。
+> **任何新的取词入口都必须显式传这个布尔值**，不要新增「只看 units」的序列化调用。
+
+**任何失败返回 `null` 而不抛**：拿不到逐字时由调用方退回逐行，绝不卡住对话框。
+
+### 各源逐字能力（实测）
+
+| 源 | 接口 | 逐字？ |
+|---|---|---|
+| QQ | `qqFetchLyrics`（QRC，`GetPlayLyricInfo`） | ✅ 有 QRC 就有 |
+| 酷狗 | `kgFetchLyrics`（KRC，需 FileHash） | ✅ 有 KRC 就有 |
+| 网易云 | `/api/song/lyric/v1?...&yv=0` → `yrc` | ✅ 视歌曲而定（实测《富士山下》有 13KB yrc，《夜曲》无） |
+| 咪咕 | 搜索结果的 `lyricUrl` | ❌ 只有逐行 |
+| 酷我 | `songinfoandlrc` | ❌ 只有逐行 |
+| AMLL TTML DB | 同播放链路 | ✅ 人工打轴 |
+
+网易云 yrc 格式（与 KRC 的时间语义**不同**）：
+
+```
+[40450,4620](40450,280,0)原(40730,260,0)谅...
+```
+
+行首 `[行起点ms,行时长ms]`；每段 `(词起点ms,词时长ms,保留)` + 词文本。
+**词时间是绝对毫秒**（KRC 是相对行首）——搞错会让整行逐字错到行首位置。
+
+## 18. UI 改动
+
+| 位置 | 改动 |
+|---|---|
+| 候选行 | 新增「逐字」按钮（`award_star`）：按该候选取 QRC/KRC/yrc；无富歌词则退它的逐行接口 |
+| 搜索行末尾 | 新增「逐字歌词」按钮：不挑候选，按歌名+时长走 AMLL → QQ → 酷狗 回退链 |
+| 歌词字段标签 | 真逐字显示「逐字」徽标（tertiary 色），逐行仍显示 `LRC`，用户一眼能分辨写进去的是什么 |
+| 状态 | `fetchingWordLyrics`（与 `fetchingLyrics` 分开，各自转圈）、`lyricsWordLevel` |
+
+### i18n 新增键（zh / en 各一份，键集必须一致）
+
+`musicTag.wordLevelTag` / `musicTag.wordLyrics` / `musicTag.wordLyricsHint` /
+`musicTag.wordLyricsEmpty`
+
+## 19. 验收
+
+```bash
+cd apps/desktop
+npm run typecheck && npx vitest run && npm run lint && npm run format:check
+npm run build:renderer && npm run build:main
+npm run verify:word-lyrics      # 端到端：纯逻辑 + 真实 taglib 落盘 + 真实网易云 yrc
+```
+
+新增测试：
+- `src/utils/__tests__/wordLevelLrc.test.ts`：编码 / 时间格式 / 往返 / 脏数据降级；
+- `src/utils/__tests__/musicTagWordLyrics.test.ts`：yrc 解析、各源取词与降级、回退链接线、
+  **逐行不得写成伪逐字**（Meting 场景回归）；
+- `src/components/__tests__/localMusicTagEntry.test.ts`：右键入口回归；
+- `scripts/verify-word-lyrics.mjs`（`npm run verify:word-lyrics`）：用 esbuild 把纯逻辑打成
+  临时 ESM 真跑一遍，并把逐字歌词经 taglib-wasm **真写进 WAV 再读回**断言词级标记完好；
+  另含一次真实网易云 yrc 抓取（实测 59/59 行带词级时间轴）。当前 29/29 断言通过。
+
+## 20. 写盘不变量（改这块前务必先读）
+
+### 20.1 逐字性只能由来源**显式担保**，不能从 `units` 反推
+
+`units.length > 1` 同时命中「官方逐字」与「本应用粗排」，两者语义完全不同。
+因此代码里的规则是：
+
+| 生产端 | 如何给出逐字性 |
+|---|---|
+| 网易云 yrc | `parseNeteaseYrc()` → 有词级行即逐字 |
+| 网易云 LRC 兜底 | `parseLrc(lrc, true, false)` + `wordLevel: false` |
+| QQ QRC / LRC 兜底 | `qqFetchLyricsDetailed()` → `wordLevel`（QRC=true / LRC=false） |
+| 酷狗 KRC | `kgFetchLyrics()` → `hasWordLevel()`（KRC 的 units 是官方数据） |
+| AMLL TTML | `wordLevel: true` |
+| Meting | `wordLevel: false`（逐行） |
+
+**写盘的唯一入口**是 `toTagLyricsText(lines, wordLevel)`：`wordLevel=false` 时经
+`stripWordUnits()` 剥掉 units 再序列化。任何新取词入口都必须显式传这个布尔值。
+
+> 真实缺陷（开发中被独立验证者发现）：`preciseLyrics` 的 **Meting 分支**返回
+> `wordLevel:false` 的逐行歌词，但行上带着 `parseLrc` 给的粗排 units，对话框据此
+> 写成了增强型 LRC——**伪时间轴被固化进用户文件**。已由 `toTagLyricsText` 的显式
+> 参数 + `stripWordUnits()` 堵住，并有单测与 E2E 断言兜底。
+
+### 20.2 序列化侧的保真规则
+
+- **词元拼接必须等于行文本**才写词级标记（`unitsMatchText`）。对不上就按逐行写——
+  宁可丢逐字，也不产生「自己写得出去、自己读不回来」的歌词。
+- **带词级标记的行不做尾部括号译文启发式**：括号是正文的一部分。
+  否则 `Hello (Live)` 回读会变成 `Hello` + 译文 `Live`，**静默改字**
+  （实测网易云 yrc 的 `…C.Y.Kong （江志仁）` 中招）。
+- 间奏三点行（`instrumental`）不写进文件：它是渲染态占位。
+- 词元里的 `<`/`>`/换行会被剥离，避免破坏标记结构。
+
+### 20.3 时间戳
+
+- 编码精度为**厘秒**（2 位小数）：这是增强型 LRC 的事实标准，第三方识别率最高；
+  写 3 位毫秒部分实现会整条忽略词级标记，得不偿失。
+- 解码端分钟接受 **2~3 位**（`[100:00.00]` 也能读回）：否则超过 99 分钟的音轨
+  会写出自己读不回来的行。
+- 词级时间戳非单调（脏数据）时整行退回粗排，宁可不逐字也不错位高亮。
+- `parseNeteaseYrc` 的词时间是**绝对毫秒**（KRC 是相对行首），且行文本独立提取，
+  坏数据不会吞字；词元对不上时保文本、弃时间轴。
+
+## 21. 已知边界
+
+- 咪咕 / 酷我的公开接口**没有**逐字时间轴：对话框会如实退回逐行 LRC，
+  歌词标签只显示 `LRC` 而不是「逐字」——这是能力边界，不是缺陷。
+- 网易云 `yrc` 逐字轨**视歌曲而定**（实测《富士山下》有、《夜曲》无）：
+  无 yrc 时退回该曲的普通 LRC 并标 `LRC`。
+- 增强型 LRC 的词级精度为**厘秒**，逐字时间轴最多有 ±5ms 的舍入误差。
+- 逐字歌词写进的是**文件内的 USLT / 内嵌歌词**（纯文本）。写标签不会额外落 `.lrc`
+  旁文件；播放时由 `parseLrc` 从标签文本还原词级时间轴。
+

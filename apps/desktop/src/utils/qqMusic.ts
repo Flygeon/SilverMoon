@@ -188,7 +188,7 @@ const LYRICS_CACHE_MAX = 512;
  * 复用统一实现。注意：这里是 `LyricLine[] | null`——null 表示"确定无歌词"，
  * 也是要缓存的结果（避免每次播放都重查一遍），所以显式允许 undefined 之外的 null。
  */
-const lyricsCache = new TtlCache<LyricLine[] | null>("qq-lyrics", {
+const lyricsCache = new TtlCache<{ lines: LyricLine[]; wordLevel: boolean } | null>("qq-lyrics", {
   ttlMs: LYRICS_CACHE_TTL,
   maxEntries: LYRICS_CACHE_MAX,
 });
@@ -201,11 +201,22 @@ function utf8Base64(text: string): string {
   return btoa(bin);
 }
 
+/** 一轨歌词的解析结果 + 「是否官方逐字」标记 */
+interface ParsedTrack {
+  lines: LyricLine[];
+  /** QRC 逐字轨为 true；LRC 兜底轨为 false（只有逐行时间轴） */
+  wordLevel: boolean;
+}
+
 /**
  * 解密并解析一轨歌词（orig/trans/roma）。
  * QRC 格式走逐字解析；LRC 格式（部分翻译轨）走 parseLrc；失败返回 null。
+ *
+ * `wordLevel` 必须显式回报，不能靠 `hasWordLevel(lines)` 反推：LRC 兜底轨经
+ * `parseLrc` 会带上**粗排** units（供渲染逐字填充用），同样满足「≥2 个词元」。
+ * 写音乐标签时若把这种粗排当逐字，会把伪时间轴写成增强型 LRC 固化进用户文件。
  */
-async function parseTrack(encrypted: string): Promise<LyricLine[] | null> {
+async function parseTrack(encrypted: string): Promise<ParsedTrack | null> {
   let plain: string;
   try {
     plain = await qrcDecrypt(encrypted);
@@ -216,13 +227,15 @@ async function parseTrack(encrypted: string): Promise<LyricLine[] | null> {
   const raw = qrcToRawLines(plain);
   if (raw) {
     const lines = rawLinesToLyricLines(raw);
-    return lines.length ? lines : null;
+    return lines.length ? { lines, wordLevel: true } : null;
   }
   if (plain.includes("[") && plain.includes("]")) {
     try {
+      // 保留粗排 units（渲染时逐字填充仍好看），但如实标 wordLevel=false
       const parsed = parseLrc(plain, false);
       // 纯音乐占位文案视为无歌词
-      return parsed.length ? filterInstrumentalPlaceholder(parsed) : null;
+      const usable = parsed.length ? filterInstrumentalPlaceholder(parsed) : null;
+      return usable ? { lines: usable, wordLevel: false } : null;
     } catch {
       return null;
     }
@@ -235,6 +248,18 @@ async function parseTrack(encrypted: string): Promise<LyricLine[] | null> {
  * 返回合并了翻译的 LyricLine[]（含逐字 units）；无歌词或失败返回 null。
  */
 export async function qqFetchLyrics(song: QqSongInfo): Promise<LyricLine[] | null> {
+  return (await qqFetchLyricsDetailed(song))?.lines ?? null;
+}
+
+/**
+ * 取歌词并**区分逐字与逐行**。
+ *
+ * 写音乐标签要按这个标记决定写增强型 LRC 还是普通 LRC：QRC 轨有官方词级时间轴，
+ * LRC 兜底轨只有逐行时间轴（它行上的 units 是本应用估算的粗排，不是官方数据）。
+ */
+export async function qqFetchLyricsDetailed(
+  song: QqSongInfo,
+): Promise<{ lines: LyricLine[]; wordLevel: boolean } | null> {
   const cached = lyricsCache.get(song.id);
   if (cached !== undefined) return cached;
 
@@ -262,27 +287,32 @@ export async function qqFetchLyrics(song: QqSongInfo): Promise<LyricLine[] | nul
     // lrc_t 判定与 qm.py 一致：qrc_t 非 0 用 qrc_t，否则 lrc_t；字符串 "0" 视为无
     const origT = (resp?.qrc_t ?? 0) !== 0 ? resp?.qrc_t : resp?.lrc_t;
     const orig = resp?.lyric ?? "";
-    let lines: LyricLine[] | null = null;
+    let parsed: ParsedTrack | null = null;
     if (orig !== "" && String(origT) !== "0") {
-      lines = await parseTrack(orig);
+      parsed = await parseTrack(orig);
     }
-    if (lines?.length) {
+    let result: { lines: LyricLine[]; wordLevel: boolean } | null = null;
+    if (parsed?.lines.length) {
       const tsT = resp?.trans_t ?? 0;
       const ts = resp?.trans ?? "";
       let trans: LyricLine[] | null = null;
       if (ts !== "" && String(tsT) !== "0") {
-        trans = await parseTrack(ts);
+        trans = (await parseTrack(ts))?.lines ?? null;
       }
       const romaT = resp?.roma_t ?? 0;
       const roma = resp?.roma ?? "";
       let romaLines: LyricLine[] | null = null;
       if (roma !== "" && String(romaT) !== "0") {
-        romaLines = await parseTrack(roma);
+        romaLines = (await parseTrack(roma))?.lines ?? null;
       }
-      lines = mergeQqLyrics(lines, trans, romaLines);
+      // 逐字性只看**原文轨**：翻译 / 罗马音轨只是附加数据，不影响原文是否逐字
+      result = {
+        lines: mergeQqLyrics(parsed.lines, trans, romaLines),
+        wordLevel: parsed.wordLevel,
+      };
     }
-    lyricsCache.set(song.id, lines);
-    return lines;
+    lyricsCache.set(song.id, result);
+    return result;
   } catch (e) {
     console.warn("[QQ歌词] 获取失败:", e instanceof Error ? e.message : e);
     lyricsCache.set(song.id, null);

@@ -8,6 +8,7 @@
  * 行 end = 下一行 start（末行按字数估算）。纯比例，无音频分析。
  */
 import type { LyricLine, WordUnit } from "@shared/types";
+import { wordTagSeconds } from "./wordLevelLrc";
 
 /**
  * 分词：CJK 每字一个单元；连续拉丁字母/数字/撇号/连字符合并为词。
@@ -316,14 +317,73 @@ export function insertInterludeDots(
  * （QQ 音乐的普通 LRC 使用冒号厘秒格式，此前无法解析导致整首歌词被丢弃）。
  * 两位小数为厘秒（LRC 标准），三位为毫秒。
  */
-const LRC_TIME_RE = /\[(\d{2}):(\d{2})(?:[:.]((?:\d{2}|\d{3})))?\]/g;
+// 分钟允许 2~3 位：formatLrcTime 对超过 99 分钟的音轨会写出 "100:00.00"，
+// 只认 2 位会让这种行整条被丢弃（自己写出去的歌词自己读不回来）。
+const LRC_TIME_RE = /\[(\d{2,3}):(\d{2})(?:[:.]((?:\d{2}|\d{3})))?\]/g;
 const LRC_TR_RE = /\[tr:(.*?)\]/g;
+/** 增强型 LRC 的词级标记 `<mm:ss.xx>`（写音乐标签时由 wordLevelLrc 生成） */
+const LRC_WORD_TAG_RE = /<\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?>/g;
 
-export function parseLrc(text: string, detectInstrumental = true): LyricLine[] {
+/**
+ * 从一行增强型 LRC 里抽出词级时间轴（`<00:12.34>原<00:12.61>谅`）。
+ *
+ * 词元文本 = 本标记之后到下一标记之前的字符；标记后没有文本的「收尾标记」
+ *（serializeWordLevelLrc 给末词补的 end）用来给前一个词收尾。
+ * 时间戳非单调（脏数据）时整体放弃，退回粗排——宁可不逐字，也不要错位高亮。
+ */
+function extractWordUnits(raw: string): WordUnit[] {
+  const marks: { start: number; from: number; to: number }[] = [];
+  LRC_WORD_TAG_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = LRC_WORD_TAG_RE.exec(raw)) !== null) {
+    const parsed = /<(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?>/.exec(m[0]);
+    if (!parsed) continue;
+    marks.push({
+      start: wordTagSeconds(parsed[1], parsed[2], parsed[3]),
+      from: m.index,
+      to: m.index + m[0].length,
+    });
+  }
+  if (marks.length < 2) return [];
+
+  const units: WordUnit[] = [];
+  for (let i = 0; i < marks.length; i += 1) {
+    const next = marks[i + 1];
+    const text = raw.slice(marks[i].to, next ? next.from : raw.length).replace(/[\r\n]/g, "");
+    if (!text) {
+      // 收尾标记：把上一个词的 end 定到它
+      if (units.length) units[units.length - 1].end = marks[i].start;
+      continue;
+    }
+    units.push({ text, start: marks[i].start, end: next ? next.start : marks[i].start });
+  }
+  if (units.length < 2) return [];
+  for (let i = 1; i < units.length; i += 1) {
+    if (units[i].start < units[i - 1].start) return [];
+  }
+  return units;
+}
+
+/**
+ * @param detectInstrumental 是否做前奏/间奏识别（隐藏作词作曲、插三点）
+ * @param attachRoughUnits   是否给没有词级时间轴的行附**粗排** units。
+ *   调用方若要用 `units.length > 1` 判断「有没有官方逐字时间轴」（例如写音乐标签
+ *   决定是否写增强型 LRC），必须传 `false`——粗排 units 是渲染用的近似，
+ *   留着会让「逐行 LRC」被误判成逐字，把伪时间轴固化进用户文件。
+ */
+export function parseLrc(
+  text: string,
+  detectInstrumental = true,
+  attachRoughUnits = true,
+): LyricLine[] {
   const lines = text.trim().split("\n");
   const map = new Map<number, LyricLine>();
+  /** 词级时间轴：行时间戳(ms) → units；解析结束后覆盖粗排结果 */
+  const wordTimeline = new Map<number, WordUnit[]>();
 
   for (const line of lines) {
+    // 词级标记必须在剔除方括号之前抽——content 清洗会把 `<...>` 一并抹掉
+    const words = extractWordUnits(line);
     // 提取所有时间戳
     const times: number[] = [];
     let m: RegExpExecArray | null;
@@ -346,9 +406,10 @@ export function parseLrc(text: string, detectInstrumental = true): LyricLine[] {
       translation = trMatch[1].trim();
     }
 
-    // 移除所有时间戳和翻译标签，得到歌词文本
+    // 移除所有时间戳（含词级标记）和翻译标签，得到歌词文本
     let content = line
-      .replace(/\[\d{2}:\d{2}(?:[:.]\d{2,3})?\]/g, "")
+      .replace(/\[\d{2,3}:\d{2}(?:[:.]\d{2,3})?\]/g, "")
+      .replace(/<\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?>/g, "")
       .replace(/\[tr:.*?\]/g, "")
       .replace(/\[lang:.*?\]/g, "")
       .replace(/\[ar:.*?\]/g, "")
@@ -360,7 +421,11 @@ export function parseLrc(text: string, detectInstrumental = true): LyricLine[] {
     if (!content) continue;
 
     // 同行尾部括号译文：如 "原文 (译文)" / "原文 （译文）"（meting 歌词常见格式）
-    if (!translation) {
+    //
+    // 带**词级标记**的行不走这条启发式：词级时间轴是权威数据，括号就是正文的一部分。
+    // 否则 serializeWordLevelLrc 写出的 "Hello (Live)" 回读会变成 "Hello" + 译文 "Live"，
+    // 用户写进文件的歌词被静默改字（实测网易云 yrc 的 "…C.Y.Kong （江志仁）" 会中招）。
+    if (!translation && !words.length) {
       const m = content.match(/\s*[（(]([^（）()]*)[）)]\s*$/);
       if (m && content.slice(0, content.length - m[0].length).trim()) {
         translation = m[1].trim();
@@ -372,6 +437,7 @@ export function parseLrc(text: string, detectInstrumental = true): LyricLine[] {
 
     for (const time of times) {
       const key = Math.round(time * 1000); // 精确到毫秒
+      if (words.length && !wordTimeline.has(key)) wordTimeline.set(key, words);
       const existing = map.get(key);
       if (existing) {
         // 同一时间戳的第二行作为翻译
@@ -388,7 +454,27 @@ export function parseLrc(text: string, detectInstrumental = true): LyricLine[] {
 
   const sorted = Array.from(map.values()).sort((a, b) => a.time - b.time);
   // 前奏/间奏识别（隐藏作词/作曲/编曲，插入三点）+ 逐字粗排时间轴
-  return buildLyricSequence(sorted, detectInstrumental);
+  const sequence = buildLyricSequence(sorted, detectInstrumental);
+  // 增强型 LRC 的官方词级时间轴覆盖粗排 units：粗排只是「播放即用」的近似，
+  // 有真时间轴时必须用真的，否则逐字高亮会与歌声错开。
+  if (wordTimeline.size) {
+    for (const line of sequence) {
+      const units = wordTimeline.get(Math.round(line.time * 1000));
+      // 只接受「词元拼起来 == 清洗后的行文本」的时间轴：尾部括号译文被剥离等
+      // 情况会让两者对不上，此时宁可退回粗排，也不要让逐字宽度与整行错位。
+      if (units?.length && units.map((u) => u.text).join("") === line.text) {
+        line.units = units;
+      }
+    }
+  }
+  // 不需要粗排 units 的调用方（写音乐标签）在这里统一剥掉：只留官方词级时间轴，
+  // 下游用 `units.length > 1` 判断「是不是逐字」才成立。
+  if (!attachRoughUnits) {
+    for (const line of sequence) {
+      if (!wordTimeline.has(Math.round(line.time * 1000))) delete line.units;
+    }
+  }
+  return sequence;
 }
 
 // ---- 纯音乐占位文案过滤 ----

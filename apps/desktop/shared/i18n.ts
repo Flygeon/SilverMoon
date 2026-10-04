@@ -1068,6 +1068,10 @@ export const messages = {
       coverKeep: "保留原封面",
       lyrics: "歌词",
       lyricsPlaceholder: "粘贴歌词，或从 API 获取（LRC）",
+      wordLevelTag: "逐字",
+      wordLyrics: "逐字歌词",
+      wordLyricsHint: "按歌名与时长从 AMLL / QQ / 酷狗 等源匹配逐字歌词，取不到则退回逐行 LRC",
+      wordLyricsEmpty: "没有找到逐字歌词，已尝试各源；可先搜索候选再点候选上的逐字按钮",
       apply: "应用",
       applying: "应用中…",
       applied: "已应用",
@@ -2194,6 +2198,12 @@ export const messages = {
       coverKeep: "Keep original cover",
       lyrics: "Lyrics",
       lyricsPlaceholder: "Paste lyrics, or fetch them from the API (LRC)",
+      wordLevelTag: "Word-level",
+      wordLyrics: "Word-level lyrics",
+      wordLyricsHint:
+        "Match word-level lyrics by title and duration across AMLL / QQ / Kugou; falls back to line-level LRC",
+      wordLyricsEmpty:
+        "No word-level lyrics found across sources; search for a candidate and use its word-level button",
       apply: "Apply",
       applying: "Applying…",
       applied: "Applied",

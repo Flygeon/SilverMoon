@@ -15,6 +15,7 @@
     "build:renderer": "vite build",
     "build:main": "node scripts/build-electron.mjs",
     "verify:music-tags": "node scripts/verify-music-tags.mjs",
+    "verify:word-lyrics": "node scripts/verify-word-lyrics.mjs",
     "verify:tag-sources": "node scripts/verify-music-tag-sources.mjs",
     "build:backend": "cargo build --manifest-path backend/Cargo.toml",
     "build:backend:release": "cargo build --release --manifest-path backend/Cargo.toml",

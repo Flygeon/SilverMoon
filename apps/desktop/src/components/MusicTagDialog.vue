@@ -22,6 +22,7 @@ import {
   chooseCoverFile,
   closeMusicTagDialog,
   fetchLyricsForResult,
+  fetchWordLyrics,
   keepCover,
   pickSearchResult,
   removeCover,
@@ -150,6 +151,31 @@ async function onFetchLyrics(result: MusicTagSearchResult) {
   if (err) show(err, { tone: "error" });
 }
 
+/** 候选行的「逐字」按钮：优先按该候选取 QRC/KRC/yrc，没有则退它的逐行接口 */
+async function onFetchWordLyrics(result: MusicTagSearchResult) {
+  pickSearchResult(result);
+  const err = await fetchWordLyrics(result);
+  if (err) show(err, { tone: "error" });
+}
+
+/** 顶部「逐字歌词」：不挑候选，按歌名+时长走 AMLL → QQ → 酷狗 回退链 */
+async function onFetchWordLyricsAuto() {
+  const err = await fetchWordLyrics();
+  if (err) show(err, { tone: "error" });
+}
+
+/**
+ * 用户手动改歌词后清掉「来自 API / 逐字」标记。
+ *
+ * 标记描述的是**已取回内容**的来源；手动编辑后内容已不再等于取回结果，
+ * 留着「逐字」徽标会让人误以为写进文件的是官方词级时间轴。
+ * 这里挂 @input（只在用户输入时触发），取词赋值走 state 不经过 DOM 事件，不会误清。
+ */
+function onLyricsEdited() {
+  dialog.lyricsFromApi = false;
+  dialog.lyricsWordLevel = false;
+}
+
 async function onPickCover() {
   const err = await chooseCoverFile();
   if (err) show(err, { tone: "error" });
@@ -208,6 +234,20 @@ async function onPickCover() {
                 </span>
                 {{ dialog.searching ? t("musicTag.searching") : t("musicTag.search") }}
               </button>
+              <button
+                class="mtd-btn outlined"
+                :disabled="dialog.fetchingWordLyrics"
+                :title="t('musicTag.wordLyricsHint')"
+                @click="onFetchWordLyricsAuto"
+              >
+                <span
+                  class="material-symbols-outlined"
+                  :class="{ spin: dialog.fetchingWordLyrics }"
+                >
+                  {{ dialog.fetchingWordLyrics ? "progress_activity" : "award_star" }}
+                </span>
+                {{ t("musicTag.wordLyrics") }}
+              </button>
             </div>
             <p v-if="dialog.error" class="mtd-error">
               <span class="material-symbols-outlined">error</span>{{ dialog.error }}
@@ -238,6 +278,14 @@ async function onPickCover() {
                   @click="onFetchLyrics(r)"
                 >
                   <span class="material-symbols-outlined">lyrics</span>
+                </button>
+                <button
+                  class="result-act"
+                  :title="t('musicTag.wordLyrics')"
+                  :disabled="dialog.fetchingWordLyrics"
+                  @click="onFetchWordLyrics(r)"
+                >
+                  <span class="material-symbols-outlined">award_star</span>
                 </button>
               </li>
             </ul>
@@ -298,7 +346,11 @@ async function onPickCover() {
             <label v-for="key in TEXTAREAS" :key="key" class="mtd-field lyrics-field">
               <span class="mtd-label">
                 {{ t("musicTag.lyrics") }}
-                <span v-if="dialog.lyricsFromApi" class="lrc-tag">LRC</span>
+                <!-- 逐字与逐行分开标记：用户一眼能看出写进文件的是不是词级时间轴 -->
+                <span v-if="dialog.lyricsWordLevel" class="lrc-tag word">
+                  {{ t("musicTag.wordLevelTag") }}
+                </span>
+                <span v-else-if="dialog.lyricsFromApi" class="lrc-tag">LRC</span>
               </span>
               <textarea
                 v-model="dialog.fields[key]"
@@ -306,6 +358,7 @@ async function onPickCover() {
                 rows="6"
                 spellcheck="false"
                 :placeholder="t('musicTag.lyricsPlaceholder')"
+                @input="onLyricsEdited"
               ></textarea>
             </label>
           </section>
@@ -664,6 +717,11 @@ async function onPickCover() {
   border-radius: var(--md-sys-shape-corner-full);
   background: var(--md-sys-color-primary-container);
   color: var(--md-sys-color-on-primary-container);
+}
+/* 逐字用 tertiary 区分逐行：写进文件的是词级时间轴，值得一眼看见 */
+.lrc-tag.word {
+  background: var(--md-sys-color-tertiary-container);
+  color: var(--md-sys-color-on-tertiary-container);
 }
 .lyrics-field {
   margin-top: 10px;

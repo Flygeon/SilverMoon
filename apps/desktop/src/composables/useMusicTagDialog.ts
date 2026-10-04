@@ -30,6 +30,11 @@ import {
   smartTagRank,
   type MusicTagSearchMode,
 } from "@/utils/musicTagSources";
+import {
+  fetchWordLyricsByMeta,
+  fetchWordLyricsForCandidate,
+  toTagLyricsText,
+} from "@/utils/musicTagWordLyrics";
 import type {
   MediaEntry,
   MusicTagCover,
@@ -41,6 +46,24 @@ import type {
 
 /** 「标签已更新」事件名：播放器监听它刷新在线覆盖 */
 export const MUSIC_TAG_UPDATED_EVENT = "silvermoon:music-tag-updated";
+
+/**
+ * 本地曲目 → 写标签目标的公共转换。
+ *
+ * 到处手抄 `{kind:"local", fileId, path, label}` 会漏字段：列表视图、网格视图、
+ * 收藏页都要带时长/艺人供逐字歌词匹配用，收在这里保证各入口一致。
+ */
+export function localTagTarget(item: MediaEntry): Extract<MusicTagTarget, { kind: "local" }> {
+  return {
+    kind: "local",
+    fileId: item.id,
+    path: item.path,
+    label: item.title || item.name,
+    artist: item.artist ?? null,
+    album: item.album ?? null,
+    durationMs: item.durationMs ?? null,
+  };
+}
 
 export type MusicTagResetMode = "online" | "backup" | "original";
 
@@ -71,6 +94,10 @@ interface MusicTagDialogState {
   coverMode: MusicTagCoverMode;
   /** 从候选拉到的歌词是否已填进表单（UI 上给个标记） */
   lyricsFromApi: boolean;
+  /** 正在取逐字歌词（与 fetchingLyrics 分开：两个按钮各自转圈） */
+  fetchingWordLyrics: boolean;
+  /** 拉到的歌词是否含**真**逐字时间轴（UI 标记「逐字」而非「LRC」） */
+  lyricsWordLevel: boolean;
 }
 
 const state = reactive<MusicTagDialogState>({
@@ -92,6 +119,8 @@ const state = reactive<MusicTagDialogState>({
   coverPreview: null,
   coverMode: "keep",
   lyricsFromApi: false,
+  fetchingWordLyrics: false,
+  lyricsWordLevel: false,
 });
 
 /** 封面图片大小上限（base64 前的原始字节），与 i18n 的 coverTooLarge 文案一致 */
@@ -140,6 +169,7 @@ export function openMusicTagDialog(target: MusicTagTarget): void {
   state.coverPreview = null;
   state.coverMode = "keep";
   state.lyricsFromApi = false;
+  state.lyricsWordLevel = false;
   state.visible = true;
 
   if (target.kind === "local") {
@@ -156,6 +186,10 @@ export function openMusicTagDialog(target: MusicTagTarget): void {
       deleted: 0,
       hasCover: false,
       favorite: false,
+      // 列表项带来的艺人/专辑/时长：逐字歌词的时长匹配要用（缺了只能纯标题搜索）
+      artist: target.artist ?? null,
+      album: target.album ?? null,
+      durationMs: target.durationMs ?? null,
     };
     state.fields = fieldsFromMediaEntry(entry);
     state.original = { ...state.fields };
@@ -333,7 +367,7 @@ export function coverUrlOf(result: MusicTagSearchResult): string {
   return "";
 }
 
-/** 拉取选中候选的歌词（LRC） */
+/** 拉取选中候选的歌词（逐行 LRC，最省事的接口） */
 export async function fetchLyricsForResult(result: MusicTagSearchResult): Promise<string | null> {
   state.fetchingLyrics = true;
   state.error = "";
@@ -342,11 +376,84 @@ export async function fetchLyricsForResult(result: MusicTagSearchResult): Promis
     if (!lrc) return t("musicTag.noResults");
     state.fields.lyrics = lrc;
     state.lyricsFromApi = true;
+    // 普通接口给的是逐行 LRC，清掉上一次的逐字标记
+    state.lyricsWordLevel = false;
     return null;
   } catch (e) {
     return friendly(e) || t("musicTag.searchFailed");
   } finally {
     state.fetchingLyrics = false;
+  }
+}
+
+/** 当前目标用于逐字匹配的标题/艺人/时长（在线取曲目自带的，本地取列表项带的） */
+function wordLyricsMeta(): { title: string; artist?: string; durationMs?: number } {
+  const target = state.target;
+  const title = state.fields.title.trim() || target?.label?.trim() || "";
+  if (target?.kind === "online") {
+    return {
+      title,
+      artist: state.fields.artist || target.song.artist || undefined,
+      durationMs: target.song.durationMs || undefined,
+    };
+  }
+  if (target?.kind === "local") {
+    return {
+      title,
+      artist: state.fields.artist || target.artist || undefined,
+      durationMs: target.durationMs ?? undefined,
+    };
+  }
+  return { title };
+}
+
+/**
+ * 取**逐字**歌词并填进表单（对话框顶部的「逐字歌词」按钮）。
+ *
+ * 与「拉歌词」的区别：这条走**逐字**链路（按候选取 QRC/KRC/yrc，或按歌名+时长走
+ * AMLL → QQ → 酷狗 回退链），取到的文本是增强型 LRC（带 `<mm:ss.xx>` 词级标记）。
+ *
+ * @param result 可选：用户点的是某条候选的「逐字」按钮；缺省按歌名+时长走回退链
+ */
+export async function fetchWordLyrics(result?: MusicTagSearchResult): Promise<string | null> {
+  state.fetchingWordLyrics = true;
+  state.error = "";
+  try {
+    // 1) 按候选取（用户明确选了某一条）
+    if (result) {
+      const byCandidate = await fetchWordLyricsForCandidate(result);
+      if (byCandidate?.lines.length) {
+        state.fields.lyrics = toTagLyricsText(byCandidate.lines, byCandidate.wordLevel);
+        state.lyricsFromApi = true;
+        state.lyricsWordLevel = byCandidate.wordLevel;
+        return null;
+      }
+      // 候选没有富歌词（咪咕/酷我）：退普通接口，别让用户白点
+      const plain = await fetchTagLyrics(result);
+      if (!plain) return t("musicTag.noResults");
+      state.fields.lyrics = plain;
+      state.lyricsFromApi = true;
+      state.lyricsWordLevel = false;
+      return null;
+    }
+
+    // 2) 按歌名 + 时长走 preciseLyrics 回退链（AMLL → QQ → 酷狗）
+    const auto = await fetchWordLyricsByMeta(wordLyricsMeta());
+    if (auto?.hit.lines.length) {
+      state.fields.lyrics = toTagLyricsText(auto.hit.lines, auto.wordLevel);
+      state.lyricsFromApi = true;
+      state.lyricsWordLevel = auto.wordLevel;
+      return null;
+    }
+
+    // 3) 回退链没命中：若当前搜索已有候选，用首条候选再试一次
+    const first = state.results[0];
+    if (first) return fetchWordLyrics(first);
+    return t("musicTag.wordLyricsEmpty");
+  } catch (e) {
+    return friendly(e) || t("musicTag.searchFailed");
+  } finally {
+    state.fetchingWordLyrics = false;
   }
 }
 
