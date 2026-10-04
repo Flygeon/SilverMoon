@@ -84,6 +84,7 @@ The `build` job deliberately does **not** declare `needs: lint`, so the slow Win
 
 - **Splash handshake is two-sided** — protocol changes must land in both `splash/src/handshake.rs` and `electron/splash.ts`. `FADE_MS` lives only in Rust; Electron learns it from the `FADING:<ms>` message. Contract tests: `electron/__tests__/splashContract.test.ts`.
 - **Shortcuts must point at `silvermoon-splash.exe`, not `SilverMoon.exe`** (`build/installer.nsh`). If they point at Electron directly the launcher never runs and the splash silently does nothing.
+- **`extraResources` lands in `<install>\resources\`, not the install root** — so the launcher sits in `resources\` while `SilverMoon.exe` is one level up. Both `locate_electron()` (Rust) and `installer.nsh` probe both locations. Assuming "same directory" ships a launcher that cannot find Electron and the app will not open; CI cannot catch this because it never unpacks the installer.
 - **`ConnectNamedPipe` blocks forever** — never await it without an independent timeout, or a dead Electron leaves the splash spinning and the user locked out (this happened; see `CONNECT_TIMEOUT` in `splash/src/handshake.rs`).
 - **WinForms cannot be AOT/trimmed** (`NETSDK1175`) — that is why the launcher is Rust, not C#. Self-contained WinForms is 153MB; the Rust build is 0.33MB.
 - Windows builds need MSVC (`link.exe`) — cannot build locally without Visual Studio Build Tools

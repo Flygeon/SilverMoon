@@ -91,11 +91,12 @@ describe("启动器握手契约", () => {
   }, 10000);
 });
 
-describe("Rust 启动器的兜底不变量", () => {
-  const handshakeRs = readFileSync(path.join(appRoot, "splash", "src", "handshake.rs"), "utf8");
-  const mainRs = readFileSync(path.join(appRoot, "splash", "src", "main.rs"), "utf8");
-  const windowRs = readFileSync(path.join(appRoot, "splash", "src", "window.rs"), "utf8");
+// 启动器源码的只读快照（文件级：多个 describe 都要断言）
+const handshakeRs = readFileSync(path.join(appRoot, "splash", "src", "handshake.rs"), "utf8");
+const mainRs = readFileSync(path.join(appRoot, "splash", "src", "main.rs"), "utf8");
+const windowRs = readFileSync(path.join(appRoot, "splash", "src", "window.rs"), "utf8");
 
+describe("Rust 启动器的兜底不变量", () => {
   it("定义了 CONNECT_TIMEOUT 兜底，且在 main.rs 里真的被引用", () => {
     expect(handshakeRs).toMatch(/CONNECT_TIMEOUT\s*:\s*Duration/);
     expect(mainRs).toContain("CONNECT_TIMEOUT");
@@ -117,5 +118,52 @@ describe("Rust 启动器的兜底不变量", () => {
   it("窗口在收到就绪后必须能自行判定结束（否则消息循环不退出）", () => {
     expect(windowRs).toContain("is_done");
     expect(mainRs).toMatch(/window::is_done\(\)/);
+  });
+});
+
+describe("发布布局：安装包里的实际落点", () => {
+  /**
+   * 这一组是**实测安装包解包后**才发现的缺陷的回归防线。
+   *
+   * 事实：electron-builder 的 `win.extraResources` 把文件放进 `<安装目录>\\resources\\`，
+   * 而 `SilverMoon.exe` 在安装根目录。所以启动器不在 Electron 旁边，而在上一级的
+   * `resources\\` 里。
+   *
+   * 后果（如果按“同级”假设写死）：启动器找不到 SilverMoon.exe → 拉起失败 →
+   * 快捷方式指向一个什么都不做的程序，应用打不开。而 CI 当时是全绿的 ——
+   * 因为 CI 只校验构建产物存在，从不解包安装包看布局。
+   */
+  // **去掉注释再断言**：NSIS 注释里正好写着「先 resources、再根目录」，
+  // 直接对全文 includes 会让注释本身满足断言 —— 变异测试因此假通过过（实测）。
+  const nshCode = readFileSync(path.join(appRoot, "build", "installer.nsh"), "utf8")
+    .split("\n")
+    .map((line) => line.replace(/;.*$/, ""))
+    .join("\n");
+
+  it("NSIS 优先按 resources\\ 定位启动器，并保留根目录回退", () => {
+    expect(nshCode).toContain("resources\\silvermoon-splash.exe");
+    // 回退分支也要在，兼容手工摆放/未来布局变化
+    expect(nshCode).toContain("$INSTDIR\\silvermoon-splash.exe");
+    expect(nshCode).toMatch(/FileExists/);
+  });
+
+  it("Rust 启动器会向上级目录探测 Electron（而不是只看同目录）", () => {
+    expect(mainRs).toContain("locate_electron");
+    // 关键不变量：候选里**必须真的包含上级目录**。
+    //
+    // 这里刻意逐条钉死，而不是用宽松的「大概有这段逻辑」正则：宽松写法在变异测试里
+    // 假通过过两次（`.take(1)` 与删掉 parent 候选都能蒙混过去）。教训是断言要能
+    // 区分「语义等价但行为不同」的最小改动。
+    expect(mainRs).toMatch(/Some\(parent\) => parent\.join\(ELECTRON_EXE\)/);
+    // 循环必须遍历**全部**候选（take(1) 这类只看首个的写法要能测出来）
+    expect(mainRs).toMatch(/for exe in candidates\.iter\(\) \{/);
+    // 逐个 is_file() 判断，而不是盲选
+    expect(mainRs).toMatch(/if exe\.is_file\(\) \{/);
+  });
+
+  it("extraResources 的 to 字段仍是纯文件名（决定它落在 resources\\ 下）", () => {
+    const builder = readFileSync(path.join(appRoot, "electron-builder.yml"), "utf8");
+    expect(builder).toMatch(/from: splash\/target\/release\/silvermoon-splash\.exe/);
+    expect(builder).toMatch(/to: silvermoon-splash\.exe/);
   });
 });

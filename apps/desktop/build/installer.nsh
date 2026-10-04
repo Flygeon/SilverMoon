@@ -32,8 +32,19 @@
   !ifndef SILVERMOON_SPLASH_LINK_DONE
     !define SILVERMOON_SPLASH_LINK_DONE
 
-    ; 启动器与 Electron 同级落盘（见 electron-builder.yml 的 win.extraResources）
-    StrCpy $R9 "$INSTDIR\silvermoon-splash.exe"
+    ; 定位启动器。
+    ;
+    ; **不要想当然写 $INSTDIR\silvermoon-splash.exe**：electron-builder 的
+    ; `extraResources` 把文件放进 `resources\`，而 SilverMoon.exe 在安装根目录。
+    ; 实测安装包内容确认布局为：
+    ;   $INSTDIR\SilverMoon.exe
+    ;   $INSTDIR\resources\silvermoon-splash.exe
+    ; 这个差异只有解包真实安装包才看得出来（CI 只校验构建产物）。
+    ; 因此这里按「先 resources、再根目录」探测，两种布局都能命中。
+    StrCpy $R9 "$INSTDIR\resources\silvermoon-splash.exe"
+    ${IfNot} ${FileExists} "$R9"
+      StrCpy $R9 "$INSTDIR\silvermoon-splash.exe"
+    ${EndIf}
 
     ${If} ${FileExists} "$R9"
       ; ---- 桌面快捷方式：改指启动器 ----

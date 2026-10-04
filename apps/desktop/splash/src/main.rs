@@ -46,23 +46,70 @@ fn handshake_slot() -> &'static Mutex<Option<Handshake>> {
     HANDSHAKE.get_or_init(|| Mutex::new(None))
 }
 
-/// splash 所在目录（安装后它与 Electron 同级）
-fn app_dir() -> std::path::PathBuf {
+/// 启动器自身所在目录。
+fn self_dir() -> std::path::PathBuf {
     std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
-/// Electron 可执行文件路径（可用 SILVERMOON_ELECTRON_BIN 覆盖，便于开发调试）
-fn electron_path() -> std::path::PathBuf {
+/// 定位 Electron 主程序，并把「应用根目录」一并返回（后者用作工作目录）。
+///
+/// 为什么不能只写成「启动器同目录」：**打包后两者的相对位置和人想的不一样**。
+/// electron-builder 的 `extraResources` 把文件放进 `resources/`，而 `SilverMoon.exe`
+/// 在安装根目录。也就是说实际布局是：
+///
+/// ```text
+/// <安装目录>\SilverMoon.exe
+/// <安装目录>\resources\silvermoon-splash.exe   ← 启动器在这里
+/// ```
+///
+/// 这个差异是**实测安装包内容**才发现的（CI 只校验了构建产物，没校验安装后的布局）。
+/// 因此这里按候选顺序探测，而不是假设单一位置：
+///
+/// 1. 启动器同目录 —— 开发/手工摆放的情形；
+/// 2. 上一级目录 —— electron-builder extraResources 的真实布局。
+///
+/// 找不到时回退到「上一级」，因为那才是发布布局，错误信息也更有指向性。
+fn locate_electron() -> (std::path::PathBuf, std::path::PathBuf) {
     if let Ok(p) = std::env::var("SILVERMOON_ELECTRON_BIN") {
-        return std::path::PathBuf::from(p);
+        let exe = std::path::PathBuf::from(p);
+        let root = exe
+            .parent()
+            .map(|d| d.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        return (exe, root);
     }
-    app_dir().join(ELECTRON_EXE)
+
+    let here = self_dir();
+    let candidates = [
+        here.join(ELECTRON_EXE),
+        match here.parent() {
+            Some(parent) => parent.join(ELECTRON_EXE),
+            None => here.join(ELECTRON_EXE),
+        },
+    ];
+
+    for exe in candidates.iter() {
+        if exe.is_file() {
+            let root = exe
+                .parent()
+                .map(|d| d.to_path_buf())
+                .unwrap_or_else(|| here.clone());
+            return (exe.clone(), root);
+        }
+    }
+
+    // 都没找到：按发布布局给出路径，让错误信息指向真实期望位置
+    let root = here.parent().map(|d| d.to_path_buf()).unwrap_or(here);
+    (root.join(ELECTRON_EXE), root)
 }
 
 fn main() {
+    // 先解析 Electron 位置（发布布局与直觉不同，见 locate_electron 的说明）
+    let (electron_exe, app_root) = locate_electron();
+
     // 1) 先建管道：Electron 一起来就会连，管道必须先就绪
     let name = handshake::pipe_name();
     let hs = match Handshake::listen(&name) {
@@ -71,7 +118,7 @@ fn main() {
             // 管道建不起来（极罕见）：退化为「直接拉起 Electron 并退出」，
             // 至少不让用户因为启动器自身故障而完全打不开应用。
             eprintln!("[splash] 命名管道创建失败：{e}；将直接启动主程序");
-            let _ = Command::new(electron_path()).spawn();
+            let _ = Command::new(&electron_exe).current_dir(&app_root).spawn();
             return;
         }
     };
@@ -82,14 +129,14 @@ fn main() {
         Ok(h) => h,
         Err(e) => {
             eprintln!("[splash] 窗口创建失败：{e}；将直接启动主程序");
-            let _ = Command::new(electron_path()).spawn();
+            let _ = Command::new(&electron_exe).current_dir(&app_root).spawn();
             return;
         }
     };
 
     // 3) 拉起 Electron（它的窗口先隐藏，等我们的 FADING 再显示）
     let ready = Arc::new(AtomicBool::new(false));
-    if spawn_electron(&name).is_err() {
+    if spawn_electron(&electron_exe, &app_root, &name).is_err() {
         // 拉起失败：没有子进程会来握手，立刻收起 splash，别让用户对着动画干等
         eprintln!("[splash] 启动 {ELECTRON_EXE} 失败");
         window::notify_ready();
@@ -134,10 +181,18 @@ fn wait_and_ack(timeout: Duration) -> bool {
 }
 
 /// 拉起 Electron 子进程，并把管道名传给它。
-fn spawn_electron(pipe: &str) -> std::io::Result<std::process::Child> {
-    Command::new(electron_path())
+///
+/// 工作目录设为**应用根目录**（Electron 所在处），而不是启动器所在处：
+/// Electron 会以 cwd 为基准解析 `resources/`、相对路径资源等，
+/// 用错目录可能导致它找不到自己的资源。
+fn spawn_electron(
+    exe: &std::path::Path,
+    app_root: &std::path::Path,
+    pipe: &str,
+) -> std::io::Result<std::process::Child> {
+    Command::new(exe)
         .arg(format!("--splash-pipe={pipe}"))
-        .current_dir(app_dir())
+        .current_dir(app_root)
         .spawn()
 }
 

@@ -77,16 +77,40 @@ npm run verify:nsis
 
 打包接线（`electron-builder.yml`）：
 
-- `win.extraResources` 把 `splash/target/release/silvermoon-splash.exe`
-  放到安装根目录，**与 SilverMoon.exe 同级** —— 启动器按自身目录找 Electron，
-  不依赖注册表或环境变量；
+- `win.extraResources` 把 `splash/target/release/silvermoon-splash.exe` 打进包，
+  实际落点是 **`<安装目录>\resources\silvermoon-splash.exe`**（见下）；
 - `nsis.include: build/installer.nsh` 让**快捷方式与「安装后立即运行」都指向启动器**。
   不改这一点，用户点快捷方式仍直接拉 Electron，splash 永远不会执行。
+
+### 安装后的真实布局（踩坑点）
+
+```text
+<安装目录>\SilverMoon.exe                      ← Electron 本体
+<安装目录>\resources\silvermoon-splash.exe    ← 启动器（不是同级！）
+<安装目录>\resources\bin\silvermoon-server.exe
+```
+
+**`extraResources` 的 `to` 是纯文件名，所以会被放进 `resources\`**，而不是安装根目录。
+最初两侧代码都按「启动器与 SilverMoon.exe 同级」写，导致发布版里启动器找不到
+Electron —— 快捷方式会指向一个什么都不做的程序，**应用直接打不开**。
+
+而这个缺陷 CI 无法发现：CI 只校验 `splash/target/release/*.exe` 构建产物存在，
+**从不解包安装包检查布局**。是解包真实 NSIS 产物（`7z x setup.exe` →
+`$PLUGINSDIR/app-64.7z`）才看出来的。
+
+因此现在两边都做**候选探测**，而不是写死单一位置：
+
+- Rust：`locate_electron()` 依次试「启动器同目录」→「上一级目录」，逐个 `is_file()`；
+- NSIS：先 `$INSTDIR\resources\silvermoon-splash.exe`，不存在再回退 `$INSTDIR\`。
+
+回归防线：`splashContract.test.ts` 的「发布布局」一组用例（含变异验证 —— 曾经因为
+断言写成宽松正则而假通过，现已钉到具体语句）。
 
 ## 6. 已知约束
 
 - 仅 Windows：启动器是 Windows GUI 程序（`user32` / `gdi32`），
   `electron-builder.yml` 也只在 `win` 平台引用它。Linux/macOS 包不受影响。
-- 启动器与 Electron 必须同目录；移动其中一个会导致找不到对方。
+- 启动器必须能找到 `SilverMoon.exe`；布局变化时 `locate_electron()` 的候选表要同步更新。
 - 协议新增消息时**两端要同时改**（Rust 与 `electron/splash.ts`），
   契约测试在 `electron/__tests__/splashContract.test.ts`。
+- **新增 extraResources 时注意落点是 `resources\`**；若希望落在安装根目录需显式处理。
