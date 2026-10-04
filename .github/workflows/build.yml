@@ -102,6 +102,21 @@ jobs:
         working-directory: apps/desktop/backend
         run: cargo clippy --all-targets -- -D warnings
 
+      # 启动器是 Windows 专用程序，但 fmt/clippy 都能在 Linux 上跑，
+      # 因此质量检查留在最快的 lint 作业里，不必等 Windows 构建。
+      # 注意：clippy 需要能解析 Windows 目标，故带 --target（构建脚本仍用宿主）。
+      - name: Install NSIS (for installer script syntax check)
+        run: sudo apt-get install -y --no-install-recommends nsis
+
+      - name: Rustfmt check (launcher)
+        working-directory: apps/desktop/splash
+        run: cargo fmt --check
+
+      # NSIS 脚本只在 Windows 打包时才被编译；等到那时才发现语法错误就是 ~12 分钟一轮。
+      # makensis 跨平台，这里先把语法与宏展开走一遍。
+      - name: NSIS installer script syntax check
+        run: npm run verify:nsis
+
   # ---------------------------------------------------------------------------
   # 安装包：Windows NSIS / Linux AppImage
   #
@@ -157,11 +172,15 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 缓存 ~/.cargo 与 backend/target：命中后 release 编译只重编改动过的 crate
+      # 缓存 ~/.cargo 与两个 Rust 工程的 target：命中后 release 编译只重编改动过的 crate。
+      # splash（原生启动器）是独立 crate、target 目录也在自己下面，必须单独列出，
+      # 否则每轮都要重编它的整棵 windows-rs 依赖树。
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: apps/desktop/backend -> target
+          workspaces: |
+            apps/desktop/backend -> target
+            apps/desktop/splash -> target
           prefix-key: release
 
       - name: Cache electron / electron-builder downloads
@@ -184,6 +203,26 @@ jobs:
       # 后端必须先生成：electron-builder 会把它作为 extraResources 打进安装包
       - name: Build Rust backend (release)
         run: cargo build --release --manifest-path backend/Cargo.toml
+
+      # 原生启动器（MD3 splash）：同样是 extraResources，必须**先于 electron-builder**
+      # 生成，否则打包时会找不到 win.extraResources 里声明的 exe 而失败。
+      # 只跑 Windows：它是 Windows GUI 程序（user32/gdi32），
+      # 且 electron-builder.yml 只在 win 平台引用该产物。
+      - name: Build native launcher (release)
+        if: runner.os == 'Windows'
+        run: cargo build --release --manifest-path splash/Cargo.toml
+
+      # 打包前确认启动器确实产出了，并守住体积：
+      # 免得静默少文件、或哪天被误配成臃肿产物（C# 自包含曾达 153MB）直到用户安装后才暴露。
+      - name: Verify launcher artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = "splash/target/release/silvermoon-splash.exe"
+          if (-not (Test-Path $exe)) { throw "启动器未生成：$exe" }
+          $mb = [math]::Round((Get-Item $exe).Length / 1MB, 3)
+          Write-Host "启动器体积：$mb MB"
+          if ((Get-Item $exe).Length -gt 5MB) { throw "启动器体积异常（$mb MB），预期小于 0.5MB" }
 
       - name: Build renderer + electron main
         run: npm run build:renderer && npm run build:main
