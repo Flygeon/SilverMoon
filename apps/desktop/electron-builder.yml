@@ -6,31 +6,38 @@ directories:
   output: release
   buildResources: build
 
-# 只打包运行期需要的东西：前端产物、Electron 主进程产物、package.json
+# `files` 是**顺序敏感**的 minimatch 列表：app-builder-lib/out/util/filter.js 的
+# minimatchAll 逐条走「已命中就只再测排除项、未命中就只再测包含项」。
+# 所以「勾回 taglib-wasm」必须写在「排除整个 node_modules」**之后**，否则永远匹配不上。
+#
+# 踩过的坑（安装包实测报 `Cannot find package 'taglib-wasm'`）：
+# 1. 原来把 `node_modules/taglib-wasm/dist/**/*` 写在 `!node_modules/**/*` **之前**，
+#    排除项后手生效 → dist 根本没进包；
+# 2. 更隐蔽的是 electron-builder 还会**自动注入** `!**/node_modules/**`，并且
+#    getMainFileMatchers 一见到第一个含 node_modules 的**正向**模式，就把这条注入到它
+#    前面（fileMatcher.js 的 insertExculdeNodeModulesIndex）。「正向在前」被双重堵死；
+# 3. 就算 dist 进了包也不够：Node 的 ESM 解析要先读包内 package.json 的 exports 才能
+#    定位入口，只给 dist/** 会直接报找不到包（实测复现过）。
+#
+# 另外 node_modules 还有一条**独立**支路（platformPackager.js 无条件调用
+# computeNodeModuleFileSets），那条支路**只取本数组里的 "!" 排除项**、再
+# prependPattern("**/*")：正向模式不进它，`!node_modules/**/*` 才是阻止「整棵生产
+# 依赖树被塞进 asar」的闸门（不写它解包后约 55MB：pdfjs-dist / @m3e/web / hls.js）。
+# 两条支路合起来：排除照旧生效，跟在后面的正向白名单把需要的包勾回来。
 files:
+  # 1) 先排掉生产依赖树（重复打包 ~55MB），后面的白名单再按需勾回。
+  - "!node_modules/**/*"
+  # 2) 真正要进包的东西
   - dist/**/*
   - dist-electron/**/*
   - package.json
   - "!**/*.map"
-  # taglib-wasm 例外：它是运行期 external（ESM-only，不能打进 main.cjs），
-  # 必须随包分发 dist（含 wasm 与 JS 胶水）才能在安装后加载。
-  # 这一行要写在下面的 "!node_modules/**/*" **之前**——node_modules 的匹配器只取
-  # 排除项并 prependPattern("**/*")，正向模式必须抢在排除项之前声明。
-  - node_modules/taglib-wasm/dist/**/*
-  # 必须显式排除生产依赖树。
-  #
-  # electron-builder 打包 node_modules 是**独立于上面正向模式**的一条支路：
-  #   app-builder-lib/out/platformPackager.js 无条件调用 computeNodeModuleFileSets，
-  #   而 fileMatcher.js 里给 node_modules 用的匹配器**只取本数组中的 "!" 排除项**，
-  #   再强行 prependPattern("**/*")。所以 dist/**/* 这类正向模式对它毫无约束，
-  #   不写这一行就会把整个生产依赖树原样塞进 app.asar。
-  #
-  # 本项目不需要运行期 node_modules：渲染进程由 Vite 全量打包进 dist/，
-  # 主进程/预加载由 esbuild 打包（scripts/build-electron.mjs 只把 electron 标为
-  # external，产物 main.cjs 仅 0.03MB），electron/ 下没有任何运行时 require()。
-  # 实测生产依赖树解包后约 55MB（pdfjs-dist 32.9MB、@m3e/web 31.8MB、hls.js 31.1MB
-  # 三者就占了绝大部分），属于纯重复打包。
-  - "!node_modules/**/*"
+  # 3) taglib-wasm 例外：运行期 external（ESM-only，不能打进 main.cjs），
+  #    必须**整包**随包分发（含 package.json 与 dist 里的 wasm/JS 胶水）。
+  - node_modules/taglib-wasm/**/*
+  # 4) taglib-wasm 的运行时依赖：WASI 后端读写用它做 msgpack 编解码
+  #    （decoder.js / wasm-io.js 静态 import "@msgpack/msgpack"）。
+  - node_modules/@msgpack/msgpack/**/*
 
 # extraResources **只在各平台条目里声明，顶层一律不写**。
 #
