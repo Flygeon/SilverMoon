@@ -56,3 +56,10 @@ ECHOæ’­æ”¾å™¨å‚è€ƒ/
 # local reference projects and workspace artifacts
 # Flutter WebView ÓÃµÄÒÆ¶¯¶Ë Web ²úÎï£¨WebView ÒÑÒÆ³ı£¬²»ÒªÔÙÌá½»£©
 dist-mobile/
+
+# win7 compatibility build output
+dist-electron-win7/
+release-win7/
+
+# ç¼–è¾‘å™¨/å·¥å…·çš„åŸå­å†™ä¸´æ—¶ç›®å½•ï¼ˆ*.tmpdir/<name>.tmpï¼‰ï¼Œä¸æ˜¯äº§ç‰©
+*.tmpdir/

@@ -27,14 +27,15 @@ import {
   readdirSync,
   unlinkSync,
 } from "node:fs";
-import { Readable } from "node:stream";
 import path from "node:path";
 import { createHash } from "node:crypto";
 
-import { net, protocol } from "electron";
+import { protocol } from "electron";
 
 import { APP_SCHEME, ASSET_SCHEME, COVER_SCHEME, projectRoot } from "./config";
 import { log } from "./log";
+import { registerProtocolHandler } from "./compat/protocol";
+import { netFetch, toWebStream } from "./compat/web-globals";
 
 /** 必须在 `app.whenReady()` **之前**调用。 */
 export function registerSchemes(): void {
@@ -124,7 +125,7 @@ function mimeOf(file: string): string {
 export function handleAppProtocol(): void {
   const root = path.join(projectRoot, "dist");
 
-  protocol.handle(APP_SCHEME, async (request) => {
+  registerProtocolHandler(APP_SCHEME, async (request) => {
     try {
       const url = new URL(request.url);
       let rel = decodeURIComponent(url.pathname);
@@ -151,7 +152,7 @@ export function handleAppProtocol(): void {
 
 /** 注册 `asset://` —— 服务任意本地文件（媒体库需要播放任意扫描到的路径）。 */
 export function handleAssetProtocol(): void {
-  protocol.handle(ASSET_SCHEME, async (request) => {
+  registerProtocolHandler(ASSET_SCHEME, async (request) => {
     try {
       const url = new URL(request.url);
       // `asset://localhost/<encoded path>`；host 段在 standard scheme 里被解析掉，
@@ -417,7 +418,7 @@ async function fetchCover(target: string): Promise<CoverCacheHit | null> {
   if (referer) headers.Referer = referer;
 
   try {
-    const res = await net.fetch(target, { headers });
+    const res = await netFetch(target, { headers });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const buf = await res.arrayBuffer();
     if (!buf.byteLength || buf.byteLength > COVER_MAX_BYTES) throw new Error("响应体异常");
@@ -447,7 +448,7 @@ export function handleCoverProtocol(cacheDir: string): void {
   // 启动时扫一次，把上次运行留下的超额部分淘汰掉
   enforceCoverCacheLimit();
 
-  protocol.handle(COVER_SCHEME, async (request) => {
+  registerProtocolHandler(COVER_SCHEME, async (request) => {
     try {
       // URL 形如 `app-cover://img/<encodeURIComponent(原始URL)>`；host 段被
       // standard scheme 解析掉，编码后的原始 URL 落在 pathname 上。
@@ -510,9 +511,7 @@ function serveFile(file: string, rangeHeader: string | null): Response {
   }
 
   if (range) {
-    const stream = Readable.toWeb(
-      createReadStream(file, { start: range.start, end: range.end }),
-    ) as ReadableStream<Uint8Array>;
+    const stream = toWebStream(createReadStream(file, { start: range.start, end: range.end }));
     return new Response(stream, {
       status: 206,
       headers: {
@@ -523,7 +522,7 @@ function serveFile(file: string, rangeHeader: string | null): Response {
     });
   }
 
-  const stream = Readable.toWeb(createReadStream(file)) as ReadableStream<Uint8Array>;
+  const stream = toWebStream(createReadStream(file));
   return new Response(stream, {
     status: 200,
     headers: { ...baseHeaders, "Content-Length": String(size) },

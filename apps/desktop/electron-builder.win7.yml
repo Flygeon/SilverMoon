@@ -1,0 +1,102 @@
+# Win7 兼容版打包配置。
+#
+# 与主 electron-builder.yml 的差异**只有**三处，其余（files 白名单顺序、
+# asarUnpack、electronLanguages、NSIS 脚本）全部沿用 —— 那两个踩坑记录
+# 在 Win7 版上同样成立，不要另起一套。
+#
+# 用法：
+#   npm run dist:win7        # 构建（renderer + main + 后端 + 启动器）后打包
+#
+# ## 三处差异
+#
+# 1. `electronVersion: 22.3.27` —— Electron 22 是**最后一个**支持 Win7/8/8.1 的
+#    大版本（23 起移除）。等价于 Chromium 108 / Node 16.17.1。
+# 2. `directories.output: release-win7` —— 与正式版产物分开，避免互相覆盖。
+# 3. `productName` 后缀 `(Win7)` —— 两者可同机共存，用户不会装错。
+#
+# ## 注意：后端与启动器必须用 win7 目标**重新编译**
+#
+# 本文件只负责打包。`extraResources` 引用的两个 exe 需要是 Win7 可运行的版本：
+#   - backend/target/<win7>/release/silvermoon.exe（lofty 写标签 + 无 SMTC）
+#   - splash/target/<win7>/release/silvermoon-splash.exe
+# 为什么必须重编：Rust 官方 msvc target 自 1.78 起要求 Windows 10+，默认产物
+# 在 Win7 上会因缺 `WaitOnAddress` 等 Win8+ 符号而**加载失败**（已用 objdump
+# 在现成 splash exe 上验证过）。相关构建命令见 docs/win7-electron22.md。
+
+appId: cn.cool.silvermoon
+productName: SilverMoon (Win7)
+copyright: Copyright © SilverMoon contributors
+
+# ⚠️ 必须显式钉版本。不写这一行时 electron-builder 会取 package.json 的
+# devDependencies.electron（= 44.4.5），打出来的"Win7 版"其实还是 Electron 44，
+# 在 Win7 上根本起不来。**实测踩过**：日志里是 `electron=44.4.5`。
+electronVersion: 22.3.27
+
+# 主进程产物在 dist-electron-win7/，而 package.json 的 main 指向 dist-electron/。
+# electron-builder 没有"入口重定向"选项，用 extraMetadata 覆写**打包进 asar 的**
+# package.json —— 源仓库的 package.json 不受影响（现代版仍走 dist-electron/）。
+# 不改 main 的话会报：
+#   Application entry file "dist-electron/main.cjs" ... was not found in this archive
+extraMetadata:
+  main: dist-electron-win7/main.cjs
+
+directories:
+  output: release-win7
+  buildResources: build
+
+# ⚠️ files 的顺序语义与踩坑记录见 electron-builder.yml 的注释，这里逐字沿用。
+files:
+  # 1) 先排掉生产依赖树（重复打包 ~55MB），后面的白名单再按需勾回。
+  - "!node_modules/**/*"
+  # 2) 真正要进包的东西
+  - dist/**/*
+  # Win7 版主进程产物在 dist-electron-win7/（见 scripts/build-electron.mjs --win7）
+  - dist-electron-win7/**/*
+  - package.json
+  - "!**/*.map"
+  # 3) taglib-wasm 例外 —— **Win7 版不需要**：Electron 22 的 Node 16 无法初始化
+  #    它（要求 Node >= 22.6，缺 WASI），读写标签改由 Rust 后端完成
+  #    （backend/src/commands/tags.rs）。因此这里不勾回 node_modules/taglib-wasm。
+  # 4) undici：Win7 版主进程内联了它（build-electron.mjs --win7 不列为 external），
+  #    因此也不需要在这里分发。
+
+asar: true
+
+# taglib-wasm 的 wasm 解包在 Win7 版**不需要**（见上）。但保留 taglib-wasm 的
+# asarUnpack 无害且能让同一份 dist 在两者间切换；Win7 版直接留空。
+
+# 与正式版一致：只保留中英两个语言包（Electron 自带 55 个，解包后 48MB）。
+electronLanguages:
+  - zh-CN
+  - en-US
+
+win:
+  icon: backend/icons/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  extraResources:
+    - from: backend/icons/icon.png
+      to: icon.png
+    # 后端以独立可执行文件随包分发（必须是用 win7 目标编译的版本，见文件头）。
+    # 路径含 target triple —— `--target-dir <crate>/target/win7` 下产物落在
+    # `target/win7/<triple>/release/`，漏了 triple 会静默报
+    # `file source doesn't exist`，最后表现为安装包里没有后端。
+    - from: backend/target/win7/x86_64-win7-windows-gnu/release/silvermoon.exe
+      to: bin/silvermoon-server.exe
+    # 原生启动器（同样需要 win7 目标重编）
+    - from: splash/target/win7/x86_64-win7-windows-gnu/release/silvermoon-splash.exe
+      to: silvermoon-splash.exe
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: SilverMoon (Win7)
+  artifactName: ${productName}-${version}-setup.${ext}
+  include: build/installer.nsh
+
+# macOS / Linux 不参与 Win7 兼容版构建

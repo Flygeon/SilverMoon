@@ -25,6 +25,16 @@ crate-type = ["rlib"]
 #   * 全局热键                            —— 由 Electron 注册，回调经 /_host 转发进本进程
 # ---------------------------------------------------------------------------
 
+[features]
+# 默认开启 SMTC（Win10+）。Win7 构建用
+# `--no-default-features --features win7` 关掉它。
+default = ["smtc"]
+smtc = ["smtc-tokio"]
+# 标记 Win7 目标：把 Win10+ 专有特性（目前是 SMTC）整体短路。
+# 单独一个 feature 而不是靠 cfg(target_os) 判断，是因为 Win7 与 Win10 是同一个
+# target_os（windows），编译器分不出来。
+win7 = []
+
 [dependencies]
 silvermoon-ipc = { path = "crates/silvermoon-ipc" }
 
@@ -76,8 +86,12 @@ kugou_server = { path = "kugou_server" }
 
 # Windows 系统媒体控件（SMTC）：把本应用注册为系统媒体会话。
 # 仅在 Windows 编译，Linux/macOS 构建不受影响。
+#
+# **optional**：Win7 兼容版必须关掉它——SMTC 是 Windows 10 才有的 WinRT API，
+# 而 `cfg(windows)` 在 win7 目标上**依然成立**，不关就会照样链接 Win10+ 符号。
+# 见 [features] 的 `smtc` / `win7`。
 [target.'cfg(windows)'.dependencies]
-smtc-tokio = "0.1"
+smtc-tokio = { version = "0.1", optional = true }
 
 # ---------------------------------------------------------------------------
 # 发布构建配置

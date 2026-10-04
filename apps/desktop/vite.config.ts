@@ -3,6 +3,8 @@ import vue from "@vitejs/plugin-vue";
 import { fileURLToPath, URL } from "node:url";
 import { readFileSync } from "node:fs";
 
+import { colorMixFallback } from "./scripts/vite-plugin-colormix-fallback.mjs";
+
 /**
  * 应用版本号以构建期常量注入（`__APP_VERSION__`）。单一真源是
  * `backend/silvermoon.config.json`（主进程与后端都读它），
@@ -23,6 +25,15 @@ export default defineConfig(async () => ({
         },
       },
     }),
+    // color-mix() 回退（Chromium < 111 / Electron 22）。
+    //
+    // 只在 `SM_COLORMIX_FALLBACK=1` 时生效 —— **现代构建的 CSS 逐字节不变**，
+    // 零回归风险。Win7 版的 `dist:win7` 会自动带上这个环境变量。
+    // 详见 scripts/vite-plugin-colormix-fallback.mjs 与 src/utils/colorMixRuntime.ts。
+    colorMixFallback({
+      enabled: process.env.SM_COLORMIX_FALLBACK === "1",
+      root: fileURLToPath(new URL(".", import.meta.url)),
+    }),
   ],
   define: {
     __APP_VERSION__: JSON.stringify(appConfig.version),
@@ -34,6 +45,17 @@ export default defineConfig(async () => ({
       "@": fileURLToPath(new URL("./src", import.meta.url)),
       "@shared": fileURLToPath(new URL("./shared", import.meta.url)),
     },
+  },
+  // worker 一律用 ES module 格式。
+  //
+  // 默认的 `iife` 对含**代码分割**（动态 import）的 worker 直接报
+  // `Invalid value "iife" ... not supported for code-splitting builds`。
+  // 本仓库新加的 pdf.js 兼容 worker 需要在补 `Promise.withResolvers` 之后再
+  // 动态 import 官方 worker（见 src/workers/pdfWorkerLegacy.ts），必然带动态
+  // import；另两个 worker（wordAnalysis / autoMix）本来就用
+  // `new Worker(..., { type: "module" })`，ES 格式才是正确对应。
+  worker: {
+    format: "es",
   },
   // Electron 渲染进程同样走本地 dev server；端口与 electron/config.ts 的
   // DEV_SERVER_URL 保持一致
@@ -50,6 +72,17 @@ export default defineConfig(async () => ({
     // 打包后由 app:// 协议从 dist/ 提供服务，绝对路径 `/assets/...` 可正常解析
     outDir: "dist",
     emptyOutDir: true,
+    // 构建目标显式钉在 **Chrome 108**（= Electron 22 的 Chromium）。
+    //
+    // 默认值（chrome87/es2020）有两个问题：
+    // 1. 不允许 top-level await，而 pdf.js 兼容 worker 需要它；
+    // 2. 会把代码降级到 2020 语法，而实际宿主（Electron 44 → Chromium 132）
+    //    远高于此，无谓地损失体积与性能。
+    // 钉 108 后：现代版与 Win7 版共用同一份 dist，且不会用到 108 之后才有的特性
+    // （如 `color-mix()`、`Promise.withResolvers` 由运行期 polyfill 兜底）。
+    target: "chrome108",
+    // pdf.js 的 wasm 与 worker 体积较大，阈值调到不会误报的档位
+    chunkSizeWarningLimit: 4096,
     rollupOptions: {
       output: {
         // 只让 manualChunks **显式点名**的模块成块；Rollup 自行派生的公共块

@@ -1,3 +1,14 @@
+// ⚠️ 必须最先执行：Chromium < 119（Electron 22）缺 Promise.withResolvers，
+// 而 pdf.js 会用到。见 utils/legacyPolyfills.ts。
+import { installLegacyPolyfills } from "@/utils/legacyPolyfills";
+// Chromium < 111 不支持 color-mix()，不处理会让大量半透明层级**静默消失**。
+// 必须在 Vue 挂载之前装好，才能拦住 @m3e/web 首次注入的样式表。
+// 详见 utils/colorMixRuntime.ts。
+import { installColorMixFallback } from "@/utils/colorMixRuntime";
+
+installLegacyPolyfills();
+installColorMixFallback();
+
 import { createApp } from "vue";
 import { createPinia } from "pinia";
 import App from "./App.vue";

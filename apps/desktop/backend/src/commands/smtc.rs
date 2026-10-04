@@ -26,11 +26,15 @@ pub struct SmtcCommand {
     pub position_ms: Option<u64>,
 }
 
-/// 初始化：Windows 上创建 SMTC 会话并转发按键事件；其他平台为空操作。
+/// 初始化：Windows 10+ 上创建 SMTC 会话并转发按键事件；其他情况为空操作。
+///
+/// **Win7 兼容版会关掉 `smtc` feature**：SMTC 是 Windows 10 才引入的 WinRT API，
+/// 而 Win7 与 Win10 的 `cfg(windows)` 都为真，只靠 target 判断无法区分，
+/// 硬链接会在 Win7 上因缺符号而启动失败。
 pub fn setup(app: &silvermoon_ipc::Host) {
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "smtc"))]
     imp::setup(app);
-    #[cfg(not(windows))]
+    #[cfg(not(all(windows, feature = "smtc")))]
     let _ = app;
 }
 
@@ -47,7 +51,7 @@ pub fn smtc_set_media(
     file_path: String,
     cover_url: Option<String>,
 ) -> Result<(), String> {
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "smtc"))]
     imp::set_media(&title, artist, album, duration_ms, &file_path, cover_url);
     Ok(())
 }
@@ -56,12 +60,12 @@ pub fn smtc_set_media(
 #[silvermoon_ipc::command]
 #[allow(unused_variables)]
 pub fn smtc_set_playback(playing: bool, position_ms: u64, duration_ms: u64) -> Result<(), String> {
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "smtc"))]
     imp::set_playback(playing, position_ms, duration_ms);
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "smtc"))]
 mod imp {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Mutex, OnceLock};

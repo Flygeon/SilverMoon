@@ -11,7 +11,10 @@ export default [
     ignores: [
       "dist/**",
       "dist-electron/**",
+      // Win7 兼容构建的产物（scripts/build-electron.mjs --win7 / electron-builder.win7.yml）
+      "dist-electron-win7/**",
       "release/**",
+      "release-win7/**",
       "node_modules/**",
       "backend/**",
       "public/**",

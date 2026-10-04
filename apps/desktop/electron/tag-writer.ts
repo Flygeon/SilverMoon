@@ -22,6 +22,29 @@ import type { AudioFile, TagLib } from "taglib-wasm";
 
 import type { MusicTagCoverMode, MusicTagFields } from "../shared/types";
 
+/**
+ * 是否强制走 Rust 后端写标签。
+ *
+ * `taglib-wasm` 要求 Node >= 22.6（其 WASI 后端需要 Node 的 `wasi` 模块与
+ * Wasm 异常处理），而 **Win7 兼容版**必须停在 Electron 22 → Node 16.17.1，
+ * 初始化会直接抛 `EnvironmentError ... Required feature: WASI support`。
+ *
+ * 本仓库没有历史可用版本（1.x 也要 >= 22.6），因此 Win7 版把读写下沉到 Rust
+ * 后端（`backend/src/commands/tags.rs`，用已就位的 `lofty`）。
+ * 构建期由 `__SM_LEGACY_ELECTRON__` 决定，见 `scripts/build-electron.mjs`。
+ */
+const USE_RUST_TAGS: boolean =
+  typeof __SM_LEGACY_ELECTRON__ !== "undefined" && __SM_LEGACY_ELECTRON__;
+
+/** 延迟取 sidecar 调用器：避免 tag-writer 直接依赖 sidecar 造成循环引用。 */
+async function callRust(
+  cmd: string,
+  args: unknown,
+): Promise<{ ok: boolean; data?: unknown; error?: string }> {
+  const { callSidecar } = await import("./main-bridge");
+  return callSidecar(cmd, args);
+}
+
 /** 写标签的入参（与契约 §4 `writeLocal` 的 payload 一一对应）。 */
 export interface WriteLocalTagsInput {
   path: string;
@@ -273,6 +296,8 @@ function readFields(file: AudioFile): MusicTagFields {
 
 /** 写标签并保存到原文件。文件不存在 / 格式不支持时**抛出**。 */
 export async function writeLocalTags(input: WriteLocalTagsInput): Promise<{ path: string }> {
+  if (USE_RUST_TAGS) return writeLocalTagsViaRust(input);
+
   const taglib = await getTagLib();
   const file = await taglib.open(input.path);
   try {
@@ -292,6 +317,8 @@ export async function writeLocalTags(input: WriteLocalTagsInput): Promise<{ path
 export async function readLocalTags(
   filePath: string,
 ): Promise<{ fields: MusicTagFields; hasCover: boolean }> {
+  if (USE_RUST_TAGS) return readLocalTagsViaRust(filePath);
+
   try {
     const taglib = await getTagLib();
     const file = await taglib.open(filePath);
@@ -303,4 +330,69 @@ export async function readLocalTags(
   } catch {
     return { fields: emptyFields(), hasCover: false };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Rust 后端实现（Win7 兼容版）
+//
+// 见上方 USE_RUST_TAGS 的说明：Electron 22 → Node 16 上 taglib-wasm 无法初始化，
+// 改由后端用 lofty 完成读写。字段语义与 taglib 版**严格一致**：
+// 空串 = 清空，缺省字段 = 本次不改；year / trackNo 保留原始字符串写法。
+// ---------------------------------------------------------------------------
+
+/** 把前端字段映射成后端 `WriteTagFields`：空串保留（= 清空），未提供则不带该键。 */
+function toRustFields(fields: MusicTagFields): Record<string, string | undefined> {
+  return {
+    title: fields.title,
+    artist: fields.artist,
+    album: fields.album,
+    albumArtist: fields.albumArtist,
+    year: fields.year,
+    trackNo: fields.trackNo,
+    discNo: fields.discNo,
+    genre: fields.genre,
+    comment: fields.comment,
+    lyrics: fields.lyrics,
+  };
+}
+
+async function writeLocalTagsViaRust(input: WriteLocalTagsInput): Promise<{ path: string }> {
+  const reply = await callRust("tags_write_local", {
+    // 后端签名是单个 `args` 结构体，因此这里整体作为一个对象传
+    args: {
+      path: input.path,
+      fields: toRustFields(input.fields),
+      coverMode: input.coverMode ?? "keep",
+      coverBase64: input.coverBase64,
+      coverMime: input.coverMime,
+    },
+  });
+  if (!reply.ok) throw new Error(reply.error ?? "写标签失败");
+  return { path: input.path };
+}
+
+async function readLocalTagsViaRust(
+  filePath: string,
+): Promise<{ fields: MusicTagFields; hasCover: boolean }> {
+  const reply = await callRust("tags_read_local", { args: { path: filePath } });
+  if (!reply.ok || !reply.data) {
+    // 与 taglib 版一致：读失败回退空字段，不抛（契约 §4 readLocal）
+    return { fields: emptyFields(), hasCover: false };
+  }
+  const data = reply.data as Partial<MusicTagFields> & { hasCover?: boolean };
+  return {
+    fields: {
+      title: data.title ?? "",
+      artist: data.artist ?? "",
+      album: data.album ?? "",
+      albumArtist: data.albumArtist ?? "",
+      year: data.year ?? "",
+      trackNo: data.trackNo ?? "",
+      discNo: data.discNo ?? "",
+      genre: data.genre ?? "",
+      comment: data.comment ?? "",
+      lyrics: data.lyrics ?? "",
+    },
+    hasCover: data.hasCover === true,
+  };
 }
