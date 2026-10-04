@@ -103,8 +103,27 @@ Electron —— 快捷方式会指向一个什么都不做的程序，**应用�
 - Rust：`locate_electron()` 依次试「启动器同目录」→「上一级目录」，逐个 `is_file()`；
 - NSIS：先 `$INSTDIR\resources\silvermoon-splash.exe`，不存在再回退 `$INSTDIR\`。
 
-回归防线：`splashContract.test.ts` 的「发布布局」一组用例（含变异验证 —— 曾经因为
-断言写成宽松正则而假通过，现已钉到具体语句）。
+### 怎么在 Linux/CI 上验证一个 Windows 程序的行为
+
+启动器是 Windows GUI 程序，跑不起来；NSIS 脚本数据是压缩的，`strings` 也搜不到。
+为了不靠「人眼审阅」，把路径判断抽成 **`splash/src/pathfind.rs`：只有 `std::path`、
+无任何 Win32 依赖的纯函数**。于是可以绕过平台限制，用 `rustc --test` 直接编译执行
+**二进制里同一份代码**：
+
+```bash
+npm run verify:splash-paths   # 6 例，真实 Rust 代码
+```
+
+> 为什么不用 Node 复刻一份同样的逻辑：复刻只能证明「我以为的逻辑对」，
+> 源码改了、复刻没跟着改就完全失效。跑真实代码没有这个缝隙。
+
+回归防线共三层：
+
+1. `pathfind.rs` 的 Rust 单测（真实代码，含「发布布局必须能通过上级目录找到」）；
+2. `packagedLayout.test.ts`：临时目录里**真实复刻安装布局**，断言两侧探测规则一致；
+3. `splashContract.test.ts`：「发布布局」一组断言（钉到具体语句，非宽松正则）。
+
+三层都用变异验证过：把上级目录候选删掉（即复现原缺陷）→ 测试如实失败。
 
 ## 6. 已知约束
 

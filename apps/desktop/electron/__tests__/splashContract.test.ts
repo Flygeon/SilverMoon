@@ -148,17 +148,17 @@ describe("发布布局：安装包里的实际落点", () => {
   });
 
   it("Rust 启动器会向上级目录探测 Electron（而不是只看同目录）", () => {
-    expect(mainRs).toContain("locate_electron");
-    // 关键不变量：候选里**必须真的包含上级目录**。
-    //
-    // 这里刻意逐条钉死，而不是用宽松的「大概有这段逻辑」正则：宽松写法在变异测试里
-    // 假通过过两次（`.take(1)` 与删掉 parent 候选都能蒙混过去）。教训是断言要能
-    // 区分「语义等价但行为不同」的最小改动。
-    expect(mainRs).toMatch(/Some\(parent\) => parent\.join\(ELECTRON_EXE\)/);
-    // 循环必须遍历**全部**候选（take(1) 这类只看首个的写法要能测出来）
-    expect(mainRs).toMatch(/for exe in candidates\.iter\(\) \{/);
+    // 路径判断已抽到 pathfind.rs（纯函数，可在 Linux 上跑真实代码）；
+    // **行为**断言交给 scripts/verify-splash-paths.mjs（rustc --test），
+    // 这里只做结构断言，确认模块成形且 main.rs 真的在用它。
+    const pf = readFileSync(path.join(appRoot, "splash", "src", "pathfind.rs"), "utf8");
+    expect(pf).toMatch(/if let Some\(parent\) = here\.parent\(\)/);
+    expect(pf).toMatch(/parent\.join\(ELECTRON_EXE\)/);
     // 逐个 is_file() 判断，而不是盲选
-    expect(mainRs).toMatch(/if exe\.is_file\(\) \{/);
+    expect(pf).toMatch(/find\(\|p\| exists\(p\)\)/);
+    // main.rs 必须调用它
+    expect(mainRs).toContain("pick_electron");
+    expect(mainRs).toContain("locate_electron");
   });
 
   it("extraResources 的 to 字段仍是纯文件名（决定它落在 resources\\ 下）", () => {

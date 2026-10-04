@@ -37,6 +37,7 @@ npm run dist                        # typecheck + build + electron-builder
 # Native launcher / splash (Windows GUI program; see doc/splash-feature.md)
 npm run build:splash                # cargo build --release --manifest-path splash/Cargo.toml
 npm run verify:nsis                 # NSIS installer script syntax check (makensis, cross-platform)
+npm run verify:splash-paths         # launcher path-resolution tests (real Rust code, runs on Linux)
 
 # Checks (all runnable locally, no linker required except cargo)
 npm run lint                        # eslint .

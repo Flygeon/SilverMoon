@@ -18,6 +18,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod handshake;
+mod pathfind;
 mod theme;
 mod window;
 
@@ -33,8 +34,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use handshake::{Handshake, CONNECT_TIMEOUT, FADE_MS, READY_TIMEOUT};
 
-/// Electron 可执行文件名（与 electron-builder 的 productName 一致）
-const ELECTRON_EXE: &str = "SilverMoon.exe";
+use pathfind::{pick_electron, ELECTRON_EXE};
 
 /// 握手通道。
 ///
@@ -83,22 +83,15 @@ fn locate_electron() -> (std::path::PathBuf, std::path::PathBuf) {
     }
 
     let here = self_dir();
-    let candidates = [
-        here.join(ELECTRON_EXE),
-        match here.parent() {
-            Some(parent) => parent.join(ELECTRON_EXE),
-            None => here.join(ELECTRON_EXE),
-        },
-    ];
 
-    for exe in candidates.iter() {
-        if exe.is_file() {
-            let root = exe
-                .parent()
-                .map(|d| d.to_path_buf())
-                .unwrap_or_else(|| here.clone());
-            return (exe.clone(), root);
-        }
+    // 候选顺序与探测逻辑抽在 pathfind.rs —— 那里是**无平台依赖的纯函数**，
+    // 能在 Linux 上直接跑单元测试。发布布局缺陷就是靠它钉住的。
+    if let Some(exe) = pick_electron(&here, |p| p.is_file()) {
+        let root = exe
+            .parent()
+            .map(|d| d.to_path_buf())
+            .unwrap_or_else(|| here.clone());
+        return (exe, root);
     }
 
     // 都没找到：按发布布局给出路径，让错误信息指向真实期望位置

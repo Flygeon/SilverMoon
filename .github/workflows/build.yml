@@ -112,6 +112,16 @@ jobs:
         working-directory: apps/desktop/splash
         run: cargo fmt --check
 
+      # 启动器路径解析的单元测试。
+      #
+      # 关键：`splash/src/pathfind.rs` 被刻意写成**无平台依赖的纯逻辑**，
+      # 所以能在 Linux 上用 rustc --test 直接跑**二进制里同一份代码**。
+      # 这拦的是「发布版布局」缺陷 —— 启动器曾经假设与 SilverMoon.exe 同级，
+      # 而 electron-builder 的 extraResources 实际放进 resources/，
+      # 导致装出来的应用打不开；当时 CI 全绿，因为没人解包安装包看布局。
+      - name: Launcher path resolution tests
+        run: npm run verify:splash-paths
+
       # NSIS 脚本只在 Windows 打包时才被编译；等到那时才发现语法错误就是 ~12 分钟一轮。
       # makensis 跨平台，这里先把语法与宏展开走一遍。
       - name: NSIS installer script syntax check

@@ -56,11 +56,16 @@ describe("安装后布局", () => {
   });
 
   it("Rust 源码里的候选顺序与上面复刻的一致（防止只改一处）", () => {
-    const rs = readFileSync(path.join(appRoot, "splash", "src", "main.rs"), "utf8");
+    // 真实逻辑在 pathfind.rs（纯函数，可在 Linux 直接跑），main.rs 只调用它。
+    // 这里做**结构断言**，行为断言由 scripts/verify-splash-paths.mjs 跑真实 Rust 代码。
+    const rs = readFileSync(path.join(appRoot, "splash", "src", "pathfind.rs"), "utf8");
     // 同目录候选
     expect(rs).toMatch(/here\.join\(ELECTRON_EXE\)/);
     // 上一级候选
-    expect(rs).toMatch(/Some\(parent\) => parent\.join\(ELECTRON_EXE\)/);
+    expect(rs).toMatch(/parent\.join\(ELECTRON_EXE\)/);
+    // main.rs 必须真的调用它，而不是自己另写一份
+    const mainRs = readFileSync(path.join(appRoot, "splash", "src", "main.rs"), "utf8");
+    expect(mainRs).toMatch(/pick_electron\(&here/);
   });
 
   it("NSIS 脚本的探测顺序与 Rust 一致：先 resources、再根目录", () => {

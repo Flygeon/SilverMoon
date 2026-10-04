@@ -18,6 +18,7 @@
     "verify:word-lyrics": "node scripts/verify-word-lyrics.mjs",
     "verify:packaging": "node scripts/verify-packaging.mjs",
     "verify:nsis": "node scripts/verify-nsis.mjs",
+    "verify:splash-paths": "node scripts/verify-splash-paths.mjs",
     "build:splash": "cargo build --release --manifest-path splash/Cargo.toml",
     "verify:tag-sources": "node scripts/verify-music-tag-sources.mjs",
     "build:backend": "cargo build --manifest-path backend/Cargo.toml",
