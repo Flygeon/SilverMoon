@@ -60,3 +60,6 @@ dist-mobile/
 # win7 compatibility build output
 dist-electron-win7/
 release-win7/
+
+# 编辑器/工具的原子写临时目录（*.tmpdir/<name>.tmp），不是产物
+*.tmpdir/

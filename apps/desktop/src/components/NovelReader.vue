@@ -10,6 +10,7 @@ import { novelCatalogueCached } from "@/utils/novelCache";
 import { translate } from "@shared/i18n";
 import { requestRelogin } from "@/novel/wenku8Auth";
 import { isLoginRequiredError } from "@/novel/wenku8Login";
+import { CURRENT_COLOR_PERCENTS, syncCurrentColorVars } from "@/utils/colorMixRuntime";
 import type { NovelChapter, NovelContent, NovelVolume } from "@shared/types";
 
 const props = defineProps<{
@@ -46,6 +47,23 @@ const themeMap: Record<string, { bg: string; fg: string }> = {
   green: { bg: "#d6e3d2", fg: "#35433a" },
 };
 const theme = computed(() => themeMap[settings.readerTheme] ?? themeMap.dark);
+
+/**
+ * 阅读器根节点。
+ *
+ * Chromium < 111（Electron 22 / Win7 版）没有 color-mix()，本组件 7 处混色
+ * 都是 `currentColor` 形态，最终会被构建期改写成
+ * `var(--sm-mix-currentColor-N, ...)`。而 currentColor 取决于元素自身的
+ * `color`，根节点推不出来，必须在主题变化时显式写入派生变量。
+ */
+const rootEl = ref<HTMLElement | null>(null);
+
+function syncCurrentColorVars_(): void {
+  syncCurrentColorVars(rootEl.value, theme.value.fg, [...CURRENT_COLOR_PERCENTS]);
+}
+
+watch(theme, () => syncCurrentColorVars_(), { flush: "post" });
+onMounted(() => syncCurrentColorVars_());
 
 const fontMap: Record<string, string> = {
   system: '"SarasaGothicSC-Regular","Microsoft YaHei",system-ui,sans-serif',
@@ -260,6 +278,7 @@ onBeforeUnmount(() => {
 <template>
   <Teleport to="body">
     <div
+      ref="rootEl"
       class="novel-reader"
       :style="{ background: theme.bg, color: theme.fg }"
       :data-dbg="renderLog()"

@@ -15,6 +15,7 @@ import { capabilities, isDesktop } from "@/capabilities";
 import { bqgCatalogueCached, novelCatalogueCached } from "@/utils/novelCache";
 import { useSettingsStore, type ReaderFontKey, type ReaderThemeKey } from "@/stores/settings";
 import { loadPdfjs, toArrayBuffer } from "@/utils/pdf";
+import { syncDerivedVarsForElement } from "@/utils/colorMixRuntime";
 import { isLoginRequiredError } from "@/novel/wenku8Login";
 import { requestRelogin } from "@/novel/wenku8Auth";
 import type { MediaEntry, NovelContent, NovelVolume } from "@shared/types";
@@ -158,6 +159,30 @@ function beginReadSession(key: string, title: string) {
 
 /** 当前背景主题（chrome 与 EPUB 正文共用） */
 const theme = computed(() => READER_THEMES[settings.readerTheme] ?? READER_THEMES.dark);
+
+/**
+ * 阅读器根节点。
+ *
+ * `--reader-bg` / `--reader-fg` 是**组件级 token**（由模板的 `:style` 写在根节点上），
+ * `theme.css` 里查不到静态值，因此构建期插件只能给透明兜底 —— 真实值必须在这里
+ * 运行期写入，否则 Chromium < 111（Electron 22 / Win7 版）看到的是透明色。
+ *
+ * 百分数清单与构建期插件从本文件收集到的一致；改 CSS 百分数时两边各自重收，
+ * `colorMixParity.test.ts` 会兜住不一致。
+ */
+const rootEl = ref<HTMLElement | null>(null);
+
+const READER_MIX_PERCENTS: Record<string, number[]> = {
+  "--reader-fg": [9, 10, 12, 14, 15, 18, 22, 24, 65, 78, 80],
+  "--reader-bg": [90, 94],
+};
+
+function syncReaderMixVars(): void {
+  syncDerivedVarsForElement(rootEl.value, READER_MIX_PERCENTS);
+}
+
+watch(theme, () => nextTick(syncReaderMixVars), { flush: "post" });
+onMounted(() => syncReaderMixVars());
 /** 当前正文字体 */
 const readerFont = computed(() => READER_FONTS[settings.readerFont] ?? READER_FONTS.system);
 /** EPUB/在线文本是否可翻页（PDF 滚动模式下不显示点击翻页） */
@@ -789,6 +814,7 @@ const PDF_MODES = [
 
 <template>
   <div
+    ref="rootEl"
     class="reader"
     :style="{
       '--reader-bg': theme.bg,

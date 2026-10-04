@@ -220,10 +220,88 @@ node scripts/verify-win7-build.mjs
 
 ### 已知遗留
 
-- **`color-mix()` 降级未做**。52 处 + `@m3e/web` 136 个文件依赖它，Chromium 108
-  不支持。目前只做了能力探测（`data-legacy-color-mix` 属性），**没有提供视觉回退**。
-  这是 Win7 版最大的体验缺口。建议做法：启动器/主进程侧预计算颜色令牌，
-  或在 `@supports not (color: color-mix(...))` 下加载一份手写令牌覆盖表。
 - Electron 22 已 **EOL**，Chromium 108 有长期未修的安全问题。**不要作为默认分发版本。**
 - `scripts/verify-music-tags.mjs` 等既有验证脚本仍针对 taglib 路径，
   Win7 版需要为 Rust 侧补等价验证（尚未写）。
+- `color-mix()` 回退见第 7 节；`@m3e/web` 的禁用态/阴影类混色依赖运行期补丁，
+  真实 Win7 上的观感仍待确认。
+
+---
+
+## 7. `color-mix()` 视觉回退
+
+### 问题
+
+`color-mix()` 要 **Chrome 111+**，Chromium 108 直接**静默丢弃**该声明 ——
+不报错、不警告，只在真机表现为「大量半透明层级变透明 / 发灰」。
+而开发机是 Chromium 132，**本地永远复现不出来**。
+
+本项目用量：自己源码 **45 处 / 13 个文件**，`@m3e/web`（MD3 组件库）
+另有 **94 处**（全部形如 `color-mix(in srgb, C p%, transparent)`）。
+
+### 方案：构建期 + 运行期两层
+
+纯 CSS 无法表达「把某变量的透明度乘一下」（相对颜色语法要 Chrome 119+），
+只能预先算成 `rgba()`；而 token 是动态的（种子色 / 皮肤 / 深浅色都会改），
+所以分两层：
+
+| 来源 | 处理 |
+|---|---|
+| 项目自己的 `.vue` / `.css` | **构建期**改写为 `var(--sm-mix-X-p, rgba(...))` |
+| `@m3e/web` 的 CSS-in-JS | **运行期**补 `CSSStyleSheet.replaceSync`，注入前改写 |
+| 动态 token 变化 | **运行期**从 `getComputedStyle` 重算并写 `:root` |
+
+关键实现点（都踩过）：
+
+1. **换算语义是预乘 alpha**。`color-mix(in srgb, C p%, transparent)` ≡
+   「C 的 alpha × p/100」。源色自身可能半透明（`--md-sys-color-scrim` 是
+   `rgba(0,0,0,0.7)`），所以是**乘积**不是直接取百分比：
+   0.7 × 60% = **0.42**，不是 0.6。
+2. **只给一侧权重时，另一侧补 `100% - 给定值`**（CSS Color 5 规则）。
+   漏了这条会把 `C 12%, transparent` 算成 `12/(12+50) ≈ 0.194` 而不是 0.12。
+3. **`MutationObserver` 的自触发死循环**。同步会写 `documentElement` 的
+   `style`，而 observer 正监听该属性 —— 无条件写就是「写 → 观察 → 再写」，
+   实测表现为**页面永远加载不完**。必须只在值真的变化时才写。
+4. **worker / 组件级 token 要单独处理**：
+   - `--reader-fg` / `--reader-bg` 由 `BookReader` 的 `:style` 写在组件根节点，
+     `theme.css` 里查不到 → 构建期只能给 `transparent` 兜底，
+     真实值由 `syncDerivedVarsForElement` 运行期写入；
+   - `NovelReader` 的 7 处 `currentColor` 混色取决于元素自身颜色 →
+     由 `syncCurrentColorVars` 按当前阅读主题写入。
+
+### 开关与产物隔离
+
+回退只在 `SM_COLORMIX_FALLBACK=1` 时启用（`npm run build:renderer:win7`）。
+**现代构建的 CSS 逐字节不变**，零回归风险：
+
+| 产物 | `color-mix` | `--sm-mix-*` |
+|---|---|---|
+| `npm run build:renderer`（正式版） | 45 | 0 |
+| `npm run build:renderer:win7` | 0 | 45 |
+
+### 验收
+
+```bash
+npm run build:renderer:win7 && npm run verify:colormix -- --mode=win7
+npm run build:renderer       && npm run verify:colormix -- --mode=modern
+```
+
+`verify:colormix` 检查：Win7 产物不得有裸 `color-mix`、每处 `--sm-mix-*`
+兜底必须是合法 `rgba` 或 `transparent`、alpha 落在 (0,1]、
+且 scrim 的兜底必须是 `0.42`（钉住「乘积」语义）；现代产物则必须**保留**
+原生 `color-mix` 且无 `--sm-mix-*` 泄漏。
+
+单元测试另有三份：
+- `src/utils/__tests__/colorMixMath.test.ts`（21 项）—— 解析与换算
+- `src/utils/__tests__/colorMixRuntime.test.ts`（16 项）—— 运行期改写与可重入性
+- `src/utils/__tests__/colorMixParity.test.ts`（4 项）—— **构建期插件与运行期
+  实现的一致性**（两边各有一份实现，算出的 rgba 必须逐字相同，否则主题切换
+  瞬间颜色会跳变）
+
+### 实测
+
+在真实 Electron 22.3.27（Chromium 108）下确认：
+`CSS.supports('color','color-mix(...)') === false`，
+而 `:root` 上被写入 `--sm-mix-md-sys-color-primary-12 = rgba(59, 96, 143, 0.12)`
+（base `#3b608f` × 12%）、`--sm-mix-md-sys-color-scrim-60 = rgba(0, 0, 0, 0.42)`
+（0.7 × 60%），元素实际渲染出的 background 即为该 rgba。

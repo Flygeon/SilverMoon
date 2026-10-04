@@ -1,0 +1,16 @@
+# Win7 目标的交叉链接配置。
+#
+# `x86_64-win7-windows-gnu` 是 **tier-3** 目标（Rust 官方为 Win7 保留），
+# 没有预编译 std、也没有自带链接器，因此必须：
+#   1. `-Z build-std=std,panic_abort` 从源码构建 std（见 package.json 的
+#      `build:backend:win7` / `build:splash:win7`）；
+#   2. 显式指定 mingw-w64 的链接器。
+#
+# 只对这一个 target 生效，不影响 Linux/macOS/Win10 的正常构建。
+#
+# 前置条件（Linux）：`apt-get install -y mingw-w64`，以及
+#   rustup toolchain install nightly --profile minimal
+#   rustup component add rust-src --toolchain nightly
+[target.x86_64-win7-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+ar = "x86_64-w64-mingw32-ar"

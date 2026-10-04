@@ -144,6 +144,26 @@ jobs:
       - name: NSIS installer script syntax check
         run: npm run verify:nsis
 
+      # color-mix 双构建验收。
+      #
+      # 为什么必须在这里拦：color-mix() 在 Chromium < 111（Electron 22 / Win7 版）
+      # 上是**静默失效** —— 声明被直接丢弃、不报错，只在真机表现为「一堆半透明
+      # 元素变透明」。而开发机是 Chromium 132，本地永远看不见这个问题。
+      #
+      # 两个方向都要验（互补，缺一不可）：
+      #   * win7  : 回退开关打开后，CSS 里不得再有裸 color-mix，且兜底合法；
+      #   * modern: 默认构建必须**保留**原生 color-mix、不得出现 --sm-mix-*，
+      #             证明回退代码没有泄漏到正式版。
+      - name: Verify color-mix fallback (win7 artifact)
+        run: |
+          npm run build:renderer:win7
+          npm run verify:colormix -- --mode=win7
+
+      - name: Verify color-mix fallback (modern artifact unchanged)
+        run: |
+          npm run build:renderer
+          npm run verify:colormix -- --mode=modern
+
   # ---------------------------------------------------------------------------
   # 安装包：Windows NSIS / Linux AppImage
   #
@@ -263,6 +283,107 @@ jobs:
         with:
           name: ${{ matrix.artifact-name }}
           path: ${{ matrix.artifact-path }}
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Win7 兼容版（Electron 22）：独立作业
+  #
+  # 为什么单独一个作业、跑在 Linux 上：
+  #   * Win7 目标 `x86_64-win7-windows-gnu` 是 tier-3，要 nightly + `-Z build-std`
+  #     从源码编 std；Windows runner 上反而更麻烦（还要额外装 mingw）。
+  #   * Linux 上交叉编译出的 PE 已实测无 Win8+ 符号（见 verify-win7-build.mjs），
+  #     不需要 Windows 才能产出可用二进制。
+  #   * 与 `build` 作业完全并行，不拖慢现有流水线；产物独立上传。
+  #
+  # **刻意不写 needs**：与 lint / build 并行，最慢的一环决定总时长。
+  # ---------------------------------------------------------------------------
+  win7:
+    name: build (win7 / Electron 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      # Win7 目标需要 nightly（-Z build-std 仅 nightly 可用）+ rust-src
+      - name: Setup Rust (nightly + rust-src)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      # tier-3 目标不自带链接器，需要 mingw-w64；pkg-config/libssl 是后端
+      # native-tls 的宿主依赖。与 lint 作业的依赖集一致。
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev mingw-w64
+
+      - name: Rust cache (win7 target dir)
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            apps/desktop/backend -> target
+            apps/desktop/splash -> target
+          prefix-key: win7
+          # build-std 的产物与普通 target 布局不同，单独缓存避免互相污染
+          key: win7-electron22
+
+      - name: Cache electron / electron-builder downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: ${{ runner.os }}-electron22-cache-${{ hashFiles('apps/desktop/package-lock.json', 'apps/desktop/electron-builder.win7.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-electron22-cache-
+
+      - name: Install frontend dependencies
+        run: npm ci --no-audit --no-fund
+
+      # ---- 构建三块产物 ----
+      # 1) Win7 后端（无 SMTC；lofty 写标签替代 taglib-wasm）
+      - name: Build Rust backend for Win7
+        run: npm run build:backend:win7
+
+      # 2) Win7 原生启动器
+      - name: Build native launcher for Win7
+        run: npm run build:splash:win7
+
+      # 3) 渲染层（启用 color-mix 回退）+ Win7 主进程
+      - name: Build renderer (color-mix fallback) + electron main
+        run: |
+          npm run build:renderer:win7
+          npm run build:main:win7
+
+      # ---- 验收（三道，全部失败即红） ----
+      # a) Win7 产物静态检查：主进程无 Electron25+ API 直调、两个 exe 无 Win8+ 符号
+      - name: Verify Win7 artifacts
+        run: npm run verify:win7
+
+      # b) color-mix 回退：CSS 里不得再有裸 color-mix，兜底必须合法
+      - name: Verify color-mix fallback
+        run: npm run verify:colormix -- --mode=win7
+
+      # c) 打包成 NSIS 安装包（Electron 22.3.27，见 electron-builder.win7.yml）
+      - name: Package Win7 NSIS installer
+        run: npx electron-builder --config electron-builder.win7.yml --win nsis --publish never
+
+      - name: Upload Win7 installer
+        uses: actions/upload-artifact@v5
+        with:
+          name: windows-win7-build
+          path: apps/desktop/release-win7/*.exe
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------

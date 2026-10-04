@@ -3,6 +3,8 @@ import vue from "@vitejs/plugin-vue";
 import { fileURLToPath, URL } from "node:url";
 import { readFileSync } from "node:fs";
 
+import { colorMixFallback } from "./scripts/vite-plugin-colormix-fallback.mjs";
+
 /**
  * 应用版本号以构建期常量注入（`__APP_VERSION__`）。单一真源是
  * `backend/silvermoon.config.json`（主进程与后端都读它），
@@ -22,6 +24,15 @@ export default defineConfig(async () => ({
           isCustomElement: (tag) => tag.startsWith("m3e-"),
         },
       },
+    }),
+    // color-mix() 回退（Chromium < 111 / Electron 22）。
+    //
+    // 只在 `SM_COLORMIX_FALLBACK=1` 时生效 —— **现代构建的 CSS 逐字节不变**，
+    // 零回归风险。Win7 版的 `dist:win7` 会自动带上这个环境变量。
+    // 详见 scripts/vite-plugin-colormix-fallback.mjs 与 src/utils/colorMixRuntime.ts。
+    colorMixFallback({
+      enabled: process.env.SM_COLORMIX_FALLBACK === "1",
+      root: fileURLToPath(new URL(".", import.meta.url)),
     }),
   ],
   define: {
