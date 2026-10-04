@@ -17,6 +17,7 @@ import {
 } from "@/stores/settings";
 import type { ObsceneMode } from "@/utils/obscene";
 import { useSkinsStore } from "@/stores/skins";
+import { useDesktopStore } from "@/stores/desktop";
 import { useBangumiCollectStore } from "@/stores/bangumiCollect";
 import { useLibraryStore } from "@/stores/library";
 import AudioEffectsPanel from "@/components/AudioEffectsPanel.vue";
@@ -186,11 +187,29 @@ const isCustomSeed = computed(
   () => !COLOR_SEEDS.some((c) => c.hex.toLowerCase() === settings.seedColor.toLowerCase()),
 );
 
+/** 系统强调色（UDA 读取）：平台不支持或未探测到时为 null */
+const desktopEnv = useDesktopStore();
+const systemAccentHex = computed(() => {
+  const rgba = desktopEnv.accent;
+  if (!rgba) return null;
+  const [r, g, b] = rgba;
+  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+});
+
 function pickSeed(hex: string) {
+  // 手动取色即把种子来源切回 manual，避免「跟随后点色板不生效」
+  settings.seedSource = "manual";
   settings.applyColorScheme(hex);
 }
 
+/** 切到「跟随系统」：由 store 的 watch 触发令牌重算 */
+function pickSystemSeed() {
+  settings.seedSource = "system";
+  settings.applyTheme(settings.theme);
+}
+
 function onCustomSeed(event: Event) {
+  settings.seedSource = "manual";
   settings.applyColorScheme((event.target as HTMLInputElement).value);
 }
 
@@ -658,7 +677,7 @@ function selectSection(id: string) {
             </button>
             <label
               class="swatch custom"
-              :class="{ active: isCustomSeed }"
+              :class="{ active: isCustomSeed && settings.seedSource !== 'system' }"
               :style="{ '--sw': settings.seedColor }"
               :title="t('settings.colorCustom')"
             >
@@ -672,6 +691,19 @@ function selectSection(id: string) {
                 @input="onCustomSeed"
               />
             </label>
+            <!-- 系统强调色（UDA）：平台支持时作为第三个种子来源出现 -->
+            <button
+              v-if="systemAccentHex"
+              class="swatch"
+              :class="{ active: settings.seedSource === 'system' }"
+              :style="{ '--sw': systemAccentHex }"
+              :title="t('settings.system')"
+              :aria-label="t('settings.system')"
+              :disabled="seedLocked"
+              @click="pickSystemSeed()"
+            >
+              <span class="material-symbols-outlined">check</span>
+            </button>
           </div>
         </div>
         <p class="hint">

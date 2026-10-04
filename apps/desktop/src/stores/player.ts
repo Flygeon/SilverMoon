@@ -16,6 +16,7 @@ import {
   taggedLyricsForSong,
 } from "@/utils/musicTagLyrics";
 import { useMusicTagsStore } from "@/stores/musicTags";
+import { useDesktopStore, WAKE_REASON } from "@/stores/desktop";
 import { emitDesktopLyricsState } from "@/utils/desktopLyrics";
 import {
   fetchCloudLyrics,
@@ -2077,6 +2078,15 @@ export const usePlayerStore = defineStore("player", () => {
       inflight: [...analysisInflight.keys()],
     };
   }
+
+  // 播放期间阻止息屏：全屏看视频 / 桌面歌词挂在桌面上时不该黑屏。
+  // 用 display 锁而非 system 锁——用户主动合盖或按电源键仍应能休眠。
+  // 失败静默：平铺 WM 上可能没有 ScreenSaver 服务，不能因此影响播放。
+  watch(playing, (nowPlaying) => {
+    const desktopEnv = useDesktopStore();
+    if (nowPlaying) void desktopEnv.keepAwake(WAKE_REASON.playback, "display");
+    else void desktopEnv.allowSleep(WAKE_REASON.playback);
+  });
 
   return {
     song,

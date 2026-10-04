@@ -3,6 +3,7 @@ import { computed, ref, shallowRef } from "vue";
 import type { UnlistenFn } from "@/ipc/events";
 import { capabilities, isDesktop } from "@/capabilities";
 import { useSettingsStore } from "@/stores/settings";
+import { useDesktopStore, WAKE_REASON } from "@/stores/desktop";
 import { markBoot } from "@/utils/bootTiming";
 import type { ListQuery, MediaEntry, ScanProgress } from "@shared/types";
 
@@ -284,6 +285,10 @@ export const useLibraryStore = defineStore("library", () => {
     error.value = null;
     progress.value = null;
 
+    // 全库扫描可能跑很久（大库几十分钟），期间阻止系统自动挂起。
+    // 失败静默：Wayland 平铺 WM 上可能没有 ScreenSaver 服务，不能因此中断扫描。
+    void useDesktopStore().keepAwake(WAKE_REASON.scan, "system");
+
     // 事件驱动进度，替代旧的 500ms 轮询
     unlistenScan?.();
     unlistenScan = await capabilities.onScanProgress((p) => {
@@ -321,12 +326,22 @@ export const useLibraryStore = defineStore("library", () => {
     currentJobId.value = null;
     unlistenScan?.();
     unlistenScan = null;
+    // 扫描结束，撤销防休眠理由（集合里还有别的理由时不会真正释放锁）
+    void useDesktopStore().allowSleep(WAKE_REASON.scan);
     if (p.stage === "error") {
       error.value = p.error ?? "scan-failed";
+      // 窗口收进托盘 / 切到别的工作区时应用内提示看不到，走系统通知
+      void useDesktopStore().notify("媒体库扫描失败", p.error ?? "未知错误", { urgency: 1 });
       return;
     }
     invalidate();
     await refreshCounts();
+    // 后台完成的回执：新增/更新条目数
+    void useDesktopStore().notify(
+      "媒体库扫描完成",
+      `新增 ${p.added} · 更新 ${p.updated} · 移除 ${p.removed}`,
+      { urgency: 0 },
+    );
   }
 
   async function cancelScan() {

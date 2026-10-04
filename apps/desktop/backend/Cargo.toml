@@ -74,10 +74,34 @@ tiny_http = "0.12"
 # 不启动其 HTTP 服务端。该 crate 内已自带 ureq/sha1/rand/qrcode 等依赖。
 kugou_server = { path = "kugou_server" }
 
+# ---------------------------------------------------------------------------
+# 桌面环境集成（UDA / UniDesktop API v0.2.0）
+#
+# 覆盖四项能力：壁纸设置、常亮锁（防休眠）、系统通知、系统强调色。
+# 之所以不直接调各平台 API：这四项在 Linux 上按桌面环境分裂为 gsettings /
+# plasmashell / hyprpaper / swww / feh，Windows 上又是另一套 Win32 / WinRT，
+# 且各自的失败模式不同；UDA 用一套能力驱动的 Rust trait 统一，并给出能力位
+# 让前端在出错**之前**分流。
+#
+# 只引入 core + 对应平台实现，不引入 uda-ffi：本后端是原生 Rust，不需要 C-ABI。
+# 上游尚未发布到 crates.io，故以 git 依赖引入并 **pin 到确定 commit**
+# （上游 v0.2.0、API 未稳定，不要改成跟踪分支）。
+# 许可：MIT OR Apache-2.0（双许可），与本项目 GPL-3.0-only 单向兼容。
+#
+# 注意：uda-platform-windows 整个 crate 是 #![cfg(windows)]，在非 Windows
+# 目标上编译为空；Linux 侧同理只在 Linux 目标下引入，macOS 不受影响
+# （desktop.rs 内有对应的 unsupported 分支返回明确错误，而非编译失败）。
+# ---------------------------------------------------------------------------
+[target.'cfg(target_os = "linux")'.dependencies]
+uda-core = { git = "https://github.com/UniDesktop/SDK", rev = "19453c4fcd87b4af2e424fef2708c08e907c2ab9" }
+uda-platform-linux = { git = "https://github.com/UniDesktop/SDK", rev = "19453c4fcd87b4af2e424fef2708c08e907c2ab9" }
+
 # Windows 系统媒体控件（SMTC）：把本应用注册为系统媒体会话。
 # 仅在 Windows 编译，Linux/macOS 构建不受影响。
 [target.'cfg(windows)'.dependencies]
 smtc-tokio = "0.1"
+uda-core = { git = "https://github.com/UniDesktop/SDK", rev = "19453c4fcd87b4af2e424fef2708c08e907c2ab9" }
+uda-platform-windows = { git = "https://github.com/UniDesktop/SDK", rev = "19453c4fcd87b4af2e424fef2708c08e907c2ab9" }
 
 # ---------------------------------------------------------------------------
 # 发布构建配置

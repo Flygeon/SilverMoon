@@ -1332,3 +1332,45 @@ export interface AppliedOnlineTags {
   /** 写入时间（ms） */
   cachedAt: number;
 }
+
+// ---------------------------------------------------------------------------
+// 桌面环境集成（经 UDA：壁纸 / 常亮锁 / 系统通知 / 系统强调色）
+// ---------------------------------------------------------------------------
+
+/** 桌面集成后端所在平台；UDA 目前只实现 Linux 与 Windows。 */
+export type DesktopPlatform = "linux" | "windows" | "unsupported";
+
+/**
+ * 当前平台可用的桌面集成能力。
+ *
+ * 启动时拉一次，用于决定入口显隐——UDA 的设计原则就是「调用前分流」，
+ * 而不是调用了再 catch。
+ */
+export interface DesktopCaps {
+  platform: DesktopPlatform;
+  /** 该平台是否有 UDA 后端（macOS 为 false） */
+  supported: boolean;
+  setWallpaper: boolean;
+  getWallpaper: boolean;
+  sendNotification: boolean;
+  wakeLock: boolean;
+  readAccentColor: boolean;
+}
+
+/** 壁纸填充模式 */
+export type WallpaperMode = "crop" | "fill" | "fit" | "stretch";
+
+/** 常亮锁类型：display 只阻止熄屏，system 同时阻止空闲挂起 */
+export type WakeLockKind = "display" | "system";
+
+/** 常亮锁当前状态 */
+export interface WakeLockStatus {
+  held: boolean;
+  /** display / system；未持锁时为空串 */
+  kind: string;
+  /** 当前登记的全部「保持唤醒」理由 */
+  reasons: string[];
+}
+
+/** 系统强调色（RGBA，各通道 0-255） */
+export type Rgba = [number, number, number, number];

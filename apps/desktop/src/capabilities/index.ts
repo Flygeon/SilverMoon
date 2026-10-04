@@ -84,6 +84,11 @@ import type {
   OsuSearchResult,
   OsuImportResult,
   OsuProgress,
+  DesktopCaps,
+  Rgba,
+  WakeLockKind,
+  WakeLockStatus,
+  WallpaperMode,
 } from "@shared/types";
 import { mockInvoke, mockMusicTags } from "./mock";
 
@@ -368,6 +373,48 @@ export const capabilities = {
   async onAppPlayerCommand(handler: (action: string) => void): Promise<UnlistenFn> {
     if (!isDesktop) return () => {};
     return listen<string>("app:player-command", (e) => handler(e.payload));
+  },
+
+  // ---- 桌面环境集成（UDA：壁纸 / 常亮锁 / 系统通知 / 系统强调色）----
+  /**
+   * 当前平台的桌面集成能力。启动时拉一次用于决定入口显隐；
+   * 浏览器预览下为 null，调用方需自行兜底。
+   */
+  desktopCapabilities(): Promise<DesktopCaps | null> {
+    return safeInvoke<DesktopCaps | null>("desktop_capabilities");
+  },
+  /**
+   * 设为系统壁纸。path 需为绝对路径（Rust 侧会 canonicalize）；
+   * dark=true 时按「深色模式专用壁纸」写入（GNOME 成对写 picture-uri-dark）。
+   */
+  setWallpaper(path: string, mode?: WallpaperMode, dark?: boolean): Promise<void> {
+    return safeInvoke("desktop_set_wallpaper", { path, mode, dark });
+  },
+  /** 读取当前系统壁纸路径；平台不支持读取时为 null */
+  getWallpaper(): Promise<string | null> {
+    return safeInvoke<string | null>("desktop_get_wallpaper");
+  },
+  /** 系统强调色 [r,g,b,a]；平台无强调色时为 null（这是正常状态，不是错误） */
+  systemAccentColor(): Promise<Rgba | null> {
+    return safeInvoke<Rgba | null>("desktop_accent_color");
+  },
+  /** 发系统通知，返回平台分配的通知 id */
+  desktopNotify(title: string, body?: string, icon?: string, urgency?: 0 | 1 | 2): Promise<number> {
+    return safeInvoke<number>("desktop_notify", { title, body, icon, urgency });
+  },
+  /**
+   * 登记一个「需要保持唤醒」的理由（同一理由重复登记幂等）。
+   * 返回是否真的持有了锁——Wayland 平铺 WM 等环境下可能失败。
+   */
+  acquireWakeLock(reason: string, kind?: WakeLockKind): Promise<boolean> {
+    return safeInvoke<boolean>("desktop_wakelock_acquire", { reason, kind });
+  },
+  /** 撤销一个理由（理由集合清空才真正释放）；不传 reason 则直接释放整把锁 */
+  releaseWakeLock(reason?: string): Promise<boolean> {
+    return safeInvoke<boolean>("desktop_wakelock_release", { reason });
+  },
+  wakeLockStatus(): Promise<WakeLockStatus> {
+    return safeInvoke<WakeLockStatus>("desktop_wakelock_status");
   },
   /** 退出应用（配合关闭最小化到托盘：托盘菜单「退出」或关闭拦截时显式退出） */
   exitApp(): Promise<void> {

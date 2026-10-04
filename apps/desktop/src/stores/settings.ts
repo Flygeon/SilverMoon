@@ -5,11 +5,14 @@ import { capabilities } from "@/capabilities";
 import { applySeedColor, clearSeedTokens } from "@/utils/dynamicTheme";
 import { applySkin } from "@/utils/skinLoader";
 import { activePrepared, activeSkinDoc, skinModeLock, skinSafeMode } from "@/utils/skinRuntime";
-import type { MusicServer, OnlinePlaylistEntry } from "@shared/types";
+import { useDesktopStore } from "./desktop";
+import type { MusicServer, OnlinePlaylistEntry, Rgba } from "@shared/types";
 import type { LyricSourcePref } from "@/utils/preciseLyrics";
 import type { ObsceneMode } from "@/utils/obscene";
 
 export type ThemeMode = "system" | "light" | "dark";
+/** MD3 动态配色的种子来源：manual 手动色 / system 跟随系统强调色 */
+export type SeedSource = "manual" | "system";
 export type PdfReadMode = "single" | "dual" | "scroll";
 /** 阅读器背景主题 */
 export type ReaderThemeKey = "dark" | "light" | "sepia" | "green";
@@ -73,6 +76,11 @@ const DEFAULTS = {
   theme: "system" as ThemeMode,
   /** MD3 动态配色的种子色（十六进制）；由它实时生成整套颜色令牌 */
   seedColor: "#1A5C9E",
+  /**
+   * 种子来源：system 时读作系统强调色（Windows DWM AccentColor /
+   * GNOME accent-color），平台拿不到时回落 `seedColor`。
+   */
+  seedSource: "manual" as SeedSource,
   /** 激活皮肤的 id；空串 = 默认皮肤（动态配色） */
   activeSkin: "",
   /** 已删除的内置皮肤 id（删除即记忆，不再播种复活） */
@@ -356,8 +364,12 @@ const DEFAULTS = {
 };
 
 export const useSettingsStore = defineStore("settings", () => {
+  // 系统强调色（桌面集成）由 desktop store 提供；只读它的 accent，
+  // 不反向依赖，避免与桌面能力探测形成环。
+  const desktop = useDesktopStore();
   const theme = ref<ThemeMode>(DEFAULTS.theme);
   const seedColor = ref(DEFAULTS.seedColor);
+  const seedSource = ref<SeedSource>(DEFAULTS.seedSource);
   const activeSkin = ref(DEFAULTS.activeSkin);
   const hiddenBuiltinSkins = ref<string[]>([...DEFAULTS.hiddenBuiltinSkins]);
   const lang = ref<"zh" | "en">(DEFAULTS.lang);
@@ -486,6 +498,7 @@ export const useSettingsStore = defineStore("settings", () => {
   const fields = {
     theme,
     seedColor,
+    seedSource,
     activeSkin,
     hiddenBuiltinSkins,
     lang,
@@ -687,6 +700,24 @@ export const useSettingsStore = defineStore("settings", () => {
   }
 
   let mediaQuery: MediaQueryList | null = null;
+  /** [r,g,b,a] → #rrggbb（MD3 取色只吃 RGB，alpha 忽略） */
+  function rgbaToHex([r, g, b]: Rgba): string {
+    return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  /**
+   * 当前生效的种子色。
+   *
+   * 「跟随系统」读 UDA 给的系统强调色；平台没有强调色（KDE / XFCE /
+   * 平铺 WM 常见）或尚未探测到时回落手动色——按 UDA 文档的约定，
+   * 拿不到强调色是**正常状态**，不当异常处理。
+   */
+  function resolveSeed(): string {
+    if (seedSource.value !== "system") return seedColor.value;
+    const rgba = desktop.accent;
+    return rgba ? rgbaToHex(rgba) : seedColor.value;
+  }
+
   function resolveTheme() {
     // 单模式皮肤强制锁定解析结果（方案书 §6.4）：settings.theme 保留用户原偏好，
     // 换回双模式皮肤后自动恢复
@@ -702,7 +733,7 @@ export const useSettingsStore = defineStore("settings", () => {
     const seedAllowed = !skinSafeMode.value && (!skin || skin.manifest.seedColor);
     if (!seedAllowed) clearSeedTokens();
     applySkin(skinSafeMode.value ? null : skin, dark, activePrepared.value ?? undefined);
-    if (seedAllowed) applySeedColor(seedColor.value, dark);
+    if (seedAllowed) applySeedColor(resolveSeed(), dark);
   }
 
   function applyTheme(mode: ThemeMode) {
@@ -761,6 +792,10 @@ export const useSettingsStore = defineStore("settings", () => {
     },
     { immediate: true },
   );
+
+  // 种子来源为「跟随系统」时，强调色探测完成 / 用户切换来源都要重算令牌。
+  // resolveSeed() 内部负责回落，这里无条件重算（一次 MD3 令牌计算，成本可忽略）。
+  watch([() => desktop.accent, seedSource], () => resolveTheme());
 
   return {
     ...fields,

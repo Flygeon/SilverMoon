@@ -7,6 +7,7 @@ import { usePlayerStore } from "@/stores/player";
 import { useAudioEffectsStore } from "@/stores/audioEffects";
 import { useLibraryStore } from "@/stores/library";
 import { useMusicTagsStore } from "@/stores/musicTags";
+import { useDesktopStore } from "@/stores/desktop";
 import { isDesktop } from "@/capabilities";
 import MiniPlayer from "@/components/MiniPlayer.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
@@ -35,6 +36,8 @@ import type { DesktopLyricsBounds } from "@/stores/settings";
 const settings = useSettingsStore();
 const player = usePlayerStore();
 const skins = useSkinsStore();
+// 桌面环境集成（壁纸 / 常亮锁 / 系统通知 / 系统强调色）
+const desktopEnv = useDesktopStore();
 // 托盘命令 + 关闭最小化到托盘 + 应用内热键
 useDesktopChrome();
 // ---- 桌面歌词控制器 ----
@@ -157,6 +160,9 @@ onMounted(async () => {
   }
   // 启动打点：这段串行 await 是「白屏/splash 停留」的主要来源，逐段记耗时
   markBoot("主界面初始化开始");
+  // 桌面集成能力探测（异步、不阻塞启动）：结果决定壁纸/常亮锁/通知入口显隐，
+  // 强调色到达后由 settings 的种子来源 watch 自动重算主题。
+  void desktopEnv.init();
   await settings.load();
   markBoot("设置已加载");
   // 皮肤加载（含 --safe-mode 检测、内置皮肤播种、激活皮肤解析）须在主题解析前完成
