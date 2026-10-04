@@ -6,10 +6,13 @@ import { useSkinsStore } from "@/stores/skins";
 import { usePlayerStore } from "@/stores/player";
 import { useAudioEffectsStore } from "@/stores/audioEffects";
 import { useLibraryStore } from "@/stores/library";
+import { useMusicTagsStore } from "@/stores/musicTags";
 import { isDesktop } from "@/capabilities";
 import MiniPlayer from "@/components/MiniPlayer.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import TextPrompt from "@/components/TextPrompt.vue";
+import MusicTagDialog from "@/components/MusicTagDialog.vue";
+import AppToast from "@/components/AppToast.vue";
 import WindowTitleBar from "@/components/WindowTitleBar.vue";
 import { useDesktopChrome } from "@/composables/useDesktopChrome";
 import { activeSkinDoc, skinBgActive, skinSafeMode } from "@/utils/skinRuntime";
@@ -157,6 +160,8 @@ onMounted(async () => {
   settings.applyTheme(settings.theme);
   void audioEffects.init();
   void library.refreshCounts();
+  // 在线歌曲的标签覆盖：启动时一次性灌回内存，切歌时无需再等 IPC
+  void useMusicTagsStore().hydrate();
 });
 
 // ---- 皮肤拖拽导入（全窗口任意位置，支持 v1 .json 与 v2 .zip）----
@@ -306,9 +311,11 @@ router.afterEach((to) => {
       v-if="player.song && !isPlayerPage && !isDesktopLyricsPage && !isExtensionHostPage"
     />
 
-    <!-- 全局 M3 右键菜单与文本输入框（Teleport 到 body） -->
+    <!-- 全局 M3 右键菜单、文本输入框与写标签对话框（Teleport 到 body） -->
     <ContextMenu />
     <TextPrompt />
+    <MusicTagDialog />
+    <AppToast />
 
     <!-- 全局回退提示（播放器 store 触发，播放页/列表页均可见） -->
     <transition name="lyric-toast">

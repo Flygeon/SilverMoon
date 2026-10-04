@@ -1252,3 +1252,69 @@ export interface ExtSource {
   path?: string | null;
   url?: string | null;
 }
+// ---- 音乐标签写入 ----
+
+/** 本地聚合搜索的数据源（对应 `utils/musicTagSources.ts`） */
+export type MusicTagSource = "qq" | "netease" | "kugou" | "migu" | "kuwo";
+
+/** 一条可写入歌曲的音乐标签字段（全部 string，空串 = 不修改该字段） */
+export interface MusicTagFields {
+  title: string;
+  artist: string;
+  album: string;
+  albumArtist: string;
+  /** 年份，原样字符串（"2005" / "2005-10-31" / ""） */
+  year: string;
+  /** 音轨号，保留 "3/12" 这种原始写法 */
+  trackNo: string;
+  discNo: string;
+  genre: string;
+  comment: string;
+  /** 未同步歌词纯文本（LRC 或纯文本） */
+  lyrics: string;
+}
+
+/** 封面处理方式：keep 保留原封面 / set 用新图替换 / remove 删除封面 */
+export type MusicTagCoverMode = "keep" | "set" | "remove";
+
+/** 封面图片（base64，可带 dataURL 前缀） */
+export interface MusicTagCover {
+  base64: string;
+  mimeType: string;
+}
+
+/** 「写音乐标签」的目标 */
+export type MusicTagTarget =
+  | { kind: "local"; fileId: string; path: string; label: string }
+  | { kind: "online"; song: OnlineSong; label: string };
+
+/** 聚合搜索返回的归一化候选 */
+export interface MusicTagSearchResult {
+  source: MusicTagSource;
+  /** 源内歌曲 id（取歌词用） */
+  songId: string;
+  title: string;
+  artist: string;
+  album: string;
+  year: string;
+  coverUrl: string;
+  /** 该候选自带的歌词地址（migu 用；其它源留空） */
+  lyricsUrl?: string;
+  /** 封面尺寸等附加信息（qq 存 albumMid，kuwo 存 web_albumpic_short） */
+  coverKey?: string;
+  /** 原始 JSON，调试用 */
+  raw?: Record<string, unknown>;
+}
+
+/** 在线歌曲的标签覆盖（内存 + 磁盘缓存共用） */
+export interface AppliedOnlineTags {
+  /** `${server}:${id}` */
+  key: string;
+  fields: MusicTagFields;
+  /** 覆盖写入前平台自己的标签（还原默认 / 歌词回退用；缺省视为无历史） */
+  original?: MusicTagFields | null;
+  /** 磁盘缓存封面绝对路径（asset:// 用） */
+  coverPath?: string | null;
+  /** 写入时间（ms） */
+  cachedAt: number;
+}

@@ -10,6 +10,7 @@ import { usePlayerStore } from "@/stores/player";
 import { useSettingsStore } from "@/stores/settings";
 import { capabilities } from "@/capabilities";
 import { openContextMenu } from "@/composables/useContextMenu";
+import { openMusicTagDialog } from "@/composables/useMusicTagDialog";
 import { translate } from "@shared/i18n";
 import { formatDuration } from "@/utils/format";
 import type { MediaEntry } from "@shared/types";
@@ -75,6 +76,7 @@ function menuOf(item: MediaEntry) {
       icon: item.favorite ? "heart_broken" : "favorite",
     },
     { id: "reveal", label: t("context.revealInExplorer"), icon: "folder_open" },
+    { id: "write-tags", label: t("musicTag.menu"), icon: "sell" },
   ];
 }
 
@@ -96,6 +98,14 @@ function onMenuSelect(id: string, item: MediaEntry, index: number) {
       break;
     case "reveal":
       void capabilities.revealInExplorer(item.path);
+      break;
+    case "write-tags":
+      openMusicTagDialog({
+        kind: "local",
+        fileId: item.id,
+        path: item.path,
+        label: titleOf(item),
+      });
       break;
     default:
       break;

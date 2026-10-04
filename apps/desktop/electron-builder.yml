@@ -12,6 +12,11 @@ files:
   - dist-electron/**/*
   - package.json
   - "!**/*.map"
+  # taglib-wasm 例外：它是运行期 external（ESM-only，不能打进 main.cjs），
+  # 必须随包分发 dist（含 wasm 与 JS 胶水）才能在安装后加载。
+  # 这一行要写在下面的 "!node_modules/**/*" **之前**——node_modules 的匹配器只取
+  # 排除项并 prependPattern("**/*")，正向模式必须抢在排除项之前声明。
+  - node_modules/taglib-wasm/dist/**/*
   # 必须显式排除生产依赖树。
   #
   # electron-builder 打包 node_modules 是**独立于上面正向模式**的一条支路：
@@ -41,6 +46,12 @@ files:
 
 asar: true
 
+# taglib-wasm 的 wasm 与 JS 胶水要在 asar 之外真实落盘：
+# Node 的 createRequire/动态 import 解析 asar 内部路径会拿到不可用的 fs 路径，
+# WASI 后端还要用真实文件系统打开 .wasm。
+asarUnpack:
+  - node_modules/taglib-wasm/**
+
 # Electron 自带 55 个语言包（locales/*.pak），实测解包后 48.3MB，而界面只提供中文。
 # 只保留 zh-CN / en-US 两个（各约 0.56MB），其余由 electron-builder 在打包后删除。
 # 实现见 app-builder-lib/out/electron/ElectronFramework.js 的
@@ -62,6 +73,8 @@ win:
     # 构建前请先执行 npm run build:backend:release。
     - from: backend/target/release/silvermoon.exe
       to: bin/silvermoon-server.exe
+    - from: node_modules/taglib-wasm/dist/taglib-wasi.wasm
+      to: taglib-wasm/taglib-wasi.wasm
 
 nsis:
   oneClick: false
@@ -82,6 +95,8 @@ mac:
       to: icon.png
     - from: backend/target/release/silvermoon
       to: bin/silvermoon-server
+    - from: node_modules/taglib-wasm/dist/taglib-wasi.wasm
+      to: taglib-wasm/taglib-wasi.wasm
 
 linux:
   icon: backend/icons/icon.png
@@ -93,3 +108,5 @@ linux:
       to: icon.png
     - from: backend/target/release/silvermoon
       to: bin/silvermoon-server
+    - from: node_modules/taglib-wasm/dist/taglib-wasi.wasm
+      to: taglib-wasm/taglib-wasi.wasm

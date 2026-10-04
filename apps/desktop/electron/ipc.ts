@@ -22,6 +22,7 @@ import {
   watchClose,
 } from "./windows";
 import { handleStore } from "./store";
+import { handleMusicTags } from "./tags";
 import { clearCoverCache } from "./protocols";
 import { log } from "./log";
 import { callSidecar, callSidecarBatch } from "./main-bridge";
@@ -319,6 +320,11 @@ const handlers: Record<string, Handler> = {
   // 键值存储
   // -------------------------------------------------------------------------
   store: (payload) => handleStore(payload),
+
+  // -------------------------------------------------------------------------
+  // 音乐标签（本地写 taglib / 在线磁盘缓存）
+  // -------------------------------------------------------------------------
+  musicTags: async (payload) => handleMusicTags(payload),
 
   // -------------------------------------------------------------------------
   // 路径

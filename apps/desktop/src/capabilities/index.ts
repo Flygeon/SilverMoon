@@ -4,12 +4,14 @@
  * 前端不直接触碰磁盘/数据库/原生资源。
  */
 import { invoke, invokeBatch, toAssetUrl } from "@/ipc/invoke";
+import { callBridge } from "@/ipc/bridge";
 import { listen, type UnlistenFn } from "@/ipc/events";
 import { openPath, openUrl, revealItemInDir } from "@/ipc/opener";
 import { open as dialogOpen, save as dialogSave } from "@/ipc/dialog";
 import { writeFile } from "@/ipc/fs";
 import { clearCoverCache as clearCoverCacheIpc } from "@/ipc/app";
 import type {
+  AppliedOnlineTags,
   BookProgress,
   FfmpegStatus,
   ListenSourceStat,
@@ -17,6 +19,9 @@ import type {
   ListQuery,
   MediaEntry,
   MediaMetadata,
+  MusicTagCover,
+  MusicTagCoverMode,
+  MusicTagFields,
   PlaySessionEnd,
   PlaySessionStart,
   ScanConfig,
@@ -80,7 +85,7 @@ import type {
   OsuImportResult,
   OsuProgress,
 } from "@shared/types";
-import { mockInvoke } from "./mock";
+import { mockInvoke, mockMusicTags } from "./mock";
 
 /** 桌面端（Electron 宿主）为真；纯 Web 预览时为假，所有原生能力降级为 mock。 */
 export const isDesktop = typeof window !== "undefined" && !!window.__SILVERMOON__;
@@ -152,6 +157,18 @@ async function loggedBqgInvoke<T>(
     }).catch(() => {});
     throw e;
   }
+}
+
+/**
+ * 音乐标签通道调用。
+ *
+ * 与 `safeInvoke` 的差别：这条通道不是 Rust 命令，而是主进程的通用能力
+ * （`window.__SILVERMOON__.call("musicTags", payload)`），因此单独走 `callBridge`；
+ * 浏览器预览（无宿主）时交回 mock 的内存实现，保证 UI 仍可见可点。
+ */
+function musicTagCall<T>(op: string, payload: Record<string, unknown> = {}): Promise<T> {
+  if (!isDesktop) return Promise.resolve(mockMusicTags<T>(op, payload));
+  return callBridge<T>("musicTags", { op, ...payload });
 }
 
 export const capabilities = {
@@ -1016,5 +1033,85 @@ export const capabilities = {
   ): Promise<UnlistenFn> {
     if (!isDesktop) return () => {};
     return listen<unknown>(`ext://${id}/${event}`, (e) => handler(e.payload));
+  },
+
+  // ---- 音乐标签写入（契约 §5.1 + 在线歌词旁路 4 个方法）----
+  /** 本地：写标签（含封面/歌词）。coverMode 缺省 keep */
+  writeLocalMusicTags(
+    path: string,
+    fields: MusicTagFields,
+    cover?: { mode: MusicTagCoverMode; image?: MusicTagCover },
+  ): Promise<void> {
+    return musicTagCall("writeLocal", {
+      path,
+      fields,
+      coverMode: cover?.mode,
+      coverBase64: cover?.image?.base64,
+      coverMime: cover?.image?.mimeType,
+    });
+  },
+  /** 本地：读当前标签 */
+  readLocalMusicTags(path: string): Promise<{ fields: MusicTagFields; hasCover: boolean }> {
+    return musicTagCall("readLocal", { path });
+  },
+  /** 本地：写入前备份（只在无备份时创建）；返回是否新建了备份 */
+  backupLocalMusicTags(path: string, fields: MusicTagFields): Promise<boolean> {
+    return musicTagCall<{ created: boolean }>("backupLocal", { path, fields }).then(
+      (r) => r.created,
+    );
+  },
+  /** 本地：读写入前备份 */
+  readLocalMusicTagsBackup(path: string): Promise<MusicTagFields | null> {
+    return musicTagCall<MusicTagFields | null>("readLocalBackup", { path });
+  },
+  /** 在线：写内存 + 磁盘缓存 */
+  cacheOnlineMusicTags(
+    key: string,
+    fields: MusicTagFields,
+    cover?: { mode: MusicTagCoverMode; image?: MusicTagCover },
+  ): Promise<AppliedOnlineTags> {
+    return musicTagCall("cacheOnline", {
+      key,
+      fields,
+      coverMode: cover?.mode,
+      coverBase64: cover?.image?.base64,
+      coverMime: cover?.image?.mimeType,
+    });
+  },
+  /** 在线：读磁盘缓存（无则 null） */
+  readOnlineMusicTags(key: string): Promise<AppliedOnlineTags | null> {
+    return musicTagCall("readOnline", { key });
+  },
+  /** 在线：删缓存（还原默认） */
+  removeOnlineMusicTags(key: string): Promise<boolean> {
+    return musicTagCall<{ removed: boolean }>("removeOnline", { key }).then((r) => r.removed);
+  },
+  /** 在线：全量列出（启动时水合内存） */
+  listOnlineMusicTags(): Promise<AppliedOnlineTags[]> {
+    return musicTagCall("listOnline", {});
+  },
+  /** 本地文件路径 → 库内 fileId（用于刷新元数据；找不到返回 null） */
+  async musicTagFileId(path: string): Promise<string | null> {
+    const name = path.replace(/\\/g, "/").split("/").pop() ?? "";
+    if (!name) return null;
+    const list = await capabilities.listFiles({ search: name, limit: 20 });
+    const hit = list.find((entry) => entry.path === path);
+    return hit ? hit.id : null;
+  },
+  /** 在线：读旁路歌词（写标签时保存的歌词文本；无则 null） */
+  readOnlineMusicTagLyrics(key: string): Promise<string | null> {
+    return musicTagCall("readLyrics", { key });
+  },
+  /** 在线：写/清旁路歌词（空串 = 删除） */
+  writeOnlineMusicTagLyrics(key: string, lyrics: string): Promise<void> {
+    return musicTagCall("writeLyrics", { key, lyrics });
+  },
+  /** 在线：读覆盖前平台原始标签快照 */
+  readOnlineMusicTagOriginal(key: string): Promise<MusicTagFields | null> {
+    return musicTagCall("readOriginal", { key });
+  },
+  /** 在线：补齐原始标签快照（只填缺的字段，不覆盖已有值） */
+  cacheOnlineMusicTagOriginal(key: string, fields: Partial<MusicTagFields>): Promise<void> {
+    return musicTagCall("writeOriginal", { key, fields });
   },
 };

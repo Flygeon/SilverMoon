@@ -332,6 +332,41 @@ export const useLibraryStore = defineStore("library", () => {
     }
   }
 
+  /**
+   * 单条条目的乐观更新（写标签等「原地改一个文件」的场景）。
+   *
+   * 为什么需要它：后端 `get_metadata` 优先读 SQLite 的 media_metadata 缓存，
+   * 只有缓存缺失才重新解析文件；因此写完标签再 `refresh` 拉回来的仍是旧值，
+   * 用户会看到「文件写成功了、列表没变」。这里先把内存条目换成新字段让 UI 立刻正确，
+   * 再由调用方触发一次后台重扫把 DB 补正。
+   *
+   * `patch` 里值为 `undefined` 的键会被忽略——调用方用 undefined 表达「该项保持原值」
+   * （例如封面 mode 为 keep 时不该把 `hasCover` 擦成 undefined）。
+   */
+  function patchEntry(fileId: string, patch: Partial<MediaEntry>): void {
+    const clean: Partial<MediaEntry> = {};
+    for (const [key, value] of Object.entries(patch)) {
+      if (value !== undefined) clean[key as keyof MediaEntry] = value as never;
+    }
+    if (!Object.keys(clean).length) return;
+
+    let hit = false;
+    const next: Record<string, MediaEntry[]> = {};
+    for (const [type, list] of Object.entries(entriesByType.value)) {
+      let changed = false;
+      const patched = list.map((entry) => {
+        if (entry.id !== fileId) return entry;
+        changed = true;
+        hit = true;
+        // 整体替换（而不是就地改字段）以便触发响应式，与 refresh 里合并页数据的写法一致
+        return { ...entry, ...clean };
+      });
+      next[type] = changed ? patched : list;
+    }
+    if (!hit) return; // 该条目不在当前列表里（被过滤掉了）→ 静默返回
+    entriesByType.value = next;
+  }
+
   async function toggleFavorite(entry: MediaEntry) {
     const next = await capabilities.toggleFavorite(entry.id);
     // 就地更新所有列表里的同一条目
@@ -370,6 +405,7 @@ export const useLibraryStore = defineStore("library", () => {
     refreshCounts,
     loadThumbnails,
     invalidate,
+    patchEntry,
     startScan,
     cancelScan,
     toggleFavorite,

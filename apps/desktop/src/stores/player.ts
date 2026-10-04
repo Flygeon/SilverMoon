@@ -9,6 +9,13 @@ import { useAudioEffectsStore } from "@/stores/audioEffects";
 import { META_RE, insertInterludeDots, parseLrc } from "@/utils/lyricTimeline";
 import { resolveKugouUrl } from "@/utils/kugou";
 import { lrcGet, lrcSet, needsProxiedCover, resolveCover } from "@/utils/onlineCache";
+import {
+  applyTagLyrics,
+  cacheLyricsForSong,
+  lyricsFromText,
+  taggedLyricsForSong,
+} from "@/utils/musicTagLyrics";
+import { useMusicTagsStore } from "@/stores/musicTags";
 import { emitDesktopLyricsState } from "@/utils/desktopLyrics";
 import {
   fetchCloudLyrics,
@@ -56,6 +63,11 @@ import type {
 /** 浏览器预览下没有 asset 协议，直接返回原路径避免抛错 */
 function toMediaSrc(path: string): string {
   return isDesktop ? toAssetUrl(path) : path;
+}
+
+/** 只有 http(s) 封面才值得走「下载 → dataURL → IndexedDB 缓存」那条路 */
+function isHttpUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url);
 }
 
 // 双语 LRC 解析器已移至 utils/lyricTimeline.ts，此处转发保持对外 API
@@ -1489,10 +1501,89 @@ export const usePlayerStore = defineStore("player", () => {
     }
   }
 
+  /**
+   * 「写音乐标签」：把在线歌曲的标签覆盖套到播放状态上。
+   *
+   * 内存里有记录就直接用；没有则读一次磁盘缓存（写标签时落盘，重启后仍生效）。
+   * 读取失败一律静默返回 undefined —— 标签覆盖不该阻塞播放。
+   */
+  async function applyTagOverride(item: OnlineSong) {
+    const tags = useMusicTagsStore();
+    try {
+      const hit = tags.get(item) ?? (await tags.resolve(item));
+      return hit ? (tags.playbackOverride(item) ?? undefined) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * 「写音乐标签」应用 / 还原默认之后，让正在播放的在线曲目立刻生效。
+   *
+   * - 在线曲目：重新套用覆盖（含封面、SMTC 元数据、标签歌词）；
+   * - 本地曲目：元数据由 Dialog 侧刷新库并重新拉取，这里不动。
+   */
+  async function refreshTagOverrides(): Promise<void> {
+    const current = song.value;
+    if (!current || current.kind !== "online") return;
+    const target = queue.value.find((it) => isOnline(it) && it.id === current.id) as
+      OnlineSong | undefined;
+    if (!target) return;
+    const override = await applyTagOverride(target);
+    current.title = override?.title || target.name;
+    current.artist = override?.artist || target.artist;
+    current.album = override?.album || target.album || "";
+    const cover = override?.coverUrl || target.pic;
+    current.cover = cover;
+    current.coverUrl = cover;
+    // 标签歌词优先；没有覆盖歌词时保持当前歌词不动（平台歌词可能已解析好）
+    const tagged = await taggedLyricsForSong(target);
+    if (tagged) {
+      const lines = lyricsFromText(tagged);
+      if (lines.length) {
+        current.lyrics = lines;
+        setLyrics(lines);
+      }
+    }
+    if (cover && isHttpUrl(cover)) {
+      void resolveCover(cover).then((resolved) => {
+        if (song.value?.id !== current.id || resolved === cover) return;
+        song.value.cover = resolved;
+      });
+    }
+    if (cover) {
+      const img = new Image();
+      img.onload = () => {
+        if (song.value?.id === current.id) coverColors.value = getDominantColors(img);
+      };
+      img.src = cover;
+    }
+    void capabilities
+      .smtcSetMedia({
+        title: current.title,
+        artist: current.artist || null,
+        album: current.album || null,
+        durationMs: Math.round((duration.value || 0) * 1000),
+        filePath: "",
+        coverUrl: current.coverUrl ?? null,
+      })
+      .catch(() => {});
+  }
+
+  // Dialog 应用 / 还原默认后广播 `silvermoon:music-tag-updated`，这里跟着刷新一次
+  if (typeof window !== "undefined") {
+    window.addEventListener("silvermoon:music-tag-updated", () => {
+      void refreshTagOverrides();
+    });
+  }
+
   /** 播放在线歌曲：拉歌词、取封面主色、推 SMTC（封面直连 pic URL） */
   async function loadOnlineSong(item: OnlineSong) {
     loadingSong.value = true;
     try {
+      // 「写音乐标签」写入的在线标签覆盖：内存里已有就直接用，没有则读一次磁盘缓存。
+      // 必须放在下面所有 song.value / SMTC / 歌词调用之前，之后整段逻辑都读覆盖后的值。
+      const overridden = await applyTagOverride(item);
       // 酷狗列表接口不返回直链：首次播放由 MusicView 解析，这里兜底
       // 「上一首 / 下一首 / 自动续播」——解析结果写回队列项，避免重复请求
       if (!item.url && item.server === "kugou") {
@@ -1513,35 +1604,45 @@ export const usePlayerStore = defineStore("player", () => {
         }
       }
       let parsed: LyricLine[] = [];
+      // 平台歌词原文（可能是 URL 拉下来的，也可能是内嵌文本）：
+      // 提到 try 外面，因为下面的标签歌词覆盖也要用它
+      let lrcText = "";
       try {
         // lrc 字段可能是 URL（需拉取），也可能是内嵌歌词文本；
         // 歌词文本按歌曲 id 缓存到 IndexedDB，重启后不再请求网络
         const lrc = item.lrc || "";
         let text = "";
+        lrcText = lrc.includes("[") ? lrc : "";
         if (lrc.startsWith("http")) {
           const cached = await lrcGet(item.id);
           if (cached !== null) {
             text = cached;
           } else {
             text = await (await fetch(lrc)).text();
+            lrcText = text;
             void lrcSet(item.id, text);
           }
         } else if (lrc.includes("[")) {
           text = lrc;
         }
         if (text.trim()) parsed = parseLrc(text, useSettingsStore().detectInstrumental);
+        // 平台歌词存成「原始快照」：只写一次，供在线歌曲的「还原默认」把歌词也退回去
+        void cacheLyricsForSong(item, text);
       } catch {
         /* 在线歌词拉取失败不阻塞播放 */
       }
+      // 「写音乐标签」写入的歌词优先于平台歌词（覆盖读取失败时静默回退平台歌词）
+      const taggedLrc = await applyTagLyrics(item, lrcText, parsed);
+      parsed = taggedLrc.lines;
       song.value = {
         id: item.id,
-        title: item.name,
-        artist: item.artist,
-        album: item.album ?? "",
-        cover: item.pic,
+        title: overridden?.title || item.name,
+        artist: overridden?.artist || item.artist,
+        album: overridden?.album || item.album || "",
+        cover: overridden?.coverUrl || item.pic,
         src: item.url,
         lyrics: parsed,
-        coverUrl: item.pic,
+        coverUrl: overridden?.coverUrl || item.pic,
         kind: "online",
       };
       // 听歌时长统计：开始新会话
@@ -1568,9 +1669,11 @@ export const usePlayerStore = defineStore("player", () => {
         img.src = item.pic;
       }
       // 封面本地缓存：命中 IndexedDB 立即替换为 dataURL（不阻塞起播）；
-      // 未命中则后台下载并写缓存，下次进入/重启直接读本地
-      void resolveCover(item.pic).then((cover) => {
-        if (song.value?.id !== item.id || cover === item.pic) return;
+      // 未命中则后台下载并写缓存，下次进入/重启直接读本地。
+      // 注意用「套用覆盖后」的封面 URL：写标签换了封面的歌，缓存要跟着换。
+      const displayCover = song.value.cover;
+      void resolveCover(displayCover).then((cover) => {
+        if (song.value?.id !== item.id || cover === displayCover) return;
         song.value.cover = cover;
         const cachedImg = new Image();
         cachedImg.onload = () => {
@@ -1582,25 +1685,29 @@ export const usePlayerStore = defineStore("player", () => {
       // 「更精确的逐字歌词」：在线歌曲时长来自音频元数据（未就绪则等待），
       // 命中 QQ 官方逐字歌词则替换（并跳过 FFT）；失败回退本地分析
       const onlineDurationMs = await waitAudioDuration(5000);
-      void schedulePreciseQqLyrics(
-        {
-          id: item.id,
-          kind: "online",
-          title: item.name,
-          artist: item.artist,
-          durationMs: onlineDurationMs,
-        },
-        parsed,
-        { id: item.id, kind: "online", filePath: undefined, url: item.url },
-      );
+      // 用户写入的标签歌词是显式选择，逐字歌词回退链不要把它替换掉
+      if (!taggedLrc.fromTag) {
+        void schedulePreciseQqLyrics(
+          {
+            id: item.id,
+            kind: "online",
+            title: item.name,
+            artist: item.artist,
+            durationMs: onlineDurationMs,
+          },
+          parsed,
+          { id: item.id, kind: "online", filePath: undefined, url: item.url },
+        );
+      }
+      // SMTC / 桌面歌词同样用覆盖后的标题与封面
       void capabilities
         .smtcSetMedia({
-          title: item.name,
-          artist: item.artist || null,
-          album: item.album ?? null,
+          title: song.value.title,
+          artist: song.value.artist || null,
+          album: song.value.album || null,
           durationMs: 0,
           filePath: "",
-          coverUrl: item.pic,
+          coverUrl: song.value.coverUrl ?? null,
         })
         .catch(() => {});
     } finally {
@@ -2009,6 +2116,7 @@ export const usePlayerStore = defineStore("player", () => {
     loadSong,
     loadById,
     loadOnlineSong,
+    refreshTagOverrides,
     loadWebDavSong,
     playOnline,
     initAudio,

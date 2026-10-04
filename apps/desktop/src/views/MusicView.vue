@@ -18,6 +18,7 @@ import { useNeteaseStore } from "@/stores/netease";
 import { useKugouStore } from "@/stores/kugou";
 import { capabilities } from "@/capabilities";
 import { openContextMenu } from "@/composables/useContextMenu";
+import { openMusicTagDialog } from "@/composables/useMusicTagDialog";
 import { promptText } from "@/composables/useTextPrompt";
 import { toOnlineSongs } from "@/utils/netease";
 import {
@@ -472,10 +473,12 @@ function onSongContext(e: MouseEvent, song: OnlineSong) {
     [
       { id: "downloadAudio", label: t("context.downloadAudio"), icon: "download" },
       { id: "downloadCover", label: t("context.downloadCover"), icon: "image" },
+      { id: "write-tags", label: t("musicTag.menu"), icon: "sell" },
     ],
     (id) => {
       if (id === "downloadAudio") void downloadAudio(song);
       else if (id === "downloadCover") void downloadCover(song);
+      else if (id === "write-tags") openMusicTagDialog({ kind: "online", song, label: song.name });
     },
   );
 }

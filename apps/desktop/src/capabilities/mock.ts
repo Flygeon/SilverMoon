@@ -4,6 +4,8 @@
  */
 import type {
   AnimeHistoryItem,
+  AppliedOnlineTags,
+  MusicTagFields,
   AnimeRuleEntry,
   FfmpegStatus,
   ListenSourceStat,
@@ -161,6 +163,99 @@ const favorites = new Set<string>(["demo-a1"]);
 
 /** 浏览器预览用：扫码轮询计数（800 → 803 推进） */
 let qrCheckCount: number | undefined;
+
+// ---- 音乐标签写入（浏览器预览内存模拟）----
+//
+// 预览环境没有 taglib / 磁盘缓存，这里只用内存 Map 让 Dialog 的三个语义都走得通：
+// 「应用 → 读到覆盖 → 还原默认 → 回到平台原值」与桌面端行为一致。
+
+const EMPTY_TAG_FIELDS: MusicTagFields = {
+  title: "",
+  artist: "",
+  album: "",
+  albumArtist: "",
+  year: "",
+  trackNo: "",
+  discNo: "",
+  genre: "",
+  comment: "",
+  lyrics: "",
+};
+
+function tagFields(input: unknown): MusicTagFields {
+  return { ...EMPTY_TAG_FIELDS, ...((input ?? {}) as Partial<MusicTagFields>) };
+}
+
+/** key = 在线合并 key；本地用 path 当 key（预览里两者互不干扰） */
+const mockOnlineTags = new Map<string, AppliedOnlineTags>();
+const mockOnlineLyrics = new Map<string, string>();
+/** 本地：path → 当前标签 / 写入前备份 / 是否写过（预览里让三个语义都走得通） */
+const mockLocalTags = new Map<string, MusicTagFields>();
+const mockLocalBackups = new Map<string, MusicTagFields>();
+
+/**
+ * 音乐标签通用能力的 mock 实现。
+ *
+ * 与 Rust 命令的 mock 分开导出：标签通道是主进程通用能力（`call("musicTags")`），
+ * 由 `capabilities.musicTagCall` 在预览环境直接调用，不经过 `mockInvoke`。
+ */
+export function mockMusicTags<T>(op: string, payload: Record<string, unknown>): T {
+  // 本地 op 的键是文件路径，在线 op 的键是 `${server}:${id}`，两者都从 key 取
+  const path = String(payload.path ?? "");
+  const key = String(payload.key ?? "");
+  switch (op) {
+    case "writeLyrics":
+    case "writeOriginal":
+      return undefined as unknown as T;
+    case "writeLocal": {
+      mockLocalTags.set(path, tagFields(payload.fields));
+      return undefined as unknown as T;
+    }
+    case "backupLocal": {
+      // 与主进程一致：只在没有备份时创建，保留最原始的写入前快照
+      if (mockLocalBackups.has(path)) return { created: false } as unknown as T;
+      mockLocalBackups.set(path, tagFields(payload.fields));
+      return { created: true } as unknown as T;
+    }
+    case "readLocal": {
+      const hit = mockLocalTags.get(path);
+      return { fields: tagFields(hit), hasCover: false } as unknown as T;
+    }
+    case "readLocalBackup":
+      return (mockLocalBackups.get(path) ?? null) as unknown as T;
+    case "readLyrics":
+    case "readOriginal":
+    case "readOnline": {
+      const hit = mockOnlineTags.get(key);
+      if (op === "readOnline") return (hit ?? null) as unknown as T;
+      if (op === "readLyrics") return (mockOnlineLyrics.get(key) ?? null) as unknown as T;
+      return (hit?.original ?? null) as unknown as T;
+    }
+    case "cacheOnline": {
+      const prev = mockOnlineTags.get(key);
+      const applied: AppliedOnlineTags = {
+        key,
+        fields: tagFields(payload.fields),
+        // 只保留首次覆盖前的快照，后续应用不覆盖它（与主进程一致）
+        original: prev?.original ?? null,
+        coverPath: null,
+        cachedAt: Date.now(),
+      };
+      mockOnlineTags.set(key, applied);
+      if (typeof payload.lyrics === "string") mockOnlineLyrics.set(key, payload.lyrics);
+      return applied as unknown as T;
+    }
+    case "removeOnline": {
+      const had = mockOnlineTags.delete(key);
+      mockOnlineLyrics.delete(key);
+      return { removed: had } as unknown as T;
+    }
+    case "listOnline":
+      return [...mockOnlineTags.values()] as unknown as T;
+    default:
+      return null as unknown as T;
+  }
+}
 
 export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const as = <R>(v: R) => Promise.resolve(v as unknown as T);

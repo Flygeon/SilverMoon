@@ -14,6 +14,8 @@
     "build": "npm run typecheck && npm run build:renderer && npm run build:main",
     "build:renderer": "vite build",
     "build:main": "node scripts/build-electron.mjs",
+    "verify:music-tags": "node scripts/verify-music-tags.mjs",
+    "verify:tag-sources": "node scripts/verify-music-tag-sources.mjs",
     "build:backend": "cargo build --manifest-path backend/Cargo.toml",
     "build:backend:release": "cargo build --release --manifest-path backend/Cargo.toml",
     "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.electron.json",
@@ -43,6 +45,7 @@
     "pdfjs-dist": "^6.2.108",
     "pinia": "^2.2.6",
     "qrcode": "^1.5.4",
+    "taglib-wasm": "^2.3.0",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0"
   },
