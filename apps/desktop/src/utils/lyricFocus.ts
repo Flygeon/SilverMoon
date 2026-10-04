@@ -123,3 +123,68 @@ export function lineOffset(
   }
   return res + offset;
 }
+
+// ---- 旧版换行动效（AMLL 改造之前的实现）----
+//
+// 2026-10 的 AMLL 改造之前，自研歌词视图的换行是这一套：布局层同样只算目标位移，
+// 但补间交给每行自己的 CSS transition（`0.7s cubic-bezier(.19,.11,0,1)`），级联用
+// setTimeout 错开。它被完整保留在 `lyricLineMotion === "legacy"` 分支里（见 LyricsView）。
+//
+// 与新版（弹簧）的**唯一**差别就是下面这两条取样规则——位移公式本身两版通用，
+// 所以直接复用上面的 lineOffset：
+//
+// - 级联延迟：旧版是 `(n * 70 - n * 10) ms`（n = 与当前行的距离 + 1），且**超过 10 行
+//   直接同步归位**。新版改成收敛级数（见 cascadeDelaySec），远端行不再突然抢先。
+// - 模糊：旧版就是 `blur(距离)px`，不封顶、也不区分已读 / 未读。
+
+/** 旧版级联的单行步进（ms）：每远一行多等的时间，旧实现里是 `n * 70` */
+export const LEGACY_CASCADE_STEP_MS = 70;
+/** 旧版级联的步进折扣（ms）：与上一条相抵后每行净增 60ms */
+export const LEGACY_CASCADE_OFFSET_MS = 10;
+/**
+ * 超过这个行数就同步归位（不再错开）。
+ *
+ * 旧实现用 n = 距离 + 1 判断，因此实际是「距离 ≥ 10 的行」直接归位。保留这一条是
+ * 为了旧版观感一致：远处行会在切行瞬间与近处行同时出发。
+ */
+export const LEGACY_CASCADE_SYNC_AFTER = 10;
+
+/**
+ * 旧实现的 `n = i - index + 1`：**当前行也会拿到 n = 1**，也就是连当前行都被延了 60ms。
+ * 超过 10 行则归 0（同步归位）。
+ */
+function legacyCascadeN(distanceBelow: number): number {
+  const n = distanceBelow + 1;
+  return n > LEGACY_CASCADE_SYNC_AFTER ? 0 : n;
+}
+
+/**
+ * 旧版的级联启动延迟（ms）：`n * 70 - n * 10`，n = 与当前行的行距 + 1。
+ *
+ * - 上方行（n ≤ 0）不延迟；
+ * - **当前行会拿到 60ms**（旧实现如此，等于整摞晚 60ms 起步）；
+ * - 距离 ≥ 10 的行归 0，与近处行同时出发（旧实现的长尾处理，新版已换成收敛级数）。
+ *
+ * @param distanceBelow 目标行相对当前行的行距（0 = 当前行，负数 = 上方行）
+ */
+export function legacyCascadeDelayMs(distanceBelow: number): number {
+  const n = legacyCascadeN(distanceBelow);
+  const ms = n * LEGACY_CASCADE_STEP_MS - n * LEGACY_CASCADE_OFFSET_MS;
+  // 上方行（n ≤ 0）与远端行（n 被置 0）都不错开，与旧实现的 `delay <= 0` 分支一致
+  return ms > 0 ? ms : 0;
+}
+
+/**
+ * 旧版的行模糊档位（px）。
+ *
+ * 旧实现就是 `blur(距离)`：既不封顶（新版封顶 LYRIC_MAX_BLUR），也不区分已读 / 未读
+ * （新版给已读行再加一档）。这里刻意保持原样——旧版的意义就是还原当年的观感。
+ *
+ * @param index 目标行下标
+ * @param activeIdx 当前焦点行下标
+ * @param enabled 是否开启「歌词模糊」设置
+ */
+export function legacyLineBlur(index: number, activeIdx: number, enabled: boolean): number {
+  if (!enabled) return 0;
+  return Math.abs(index - activeIdx);
+}

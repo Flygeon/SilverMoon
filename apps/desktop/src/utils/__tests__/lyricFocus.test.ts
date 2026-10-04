@@ -11,6 +11,8 @@
 import { describe, expect, it } from "vitest";
 import {
   cascadeDelaySec,
+  legacyCascadeDelayMs,
+  legacyLineBlur,
   lineOffset,
   lyricLineBlur,
   lyricLineScale,
@@ -152,5 +154,50 @@ describe("lyricLineBlur：按行距分档，已读行更糊", () => {
   it("档位封顶 LYRIC_MAX_BLUR（对齐 AMLL render 的 min(5, blur)）", () => {
     expect(lyricLineBlur(0, 9, true, true)).toBe(LYRIC_MAX_BLUR);
     expect(lyricLineBlur(9, 0, true, true)).toBe(LYRIC_MAX_BLUR);
+  });
+});
+
+describe("legacyCascadeDelayMs：旧版换行的错开规则", () => {
+  it("上方行不延迟（旧实现的 delay <= 0 分支）", () => {
+    expect(legacyCascadeDelayMs(-1)).toBe(0);
+    expect(legacyCascadeDelayMs(-5)).toBe(0);
+  });
+
+  it("当前行与下方行按 (n*70 - n*10) 错开，n = 行距 + 1（旧实现连当前行也延了 60ms）", () => {
+    expect(legacyCascadeDelayMs(0)).toBe(60);
+    expect(legacyCascadeDelayMs(1)).toBe(120);
+    expect(legacyCascadeDelayMs(8)).toBe(540);
+    expect(legacyCascadeDelayMs(9)).toBe(600);
+  });
+
+  it("距离 ≥ 10 行直接同步归位（旧实现的 `if (n > 10) n = 0`）", () => {
+    expect(legacyCascadeDelayMs(10)).toBe(0);
+    expect(legacyCascadeDelayMs(50)).toBe(0);
+  });
+
+  it("与新版收敛级数不同：更远的行反而回到 0 延迟", () => {
+    // 这正是新版要把旧规则换掉的原因（远端行抢先动，波浪散架）
+    expect(cascadeDelaySec(50)).toBeGreaterThan(cascadeDelaySec(9));
+    expect(legacyCascadeDelayMs(50)).toBeLessThan(legacyCascadeDelayMs(9));
+  });
+});
+
+describe("legacyLineBlur：旧版模糊档位", () => {
+  it("关闭模糊时一律 0", () => {
+    expect(legacyLineBlur(0, 5, false)).toBe(0);
+    expect(legacyLineBlur(9, 5, false)).toBe(0);
+  });
+
+  it("焦点行不糊", () => {
+    expect(legacyLineBlur(5, 5, true)).toBe(0);
+  });
+
+  it("就是「与焦点的行距」（不封顶、不区分已读 / 未读）", () => {
+    expect(legacyLineBlur(4, 5, true)).toBe(1);
+    expect(legacyLineBlur(6, 5, true)).toBe(1);
+    // 新版给已读行再加一档、并封顶 5；旧版两样都没有
+    expect(lyricLineBlur(4, 5, true, true)).toBe(3);
+    expect(legacyLineBlur(0, 9, true)).toBe(9);
+    expect(lyricLineBlur(0, 9, true, true)).toBe(LYRIC_MAX_BLUR);
   });
 });

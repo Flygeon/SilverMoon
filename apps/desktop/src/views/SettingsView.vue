@@ -9,6 +9,7 @@ import {
   type PlayerBgMode,
   type LyricFontKey,
   type LyricEngine,
+  type LyricLineMotion,
   type ShareCodePreference,
   type DesktopLyricsAnimation,
   type DesktopLyricsToolbar,
@@ -98,6 +99,9 @@ const playerBgTabs = opts(["animated", "amll", "image", "off"] as PlayerBgMode[]
   t("settings.playerBg_" + v),
 );
 const lyricEngineTabs = opts(LYRIC_ENGINES, (v) => t("settings.lyricEngine_" + v));
+/** 自研歌词视图的换行动效方案：spring 新版弹簧 / legacy 旧版 CSS 过渡 */
+const LYRIC_LINE_MOTIONS: LyricLineMotion[] = ["spring", "legacy"];
+const lyricLineMotionTabs = opts(LYRIC_LINE_MOTIONS, (v) => t("settings.lyricLineMotion_" + v));
 const musicViewTabs = opts(["grid", "list"] as const, (v) => t("settings.musicViewMode_" + v));
 const shareCodeTabs = opts(["chinese", "original", "both"] as ShareCodePreference[], (v) =>
   t("settings.shareCodePreference_" + v),
@@ -841,6 +845,20 @@ function selectSection(id: string) {
           <SegmentedTabs v-model="settings.lyricEngine" bare :tabs="lyricEngineTabs" />
         </div>
         <p class="hint">{{ t("settings.lyricEngineHint") }}</p>
+
+        <!--
+          换行动效方案：只对自研引擎生效（AMLL 引擎是官方组件，换行由它自己管）。
+          与下面的「歌词行缩放 / 物理弹簧滚动」是两套并列的实现，因此不放进 AMLL 专属区。
+        -->
+        <template v-if="settings.lyricEngine === 'native'">
+          <div class="row">
+            <div class="row-label">
+              <span>{{ t("settings.lyricLineMotion") }}</span>
+            </div>
+            <SegmentedTabs v-model="settings.lyricLineMotion" bare :tabs="lyricLineMotionTabs" />
+          </div>
+          <p class="hint">{{ t("settings.lyricLineMotionHint") }}</p>
+        </template>
 
         <!-- AMLL 引擎专属动效设置：仅在选用 AMLL 时展示，避免与自研视图的选项混在一起 -->
         <template v-if="settings.lyricEngine === 'amll'">

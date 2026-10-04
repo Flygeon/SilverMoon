@@ -32,6 +32,17 @@ export type LyricSubMode = "none" | "translation" | "romaji";
  *   滚轮浏览等本项目自研层还没实现的表现，动效参数由下面的 amll* 设置项控制。
  */
 export type LyricEngine = "native" | "amll";
+/**
+ * 自研歌词视图的**换行动效方案**（两套并存，由用户在设置里切换）：
+ * - `spring`（新版，默认）：对齐 AMLL —— 布局层只算目标位移，位移 / 缩放各一条弹簧逐帧
+ *   积分；切行时速度连续，另有级联延迟（AMLL 的 1/1.05 衰减）与「失去焦点」缩放。
+ * - `legacy`（旧版）：AMLL 改造之前的实现 —— 每行独立 CSS transition
+ *   `0.7s cubic-bezier(.19,.11,0,1)`，级联延迟 (n*70 - n*10) ms，模糊随行距线性增长。
+ *
+ * 只影响「换行/滚动」这一层：逐字填充、逐字上浮（WAAPI）、AMLL 歌词解析与特殊标记
+ * 渲染在两种方案下完全一致。
+ */
+export type LyricLineMotion = "spring" | "legacy";
 /** 预设分享码偏好：仅中文 / 仅原版 / 两者同时输出 */
 export type ShareCodePreference = "chinese" | "original" | "both";
 /** 桌面歌词切换动画方案 */
@@ -130,6 +141,13 @@ const DEFAULTS = {
   /** 播放器背景：动态模糊 / AMLL 网格渐变 / 仅图片模糊 / 关闭 */
   playerBg: "animated" as PlayerBgMode,
   lyricBlur: true,
+  /**
+   * 自研歌词视图的换行动效方案：spring = 新版（AMLL 弹簧滚动）/ legacy = 旧版（CSS 过渡）。
+   *
+   * 默认 spring（维持现状），旧版仅供怀念旧观感的用户切换。两套方案的逐字填充、
+   * 逐字上浮、AMLL 歌词解析完全一致，只差换行时整摞歌词怎么走。
+   */
+  lyricLineMotion: "spring" as LyricLineMotion,
   scanDirs: [] as string[],
   gridColumns: 6,
   /** 最小文件体积过滤（MB）；0 表示不过滤 */
@@ -365,6 +383,7 @@ export const useSettingsStore = defineStore("settings", () => {
   const obsceneMask = ref<ObsceneMode>(DEFAULTS.obsceneMask);
   const playerBg = ref<PlayerBgMode>(DEFAULTS.playerBg);
   const lyricBlur = ref(DEFAULTS.lyricBlur);
+  const lyricLineMotion = ref<LyricLineMotion>(DEFAULTS.lyricLineMotion);
   const scanDirs = ref<string[]>([...DEFAULTS.scanDirs]);
   const gridColumns = ref(DEFAULTS.gridColumns);
   const minFileSizeMb = ref(DEFAULTS.minFileSizeMb);
@@ -492,6 +511,7 @@ export const useSettingsStore = defineStore("settings", () => {
     obsceneMask,
     playerBg,
     lyricBlur,
+    lyricLineMotion,
     scanDirs,
     gridColumns,
     minFileSizeMb,

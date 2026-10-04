@@ -201,6 +201,11 @@ export const messages = {
         "自研引擎：项目自己的弹簧滚动 + 逐字填充，逐行开销更低；AMLL 引擎：直接引用 AMLL 官方歌词组件，动效最完整（行缩放、强调辉光、注音、滚轮浏览）。",
       lyricEngine_native: "自研",
       lyricEngine_amll: "AMLL",
+      lyricLineMotion: "换行动效",
+      lyricLineMotionHint:
+        "仅影响自研引擎里「一句唱完、整摞歌词往上走」的方式。新版：弹簧物理滚动，位移连续、切行不顿；旧版：AMLL 改造之前的 CSS 过渡（每行独立缓动 + 错开启动）。逐字填充、唱完上浮与 AMLL 歌词解析两版完全一致。",
+      lyricLineMotion_spring: "新版",
+      lyricLineMotion_legacy: "旧版",
       amllEnableScale: "歌词行缩放",
       amllEnableScaleHint: "非当前行轻微缩小以凸显当前行，性能影响很小。",
       amllHidePassedLines: "隐藏已唱过的行",
@@ -1250,6 +1255,11 @@ export const messages = {
         "Built-in: our own spring scrolling and word-by-word fill, cheaper per line. AMLL: embeds the official AMLL lyric component for the fullest effect set (line scaling, emphasis glow, ruby, wheel scrolling).",
       lyricEngine_native: "Built-in",
       lyricEngine_amll: "AMLL",
+      lyricLineMotion: "Line-transition motion",
+      lyricLineMotionHint:
+        "Only affects how the built-in engine moves the stack of lyrics when a line ends. New: physics spring scrolling \u2014 continuous motion, no stutter at line changes. Legacy: the CSS transition used before the AMLL rework (independent easing per line, staggered start). Word fill, sung-word float and lyric parsing are identical in both.",
+      lyricLineMotion_spring: "New",
+      lyricLineMotion_legacy: "Legacy",
       amllEnableScale: "Line scaling",
       amllEnableScaleHint:
         "Slightly shrinks non-active lines to emphasize the current one; negligible cost.",

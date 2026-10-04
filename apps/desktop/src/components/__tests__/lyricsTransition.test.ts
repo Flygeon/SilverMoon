@@ -148,3 +148,71 @@ describe("LyricsView 的失去焦点过渡", () => {
     expect(SRC).toMatch(/\.lyric-main[\s\S]*?class="lyric-translation"/);
   });
 });
+
+describe("双换行动效方案（设置里的「换行动效」）", () => {
+  const SETTINGS = readFileSync(resolve(process.cwd(), "src/stores/settings.ts"), "utf8");
+
+  it("默认走新版：类型、默认值与注册表都在", () => {
+    expect(SETTINGS).toContain('export type LyricLineMotion = "spring" | "legacy"');
+    expect(SETTINGS).toContain('lyricLineMotion: "spring" as LyricLineMotion');
+    // load/save 的单一注册表里必须带上它，否则重启后被丢弃 / 不落盘
+    const fieldsAt = SETTINGS.indexOf("const fields = {");
+    const keyAt = SETTINGS.indexOf("lyricLineMotion,");
+    expect(fieldsAt).toBeGreaterThan(-1);
+    expect(keyAt).toBeGreaterThan(fieldsAt);
+  });
+
+  it("旧版位移由 CSS transition 补间（AMLL 之前那条参考曲线）", () => {
+    expect(SRC).toContain("all 0.7s cubic-bezier(0.19, 0.11, 0, 1)");
+    expect(ruleBlock(".lyric-item.legacy-motion {")).toContain("transition");
+  });
+
+  it("新版坐标不含 transform 过渡（位移与缩放都归弹簧逐帧积分）", () => {
+    const item = ruleBlock(".lyric-item {");
+    const start = item.indexOf("transition");
+    const decl = item.slice(start, item.indexOf(";", start));
+    expect(decl).not.toContain("transform");
+    expect(decl).not.toContain("all");
+  });
+
+  it("换歌时旧版也要压掉位移过渡（否则新歌会从上一首滑过来）", () => {
+    expect(SRC).toContain(".lyric-item.legacy-no-transition");
+    expect(SRC).toContain('classList.add("legacy-no-transition")');
+    expect(SRC).toContain('classList.remove("legacy-no-transition")');
+  });
+
+  it("旧版级联 / 模糊走 legacy* 纯函数，新版两条通路都还在", () => {
+    // 旧版的 (n*70 - n*10) 与 blur(距离) 抽成了可测纯函数
+    expect(SRC).toContain("legacyCascadeDelayMs(");
+    expect(SRC).toContain("legacyLineBlur(");
+    expect(SRC).toContain("applyLegacyLayout");
+    // 新版未被改动
+    expect(SRC).toContain("cascadeDelaySec(");
+    expect(SRC).toContain("lyricLineBlur(");
+    expect(SRC).toContain("getPosYSpringPolicy");
+  });
+
+  it("旧版由 CSS transition 承担位移，因此不再走弹簧那段循环", () => {
+    // legacy 分支在 syncRows 之前就返回，避免两条补间通路同时写 transform
+    const branchAt = SRC.indexOf('settings.lyricLineMotion === "legacy"');
+    const returnAt = SRC.indexOf("return;", branchAt);
+    const syncRowsAt = SRC.indexOf("  syncRows();", 0);
+    expect(branchAt).toBeGreaterThan(-1);
+    expect(returnAt).toBeGreaterThan(branchAt);
+    expect(returnAt).toBeLessThan(syncRowsAt);
+    // 但逐字填充必须还在这一分支里（填充与上浮是两套方案共用的表现）
+    expect(SRC.slice(branchAt, returnAt)).toContain("updateWordFill()");
+  });
+
+  it("切换方案 / 换行都会触发旧版重新布局（新版靠 rAF 追目标值，不需要）", () => {
+    expect(SRC).toContain("settings.lyricLineMotion,");
+    expect(SRC).toContain("legacyAnimateNext = true");
+    expect(SRC).toContain("() => player.activeLine");
+  });
+
+  it("旧版没有「失去焦点缩放」：规则里用 none 压掉，JS 也会清残留内联 scale", () => {
+    expect(SRC).toContain(".lyric-item.legacy-motion .lyric-main,");
+    expect(SRC).toContain("transform: none;");
+    expect(SRC).toContain("textEl.style.transform = ");
+  });
+});

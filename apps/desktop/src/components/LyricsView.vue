@@ -1,6 +1,12 @@
 <script setup lang="ts">
 /**
- * 歌词视图 —— 每行绝对定位 + **独立弹簧**（位移与缩放各一条，对齐 AMLL 的滚动模型）。
+ * 歌词视图 —— 每行绝对定位 + 两套**可切换的换行动效**（设置项 `lyricLineMotion`）。
+ *
+ * - `spring`（新版，默认）：对齐 AMLL —— 位移与缩放各一条弹簧逐帧积分；
+ * - `legacy`（旧版）：AMLL 改造之前的实现 —— 每行独立 CSS transition + setTimeout 级联。
+ *
+ * 两套方案只差「换行时整摞歌词怎么走」：逐字填充、逐字上浮（WAAPI）、AMLL 歌词解析与
+ * 特殊标记渲染（注音 / 和声 / 对唱 / 间奏三点）在两种方案下完全一致。
  *
  * 关键点（勿改为容器滚动）：
  * - 每行绝对定位，靠各自的 translateY 位移，而不是滚动容器。容器 scrollTo 只能整体
@@ -29,6 +35,8 @@ import { getPosYSpringPolicy, Spring } from "@/utils/spring";
 import { floatAnimationSpec } from "@/utils/wordFloat";
 import {
   cascadeDelaySec,
+  legacyCascadeDelayMs,
+  legacyLineBlur,
   lineOffset,
   lyricLineBlur,
   lyricLineScale,
@@ -313,6 +321,79 @@ function inViewport(y: number, h: number, containerH: number): boolean {
   return y + h >= -buffer && y <= containerH + buffer;
 }
 
+// ---- 旧版换行动效：CSS transition + setTimeout 级联 ----
+//
+// 下面是 AMLL 改造之前的实现，设置里选「旧版」时启用。位移公式与新版共用 lineOffset
+// （两版都是「行高 + 行距」的前缀和），差别只在补间方式与档位规则：
+//
+// - 补间：新版由 rAF 里的弹簧逐帧积分；旧版把目标位移写成内联 transform，交给
+//   .lyric-item 上的 CSS transition（0.7s cubic-bezier(.19,.11,0,1)）自己缓动；
+// - 级联：旧版 `(n*70 - n*10) ms`，且超过 10 行直接同步归位（新版改成收敛级数）；
+// - 模糊：旧版就是 `blur(距离)px`，没封顶、也不区分已读 / 未读。
+//
+// 逐字填充与逐字上浮不在这里，两套方案共用一个 rAF 循环。
+
+/** 旧版级联的 setTimeout 句柄：每次重新布局都要清掉，否则上一轮的定时器会盖掉新位移 */
+let legacyTimers: number[] = [];
+/** 旧版：待应用的布局刷新（放在 rAF 里做，避免 watch 里连读 offsetHeight 触发重排） */
+let legacyLayoutPending = false;
+/** 旧版：本次布局是否带级联过渡（换歌 / 行高变化直接就位，不走过渡） */
+let legacyAnimateNext = false;
+
+function cancelLegacyLayout(): void {
+  legacyLayoutPending = false;
+  legacyAnimateNext = false;
+  for (const id of legacyTimers) clearTimeout(id);
+  legacyTimers = [];
+}
+
+/**
+ * 旧版换行：每一行的目标位移直接写进内联 transform，由 CSS transition 补间。
+ *
+ * @param animate 是否带级联过渡：换行 = true；换歌 / 初始化 / 行高变化 = false
+ */
+function applyLegacyLayout(opts: { animate: boolean }): void {
+  for (const id of legacyTimers) clearTimeout(id);
+  legacyTimers = [];
+  const lines = player.lyrics;
+  if (!lines.length) return;
+  if (heightsDirty) measureHeights();
+  const active = player.activeLine >= 0 ? player.activeLine : 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const el = lineRefs.value[i];
+    if (!el) continue;
+
+    const distance = Math.abs(i - active);
+    const filter = legacyLineBlur(i, active, settings.lyricBlur)
+      ? "blur(" + distance + "px)"
+      : "none";
+    if (el.style.filter !== filter) el.style.filter = filter;
+    const opacity = i === active ? "1" : String(Math.max(0.22, 1 - distance * 0.22));
+    if (el.style.opacity !== opacity) el.style.opacity = opacity;
+
+    // 旧版没有「失去焦点缩放」：元素按 index 复用，残留的内联 scale 必须清掉
+    const textEl = mainRefs[i];
+    if (textEl && textEl.style.transform) textEl.style.transform = "";
+    for (const bgEl of bgRefs[i] ?? []) {
+      if (bgEl.style.transform) bgEl.style.transform = "";
+    }
+
+    const target = getLayout(active, i);
+    const transform = "translateY(" + target.toFixed(2) + "px)";
+    const delay = opts.animate ? legacyCascadeDelayMs(i - active) : 0;
+    if (delay <= 0) {
+      if (el.style.transform !== transform) el.style.transform = transform;
+    } else {
+      legacyTimers.push(
+        window.setTimeout(() => {
+          el.style.transform = transform;
+        }, delay),
+      );
+    }
+  }
+}
+
 function rafLoop(ts: number): void {
   rafId = requestAnimationFrame(rafLoop);
   const dt = lastFrame ? Math.min((ts - lastFrame) / 1000, 0.1) : 0;
@@ -327,6 +408,22 @@ function rafLoop(ts: number): void {
     void nextTick(syncActiveWords);
   }
   if (heightsDirty) measureHeights();
+
+  /*
+   * 旧版动效只借用本循环的两件事：测行高、按播放位置推进逐字填充。
+   * 换行的位移与明暗交给 .legacy-motion 下的 CSS transition 与 setTimeout 级联
+   * （applyLegacyLayout），因此这里直接跳过整段弹簧逻辑。上浮仍由 WAAPI 驱动，
+   * 与下面 syncActiveWords 共用，不受方案切换影响。
+   */
+  if (settings.lyricLineMotion === "legacy") {
+    if (legacyLayoutPending) {
+      legacyLayoutPending = false;
+      applyLegacyLayout({ animate: legacyAnimateNext });
+    }
+    updateWordFill();
+    return;
+  }
+
   syncRows();
 
   const containerH = containerRef.value?.clientHeight ?? 0;
@@ -466,6 +563,7 @@ watch(
     activeBgWords = [];
     lastFill = new WeakMap<HTMLElement, number>();
     cancelFloatAnims();
+    cancelLegacyLayout();
     heightsDirty = true;
     seekDetector.reset();
     // v-for 按 index 复用元素，旧的内联 transform / 滤镜会残留一帧；先清掉再让 rAF 重写。
@@ -475,6 +573,8 @@ watch(
       // 换歌是「重新就位」而不是「过渡」：先压掉 opacity / filter 的过渡，否则新歌词
       // 会从上一首的明暗档位淡过来。压一帧后恢复（同原实现的 no-transition 手法）。
       el.classList.add("no-transition");
+      // 旧版：transition 还兼管位移，同样要压一帧，否则新歌的第一屏会从上一首滑过来
+      if (settings.lyricLineMotion === "legacy") el.classList.add("legacy-no-transition");
       el.style.transform = "";
       el.style.opacity = "";
       el.style.filter = "";
@@ -488,7 +588,16 @@ watch(
     // 强制回流，让上面清空的样式先落地，再恢复过渡（否则会被合并成一次带动画的变更）
     void containerRef.value?.offsetHeight;
     requestAnimationFrame(() => {
-      for (const el of lineRefs.value) el?.classList.remove("no-transition");
+      for (const el of lineRefs.value) {
+        el?.classList.remove("no-transition");
+        el?.classList.remove("legacy-no-transition");
+      }
+      // 内联样式清空后立刻按新歌的位置就位（旧版位移走 CSS 过渡，必须显式重写 transform）
+      if (settings.lyricLineMotion === "legacy") {
+        heightsDirty = true;
+        legacyLayoutPending = true;
+        legacyAnimateNext = false;
+      }
     });
   },
 );
@@ -502,10 +611,35 @@ watch(
     settings.lyricTranslationGap,
     settings.lyricSubMode,
     settings.wordLyrics,
+    // 行高 / 字号变了，旧版的位移目标也要重算（等价旧实现的 updateLayout(..., 0)）
+    settings.lyricLineMotion,
   ],
   () => {
     heightsDirty = true;
+    if (settings.lyricLineMotion === "legacy") {
+      // 行高变化没有过渡可言，直接就位；换方案时同样直接就位
+      legacyLayoutPending = true;
+      legacyAnimateNext = false;
+    }
     void nextTick(syncActiveWords);
+  },
+);
+
+/**
+ * 旧版动效：跟着当前行重新布局，并按与当前行的距离错开启动（旧实现的 activeLine watch）。
+ *
+ * 新版（spring）不需要这个 watch —— 弹簧在 rAF 里追目标值，切行天然平滑。
+ */
+watch(
+  () => player.activeLine,
+  () => {
+    if (settings.lyricLineMotion !== "legacy") return;
+    // 等 Vue 把当前行的 DOM 换好（整行文本 ↔ 逐词 span）再量高度，否则会量到旧结构
+    void nextTick(() => {
+      heightsDirty = true;
+      legacyLayoutPending = true;
+      legacyAnimateNext = true;
+    });
   },
 );
 
@@ -529,7 +663,26 @@ let ro: ResizeObserver | null = null;
 
 onMounted(() => {
   heightsDirty = true;
-  ro = new ResizeObserver(() => invalidateHeights());
+  /*
+   * 旧版：挂载时就排一次布局。
+   *
+   * 切 Tab 会把本组件销毁重建（PlayerView 用 v-if），而重建时 activeLine 往往已经是
+   * 某一行了——activeLine 的 watch 只在「变化」时触发，不会补这一次，于是整摞歌词会
+   * 停在 translateY(0) 全部叠在顶部。新版没有这个问题：rAF 里的 primed 标志会在首帧
+   * 直接把弹簧放到目标位置。
+   */
+  if (settings.lyricLineMotion === "legacy") {
+    legacyLayoutPending = true;
+    legacyAnimateNext = false;
+  }
+  ro = new ResizeObserver(() => {
+    invalidateHeights();
+    // 旧版：容器尺寸变化要重排（旧实现的 ResizeObserver 也是直接就位）
+    if (settings.lyricLineMotion === "legacy") {
+      legacyLayoutPending = true;
+      legacyAnimateNext = false;
+    }
+  });
   if (containerRef.value) ro.observe(containerRef.value);
   rafId = requestAnimationFrame(rafLoop);
 });
@@ -538,6 +691,7 @@ onBeforeUnmount(() => {
   ro?.disconnect();
   cancelAnimationFrame(rafId);
   cancelFloatAnims();
+  cancelLegacyLayout();
 });
 
 const hasLyrics = computed(() => player.lyrics.length > 0);
@@ -585,6 +739,8 @@ function bgFirst(line: LyricLine): boolean {
             active: i === player.activeLine,
             instrumental: line.instrumental,
             duet: line.duet,
+            // 旧版换行动效：位移补间由 CSS transition 承担（新版由弹簧逐帧积分）
+            'legacy-motion': settings.lyricLineMotion === 'legacy',
           },
           i === player.activeLine ? dotsClass(line) : '',
         ]"
@@ -707,6 +863,31 @@ function bgFirst(line: LyricLine): boolean {
 /* 换歌瞬间就位：不走过渡（与 transform 的弹簧无关，这里专治 opacity / filter） */
 .lyric-item.no-transition {
   transition: none !important;
+}
+
+/*
+ * 旧版换行动效（设置里选「旧版」时挂上）：位移同样交给 CSS 过渡，用的就是 AMLL 改造
+ * 之前那条参考实现曲线。级联延迟（n*70 - n*10 ms，超过 10 行同步归位）在 JS 里用
+ * setTimeout 错开（见 applyLegacyLayout），这里的过渡只负责每行自己的缓动。
+ *
+ * 新版（默认）刻意不含 transform：位移由弹簧逐帧积分，再加 CSS 过渡会把两套缓动叠起来。
+ */
+.lyric-item.legacy-motion {
+  transition: all 0.7s cubic-bezier(0.19, 0.11, 0, 1);
+}
+
+/* 旧版换歌 / 初始化：位移与明暗都直接就位，避免从上一次的位置滑过来 */
+.lyric-item.legacy-no-transition {
+  transition: none !important;
+}
+
+/*
+ * 旧版动效下没有「失去焦点缩放」：AMLL 改造之前非当前行不缩放。
+ * JS 在 legacy 分支里会清掉残留的内联 scale，这里再加一道保险。
+ */
+.lyric-item.legacy-motion .lyric-main,
+.lyric-item.legacy-motion .lyric-bg {
+  transform: none;
 }
 
 .lyric-item.active {
