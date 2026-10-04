@@ -82,6 +82,41 @@ describe("rewriteColorMix", () => {
     const src = "color: red; background: blue;";
     expect(rewriteColorMix(src, () => null)).toBe(src);
   });
+
+  // 回归：@m3e/web 的变量是**多层嵌套**的，只解一层会让整条调用被判为
+  // 「无法换算」而残留 —— 实测 50 个 shadow root 里 29 个因此没被改写。
+  it("递归解开嵌套 var 链（m3e 真实形态）", () => {
+    const src =
+      "color-mix(in srgb, var(--m3e-a, var(--m3e-b, var(--md-sys-color-on-surface, #1D1B20))) 12%, transparent)";
+    const readToken = (n: string) =>
+      n === "--md-sys-color-on-surface" ? { r: 29, g: 27, b: 32, a: 1 } : null;
+    expect(rewriteColorMix(src, readToken)).toBe("rgba(29, 27, 32, 0.12)");
+  });
+
+  it("嵌套 var 链中某一层有实时值时优先用它", () => {
+    const src = "color-mix(in srgb, var(--a, var(--b, #000)) 50%, transparent)";
+    const out = rewriteColorMix(src, (n) => (n === "--a" ? { r: 1, g: 2, b: 3, a: 1 } : null));
+    expect(out).toBe("rgba(1, 2, 3, 0.5)");
+  });
+
+  it("权重也可以是嵌套 var，并读实时值", () => {
+    const src =
+      "color-mix(in srgb, var(--md-sys-color-primary) var(--m3e-op, var(--m3e-op-fallback, 20%)), transparent)";
+    const readRaw = (n: string) => (n === "--m3e-op" ? "8%" : null);
+    const out = rewriteColorMix(src, () => ({ r: 10, g: 20, b: 30, a: 1 }), readRaw);
+    expect(out).toBe("rgba(10, 20, 30, 0.08)");
+  });
+
+  it("权重变量的兜底链也能取到", () => {
+    const src = "color-mix(in srgb, #fff var(--m3e-op, var(--deep, 25%)), transparent)";
+    expect(
+      rewriteColorMix(
+        src,
+        () => null,
+        () => null,
+      ),
+    ).toBe("rgba(255, 255, 255, 0.25)");
+  });
 });
 
 describe("syncCurrentColorVars", () => {

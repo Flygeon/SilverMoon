@@ -321,12 +321,17 @@ jobs:
           components: rust-src
 
       # tier-3 目标不自带链接器，需要 mingw-w64；pkg-config/libssl 是后端
-      # native-tls 的宿主依赖。与 lint 作业的依赖集一致。
+      # native-tls 的宿主依赖。
+      #
+      # binutils 显式装上：`verify:win7` 用 `objdump -p` 检查两个 exe **没有**
+      # 导入 WaitOnAddress 等 Win8+ 符号 —— 这正是「Win7 上加载即失败」的根因。
+      # 虽然 ubuntu runner 自带 binutils，但一旦缺失，校验脚本会降级成「跳过」，
+      # 那道闸门就形同虚设，所以这里写死依赖。
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config libssl-dev mingw-w64
+            pkg-config libssl-dev mingw-w64 binutils
 
       - name: Rust cache (win7 target dir)
         uses: swatinem/rust-cache@v2
@@ -391,7 +396,8 @@ jobs:
   # ---------------------------------------------------------------------------
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [lint, build]
+    # win7 也纳入：打 tag 时 Win7 兼容包应一并发布，否则用户拿不到。
+    needs: [lint, build, win7]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts

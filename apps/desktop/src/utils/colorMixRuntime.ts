@@ -59,15 +59,36 @@ export function supportsColorMix(): boolean {
   }
 }
 
-/** 把一条 CSS 值解析成 Rgba（支持 `var(--x, fallback)`）。 */
-function resolveTokenValue(value: string, readToken: (name: string) => Rgba | null): Rgba | null {
-  const v = parseVarOperand(value);
-  if (v) {
-    const direct = readToken(v.name);
-    if (direct) return direct;
-    return v.fallback ? parseConcreteColor(v.fallback) : null;
-  }
-  return parseConcreteColor(value);
+/**
+ * 基于某元素的当前计算样式构造 token 读取器（带缓存）。
+ *
+ * 返回两个函数：
+ * - `color(name)` —— 解析成 Rgba（用于颜色操作数）
+ * - `raw(name)`   —— 原始字符串（用于**权重**：m3e 的
+ *   `var(--m3e-*-opacity, 8%)` 读到的是 `8%`，不是颜色）
+ */
+function tokenReadersFor(el: Element): {
+  color: (name: string) => Rgba | null;
+  raw: (name: string) => string | null;
+} {
+  const colorCache = new Map<string, Rgba | null>();
+  const rawCache = new Map<string, string | null>();
+  const style = getComputedStyle(el);
+  const raw = (name: string): string | null => {
+    if (rawCache.has(name)) return rawCache.get(name) ?? null;
+    const v = style.getPropertyValue(name).trim();
+    const result = v ? v : null;
+    rawCache.set(name, result);
+    return result;
+  };
+  const color = (name: string): Rgba | null => {
+    if (colorCache.has(name)) return colorCache.get(name) ?? null;
+    const v = raw(name);
+    const parsed = v ? parseConcreteColor(v) : null;
+    colorCache.set(name, parsed);
+    return parsed;
+  };
+  return { color, raw };
 }
 
 /**
@@ -75,35 +96,35 @@ function resolveTokenValue(value: string, readToken: (name: string) => Rgba | nu
  *
  * 无法换算的（非 srgb、操作数解析不出）**保持原样** —— 交给浏览器按原有语义处理，
  * 不会比现状更差。
+ *
+ * 关键是**递归解 var 链**：m3e 的变量嵌套多层
+ * （`var(--a, var(--b, var(--md-sys-color-on-surface, #1D1B20)))`），
+ * 只解一层会让整条调用被判为「无法换算」而残留，实测 50 个 shadow root 里
+ * 有 29 个因此没被改写。见 colorMixMath.ts 的 resolveVarChain。
  */
-export function rewriteColorMix(cssText: string, readToken: (name: string) => Rgba | null): string {
+export function rewriteColorMix(
+  cssText: string,
+  readToken: (name: string) => Rgba | null,
+  readRawVar?: (name: string) => string | null,
+): string {
   if (!cssText.includes("color-mix")) return cssText;
   let out = cssText;
   for (const call of extractColorMixCalls(cssText)) {
     const parsed = parseColorMixCall(call.full);
     if (!parsed) continue;
-    const resolved = resolveColorMix(parsed, (name, fallback) => {
-      const direct = readToken(name);
-      if (direct) return direct;
-      return fallback ? parseConcreteColor(fallback) : null;
-    });
+    const resolved = resolveColorMix(
+      parsed,
+      (name, fallback) => {
+        const direct = readToken(name);
+        if (direct) return direct;
+        return fallback ? parseConcreteColor(fallback) : null;
+      },
+      readRawVar,
+    );
     if (!resolved) continue;
     out = out.split(call.full).join(formatRgba(resolved));
   }
   return out;
-}
-
-/** 基于某元素的当前计算样式构造 token 读取器（带缓存）。 */
-function tokenReaderFor(el: Element): (name: string) => Rgba | null {
-  const cache = new Map<string, Rgba | null>();
-  const style = getComputedStyle(el);
-  return (name: string) => {
-    if (cache.has(name)) return cache.get(name) ?? null;
-    const raw = style.getPropertyValue(name).trim();
-    const parsed = raw ? parseConcreteColor(raw) : null;
-    cache.set(name, parsed);
-    return parsed;
-  };
 }
 
 /**
@@ -115,7 +136,7 @@ function tokenReaderFor(el: Element): (name: string) => Rgba | null {
 export function syncDerivedRootVars(): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
-  const readToken = tokenReaderFor(root);
+  const readToken = tokenReadersFor(root).color;
 
   /** 本轮期望写入的 变量名 → 值。 */
   const desired = new Map<string, string>();
@@ -174,8 +195,8 @@ function patchConstructableStyleSheets(): void {
     if (PATCHED.has(this)) return original.call(this, text);
     PATCHED.add(this);
     try {
-      const readToken = tokenReaderFor(document.documentElement);
-      return original.call(this, rewriteColorMix(String(text), readToken));
+      const readers = tokenReadersFor(document.documentElement);
+      return original.call(this, rewriteColorMix(String(text), readers.color, readers.raw));
     } catch {
       // 改写自身出错绝不能阻断样式注入 —— 原样交给浏览器
       return original.call(this, text);
@@ -237,7 +258,7 @@ export function syncDerivedVarsForElement(
   if (!el || typeof getComputedStyle !== "function") return;
   if (supportsColorMix()) return;
 
-  const readToken = tokenReaderFor(el);
+  const readToken = tokenReadersFor(el).color;
   for (const [token, percents] of Object.entries(tokens)) {
     const base = readToken(token);
     if (!base) continue;

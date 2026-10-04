@@ -203,7 +203,23 @@ export interface Operand {
   weight: string | null;
 }
 
-const WEIGHT_RE = /^(\d+(?:\.\d+)?)%$|^var\(\s*--[A-Za-z0-9_-]+\s*(?:,\s*\d+(?:\.\d+)?%\s*)?\)$/;
+/**
+ * 判断一段文本是否是**权重**（而不是颜色）。
+ *
+ * 不能用固定正则：`@m3e/web` 的权重本身就是**嵌套 var 链**，实测形如
+ * `var(--m3e-op, var(--m3e-op-fallback, 20%))`。早先那条只允许
+ * 「var(--x, 20%)」一层回退的正则匹配不到它，于是整条 color-mix 被当成
+ * 「无法解析」而原样保留 —— 在 Chromium 108 上静默失效（实测踩过）。
+ *
+ * 判据：
+ * - 能通过 `weightValue` 递归解出百分比 → 是权重；
+ * - 或者是任何 `var(...)` 形态 —— CSS 里 `<color> <weight>` 的第二位置
+ *   只可能是权重（颜色之间必须夹百分比），所以 var 尾巴必是权重。
+ */
+function looksLikeWeight(text: string): boolean {
+  if (weightValue(text) !== null) return true;
+  return /^var\([\s\S]*\)$/.test(text.trim());
+}
 
 /** 拆 `<color> <weight>`。从**顶层**尾部找权重 —— 颜色可能含空格与括号
  *  （`var(--a, rgba(1, 2, 3, .5))`），直接 lastIndexOf(` `) 会切在括号里面。 */
@@ -217,7 +233,7 @@ export function parseOperand(text: string): Operand {
     else if (ch === "(") depth -= 1;
     else if (ch === " " && depth === 0) {
       const tail = t.slice(i + 1).trim();
-      if (WEIGHT_RE.test(tail)) return { color: t.slice(0, i).trim(), weight: tail };
+      if (looksLikeWeight(tail)) return { color: t.slice(0, i).trim(), weight: tail };
       // 顶层空格但尾部不是权重：说明整串都是颜色（如 `rgb(0 0 0 / .5)`），不再往左找
       break;
     }
@@ -233,17 +249,79 @@ export function parseVarOperand(operand: string): { name: string; fallback: stri
   return { name: m[1], fallback: raw ? raw : null };
 }
 
-/** 权重表达式 → 0–1 的数值。静态 `12%` 直接取；`var(--x, 12%)` 取其兜底。 */
-export function weightValue(weight: string | null): number | null {
-  if (!weight) return null;
-  const direct = /^(\d+(?:\.\d+)?)%$/.exec(weight.trim());
+/**
+ * 递归解开 `var()` 变量链，拿到具体颜色。
+ *
+ * ## 为什么必须递归
+ *
+ * `@m3e/web` 的变量是**多层嵌套**的，实测形如：
+ *
+ * ```css
+ * color-mix(in srgb,
+ *   var(--m3e-text-button-disabled-container-color,
+ *       var(--m3e-button-disabled-container-color,
+ *           var(--md-sys-color-on-surface, #1D1B20))) 12%,
+ *   transparent)
+ * ```
+ *
+ * 只解一层时，拿到的是另一个 `var(...)`（不是具体颜色），整条调用被判为
+ * 「无法换算」而**原样保留** → 在 Chromium 108 上依然静默失效。
+ * 实测：不递归时 50 个 shadow root 里仍有 **29 个**残留 `color-mix`。
+ *
+ * 解析顺序与 CSS custom property 的回退语义一致：
+ * 1. `readToken(name)` 有值 → 用它；
+ * 2. 否则该 var 有 fallback → **递归**解析 fallback；
+ * 3. 都没有 → null。
+ *
+ * `depth` 防自引用链导致栈溢出。
+ */
+export function resolveVarChain(
+  value: string,
+  readToken: (name: string) => Rgba | null,
+  depth = 0,
+): Rgba | null {
+  if (depth > 16) return null;
+  const v = parseVarOperand(value);
+  if (!v) return parseConcreteColor(value);
+
+  const direct = readToken(v.name);
+  if (direct) return direct;
+  if (!v.fallback) return null;
+  return resolveVarChain(v.fallback, readToken, depth + 1);
+}
+
+/**
+ * 权重表达式 → 0–1 的数值。
+ *
+ * 三种形态都要认（`@m3e/web` 三种都用到了）：
+ * - 静态：`12%`
+ * - 带兜底的变量：`var(--m3e-menu-active-state-layer-opacity, 8%)`
+ * - **嵌套**变量：`var(--a, var(--b, 10%))`（实测 m3e 里有）
+ *
+ * `readToken` 读变量当前值（m3e 会在组件上设 `--m3e-*-opacity: 8%` 这类）。
+ */
+export function weightValue(
+  weight: string | null,
+  readToken?: (name: string) => string | null,
+  depth = 0,
+): number | null {
+  if (!weight || depth > 16) return null;
+  const t = weight.trim();
+  const direct = /^(\d+(?:\.\d+)?)%$/.exec(t);
   if (direct) return Number(direct[1]) / 100;
-  const v = parseVarOperand(weight.trim());
-  if (v?.fallback) {
-    const m = /^(\d+(?:\.\d+)?)%$/.exec(v.fallback.trim());
+
+  const v = parseVarOperand(t);
+  if (!v) return null;
+
+  const live = readToken?.(v.name);
+  if (live) {
+    const m = /^(\d+(?:\.\d+)?)%$/.exec(live.trim());
     if (m) return Number(m[1]) / 100;
+    const n = Number(live.trim());
+    if (Number.isFinite(n) && n >= 0 && n <= 1) return n;
   }
-  return null;
+  if (!v.fallback) return null;
+  return weightValue(v.fallback, readToken, depth + 1);
 }
 
 /** color-mix 的解析结果。 */
@@ -278,12 +356,19 @@ export function parseColorMixCall(call: string): ParsedColorMix | null {
 export function resolveColorMix(
   parsed: ParsedColorMix,
   resolveVar: (name: string, fallback: string | null) => Rgba | null,
+  readVarRaw?: (name: string) => string | null,
 ): Rgba | null {
   if (!parsed.isSrgb || parsed.operands.length < 2) return null;
 
+  // 变量链递归解开：m3e 的 var 是嵌套的（见 resolveVarChain 的说明）
   const resolveOperand = (op: Operand): Rgba | null => {
     const v = parseVarOperand(op.color);
-    if (v) return resolveVar(v.name, v.fallback);
+    if (v) {
+      const direct = resolveVar(v.name, v.fallback);
+      if (direct) return direct;
+      // 只解一层没命中时，继续往 fallback 深处挖
+      return v.fallback ? resolveVarChain(v.fallback, (n) => resolveVar(n, null)) : null;
+    }
     return parseConcreteColor(op.color);
   };
 
@@ -294,8 +379,8 @@ export function resolveColorMix(
   // CSS Color 5：只给一侧权重时，另一侧补 `100% - 给定值`；两侧都没给才各 50%。
   // 这个默认值很容易漏 —— 漏了会把 `C 12%, transparent` 算成 12/(12+50) ≈ 0.194
   // 而不是 0.12（实测踩过）。
-  const given1 = weightValue(parsed.operands[0].weight);
-  const given2 = weightValue(parsed.operands[1].weight);
+  const given1 = weightValue(parsed.operands[0].weight, readVarRaw);
+  const given2 = weightValue(parsed.operands[1].weight, readVarRaw);
   let w1: number;
   let w2: number;
   if (given1 !== null && given2 !== null) {
