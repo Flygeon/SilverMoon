@@ -4,6 +4,7 @@
  * 启动顺序（每一步都有依赖关系，不要随意调换）：
  *
  * ```
+ * installWebGlobals()        // Electron < 25 的 fetch/Response 回填，必须最先
  * registerSchemes()          // 必须在 ready 之前
  * 解析路径 + 迁移旧数据       // 决定 userData，必须在 ready 之前
  * ↓ ready
@@ -18,7 +19,13 @@
 import { app, dialog, shell } from "electron";
 import path from "node:path";
 
+import { installWebGlobals } from "./compat/web-globals";
 import { config, cacheDir, dataDir, ensureDir, isDev, logDir, migrateLegacyData } from "./config";
+
+// ⚠️ 必须在使用 fetch / Response 之前执行。Electron < 25（Node < 18）没有这些
+// Web 标准全局，而 protocols.ts 有 12 处 `new Response(...)`、sidecar.ts 依赖
+// `fetch` 与 `response.body.getReader()`。见 compat/web-globals.ts。
+installWebGlobals();
 import { initLog, log } from "./log";
 import { initStore, flushAllStores } from "./store";
 import {

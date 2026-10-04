@@ -1,3 +1,9 @@
+// ⚠️ 必须最先执行：Chromium < 119（Electron 22）缺 Promise.withResolvers，
+// 而 pdf.js 会用到。见 utils/legacyPolyfills.ts。
+import { installLegacyPolyfills } from "@/utils/legacyPolyfills";
+
+installLegacyPolyfills();
+
 import { createApp } from "vue";
 import { createPinia } from "pinia";
 import App from "./App.vue";

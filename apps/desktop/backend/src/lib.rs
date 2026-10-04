@@ -183,6 +183,9 @@ pub fn run() {
             commands::stats::listen_source_breakdown,
             commands::smtc::smtc_set_media,
             commands::smtc::smtc_set_playback,
+            // 本地音频标签读写（Win7 兼容版用；正式版走 Electron 侧的 taglib-wasm）
+            commands::tags::tags_read_local,
+            commands::tags::tags_write_local,
             commands::thumbnail::get_thumbnail,
             commands::thumbnail::get_thumbnails,
             commands::thumbnail::thumbnail_cache_path,

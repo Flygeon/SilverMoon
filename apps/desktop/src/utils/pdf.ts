@@ -8,7 +8,9 @@ export function loadPdfjs(): Promise<any> {
   if (!pdfjsPromise) {
     pdfjsPromise = (async () => {
       const pdfjs: any = await import("pdfjs-dist");
-      const workerUrl = (await import("pdfjs-dist/build/pdf.worker.mjs?url")).default;
+      // 走自定义 worker 入口而不是直接用官方 worker：Chromium < 119 需要在
+      // worker 上下文里先补 Promise.withResolvers（见 workers/pdfWorkerLegacy.ts）。
+      const workerUrl = (await import("@/workers/pdfWorkerLegacy?worker&url")).default;
       pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
       return pdfjs;
     })();

@@ -8,6 +8,7 @@ pub mod skin;
 pub mod smtc;
 pub mod song;
 pub mod stats;
+pub mod tags;
 pub mod thumbnail;
 
 use std::collections::HashMap;

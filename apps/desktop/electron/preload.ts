@@ -8,9 +8,12 @@
  *    的 `isDesktop`）；
  * 2. 把主进程推来的事件转成 DOM `CustomEvent`；
  * 3. 接管文件拖放：新版 Electron 不再提供 `File.path`，必须在这里用
- *    `webUtils.getPathForFile()` 把 `File` 换成真实路径。
+ *    `webUtils.getPathForFile()` 把 `File` 换成真实路径。Electron < 29 没有
+ *    `webUtils`，回退到 `File.path`（见 `compat/file-path.ts`）。
  */
-import { contextBridge, ipcRenderer, webUtils } from "electron";
+import { contextBridge, ipcRenderer } from "electron";
+
+import { getPathForFile } from "./compat/file-path";
 
 interface BridgeReply {
   ok: boolean;
@@ -86,7 +89,7 @@ function pathsOf(list: FileList | null): string[] {
   const out: string[] = [];
   for (const file of Array.from(list)) {
     try {
-      const path = webUtils.getPathForFile(file);
+      const path = getPathForFile(file);
       if (path) out.push(path);
     } catch {
       /* 非磁盘文件（如浏览器内拖拽的虚拟文件）忽略 */
