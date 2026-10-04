@@ -67,10 +67,15 @@ jobs:
           prefix-key: clippy
 
       # 后端只需要 native-tls 的 pkg-config 支持，无需任何桌面框架的开发库。
+      #
+      # 另外装 mingw-w64：用于在 Linux 上**交叉编译启动器**，
+      # 以便校验图标资源真的嵌进了 exe（比等 Windows 作业快得多）。
+      # 同时把 NSIS 自检要用的 nsis 一起装上。
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev mingw-w64 nsis
 
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
@@ -105,8 +110,6 @@ jobs:
       # 启动器是 Windows 专用程序，但 fmt/clippy 都能在 Linux 上跑，
       # 因此质量检查留在最快的 lint 作业里，不必等 Windows 构建。
       # 注意：clippy 需要能解析 Windows 目标，故带 --target（构建脚本仍用宿主）。
-      - name: Install NSIS (for installer script syntax check)
-        run: sudo apt-get install -y --no-install-recommends nsis
 
       - name: Rustfmt check (launcher)
         working-directory: apps/desktop/splash
@@ -124,6 +127,17 @@ jobs:
       # 以上两类当时 CI 全绿却带着缺陷发布。
       - name: Launcher logic tests (path / theme / animation)
         run: npm run verify:splash-paths
+
+      # 图标资源校验：**必须真的嵌进 exe**，否则快捷方式是空白图标。
+      # 这里用 GNU 目标本地构建一份来验（比 Windows 作业快得多），
+      # 能在 1 分钟内拦下「资源没编出来」这类静默失败。
+      - name: Build launcher for resource check (GNU)
+        run: |
+          rustup target add x86_64-pc-windows-gnu
+          cargo build --release --target x86_64-pc-windows-gnu --manifest-path splash/Cargo.toml
+
+      - name: Verify launcher icon resource (.rsrc)
+        run: npm run verify:splash-resources
 
       # NSIS 脚本只在 Windows 打包时才被编译；等到那时才发现语法错误就是 ~12 分钟一轮。
       # makensis 跨平台，这里先把语法与宏展开走一遍。
@@ -225,17 +239,18 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo build --release --manifest-path splash/Cargo.toml
 
-      # 打包前确认启动器确实产出了，并守住体积：
-      # 免得静默少文件、或哪天被误配成臃肿产物（C# 自包含曾达 153MB）直到用户安装后才暴露。
-      - name: Verify launcher artifact
+      # 打包前对启动器做**硬校验**（图标资源 + 体积）。
+      #
+      # 为什么必须让 CI 失败而不是只打 warning（真实教训）：
+      # 图标嵌入失败时 build.rs 只打印 cargo:warning，构建照常成功；
+      # 于是 CI 全绿、发布版快捷方式却没有图标 —— 直到用户装上才发现。
+      # 实测就是这样漏过一次（MSVC 下裸 rc 不在 PATH，资源没编出来）。
+      #
+      # 校验脚本用**纯 Node 解析 PE 节表**，不依赖 objdump（仅 Linux 有）
+      # 或 dumpbin（pwsh 里不保证在 PATH），跨平台行为一致。
+      - name: Verify launcher artifact (icon + size)
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $exe = "splash/target/release/silvermoon-splash.exe"
-          if (-not (Test-Path $exe)) { throw "启动器未生成：$exe" }
-          $mb = [math]::Round((Get-Item $exe).Length / 1MB, 3)
-          Write-Host "启动器体积：$mb MB"
-          if ((Get-Item $exe).Length -gt 5MB) { throw "启动器体积异常（$mb MB），预期小于 0.5MB" }
+        run: npm run verify:splash-resources
 
       - name: Build renderer + electron main
         run: npm run build:renderer && npm run build:main
