@@ -16,6 +16,7 @@ import path from "node:path";
 
 import { config, ensureDir, iconPath, isDev, rendererUrl } from "./config";
 import { log } from "./log";
+import { handshakeWithSplash, splashPipeName } from "./splash";
 
 /** 渲染进程可监听的事件帧。 */
 export interface EventFrame {
@@ -170,7 +171,7 @@ export function createMainWindow(): BrowserWindow {
   });
 
   register("main", win);
-  win.once("ready-to-show", () => win.show());
+  scheduleMainWindowShow(win);
 
   const target = rendererUrl();
   log.info(`主窗口载入：${target}`);
@@ -178,6 +179,39 @@ export function createMainWindow(): BrowserWindow {
   if (isDev) win.webContents.openDevTools({ mode: "detach" });
 
   return win;
+}
+
+/**
+ * 决定主窗口「何时显示」。
+ *
+ * 两种情况：
+ * - **有启动器**（命令行带 `--splash-pipe=`，即用户从快捷方式正常启动）：
+ *   先等首帧可显示，再与启动器握手；启动器开始淡出后再等它给的时长才 show，
+ *   形成「splash 淡出 / 主窗口淡入」的交叠，中间没有黑屏或白闪。
+ * - **没有启动器**（开发态 `electron .`、或启动器数据缺失）：
+ *   维持原有行为，ready-to-show 即显示。
+ */
+function scheduleMainWindowShow(win: BrowserWindow): void {
+  if (!splashPipeName()) {
+    win.once("ready-to-show", () => win.show());
+    return;
+  }
+
+  win.once("ready-to-show", () => {
+    void handshakeWithSplash((fadeMs) => {
+      // 启动器已开始淡出：等它淡完再显示，两者交叠
+      log.info(`启动器开始淡出（${fadeMs}ms），随后显示主窗口`);
+      setTimeout(() => {
+        if (!win.isDestroyed()) win.show();
+      }, fadeMs);
+    }).then((ok) => {
+      // 握手失败（启动器没响应/管道异常）：不能让用户看不到窗口，直接显示
+      if (!ok && !win.isDestroyed()) {
+        log.warn("启动器握手未完成，直接显示主窗口");
+        win.show();
+      }
+    });
+  });
 }
 
 /** 渲染进程请求创建的子窗口。 */

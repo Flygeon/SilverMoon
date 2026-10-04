@@ -12,6 +12,7 @@ release/
 
 # rust
 backend/target/
+splash/target/
 backend/gen/schemas/
 backend/.tauri/
 

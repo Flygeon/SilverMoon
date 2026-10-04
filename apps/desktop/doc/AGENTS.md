@@ -34,6 +34,10 @@ npm run dev                         # vite + esbuild watch + electron (scripts/d
 npm start                           # run the already-built app
 npm run dist                        # typecheck + build + electron-builder
 
+# Native launcher / splash (Windows GUI program; see doc/splash-feature.md)
+npm run build:splash                # cargo build --release --manifest-path splash/Cargo.toml
+npm run verify:nsis                 # NSIS installer script syntax check (makensis, cross-platform)
+
 # Checks (all runnable locally, no linker required except cargo)
 npm run lint                        # eslint .
 npm run format:check                # prettier
@@ -41,6 +45,7 @@ npm run typecheck                   # vue-tsc --noEmit && tsc -p tsconfig.electr
 npm test                            # vitest
 cd backend && cargo fmt --check
 cd backend && cargo clippy --all-targets -- -D warnings
+cd splash && cargo fmt --check && cargo clippy --release -- -D warnings
 ```
 
 ## Architecture
@@ -48,6 +53,7 @@ cd backend && cargo clippy --all-targets -- -D warnings
 - `electron/` — Electron main process: windows, tray, hotkeys, dialogs, `app://` + `asset://` protocols, sidecar supervision, host RPC server.
 - `src/ipc/` — **the single bridge between the renderer and the native layer** (`invoke` / `events` / `window` / `dragdrop` / `paths` / `app` / `store` / `dialog` / `fs` / `opener` / `http`). Business code imports from here directly.
 - `src/capabilities/index.ts` — higher-level facade over `src/ipc/`: wraps every backend command and provides a **browser mock** so `npm run dev` works without Electron.
+- `splash/` — **standalone native launcher** (Rust + windows-rs) that paints an MD3 splash while Electron cold-starts, then hands over via a named pipe. Separate crate, not part of the backend workspace; Windows-only artifact. See `doc/splash-feature.md`.
 - `backend/` — Rust backend (commands, SQLite library DB, scanning, metadata).
   - `backend/crates/silvermoon-ipc/` — command macro + route table + managed state + events + local HTTP/SSE server.
   - `backend/crates/silvermoon-ipc-macros/` — `#[command]` / `generate_handler!` / `generate_context!`.
@@ -76,6 +82,10 @@ The `build` job deliberately does **not** declare `needs: lint`, so the slow Win
 
 ## Gotchas
 
+- **Splash handshake is two-sided** — protocol changes must land in both `splash/src/handshake.rs` and `electron/splash.ts`. `FADE_MS` lives only in Rust; Electron learns it from the `FADING:<ms>` message. Contract tests: `electron/__tests__/splashContract.test.ts`.
+- **Shortcuts must point at `silvermoon-splash.exe`, not `SilverMoon.exe`** (`build/installer.nsh`). If they point at Electron directly the launcher never runs and the splash silently does nothing.
+- **`ConnectNamedPipe` blocks forever** — never await it without an independent timeout, or a dead Electron leaves the splash spinning and the user locked out (this happened; see `CONNECT_TIMEOUT` in `splash/src/handshake.rs`).
+- **WinForms cannot be AOT/trimmed** (`NETSDK1175`) — that is why the launcher is Rust, not C#. Self-contained WinForms is 153MB; the Rust build is 0.33MB.
 - Windows builds need MSVC (`link.exe`) — cannot build locally without Visual Studio Build Tools
 - Rust `lofty` crate: `ItemKey::UnsynchronizedLyrics` does not exist in v0.20, only `ItemKey::Lyrics`
 - `src/ipc/opener.ts` exports `openPath` (not `open`)

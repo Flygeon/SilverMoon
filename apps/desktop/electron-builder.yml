@@ -82,6 +82,11 @@ win:
       to: bin/silvermoon-server.exe
     - from: node_modules/taglib-wasm/dist/taglib-wasi.wasm
       to: taglib-wasm/taglib-wasi.wasm
+    # 原生启动器（Rust + Win32，MD3 自绘 splash，约 0.3MB）。
+    # 它与 SilverMoon.exe 同级落地：启动器按自身所在目录去找 Electron，
+    # 不依赖注册表或环境变量。构建前需先 cargo build（见 CI）。
+    - from: splash/target/release/silvermoon-splash.exe
+      to: silvermoon-splash.exe
 
 nsis:
   oneClick: false
@@ -91,6 +96,9 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: SilverMoon
   artifactName: ${productName}-${version}-setup.${ext}
+  # 用自定义脚本把**快捷方式指向启动器**而不是 Electron 本体：
+  # 只有从启动器进来才有无缝的 splash 过渡。脚本见 build/installer.nsh。
+  include: build/installer.nsh
 
 mac:
   icon: backend/icons/icon.icns

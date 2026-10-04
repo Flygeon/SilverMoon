@@ -1,0 +1,35 @@
+[package]
+name = "silvermoon-splash"
+version = "0.0.2"
+description = "SilverMoon 启动动画（MD3 自绘 splash）"
+edition = "2021"
+rust-version = "1.82"
+license = "GPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "silvermoon-splash"
+path = "src/main.rs"
+
+# 独立原生启动器：不参与 backend 的 workspace（无代码共享），
+# 且只在 Windows 上构建（Electron 桌面端目前只发 NSIS）。
+[dependencies]
+windows = { version = "0.58", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",         # CreateNamedPipeW 的 feature 门控之一
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",        # 命名管道（CreateNamedPipeW 等）的 feature 门控
+  "Win32_System_LibraryLoader",
+  "Win32_System_Pipes",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+# 体积优先：启动器要在双击瞬间出画面，且不能给安装包增重。
+# 实测 release 约 0.23MB（opt-level="z" + LTO + strip）。
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
