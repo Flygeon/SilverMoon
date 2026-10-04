@@ -33,12 +33,14 @@ if (!exePath) {
 }
 
 /**
- * 读取 PE 文件的节名列表。
+ * 读取 PE 文件的节表：`{ name, rawSize }` 列表。
  *
  * 布局（全部小端）：
  *   0x3C  e_lfanew（DWORD）→ PE 头偏移
  *   PE 头 +0x04 = COFF 头 → +0x02 NumberOfSections（WORD），+0x10 SizeOfOptionalHeader
- *   节表紧随可选头之后，每项 40 字节，首 8 字节是节名。
+ *   节表紧随可选头之后，每项 40 字节：
+ *     +0x00 8 字节节名（ASCII，NUL 填充）
+ *     +0x08 SizeOfRawData（节在文件中的大小）
  */
 function peSections(buf) {
   if (buf.length < 0x40 || buf[0] !== 0x4d || buf[1] !== 0x5a) {
@@ -55,13 +57,14 @@ function peSections(buf) {
   if (numSections === 0 || numSections > 96) {
     throw new Error("节数量异常：" + numSections);
   }
-  const names = [];
+  const sections = [];
   for (let i = 0; i < numSections; i++) {
     const off = tableOff + i * 40;
-    if (off + 8 > buf.length) throw new Error("节表越界");
-    names.push(buf.toString("ascii", off, off + 8).replace(/\0+$/, ""));
+    if (off + 40 > buf.length) throw new Error("节表越界");
+    const name = buf.toString("ascii", off, off + 8).replace(/\0+$/, "");
+    sections.push({ name, rawSize: buf.readUInt32LE(off + 8) });
   }
-  return names;
+  return sections;
 }
 
 let buf;
@@ -81,28 +84,34 @@ try {
 }
 
 const sizeKb = statSync(exePath).size / 1024;
+const rsrc = sections.find((s) => s.name === ".rsrc");
 console.log("启动器：" + path.relative(appRoot, exePath));
 console.log("  体积：" + sizeKb.toFixed(1) + " KB");
-console.log("  节：" + sections.join(", "));
+console.log("  节：" + sections.map((s) => s.name).join(", "));
 
 let failed = false;
 
 // 1) 图标资源：.rsrc 节是图标/版本信息落地的标志
-if (!sections.includes(".rsrc")) {
+if (!rsrc) {
   console.error("✗ 缺少 .rsrc 节 —— 图标未嵌入，桌面快捷方式会是空白方块。");
   console.error("  检查 splash/build.rs 的资源编译是否成功（构建日志搜 cargo:warning）。");
   failed = true;
 } else {
-  console.log("  ✓ 含 .rsrc 节（图标资源已嵌入）");
+  const rsrcKb = rsrc.rawSize / 1024;
+  console.log("  ✓ 含 .rsrc 节，大小 " + rsrcKb.toFixed(1) + " KB（图标资源已嵌入）");
+  // 直接校验 .rsrc 的**内容大小**，而不是总体积：
+  // 不同工具链的其余代码体积差很多（实测 GNU 总 488KB / MSVC 总 376KB），
+  // 而 .rsrc 大小只取决于嵌进去的图标。用总体积当阈值会误伤 MSVC（踩过）。
+  // 应用图标是 7 种尺寸合计约 124KB，节大小应明显大于纯版本信息（几 KB）。
+  if (rsrc.rawSize < 60 * 1024) {
+    console.error(
+      "✗ .rsrc 节只有 " + rsrcKb.toFixed(1) + " KB，疑似只含版本信息、没含图标（预期 >60KB）",
+    );
+    failed = true;
+  }
 }
 
-// 2) 体积下限：嵌入 7 种尺寸图标约 +140KB；太小说明其实没嵌进去
-if (sizeKb < 380) {
-  console.error("✗ 体积偏小（" + sizeKb.toFixed(1) + " KB < 380 KB），疑似未嵌入图标");
-  failed = true;
-}
-
-// 3) 体积上限：防止哪天被误配成臃肿产物（C# 自包含曾达 153MB）
+// 2) 体积上限：防止哪天被误配成臃肿产物（C# 自包含曾达 153MB）
 if (sizeKb > 5 * 1024) {
   console.error("✗ 体积异常（" + (sizeKb / 1024).toFixed(1) + " MB），预期小于 0.5MB");
   failed = true;
