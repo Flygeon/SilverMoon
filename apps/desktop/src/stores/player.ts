@@ -13,6 +13,7 @@ import { emitDesktopLyricsState } from "@/utils/desktopLyrics";
 import {
   fetchCloudLyrics,
   normalizeTitle,
+  prefetchCloudLyrics,
   type LyricSource,
   type LyricSourcePref,
   type QqFallbackReason,
@@ -431,13 +432,21 @@ export const usePlayerStore = defineStore("player", () => {
   let dualDeck: DualDeck | null = null;
   /** 已发起的预分析：key -> Promise，避免重复分析 */
   const analysisInflight = new Map<string, Promise<TrackAnalysis | null>>();
-  /** 已准备的下一个 deck（预载完成，等待过渡） */
+  /** 已准备的下一个 deck（预载完成，等待过渡）。 */
   let prepared: { index: number; analysis: TrackAnalysis | null; src: string } | null = null;
   /** 过渡是否已为本曲触发过（避免 timeupdate 反复触发） */
   let mixTriggeredFor: string | null = null;
-  /** 本次播放是否真的用上了 AutoMix（决定结束时要等过渡还是直接切） */
   /** 预载进行中（避免 timeupdate 反复触发 prepareNext） */
   let preparing: Promise<void> | null = null;
+  /**
+   * 为下一曲预载音频的那个元素（**不播放**，只让它把元数据 / 缓冲准备好）。
+   *
+   * 需要它是因为在线 / WebDAV 曲目本身不带时长，而预载歌词的匹配要求 ±1s 的时长 ——
+   * 只能先把源挂上去、等 loadedmetadata。主元素此刻正放着当前曲，不能动；另一个 deck
+   * 反正过渡时也要用同一个 src，顺手先挂上还省掉一次加载。
+   */
+  let preloadEl: HTMLAudioElement | null = null;
+
   /** 本次是否被 __automix.forceMix() 强制放行 */
   let forceAllowOnce = false;
   /** AutoMix 过渡交接期间，抑制 loadXxx 内部的 startPlayback */
@@ -502,9 +511,17 @@ export const usePlayerStore = defineStore("player", () => {
       decks.setGain(currentDeck, 1);
       decks.setGain(to, 0);
 
-      // 预载下一曲并 seek 到跳过静音后的位置
-      to.el.src = prepared.src;
-      to.el.load();
+      /*
+       * 预载下一曲并 seek 到跳过静音后的位置。
+       *
+       * src 没变就不重挂：歌词预载阶段已经把源挂到同一个元素上等过元数据，
+       * 重新赋值 + load() 会白白丢掉已缓冲的数据（在线曲就是重新下一次）。
+       * deck 提升之后元素被复用，源已经不同，走的仍是原来的重挂路径。
+       */
+      if (to.el.src !== prepared.src || to.el.readyState === 0) {
+        to.el.src = prepared.src;
+        to.el.load();
+      }
       await new Promise<void>((resolve) => {
         const onReady = () => resolve();
         to.el.addEventListener("loadedmetadata", onReady, { once: true });
@@ -537,8 +554,12 @@ export const usePlayerStore = defineStore("player", () => {
       audioEl.value = to.el;
       // 旧元素停掉并断开源，避免它继续占用解码资源
       el.pause();
-      oldEl.src = "";
+      oldEl.removeAttribute("src");
       oldEl.load();
+      // 元素角色互换：原来「为下一曲预载」的元素成了当前元素，另一边（刚停下的）
+      // 变成下一次为「新的下一曲」预载音频用的元素。不跟着换，下一次预载会被
+      // primePreloadSource 的「正在播就不碰」判断挡掉。
+      preloadEl = oldEl;
       decks.setGain(currentDeck, 0);
       decks.setGain(to, 1);
       // audio 元素换了，音效链的「主元素」登记也要跟着换，否则 resume/suspend 作用在旧元素上
@@ -678,11 +699,20 @@ export const usePlayerStore = defineStore("player", () => {
       return;
     }
 
-    // 并行分析：当前曲 + 下一曲
+    /*
+     * 预载触发时机：loadedmetadata（换歌后）与 play（提前预载的下一曲 deck 开始出声）。
+     * 后者会打断当前曲 —— 但 AutoMix 只监听「当前元素」的事件（见 bindElement 的
+     * isActive 闸门），另一条 deck 的 loadedmetadata 根本不会走到这里，所以只有
+     * 真正切换成当前曲时才会再进来一次。
+     */
+    primePreloadSource(src);
+
+    // 并行分析：当前曲 + 下一曲 + 歌词（歌词那一路见 prefetchNextLyrics）
     const curDur = duration.value || (song.value?.durationMs ?? 0) / 1000;
     const [curAnalysis, nextAnalysis] = await Promise.all([
       analyze(cur.source, cur.id, curDur),
       analyzeNextItem(item, src),
+      prefetchNextLyrics(item, src, preloadEl),
     ]);
 
     prepared = { index: idx, analysis: nextAnalysis, src };
@@ -693,6 +723,127 @@ export const usePlayerStore = defineStore("player", () => {
       curBpm: curAnalysis?.bpm ?? null,
       nextBpm: nextAnalysis?.bpm ?? null,
     });
+  }
+
+  /**
+   * 预载「下一曲」的逐字歌词：把源与时长凑齐，交给 prefetchCloudLyrics 落缓存。
+   *
+   * 为什么值得做：预载发生在前瞻窗口（过渡时长 + 2s，默认 10s）之前，而且这边还要等
+   * 音频元数据，实际有几十秒的余量。这段时间里把歌词的搜索 + 下载做掉，等真正切歌时
+   * fetchCloudLyrics 直接命中缓存、`schedulePreciseQqLyrics` 瞬间换上官方逐字轴，
+   * 而不是让用户听着一首没有歌词的歌等网络。
+   *
+   * 几条边界：
+   * - 关闭「更精确的逐字歌词」时直接跳过（那份能力本来就不会被用上，别白花流量）；
+   * - 时长只对**本地 / 在线**曲目必需且可取：本地取元数据，在线 / WebDAV 等预载元素
+   *   报出元数据；拿不到时长就不预载（±1s 匹配没了会误配，宁可不做）；
+   * - WebDAV 曲目除了云端回退链，播放时还会去拉同目录的 .lrc（localLyrics）——
+   *   预载的元素那边会顺带把它塞进 IndexedDB，切过去时读缓存即可，不必再等一次网络；
+   * - 失败不抛、不提示：预载只是加速，失败了下次取词照旧走完整回退链。
+   */
+  async function prefetchNextLyrics(
+    item: QueueItem,
+    src: string,
+    el: HTMLAudioElement | null,
+  ): Promise<void> {
+    const s = useSettingsStore();
+    if (!s.preciseLyrics) return;
+    try {
+      let meta: { id: string; title: string; artist: string; durationMs?: number } | null = null;
+      if (isWebDav(item)) {
+        const title = item.name.replace(/\.[^.]+$/, "");
+        const lrcMs = await prefetchWebdavLyrics(item.path);
+        meta = {
+          id: `webdav:${item.path}`,
+          title,
+          artist: "WebDAV",
+          durationMs: lrcMs ?? (await waitAudioDuration(3000, el)),
+        };
+      } else if (isOnline(item)) {
+        meta = {
+          id: item.id,
+          title: item.name,
+          artist: item.artist,
+          // 在线列表自带时长（酷狗）就直接用，省掉一次元数据等待
+          durationMs: item.durationMs ?? (await waitAudioDuration(3000, el)),
+        };
+      } else {
+        const full = await capabilities.getSong(item.id);
+        meta = {
+          id: item.id,
+          title: full.meta.title ?? full.file.name.replace(/\.[^.]+$/, ""),
+          artist: full.meta.artist ?? "",
+          durationMs: full.meta.durationMs ?? undefined,
+        };
+      }
+      if (!meta.durationMs) {
+        mixLog("下一曲歌词预载跳过（拿不到时长，无法做 ±1s 匹配）", { id: meta.id });
+        return;
+      }
+      const prefKey = lyricPrefKey(meta);
+      const pref = prefKey ? s.lyricSourcePrefs[prefKey] : undefined;
+      // 与 schedulePreciseQqLyrics 同一套约束：未登录时 meting 偏好不再作为首选；
+      // 「设置里关掉 AMLL」也要拦掉历史偏好，否则预载会白请求一个已关掉的来源。
+      const neteaseLoggedIn = s.neteaseEnabled && useNeteaseStore().loggedIn;
+      const metingMiss = pref === "meting" && !neteaseLoggedIn;
+      const amllMiss = pref === "amll" && !s.amllLyricsEnabled;
+      const effectivePref = metingMiss || amllMiss ? undefined : pref;
+      if (effectivePref === "local") {
+        mixLog("下一曲歌词预载跳过（用户偏好本地歌词）", { id: meta.id });
+        return;
+      }
+      mixLog("开始预载下一曲歌词", { id: meta.id, title: meta.title, src });
+      await prefetchCloudLyrics({
+        title: meta.title,
+        artist: meta.artist || undefined,
+        durationMs: meta.durationMs,
+        preferredSource: effectivePref,
+        fallbackToMeting: neteaseLoggedIn,
+        amllBase: s.amllLyricBase,
+      });
+    } catch (e) {
+      mixWarn("下一曲歌词预载失败（不影响播放）", e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * WebDAV 曲目的预载：把同目录同名 .lrc 拉下来写进 IndexedDB 缓存。
+   *
+   * 与 loadWebDavSong 里那段完全同源（包括只认 `[` 的判定），区别只是**不解析、不应用**：
+   * 目标是让切过去时 lrcGet 直接命中，顺便把时长（最后一行时间，粗估）带回来。
+   * 同一首歌只拉一次，重复预载直接被缓存挡掉。
+   */
+  async function prefetchWebdavLyrics(path: string): Promise<number | undefined> {
+    const id = `webdav:${path}`;
+    try {
+      if ((await lrcGet(id)) !== null) return undefined;
+      const lrcPath = path.replace(/\.[^.]+$/, "") + ".lrc";
+      const res = await fetch(await capabilities.webdavMediaUrl(lrcPath));
+      if (!res.ok) return undefined;
+      const text = await res.text();
+      if (!text.includes("[")) return undefined;
+      void lrcSet(id, text);
+      // 与 loadWebDavSong 的兜底同一个估法：最后一行时间 +1s
+      let last = 0;
+      for (const line of parseLrc(text, false)) last = Math.max(last, line.time);
+      return last > 0 ? (last + 1) * 1000 : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * 预载元素：**不播放**，只让它把「下一曲」的源挂上去、拿到元数据。
+   *
+   * 单独抽一个函数是为了让意图集中：`preloadEl.src === src` 时不重挂，避免把已经
+   * 缓冲好的数据丢掉；已经切到这首（元素正在播）时不碰它，否则会把当前播放打断。
+   */
+  function primePreloadSource(src: string): void {
+    const el = preloadEl;
+    if (!el || el === audioEl.value || el.src === src) return;
+    el.src = src;
+    el.preload = "auto";
+    el.load();
   }
 
   /** 队列条目的稳定标识（与分析缓存 key 一一对应）。 */
@@ -760,6 +911,10 @@ export const usePlayerStore = defineStore("player", () => {
   function ensureDualDeck(): DualDeck {
     if (!dualDeck) {
       dualDeck = new DualDeck(audioEffectEngine, (msg, detail) => mixLog(msg, detail));
+      // 预载歌词时用来读元数据的元素：就是过渡时会被淡入的那个 deck。
+      // 在这里创建等价于「只在 AutoMix 真正投入使用时才多一个 audio 元素」，
+      // 不用 AutoMix 的用户仍然只有一个元素（零回归面，与 DualDeck 的设计一致）。
+      preloadEl = dualDeck.other(mixDeck.value).el;
     }
     return dualDeck;
   }
@@ -924,10 +1079,17 @@ export const usePlayerStore = defineStore("player", () => {
   /** 正在获取 QQ 官方逐字歌词的歌曲 key，避免同一首重复请求 */
   const qqLyricsInflight = new Set<string>();
 
-  /** 等待 audio 元素元数据就绪并返回时长（毫秒）；超时/不可用返回 undefined */
-  function waitAudioDuration(timeoutMs: number): Promise<number | undefined> {
+  /**
+   * 等待 audio 元素元数据就绪并返回时长（毫秒）；超时/不可用返回 undefined。
+   *
+   * @param el 缺省为当前播放元素。AutoMix 预载歌词时传的是**另一个 deck**：
+   *   下一曲的元数据早就由预载阶段取到了，直接读它即可，不必等主元素换过去。
+   */
+  function waitAudioDuration(
+    timeoutMs: number,
+    el: HTMLAudioElement | null = audioEl.value,
+  ): Promise<number | undefined> {
     return new Promise((resolve) => {
-      const el = audioEl.value;
       if (!el) {
         resolve(undefined);
         return;
@@ -1576,6 +1738,13 @@ export const usePlayerStore = defineStore("player", () => {
     mixLog("预载的下一曲已失效（" + reason + "）", { index: prepared.index });
     prepared = null;
     mixTriggeredFor = null;
+    // 预载元素上还挂着这首歌的源：留着既占解码 / 网络，也会让下一次预载的
+    // 「src 没变就不重挂」判断失效。这里只是断开，元素本身留给过渡复用。
+    if (preloadEl) {
+      preloadEl.pause();
+      preloadEl.removeAttribute("src");
+      preloadEl.load();
+    }
   }
 
   async function next() {

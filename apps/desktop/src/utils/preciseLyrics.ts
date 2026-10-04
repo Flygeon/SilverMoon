@@ -566,6 +566,29 @@ export interface PreciseLyricsOptions {
 }
 
 /**
+ * 预热云端歌词：**只写缓存，不碰任何播放 / 歌词状态**。
+ *
+ * 给 AutoMix 的「预载下一曲」用：那段等待本来就有几十秒（分析 + 取流 + 等过渡窗口），
+ * 顺手把歌词的搜索与下载做掉，等真正切到这首歌时 fetchCloudLyrics 直接命中缓存，
+ * 不必再等一次网络 —— 否则用户会看到「歌已经切过去了，歌词还在转」。
+ *
+ * 与 fetchCloudLyrics 走同一条回退链、同一份结果缓存（成功 1h / 确定性失败 10min /
+ * 网络失败 90s），因此这里**不做任何去重**：重复调用本身就会被缓存挡掉，而进程内
+ * 再叠一层「进行中」表反而要处理它自己的并发清理。失败也不写任何 UI 状态：
+ * 预载失败只是让下次取词变慢，绝不能影响正在播的那首。
+ */
+export async function prefetchCloudLyrics(
+  opts: PreciseLyricsOptions,
+): Promise<PreciseLyricsResult> {
+  const result = await fetchCloudLyrics(opts);
+  const verdict = result.ok
+    ? `命中${SOURCE_LABEL[result.source]}（${result.fromCache ? "来自缓存" : "在线获取"}）`
+    : `未命中（${result.reason}）`;
+  console.info(`[逐字歌词] 预载 ${opts.title}：${verdict}`);
+  return result;
+}
+
+/**
  * 按回退链从云端取逐字歌词（偏好来源 → 另一来源；登录网易云后追加 Meting）。
  * 成功返回歌词（含来源信息），失败返回原因；调用方据此回退本地歌词并提示。
  */

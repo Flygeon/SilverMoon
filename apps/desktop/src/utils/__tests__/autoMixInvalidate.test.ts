@@ -116,3 +116,85 @@ describe("接线护栏（源码级）", () => {
     expect(body).toMatch(/invalidatePrepared\(/);
   });
 });
+/**
+ * AutoMix 预载歌词的接线护栏（源码级）。
+ *
+ * 纯逻辑测不到「接线」：prefetchCloudLyrics 写得再对，只要没接进 doPrepareNext，
+ * 用户感知到的仍然是「切过去才去搜歌词」。所以这里直接读源码断言调用点与顺序约束。
+ */
+describe("AutoMix 预载歌词（接线护栏）", () => {
+  const src = readFileSync(resolve(__dirname, "../../stores/player.ts"), "utf8");
+
+  it("预载流程里会顺带预载下一曲歌词", () => {
+    expect(src).toContain("prefetchNextLyrics(");
+  });
+
+  it("歌词预载与分析并行，而不是排在后面（否则白等一轮）", () => {
+    const idx = src.indexOf("const [curAnalysis, nextAnalysis] = await Promise.all([");
+    expect(idx).toBeGreaterThan(-1);
+    // 同一个 Promise.all 的三个成员：当前曲分析 / 下一曲分析 / 歌词预载
+    const body = src.slice(idx, idx + 320);
+    expect(body).toContain("analyze(cur.source");
+    expect(body).toContain("analyzeNextItem(item, src)");
+    expect(body).toContain("prefetchNextLyrics(item, src, preloadEl)");
+  });
+
+  it("预载发生在 prepared 落位之前（这样失败也只是跳过，不会污染过渡状态）", () => {
+    const callAt = src.indexOf("prefetchNextLyrics(item, src, preloadEl)");
+    const assignAt = src.indexOf("prepared = { index: idx, analysis: nextAnalysis, src }");
+    expect(callAt).toBeGreaterThan(-1);
+    expect(assignAt).toBeGreaterThan(callAt);
+  });
+
+  it("关闭「更精确的逐字歌词」时不预载（不白花流量）", () => {
+    const fnAt = src.indexOf("async function prefetchNextLyrics(");
+    expect(fnAt).toBeGreaterThan(-1);
+    const body = src.slice(fnAt, fnAt + 600);
+    expect(body).toMatch(/if \(!s\.preciseLyrics\) return;/);
+  });
+
+  it("拿不到时长就跳过预载（±1s 匹配依赖它，宁可不做也不误配）", () => {
+    expect(src).toMatch(/if \(!meta\.durationMs\) \{[\s\S]{0,120}return;/);
+  });
+
+  it("在线 / WebDAV 的时长读的是预载元素，而不是当前正在播的元素", () => {
+    // waitAudioDuration 必须能收元素参数，且预载路径传的是 el
+    expect(src).toMatch(
+      /function waitAudioDuration\(\s*timeoutMs: number,\s*el: HTMLAudioElement \| null = audioEl\.value,/,
+    );
+    expect(src).toContain("await waitAudioDuration(3000, el)");
+  });
+
+  it("预载元素由 AutoMix 的双 deck 提供，且只在真正会用 AutoMix 时才创建", () => {
+    const fnAt = src.indexOf("function ensureDualDeck(");
+    const body = src.slice(fnAt, fnAt + 600);
+    expect(body).toContain("preloadEl = dualDeck.other(mixDeck.value).el");
+  });
+
+  it("预载失败静默降级：不弹提示、不写 lastError", () => {
+    const fnAt = src.indexOf("async function prefetchNextLyrics(");
+    const body = src.slice(fnAt, src.indexOf("function prefetchWebdavLyrics("));
+    expect(body).toMatch(/catch \(e\) \{[\s\S]{0,200}mixWarn\(/);
+    expect(body).not.toContain("showLyricNotice");
+    expect(body).not.toContain("lastError");
+  });
+
+  it("预载的下一曲失效时，预载元素上的源也要断掉", () => {
+    const fnAt = src.indexOf("function invalidatePrepared(");
+    const body = src.slice(fnAt, fnAt + 900);
+    expect(body).toContain("preloadEl.removeAttribute");
+  });
+
+  it("过渡时源没变就不重挂（保住预载阶段已经缓冲好的数据）", () => {
+    expect(src).toMatch(/if \(to\.el\.src !== prepared\.src \|\| to\.el\.readyState === 0\) \{/);
+  });
+
+  it("挂源时跳过正在播的元素（否则会把当前曲打断）", () => {
+    const fnAt = src.indexOf("function primePreloadSource(");
+    expect(fnAt).toBeGreaterThan(-1);
+    const body = src.slice(fnAt, fnAt + 400);
+    expect(body).toContain("el === audioEl.value");
+    // 当前元素腾出来后，预载元素要跟着换，否则下一次预载会落到正在播的 deck 上
+    expect(src).toContain("preloadEl = oldEl;");
+  });
+});

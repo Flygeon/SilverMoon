@@ -14,7 +14,11 @@
  * 5. **同名不同艺人**：453 组同名里 38% 是不同歌，必须用艺人分区分。
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchCloudLyrics, preciseLyricsClearCache } from "@/utils/preciseLyrics";
+import {
+  fetchCloudLyrics,
+  preciseLyricsClearCache,
+  prefetchCloudLyrics,
+} from "@/utils/preciseLyrics";
 import { amllClearCache } from "@/utils/amllTtml";
 
 vi.mock("@/ipc/store", () => ({
@@ -381,5 +385,56 @@ describe("AMLL 关闭时不发任何 AMLL 请求", () => {
     });
     expect(r.ok).toBe(false);
     expect(calls.some((u) => u.includes("raw-lyrics-index.jsonl"))).toBe(false);
+  });
+});
+describe("prefetchCloudLyrics（AutoMix 预载下一曲歌词）", () => {
+  it("预载只落缓存：随后正式取词直接命中，不再打网络", async () => {
+    const songTtml = ttml({ pCount: 30, lastLineStartMs: 110000, durMs: 120000 });
+    const { calls } = stubFetch([
+      { needle: "raw-lyrics-index.jsonl", body: idxEntry(["预载歌"], ["预载歌手"], "p.ttml") },
+      { needle: "raw-lyrics/p.ttml", body: songTtml },
+    ]);
+    const opts = {
+      title: "预载歌",
+      artist: "预载歌手",
+      durationMs: 120000,
+      amllEnabled: true,
+      amllBase: BASE,
+    };
+
+    const pre = await prefetchCloudLyrics(opts);
+    expect(pre.ok).toBe(true);
+    const callsAfterPrefetch = calls.length;
+
+    // 正式取词：同参数、同缓存键，必须直接命中缓存且一次网络都不发
+    const real = await fetchCloudLyrics(opts);
+    expect(real.ok).toBe(true);
+    if (real.ok) {
+      expect(real.fromCache).toBe(true);
+      expect(real.source).toBe("amll");
+    }
+    expect(calls.length).toBe(callsAfterPrefetch);
+  });
+
+  it("未命中时只返回失败结果，不抛错（预载不能影响播放）", async () => {
+    stubFetch([{ needle: "raw-lyrics-index.jsonl", body: "" }]);
+    const r = await prefetchCloudLyrics({
+      title: "查无此歌",
+      artist: "查无此人",
+      durationMs: 100000,
+      amllEnabled: true,
+      amllBase: BASE,
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it("缺时长直接按 missing-info 短路（预载与正式取词同一判据）", async () => {
+    const r = await prefetchCloudLyrics({
+      title: "没有时长的歌",
+      durationMs: undefined,
+      amllEnabled: true,
+      amllBase: BASE,
+    });
+    expect(r).toEqual({ ok: false, reason: "missing-info" });
   });
 });
