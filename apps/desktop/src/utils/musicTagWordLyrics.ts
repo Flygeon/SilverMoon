@@ -23,7 +23,7 @@
  */
 import type { LyricLine, MusicTagSearchResult } from "@shared/types";
 import { fetch as hostFetch } from "@/ipc/http";
-import { qqFetchLyrics, qqFetchLyricsDetailed } from "@/utils/qqMusic";
+import { qqFetchLyricsDetailed } from "@/utils/qqMusic";
 import { kgFetchLyrics } from "@/utils/kgMusic";
 import { hasWordLevel } from "@/utils/qrc";
 import {
@@ -117,7 +117,7 @@ async function neteaseWordLyrics(
  * 按对话框里选中的候选取**逐字**歌词。
  *
  * 各源能力不同，这里如实降级：
- * - qq：QRC 富接口（`qqFetchLyrics`），有逐字就用；
+ * - qq：QRC 富接口（`qqFetchLyricsDetailed`），有逐字就用；
  * - kugou：KRC 富接口（`kgFetchLyrics`，需 hash），有逐字就用；
  * - netease：新增 yrc 逐字轨，没有则退普通 LRC；
  * - migu / kuwo：公开接口只有逐行时间轴，**返回逐行结果**（`wordLevel: false`），

@@ -422,10 +422,14 @@ export function parseLrc(
 
     // 同行尾部括号译文：如 "原文 (译文)" / "原文 （译文）"（meting 歌词常见格式）
     //
-    // 带**词级标记**的行不走这条启发式：词级时间轴是权威数据，括号就是正文的一部分。
-    // 否则 serializeWordLevelLrc 写出的 "Hello (Live)" 回读会变成 "Hello" + 译文 "Live"，
-    // 用户写进文件的歌词被静默改字（实测网易云 yrc 的 "…C.Y.Kong （江志仁）" 会中招）。
-    if (!translation && !words.length) {
+    // 三种情况**不**走这条启发式，否则会把正文当译文切掉（静默改字）：
+    // 1. 已有 [tr:] 标签——译文来源明确；
+    // 2. 带**词级标记**——词级时间轴是权威数据，括号就是正文的一部分
+    //    （serializeWordLevelLrc 写出的 "Hello (Live)" 否则回读成 "Hello" + "Live"）；
+    // 3. 同一时间戳**已有行**——这一行本身就是独立的译文行
+    //    （"hello" + "你好（正式版）" 否则会被截成 "你好" + 译文 "正式版"）。
+    const hasEarlierAtSameTime = times.some((time) => map.has(Math.round(time * 1000)));
+    if (!translation && !words.length && !hasEarlierAtSameTime) {
       const m = content.match(/\s*[（(]([^（）()]*)[）)]\s*$/);
       if (m && content.slice(0, content.length - m[0].length).trim()) {
         translation = m[1].trim();
@@ -457,21 +461,27 @@ export function parseLrc(
   const sequence = buildLyricSequence(sorted, detectInstrumental);
   // 增强型 LRC 的官方词级时间轴覆盖粗排 units：粗排只是「播放即用」的近似，
   // 有真时间轴时必须用真的，否则逐字高亮会与歌声错开。
-  if (wordTimeline.size) {
-    for (const line of sequence) {
-      const units = wordTimeline.get(Math.round(line.time * 1000));
-      // 只接受「词元拼起来 == 清洗后的行文本」的时间轴：尾部括号译文被剥离等
-      // 情况会让两者对不上，此时宁可退回粗排，也不要让逐字宽度与整行错位。
-      if (units?.length && units.map((u) => u.text).join("") === line.text) {
-        line.units = units;
-      }
+  //
+  // `officialKeys` 收集**真正套用成功**的行时间戳。判定必须用这个集合而不是
+  // `wordTimeline`：只写过词级标记、但时间轴被下面的文本一致性检查拒绝的行，
+  // 其 units 仍是**粗排**，不能算官方逐字（否则 attachRoughUnits=false 会漏剥，
+  // 写标签又把伪逐字写回文件）。
+  const officialKeys = new Set<number>();
+  for (const line of sequence) {
+    const key = Math.round(line.time * 1000);
+    const units = wordTimeline.get(key);
+    // 只接受「词元拼起来 == 清洗后的行文本」的时间轴：尾部括号译文被剥离等
+    // 情况会让两者对不上，此时宁可退回粗排，也不要让逐字宽度与整行错位。
+    if (units?.length && units.map((u) => u.text).join("") === line.text) {
+      line.units = units;
+      officialKeys.add(key);
     }
   }
   // 不需要粗排 units 的调用方（写音乐标签）在这里统一剥掉：只留官方词级时间轴，
   // 下游用 `units.length > 1` 判断「是不是逐字」才成立。
   if (!attachRoughUnits) {
     for (const line of sequence) {
-      if (!wordTimeline.has(Math.round(line.time * 1000))) delete line.units;
+      if (!officialKeys.has(Math.round(line.time * 1000))) delete line.units;
     }
   }
   return sequence;

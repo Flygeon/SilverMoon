@@ -215,4 +215,30 @@ describe("往返：serialize → parseLrc", () => {
     const parsed = parseLrc("[100:00.00]第一行", false);
     expect(parsed.map((l) => l.text)).toEqual(["第一行"]);
   });
+
+  it("独立译文行末尾带括号时不被截断（按同时间戳第二行处理）", () => {
+    // 回归：serializeWordLevelLrc 会写「原文行」+「同时间戳译文行」。
+    // 译文行本身以括号结尾时，括号译文启发式会把它截成 "你好" + 译文 "正式版"。
+    const parsed = parseLrc("[00:20.00]hello\n[00:20.00]你好（正式版）", false);
+    expect(parsed[0].text).toBe("hello");
+    expect(parsed[0].translation).toBe("你好（正式版）");
+  });
+
+  it("译文行走 serialize → parse 往返不丢字", () => {
+    const source: LyricLine[] = [line({ time: 20, text: "hello", translation: "你好（正式版）" })];
+    const parsed = parseLrc(serializeWordLevelLrc(source), false);
+    expect(parsed[0].text).toBe("hello");
+    expect(parsed[0].translation).toBe("你好（正式版）");
+  });
+
+  it("attachRoughUnits=false：词级标记被一致性检查拒绝时也不留粗排 units", () => {
+    // 回归：判定曾用「写过词级标记」而不是「真的套用成功」，导致被拒绝的行
+    // 仍带着粗排 units 漏出去，写标签时又被当成逐字写回文件。
+    const text = "[00:10.00]<00:10.00>hello <00:10.50>world [tr:你好]";
+    const strict = parseLrc(text, false, false);
+    expect(strict[0]?.units).toBeUndefined();
+    // 默认（渲染链路）仍保留粗排，行为不变
+    const loose = parseLrc(text, false);
+    expect((loose[0]?.units?.length ?? 0) > 0).toBe(true);
+  });
 });

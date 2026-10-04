@@ -605,9 +605,16 @@ export function parseLrc(
 > ⚠️ **这个参数是必须的，不是可选的洁癖**：粗排 units 是渲染用的近似，每行都有。
 > 写标签时若用 `units.length > 1` 判断「有没有逐字」，逐行 LRC 会被误判成逐字，
 > 把伪时间轴以增强型 LRC 固化进用户文件、别的播放器按错误时间轴点亮。
-> 因此**所有「取词 → 写标签」链路传 `attachRoughUnits=false`**：
-> - `src/utils/musicTagWordLyrics.ts` 的 NetEase 逐行兜底；
-> - `src/utils/qqMusic.ts` `parseTrack` 的 LRC 兜底轨（`parseLrc(plain, false, false)`）。
+> 因此**所有「取词 → 写标签」链路都必须剥掉粗排 units**：
+> - `src/utils/musicTagWordLyrics.ts` 的 NetEase 逐行兜底：`parseLrc(lrc, true, false)`；
+> - QQ / 酷狗 / AMLL 的逐字性由来源显式回报（`qqFetchLyricsDetailed` 等），
+>   `toTagLyricsText(lines, wordLevel)` 在 `wordLevel=false` 时统一 `stripWordUnits()`；
+> - `qqMusic.parseTrack` 的 LRC 兜底轨**保留**粗排 units（渲染逐字填充要用），
+>   但如实回报 `wordLevel: false`——判定不再看 units。
+
+> ⚠️ `attachRoughUnits=false` 的剥离判据必须是「**真的套用成功**的行时间戳集合」
+> （`officialKeys`），不能是「这一行写过词级标记」：词级标记存在、但被下面的
+> 文本一致性检查拒绝时，该行 units 仍是**粗排**，用后者判断会把它漏出去。
 
 ## 17. 逐字取词：`src/utils/musicTagWordLyrics.ts`
 
@@ -722,9 +729,12 @@ npm run verify:word-lyrics      # 端到端：纯逻辑 + 真实 taglib 落盘 +
 
 - **词元拼接必须等于行文本**才写词级标记（`unitsMatchText`）。对不上就按逐行写——
   宁可丢逐字，也不产生「自己写得出去、自己读不回来」的歌词。
-- **带词级标记的行不做尾部括号译文启发式**：括号是正文的一部分。
-  否则 `Hello (Live)` 回读会变成 `Hello` + 译文 `Live`，**静默改字**
-  （实测网易云 yrc 的 `…C.Y.Kong （江志仁）` 中招）。
+- **尾部括号译文启发式有三种豁免**（否则都会**静默改字**）：
+  1. 已有 `[tr:]` 标签；
+  2. 该行带词级标记——括号是正文（`Hello (Live)` 否则回读成 `Hello` + `Live`；
+     实测网易云 yrc 的 `…C.Y.Kong （江志仁）` 中招）；
+  3. 同一时间戳**已有行**——这行本身就是独立译文行，
+     否则 `中文（正式版）` 会被截成 `中文` + 译文 `正式版`。
 - 间奏三点行（`instrumental`）不写进文件：它是渲染态占位。
 - 词元里的 `<`/`>`/换行会被剥离，避免破坏标记结构。
 
