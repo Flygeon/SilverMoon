@@ -15,10 +15,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { MediaEntry } from "@shared/types";
 
-/** 与 MediaGrid.onContextMenu 一致的菜单决策（音频多一项写标签） */
-function gridMenuIds(type: MediaEntry["type"]): string[] {
+/** 与 MediaGrid.onContextMenu 一致的菜单决策（在位的音频多一项写标签） */
+function gridMenuIds(type: MediaEntry["type"], deleted = 0): string[] {
   const items = ["reveal"];
-  if (type === "audio") items.push("write-tags");
+  if (type === "audio" && !deleted) items.push("write-tags");
   return items;
 }
 
@@ -41,6 +41,12 @@ describe("本地音乐右键「写音乐标签」入口", () => {
     }
   });
 
+  it("网格视图：回收站里的音频不给写标签项（文件可能已删，写了必然失败）", () => {
+    expect(gridMenuIds("audio", 1)).not.toContain("write-tags");
+    // 「在资源管理器中显示」仍在，方便用户定位残留文件
+    expect(gridMenuIds("audio", 1)).toContain("reveal");
+  });
+
   it("列表视图：音频行一直有写标签项", () => {
     expect(TRACK_LIST_MENU_IDS).toContain("write-tags");
   });
@@ -50,7 +56,7 @@ describe("本地音乐右键「写音乐标签」入口", () => {
     expect(src).toContain('t("musicTag.menu")');
     expect(src).toMatch(/openMusicTagDialog\(localTagTarget\(/);
     // 只对音频开放
-    expect(src).toMatch(/item\.type === "audio"/);
+    expect(src).toMatch(/item\.type === "audio" && !item\.deleted/);
   });
 
   it("TrackList 源码：确实接上了写标签，且与网格共用同一目标构造函数", () => {

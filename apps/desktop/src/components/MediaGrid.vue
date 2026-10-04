@@ -62,7 +62,9 @@ function onContextMenu(e: MouseEvent, item: MediaEntry) {
   const items: MenuItem[] = [
     { id: "reveal", label: t("context.revealInExplorer"), icon: "folder_open" },
   ];
-  if (item.type === "audio") {
+  // 只给**在位**的音频：回收站里的条目文件可能已被删，写标签必然失败；
+  // 那个页面也不是写标签的场景（要写也得先还原）。
+  if (item.type === "audio" && !item.deleted) {
     items.push({ id: "write-tags", label: t("musicTag.menu"), icon: "sell" });
   }
   openContextMenu(e, items, (id) => {
