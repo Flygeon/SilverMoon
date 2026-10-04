@@ -112,7 +112,11 @@ pub fn tags_read_local(path: String) -> Result<LocalTagFields, String> {
     };
 
     let s = |v: Option<std::borrow::Cow<'_, str>>| v.map(|x| x.to_string()).unwrap_or_default();
-    let item = |k: ItemKey| tag.get_string(&k).map(|x| x.to_string()).unwrap_or_default();
+    let item = |k: ItemKey| {
+        tag.get_string(&k)
+            .map(|x| x.to_string())
+            .unwrap_or_default()
+    };
 
     // 年份 / 音轨 / 碟号优先取**原始字符串**（"2005-10-31" / "3/12"），
     // 取不到才退回 lofty 的数值型访问器 —— 数值型会把复合写法压平。
@@ -130,7 +134,10 @@ pub fn tags_read_local(path: String) -> Result<LocalTagFields, String> {
         album: s(tag.album()),
         album_artist: item(ItemKey::AlbumArtist),
         year: prefer_raw(item(ItemKey::Year), tag.year().map(|y| y.to_string())),
-        track_no: prefer_raw(item(ItemKey::TrackNumber), tag.track().map(|t| t.to_string())),
+        track_no: prefer_raw(
+            item(ItemKey::TrackNumber),
+            tag.track().map(|t| t.to_string()),
+        ),
         disc_no: prefer_raw(item(ItemKey::DiscNumber), tag.disk().map(|d| d.to_string())),
         genre: s(tag.genre()),
         comment: item(ItemKey::Comment),
@@ -193,7 +200,9 @@ fn apply_fields(tag: &mut Tag, fields: &WriteTagFields) {
 
 /// 取（或新建）指定类型的标签。
 fn tag_type_owned(file: &lofty::file::TaggedFile, tag_type: TagType) -> Tag {
-    file.tag(tag_type).cloned().unwrap_or_else(|| Tag::new(tag_type))
+    file.tag(tag_type)
+        .cloned()
+        .unwrap_or_else(|| Tag::new(tag_type))
 }
 
 /// 空串 → 删除该键；非空 → 写入。
@@ -249,12 +258,19 @@ fn write_inner(args: &WriteLocalTagsArgs) -> Result<(), String> {
             tag.remove_picture_type(PictureType::CoverFront);
         }
         CoverMode::Set => {
-            let raw = args.cover_base64.as_deref().ok_or("coverMode=set 但缺少封面数据")?;
+            let raw = args
+                .cover_base64
+                .as_deref()
+                .ok_or("coverMode=set 但缺少封面数据")?;
             let bytes = decode_base64(raw)?;
             if bytes.is_empty() {
                 return Err("coverMode=set 但封面数据为空".into());
             }
-            let mime = args.cover_mime.as_deref().map(mime_from).unwrap_or(MimeType::Jpeg);
+            let mime = args
+                .cover_mime
+                .as_deref()
+                .map(mime_from)
+                .unwrap_or(MimeType::Jpeg);
             tag.remove_picture_type(PictureType::CoverFront);
             tag.push_picture(Picture::new_unchecked(
                 PictureType::CoverFront,
@@ -287,7 +303,12 @@ fn decode_base64(value: &str) -> Result<Vec<u8>, String> {
 
 /// MIME 字符串 → lofty 的 `MimeType`。
 fn mime_from(value: &str) -> MimeType {
-    let v = value.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    let v = value
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
     match v.as_str() {
         "image/png" => MimeType::Png,
         "image/gif" => MimeType::Gif,
