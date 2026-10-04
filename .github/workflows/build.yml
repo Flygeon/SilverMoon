@@ -327,11 +327,30 @@ jobs:
       # 导入 WaitOnAddress 等 Win8+ 符号 —— 这正是「Win7 上加载即失败」的根因。
       # 虽然 ubuntu runner 自带 binutils，但一旦缺失，校验脚本会降级成「跳过」，
       # 那道闸门就形同虚设，所以这里写死依赖。
+      #
+      # wine **也是必需项**（实测踩过，不是可选项）：ubuntu-latest 上默认没有 wine，
+      # 而 electron-builder 26 在 Linux 打 NSIS 包时，除了用 makensis 生成安装器，
+      # 还要 **把刚生成的安装器跑一次**，让它自解压出卸载器：
+      #   app-builder-lib/out/targets/nsis/NsisTarget.js
+      #     → new WineVmManager(...).exec(installerPath, [], ...)
+      # 漏装时构建到这一步直接红，报错只有一行 `wine process failed ENOENT`：
+      #   ✓ building target=nsis file=...-setup.exe
+      #   ✓ signing with signtool.exe path=...-setup.__uninstaller.exe
+      #   ⨯ wine process failed ENOENT
+      # 症状极具误导性 —— 前面的 makensis、7z、nsis-resources 下载全部成功，
+      # 看起来「工具链都装好了」，实际只差一个 wine。
+      #
+      # 两处细节缺一不可：
+      #   * `dpkg --add-architecture i386`：wine 的加载器链依赖 32 位用户态；
+      #     不加 i386 时 `apt-get install wine` 会只装个壳，wine 命令存在却起不来。
+      #   * `wine32:i386` 必须显式列出：NSIS 的 makensis.exe 与安装器都是 32 位 PE，
+      #     纯 wine64 会在 WINEARCH 上直接拒绝。
       - name: Install system dependencies
         run: |
+          sudo dpkg --add-architecture i386
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config libssl-dev mingw-w64 binutils
+            pkg-config libssl-dev mingw-w64 binutils wine wine32:i386
 
       - name: Rust cache (win7 target dir)
         uses: swatinem/rust-cache@v2
