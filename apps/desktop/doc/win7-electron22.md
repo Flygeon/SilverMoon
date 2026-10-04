@@ -262,7 +262,24 @@ node scripts/verify-win7-build.mjs
 3. **`MutationObserver` 的自触发死循环**。同步会写 `documentElement` 的
    `style`，而 observer 正监听该属性 —— 无条件写就是「写 → 观察 → 再写」，
    实测表现为**页面永远加载不完**。必须只在值真的变化时才写。
-4. **worker / 组件级 token 要单独处理**：
+4. **`@m3e/web` 的 var 是三层嵌套的，必须递归解**。实测形态：
+
+   ```css
+   color-mix(in srgb, var(--m3e-text-button-disabled-container-color,
+       var(--m3e-button-disabled-container-color,
+           var(--md-sys-color-on-surface, #1D1B20))) 12%, transparent)
+   ```
+
+   只解**一层**时拿到的是另一个 `var(...)`（不是具体颜色），整条调用被判为
+   「无法换算」而原样保留 → Chromium 108 上依然失效。
+   实测：**50 个 shadow root 里 29 个残留** `color-mix`，而当时所有单测都是绿的
+   （测试里的 var 只有一层，是「我以为」的形态）。
+
+   修复：`resolveVarChain()` 递归解 var 链；权重也支持嵌套
+   （`var(--a, var(--b, 20%))`，且会先读变量实时值 —— m3e 会设
+   `--m3e-*-opacity: 8%`）。修完实测 **50 个 shadow root、0 残留**。
+
+5. **worker / 组件级 token 要单独处理**：
    - `--reader-fg` / `--reader-bg` 由 `BookReader` 的 `:style` 写在组件根节点，
      `theme.css` 里查不到 → 构建期只能给 `transparent` 兜底，
      真实值由 `syncDerivedVarsForElement` 运行期写入；
@@ -291,12 +308,16 @@ npm run build:renderer       && npm run verify:colormix -- --mode=modern
 且 scrim 的兜底必须是 `0.42`（钉住「乘积」语义）；现代产物则必须**保留**
 原生 `color-mix` 且无 `--sm-mix-*` 泄漏。
 
-单元测试另有三份：
+单元测试另有四份：
 - `src/utils/__tests__/colorMixMath.test.ts`（21 项）—— 解析与换算
-- `src/utils/__tests__/colorMixRuntime.test.ts`（16 项）—— 运行期改写与可重入性
+- `src/utils/__tests__/colorMixRuntime.test.ts`（20 项）—— 运行期改写、可重入性、嵌套 var
 - `src/utils/__tests__/colorMixParity.test.ts`（4 项）—— **构建期插件与运行期
   实现的一致性**（两边各有一份实现，算出的 rgba 必须逐字相同，否则主题切换
   瞬间颜色会跳变）
+- `src/utils/__tests__/colorMixM3e.test.ts`（8 项）—— 从**真实** `@m3e/web`
+  bundle 抽 94 条 color-mix（按 m3e 语义做 `${`` + `...}` 插值替换，得到运行期等价
+  CSS），断言 **100% 可改写**。这是拦住「只解一层 var」那类缺陷的关键用例：
+  它测的是**库的真实形态**，而不是自己的假设。
 
 ### 实测
 
