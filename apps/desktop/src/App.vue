@@ -16,6 +16,7 @@ import AppToast from "@/components/AppToast.vue";
 import WindowTitleBar from "@/components/WindowTitleBar.vue";
 import { useDesktopChrome } from "@/composables/useDesktopChrome";
 import { activeSkinDoc, skinBgActive, skinSafeMode } from "@/utils/skinRuntime";
+import { markBoot } from "@/utils/bootTiming";
 import { translate } from "@shared/i18n";
 import { listen, type Event, type UnlistenFn } from "@/ipc/events";
 import { onDragDropEvent, type DragDropEvent } from "@/ipc/dragdrop";
@@ -154,10 +155,15 @@ onMounted(async () => {
     void router.replace("/extension-host");
     return; // 扩展宿主窗口不需要主界面初始化（皮肤/媒体库）
   }
+  // 启动打点：这段串行 await 是「白屏/splash 停留」的主要来源，逐段记耗时
+  markBoot("主界面初始化开始");
   await settings.load();
+  markBoot("设置已加载");
   // 皮肤加载（含 --safe-mode 检测、内置皮肤播种、激活皮肤解析）须在主题解析前完成
   await skins.load();
+  markBoot("皮肤已加载");
   settings.applyTheme(settings.theme);
+  markBoot("主题已应用");
   void audioEffects.init();
   void library.refreshCounts();
   // 在线歌曲的标签覆盖：启动时一次性灌回内存，切歌时无需再等 IPC

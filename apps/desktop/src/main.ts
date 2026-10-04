@@ -2,6 +2,7 @@ import { createApp } from "vue";
 import { createPinia } from "pinia";
 import App from "./App.vue";
 import router from "./router";
+import { markBoot, markFirstPaint } from "@/utils/bootTiming";
 // 字体声明必须先于主题令牌引入：theme.css 只声明字体栈，字形由 fonts.css 提供
 import "@/tokens/fonts.css";
 import "@/tokens/theme.css";
@@ -28,6 +29,8 @@ async function reportError(tag: string, payload: Record<string, unknown>) {
     /* 忽略——不能在错误处理路径里再抛 */
   }
 }
+
+markFirstPaint();
 
 const app = createApp(App);
 app.use(createPinia());
@@ -97,6 +100,7 @@ window.addEventListener("unhandledrejection", (e) => {
 });
 
 app.mount("#app");
+markBoot("Vue 挂载完成");
 
 // 启动加载动画收尾：Vue 挂载后让 index.html 里的 splash 淡出并移除。
 // transitionend 在个别 webview 里可能不触发，加超时兜底强制移除。

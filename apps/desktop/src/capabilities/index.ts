@@ -923,6 +923,17 @@ export const capabilities = {
   appLog(msg: string): Promise<void> {
     return safeInvoke("app_log", { msg });
   },
+  /**
+   * 渲染进程启动打点 → 主进程 main.log（`[启动][渲染] xxx: NNms`）。
+   *
+   * 走主进程 `app` 通道而不是 `app_log`（后者是 Rust 命令、要侧车在线）：启动打点
+   * 必须能在「后端未就绪」时也记录，否则降级模式下一个数字都拿不到。
+   * 失败静默——打点绝不能影响启动。
+   */
+  appLogBoot(mark: string, sinceMs: number): void {
+    if (!isDesktop) return;
+    void callBridge("app", { op: "logBoot", mark, since: sinceMs }).catch(() => undefined);
+  },
 
   // ---- 皮肤系统（方案书 §7/§8）----
   /** 启动参数含 --safe-mode：皮肤逃生通道 */

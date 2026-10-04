@@ -52,15 +52,25 @@ export default defineConfig(async () => ({
     emptyOutDir: true,
     rollupOptions: {
       output: {
+        // 只让 manualChunks **显式点名**的模块成块；Rollup 自行派生的公共块
+        // （尤其是 CJS 互操作助手）一律回落到真正使用它的 chunk 里。
+        //
+        // 踩坑记录（首屏凭空多拉 416KB）：pako / qrcode 是 CJS，经
+        // App.vue → player → netease/kugou 被**静态**拉进入口 chunk，它们需要 Rollup
+        // 的 `interopDefault` 助手（几十字节）。不开这个开关时 Rollup 会把这个助手塞进
+        // 它认为合适的**任意**命名块 —— 实测塞进了 amll-bg，于是入口 chunk 出现真静态
+        // 依赖 `import{g as _S}from"./amll-bg-*.js"`，Vite 顺手在 index.html 加了
+        // `<link rel="modulepreload" href=".../amll-bg-*.js">`，416KB 的 AMLL 包在首帧
+        // 就被下载，「切到 AMLL 引擎才加载」彻底失效。
+        // 开启后助手独立成 `_commonjsHelpers-*.js`（约 0.7KB），amll-bg 回到按需加载。
+        onlyExplicitManualChunks: true,
         // 重依赖各自成块，配合动态 import 保证「进哪个页面才加载哪个块」：
         // amll-bg（AMLL core + @pixi/*，6MB+）只有选 AMLL 背景才会拉，
         // anime-player（artplayer + 弹幕插件）只有进番剧播放页才会拉。
         manualChunks(id) {
           if (!id.includes("node_modules")) return undefined;
-          // CSS 不能并进 amll-bg：入口 chunk 会静态引用 amll-bg（Rollup 把 ESM 互操作
-          // 助手放在了那个块里），AMLL 的 style.css 一旦落进去就会被 index.html 预加载，
-          // 「只有切到 AMLL 引擎才加载 AMLL 样式」的按需加载随之失效。
-          // 让 Vite 自己把 CSS 分给动态 import 它的组件。
+          // CSS 让 Vite 自己分给动态 import 它的组件：样式若并进 amll-bg，
+          // AMLL 的 style.css 会随该块一起被加载，「按需」失效。
           if (id.endsWith(".css")) return undefined;
           if (id.includes("@applemusic-like-lyrics") || /@pixi\//.test(id)) return "amll-bg";
           if (id.includes("artplayer")) return "anime-player";

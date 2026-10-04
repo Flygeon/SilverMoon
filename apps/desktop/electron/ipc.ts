@@ -380,6 +380,22 @@ const handlers: Record<string, Handler> = {
       /** M6：清空在线封面磁盘缓存（<cache>/covers），返回释放字节数 */
       case "clearCoverCache":
         return clearCoverCache();
+      /**
+       * 渲染进程启动打点 → 主进程 main.log。
+       *
+       * 为什么单独开一个 op：`app_log` 是 **Rust 命令**（要侧车在线），而启动打点
+       * 恰恰要在「侧车尚未就绪」时记录；且这条不能依赖后端可用性，否则降级模式下
+       * 一个数字都拿不到。这里只写主进程日志，同步返回，不产生额外往返。
+       */
+      case "logBoot": {
+        const mark = String(payload.mark ?? "").trim();
+        const since = Number(payload.since ?? 0);
+        if (mark) {
+          const ms = Number.isFinite(since) ? Math.round(since) : -1;
+          log.info(`[启动][渲染] ${mark}: ${ms}ms`);
+        }
+        return null;
+      }
       case "exit":
         quitApp();
         return null;

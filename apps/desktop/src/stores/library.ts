@@ -3,6 +3,7 @@ import { computed, ref, shallowRef } from "vue";
 import type { UnlistenFn } from "@/ipc/events";
 import { capabilities, isDesktop } from "@/capabilities";
 import { useSettingsStore } from "@/stores/settings";
+import { markBoot } from "@/utils/bootTiming";
 import type { ListQuery, MediaEntry, ScanProgress } from "@shared/types";
 
 export type SortKey = NonNullable<ListQuery["sortBy"]>;
@@ -123,6 +124,8 @@ export const useLibraryStore = defineStore("library", () => {
       entriesByType.value = { ...entriesByType.value, [type]: first };
       totals.value = { ...totals.value, [type]: total };
       firstPageOk = true;
+      // 首页数据到位 = 列表即将渲染出真实内容（首屏可见的关键节点）
+      markBoot(`${type} 首屏数据到位`);
     } catch (e) {
       if (requestSeq[type] !== seq) return;
       error.value = String(e);
