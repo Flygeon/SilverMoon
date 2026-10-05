@@ -15,10 +15,20 @@
  * createMainWindow() ┘       // 两者并行：界面加载不依赖后端就绪
  * ```
  */
-import { app, dialog, shell } from "electron";
+import { app, dialog, session, shell } from "electron";
 import path from "node:path";
 
-import { config, cacheDir, dataDir, ensureDir, isDev, logDir, migrateLegacyData } from "./config";
+import {
+  APP_ORIGIN,
+  DEV_SERVER_URL,
+  config,
+  cacheDir,
+  dataDir,
+  ensureDir,
+  isDev,
+  logDir,
+  migrateLegacyData,
+} from "./config";
 import { initLog, log } from "./log";
 import { initStore, flushAllStores } from "./store";
 import {
@@ -53,8 +63,14 @@ import {
 // 自定义协议必须在 app ready 之前登记
 registerSchemes();
 
-// 单实例：第二次启动直接聚焦已有窗口
-if (!app.requestSingleInstanceLock()) {
+// 单实例：第二次启动直接聚焦已有窗口。
+//
+// `app.quit()` 只是把退出**排入队列**：当前 tick 之后的模块级代码与 `whenReady()`
+// 回调仍会照常执行 —— 第二个实例会再起一个宿主服务、拉起后端、建窗口，原生启动器
+// 也要空等命名管道。所以把结果记进变量，用它守卫所有启动副作用。
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  log.warn("已有实例在运行，本进程立即退出");
   app.quit();
 } else {
   app.on("second-instance", () => {
@@ -76,7 +92,8 @@ const DATA_DIR = dataDir(appDataRoot);
 const CACHE_DIR = cacheDir(localAppDataRoot);
 
 // 首次运行：把旧项目 LumiLuna 的数据整份搬过来（只读旧目录）
-const migration = migrateLegacyData(appDataRoot);
+// 第二个实例不碰迁移：否则会与正在运行的第一个实例争抢同一份数据目录
+const migration = hasSingleInstanceLock ? migrateLegacyData(appDataRoot) : { migrated: false };
 
 ensureDir(DATA_DIR);
 ensureDir(CACHE_DIR);
@@ -105,6 +122,24 @@ if (migration.migrated) {
 let hostServer: HostServer | null = null;
 let quitting = false;
 
+/**
+ * 收敛 web 权限。
+ *
+ * Electron 默认**授予**页面申请的一切（摄像头 / 麦克风 / 定位 / 通知 / MIDI…），
+ * 而番剧、Pixiv、文库8 这些窗口加载的是第三方远程页。本应用一项都不需要，
+ * 只保留两个：`clipboard-sanitized-write`（各处的「复制」按钮）与 `fullscreen`
+ * （ArtPlayer 的全屏控件）。
+ */
+function hardenSession(): void {
+  const allowed = new Set<string>(["clipboard-sanitized-write", "fullscreen"]);
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    const ok = allowed.has(permission);
+    if (!ok) log.warn(`已拒绝页面权限请求：${permission}`);
+    callback(ok);
+  });
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowed.has(permission));
+}
+
 async function bootstrap(): Promise<void> {
   // 启动打点：一次日志看清时间花在哪段（验收优化用，保持低成本）
   const bootT0 = performance.now();
@@ -120,6 +155,7 @@ async function bootstrap(): Promise<void> {
   hostServer = await startHostServer();
   mark("宿主服务器就绪");
   registerIpc();
+  hardenSession();
 
   const sidecar = new Sidecar();
   setSidecar(sidecar);
@@ -135,34 +171,69 @@ async function bootstrap(): Promise<void> {
 
   // 侧车 → 渲染进程：SSE 事件转发
   sidecar.on("event", (frame: EventFrame) => dispatchEvent(frame));
+  // 启动参数留一份：崩溃重启要原样复用（宿主端口/令牌不变，SSE 逻辑无需改动）
+  const sidecarOptions = {
+    dataDir: DATA_DIR,
+    cacheDir: CACHE_DIR,
+    hostPort: hostServer.port,
+    hostToken: hostServer.token,
+  };
+
+  /**
+   * 后端崩溃自动重启。
+   *
+   * 此前崩溃只弹一个「知道了」，没有任何恢复路径：`start()` 只在 bootstrap 调一次，
+   * 之后所有命令永久返回「后端未启动」，用户只能重启整个应用。
+   * 这里做指数退避重启（1s / 2s / 4s，最多 3 次）；稳定运行 60s 后清零计数，
+   * 避免「每小时崩一次」被误判成雪崩而停止恢复。
+   */
+  let restartCount = 0;
+  const MAX_RESTARTS = 3;
   sidecar.on("crashed", ({ code }: { code: number | null }) => {
     if (quitting) return;
     log.error(`后端进程异常退出（code=${code}）`);
-    void dialog.showMessageBox({
-      type: "error",
-      title: config.productName,
-      message: "后端进程已退出",
-      detail:
-        "媒体库后端（后端进程）意外停止，界面上的操作会陆续失败。\n" +
-        "建议重启应用。若反复出现，请查看日志目录下的 main.log。",
-      buttons: ["知道了"],
-    });
+
+    if (restartCount >= MAX_RESTARTS) {
+      log.error(`后端已连续退出 ${restartCount} 次，停止自动重启`);
+      void dialog.showMessageBox({
+        type: "error",
+        title: config.productName,
+        message: "后端进程已退出",
+        detail:
+          "媒体库后端（后端进程）反复意外停止，已停止自动重启。\n" +
+          "界面上的操作会陆续失败，建议重启应用。\n" +
+          "若反复出现，请查看日志目录下的 main.log。",
+        buttons: ["知道了"],
+      });
+      return;
+    }
+
+    restartCount += 1;
+    const delay = 1000 * 2 ** (restartCount - 1);
+    log.warn(`${delay}ms 后自动重启后端（第 ${restartCount}/${MAX_RESTARTS} 次）`);
+    setTimeout(() => {
+      if (quitting) return;
+      void sidecar.start(sidecarOptions).then((ok) => {
+        if (!ok) {
+          log.error("后端自动重启失败");
+          return;
+        }
+        log.info("后端已自动重启");
+        // 稳定运行 60s 后清零，允许后续再次自愈
+        setTimeout(() => {
+          restartCount = 0;
+        }, 60_000);
+      });
+    }, delay);
   });
 
   // 窗口创建与后端握手**并行**：渲染层的页面加载与转场不依赖后端就绪（数据由
   // "先转场、后加载"范式异步填充），后端起来后数据自然到位；后端缺失时窗口
   // 也能立即出现并给出降级提示，而不是白等握手（上限 15s）。
-  const sidecarReady = sidecar
-    .start({
-      dataDir: DATA_DIR,
-      cacheDir: CACHE_DIR,
-      hostPort: hostServer.port,
-      hostToken: hostServer.token,
-    })
-    .then((ok) => {
-      mark("后端握手完成");
-      return ok;
-    });
+  const sidecarReady = sidecar.start(sidecarOptions).then((ok) => {
+    mark("后端握手完成");
+    return ok;
+  });
 
   const mainWindow = createMainWindow();
   mark("主窗口已创建");
@@ -206,6 +277,37 @@ async function bootstrap(): Promise<void> {
       return { action: "deny" };
     });
   });
+
+  // 渲染进程崩溃此前完全没有监听：用户只会看到白屏，日志里也找不到线索。
+  // 只对自家前端来源提示——番剧取流窗这类远程页崩掉不该打断用户。
+  app.on("render-process-gone", (_event, contents, details) => {
+    let url = "";
+    try {
+      url = contents.getURL();
+    } catch {
+      /* 窗口可能已销毁 */
+    }
+    log.error(`渲染进程崩溃：reason=${details.reason} exitCode=${details.exitCode} url=${url}`);
+    if (quitting || details.reason === "clean-exit") return;
+    if (url.startsWith(APP_ORIGIN) || url.startsWith(DEV_SERVER_URL)) {
+      void dialog.showMessageBox({
+        type: "error",
+        title: config.productName,
+        message: "界面进程已崩溃",
+        detail:
+          "渲染进程意外退出，界面可能已无法交互。\n" +
+          `原因：${details.reason}（exitCode=${details.exitCode}）\n` +
+          "建议重启应用；反复出现请把日志目录下的 main.log 一并反馈。",
+        buttons: ["知道了"],
+      });
+    }
+  });
+
+  app.on("child-process-gone", (_event, details) => {
+    log.error(
+      `子进程退出：type=${details.type} reason=${details.reason} exitCode=${details.exitCode}`,
+    );
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -225,19 +327,22 @@ async function shutdown(code: number): Promise<void> {
   app.exit(code);
 }
 
-app
-  .whenReady()
-  .then(bootstrap)
-  .catch((error) => {
-    log.error("启动失败：", error);
-    void dialog.showMessageBoxSync({
-      type: "error",
-      title: config.productName,
-      message: "启动失败",
-      detail: String((error as Error)?.stack ?? error),
+// 只有拿到单实例锁的进程才真正启动：否则第二个实例会连带起宿主服务与后端进程。
+if (hasSingleInstanceLock) {
+  app
+    .whenReady()
+    .then(bootstrap)
+    .catch((error) => {
+      log.error("启动失败：", error);
+      void dialog.showMessageBoxSync({
+        type: "error",
+        title: config.productName,
+        message: "启动失败",
+        detail: String((error as Error)?.stack ?? error),
+      });
+      app.exit(1);
     });
-    app.exit(1);
-  });
+}
 
 app.on("window-all-closed", () => {
   // 主窗口关闭即退出（closeToTray 时前端会 hide 而不是 close，不会走到这里）

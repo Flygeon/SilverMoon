@@ -102,6 +102,10 @@ export class Sidecar extends EventEmitter {
 
   /** 启动侧车。返回是否成功拉起。 */
   async start(options: SidecarOptions): Promise<boolean> {
+    // 崩溃自动重启会再次进入这里：必须清掉上一次 stop() 留下的标记，
+    // 否则重启后的进程退出不再触发 crashed，自愈会静默失效。
+    this.stopping = false;
+
     const binary = Sidecar.resolveBinary();
     if (!binary) {
       log.warn(

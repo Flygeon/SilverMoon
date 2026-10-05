@@ -233,24 +233,38 @@ fn main() {
 
     // 3) 拉起 Electron（它的窗口先隐藏，等我们的 FADING 再显示）
     let ready = Arc::new(AtomicBool::new(false));
-    if spawn_electron(&electron_exe, &app_root, &name).is_err() {
-        // 拉起失败：没有子进程会来握手，立刻收起 splash，别让用户对着动画干等
-        eprintln!("[splash] 启动 {ELECTRON_EXE} 失败");
-        window::notify_ready();
-    } else {
-        let ready_bg = Arc::clone(&ready);
-        std::thread::spawn(move || {
-            let got = wait_and_ack(READY_TIMEOUT);
-            ready_bg.store(got, Ordering::SeqCst);
-        });
+    match spawn_electron(&electron_exe, &app_root, &name) {
+        Err(_) => {
+            // 拉起失败：没有子进程会来握手，立刻收起 splash，别让用户对着动画干等
+            eprintln!("[splash] 启动 {ELECTRON_EXE} 失败");
+            window::notify_ready();
+        }
+        Ok(mut child) => {
+            // 子进程提前退出探针。
+            //
+            // 最典型的是**用户重复启动**：第二个 Electron 实例拿不到单实例锁会立即
+            // 退出，永远不来连管道。没有这道探针时只能等 CONNECT_TIMEOUT(45s) 才收起
+            // splash，用户等于对着启动动画干等 45 秒，看起来就是卡死。
+            let ready_probe = Arc::clone(&ready);
+            std::thread::spawn(move || {
+                let _ = child.wait();
+                ready_probe.store(true, Ordering::SeqCst);
+            });
 
-        // 硬兜底：无论握手线程卡在什么状态，到达 CONNECT_TIMEOUT 就必须开始淡出。
-        // 没有这道保险，Electron 异常时用户会对着无限转圈的 splash 且进不去应用。
-        let ready_timeout = Arc::clone(&ready);
-        std::thread::spawn(move || {
-            std::thread::sleep(CONNECT_TIMEOUT);
-            ready_timeout.store(true, Ordering::SeqCst);
-        });
+            let ready_bg = Arc::clone(&ready);
+            std::thread::spawn(move || {
+                let got = wait_and_ack(READY_TIMEOUT);
+                ready_bg.store(got, Ordering::SeqCst);
+            });
+
+            // 硬兜底：无论握手线程卡在什么状态，到达 CONNECT_TIMEOUT 就必须开始淡出。
+            // 没有这道保险，Electron 异常时用户会对着无限转圈的 splash 且进不去应用。
+            let ready_timeout = Arc::clone(&ready);
+            std::thread::spawn(move || {
+                std::thread::sleep(CONNECT_TIMEOUT);
+                ready_timeout.store(true, Ordering::SeqCst);
+            });
+        }
     }
 
     // 4) 消息循环 + 动画（阻塞直到淡出完成）

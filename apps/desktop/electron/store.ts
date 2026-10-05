@@ -75,16 +75,17 @@ function persist(file: string): void {
   }
 }
 
-/** 进程退出前把所有脏 store 落盘。 */
+/**
+ * 进程退出前把所有脏 store 落盘。
+ *
+ * 复用 `persist()`（临时文件 + rename 的原子写）而不是直接 `writeFileSync`：
+ * 退出路径最容易被打断（关机、强杀、崩溃），直写会留下半截 JSON，下次启动被判为
+ * 损坏并退化成空 store —— 等于把用户的设置静默丢掉。
+ */
 export function flushAllStores(): void {
   for (const [key, entry] of files) {
     if (!entry.dirty) continue;
-    try {
-      writeFileSync(key, JSON.stringify(entry.data, null, 2), "utf8");
-      entry.dirty = false;
-    } catch (error) {
-      log.error(`退出前落盘 ${key} 失败：`, error);
-    }
+    persist(key);
   }
 }
 
