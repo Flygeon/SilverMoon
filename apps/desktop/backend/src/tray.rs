@@ -67,7 +67,7 @@ pub fn setup(app: &Host) -> silvermoon_ipc::Result<()> {
     let tray = TrayIconBuilder::with_id("main-tray")
         .icon(icon)
         .menu(&menu)
-        .tooltip("LumiLuna")
+        .tooltip("SilverMoon")
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main_window(app),

@@ -399,7 +399,7 @@ const LOGIN_INJECT_JS: &str = r#"
     try {
       var d = document.createElement('div');
       d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#c00;color:#fff;font:12px/1.6 monospace;padding:6px 8px;white-space:pre-wrap;';
-      d.textContent = 'LumiLuna 登录注入错误: ' + msg;
+      d.textContent = 'SilverMoon 登录注入错误: ' + msg;
       (document.body || document.documentElement).appendChild(d);
     } catch (e) {}
     try {

@@ -648,7 +648,7 @@ pub fn open_extension_window(
         "extension",
         WindowUrl::App(PathBuf::from("/index.html")),
     )
-    .title("LumiLuna · 扩展")
+    .title("SilverMoon · 扩展")
     .inner_size(760.0, 520.0)
     .minimizable(false)
     .resizable(true)
