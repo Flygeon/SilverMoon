@@ -193,21 +193,36 @@ mod guard_tests {
     #[test]
     fn host_rejects_rebinding_and_missing() {
         // 攻击者域名解析到 127.0.0.1 → Host 仍是攻击者域名，必须拒绝
-        assert!(!host_is_loopback(&headers(&[("host", "evil.example.com")])));
-        assert!(!host_is_loopback(&headers(&[("host", "evil.example.com:80")])));
+        let evil = headers(&[("host", "evil.example.com")]);
+        assert!(!host_is_loopback(&evil));
+
+        // 带端口的写法同样必须拒绝
+        let evil_with_port = headers(&[("host", "evil.example.com:80")]);
+        assert!(!host_is_loopback(&evil_with_port));
+
         // 完全没有 Host 头
-        assert!(!host_is_loopback(&headers(&[])));
+        let missing = headers(&[]);
+        assert!(!host_is_loopback(&missing));
     }
 
     #[test]
     fn origin_allows_node_client_and_own_frontend() {
         // 主进程 fetch 不带 Origin
-        assert!(origin_is_trusted(&headers(&[])));
-        assert!(origin_is_trusted(&headers(&[("origin", "app://silvermoon")])));
-        assert!(origin_is_trusted(&headers(&[("origin", "http://localhost:1420")])));
-        assert!(origin_is_trusted(&headers(&[("origin", "APP://SilverMoon")])));
+        let absent = headers(&[]);
+        assert!(origin_is_trusted(&absent));
+
+        let app = headers(&[("origin", "app://silvermoon")]);
+        assert!(origin_is_trusted(&app));
+
+        let dev = headers(&[("origin", "http://localhost:1420")]);
+        assert!(origin_is_trusted(&dev));
+
+        let dev_upper = headers(&[("origin", "APP://SilverMoon")]);
+        assert!(origin_is_trusted(&dev_upper));
+
         // 网页来源必须拒绝
-        assert!(!origin_is_trusted(&headers(&[("origin", "https://evil.example.com")])));
+        let evil = headers(&[("origin", "https://evil.example.com")]);
+        assert!(!origin_is_trusted(&evil));
     }
 
     #[test]
@@ -218,8 +233,11 @@ mod guard_tests {
 
     #[test]
     fn token_mismatch_is_rejected() {
-        assert!(!authorized(&headers(&[("x-silvermoon-token", "nope")]), "secret"));
-        assert!(authorized(&headers(&[("x-silvermoon-token", "secret")]), "secret"));
+        let wrong = headers(&[("x-silvermoon-token", "nope")]);
+        assert!(!authorized(&wrong, "secret"));
+
+        let right = headers(&[("x-silvermoon-token", "secret")]);
+        assert!(authorized(&right, "secret"));
     }
 
     #[test]
