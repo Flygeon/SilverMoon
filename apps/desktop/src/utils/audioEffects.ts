@@ -55,6 +55,17 @@ export class AudioEffectEngine {
   /** 主元素的专用增益（AutoMix 淡入用）；未接入时为 null */
   private primaryGain: GainNode | null = null;
 
+  /**
+   * 响度归一化增益节点。
+   *
+   * 与 `primaryGain` 串联：primaryGain(自动混音淡入) → loudnessGain(响度归一化) → input。
+   * 这样两个功能互不干扰：自动混音控制"这歌怎么进来"，响度归一化控制"它多响"。
+   *
+   * 未 attach 时为 null，此时 setLoudnessGain 只是记下值，等 attach 后生效。
+   */
+  private loudnessGain: GainNode | null = null;
+  private loudnessGainValue = 1;
+
   /** 额外接入的 media 元素（双 deck 的第二个 deck） */
   private extraSources: {
     media: HTMLAudioElement;
@@ -93,8 +104,13 @@ export class AudioEffectEngine {
     const primaryGain = ctx.createGain();
     primaryGain.gain.value = 1;
 
+    // 响度归一化增益：接在 primaryGain 之后、input 之前（见字段注释）
+    const loudGain = ctx.createGain();
+    loudGain.gain.value = this.loudnessGainValue;
+
     source.connect(primaryGain);
-    primaryGain.connect(input);
+    primaryGain.connect(loudGain);
+    loudGain.connect(input);
     input.connect(bypass);
     bypass.connect(output);
 
@@ -183,6 +199,7 @@ export class AudioEffectEngine {
     this.ctx = ctx;
     this.media = media;
     this.primaryGain = primaryGain;
+    this.loudnessGain = loudGain;
     this.input = input;
     this.output = output;
     this.bypass = bypass;
@@ -219,6 +236,25 @@ export class AudioEffectEngine {
     gain.connect(this.input);
     this.extraSources.push({ media, source, gain });
     return gain;
+  }
+
+  /**
+   * 设置响度归一化增益（线性倍率，1 = 不改动）。
+   *
+   * 在音效关闭时也有效：只要引擎已 attach 就起作用；未 attach 则先记下取值，
+   * 等下次 attach 时应用 —— 这样「响度归一化」不依赖「音效开关」，
+   * 两者是彼此独立的两个功能。
+   */
+  setLoudnessGain(value: number): void {
+    this.loudnessGainValue = Number.isFinite(value) && value > 0 ? value : 1;
+    if (this.loudnessGain && this.ctx) {
+      this.loudnessGain.gain.setTargetAtTime(this.loudnessGainValue, this.ctx.currentTime, 0.05);
+    }
+  }
+
+  /** 当前响度增益（供 UI 显示）。 */
+  getLoudnessGain(): number {
+    return this.loudnessGainValue;
   }
 
   /**

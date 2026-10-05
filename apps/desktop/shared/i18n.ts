@@ -239,6 +239,20 @@ export const messages = {
         "默认走 jsDelivr 镜像；访问不畅可换成社区镜像或自建（如 https://amll.mirror.dimeta.top/api/db），仅影响歌词文件下载。",
       detectInstrumental: "自动识别前奏/间奏",
       detectInstrumentalHint: "将开头作词/作曲/编曲信息替换为三点前奏，长间奏插入三点等待。",
+      loudnessNormalize: "响度归一化",
+      checkUpdate: "检查更新",
+      checkUpdateHint: "从 GitHub Releases 获取新版本。发现新版本后会提示，可选择何时重启安装。",
+      updateAvailable: "发现新版本 v{version}",
+      updateDownloading: "正在下载更新…{percent}%",
+      updateReady: "更新已就绪，重启后生效",
+      updateUpToDate: "已是最新版本",
+      updateRestartNow: "重启并更新",
+      updateLater: "稍后",
+      updateNotSupported: "当前构建不支持自动更新。",
+      loudnessNormalizeHint:
+        "把本地文件与各在线源统一到同一音量（EBU R128 / LUFS）。按需测量：只测实际播放过的歌，结果缓存在本地。",
+      loudnessTarget: "目标响度（LUFS）",
+      loudnessTargetHint: "-14 是流媒体常用值；数值越小越安静。增益被限制在 ±12 dB 以内。",
       obsceneMask: "不雅用语遮蔽",
       obsceneMaskHint:
         "AMLL TTML 标注的不雅用语（amll:obscene）显示方式；仅在歌词本身带该标注时生效。",
@@ -1365,6 +1379,22 @@ export const messages = {
       detectInstrumental: "Auto-detect intro & interlude",
       detectInstrumentalHint:
         "Replace leading credits (作词/作曲/编曲) with a 3-dot intro and insert 3-dot waits for long interludes.",
+      loudnessNormalize: "Loudness normalization",
+      checkUpdate: "Check for updates",
+      checkUpdateHint:
+        "Fetches new versions from GitHub Releases. You will be notified and choose when to restart and install.",
+      updateAvailable: "Version v{version} is available",
+      updateDownloading: "Downloading update… {percent}%",
+      updateReady: "Update ready — restart to apply",
+      updateUpToDate: "You're up to date",
+      updateRestartNow: "Restart & update",
+      updateLater: "Later",
+      updateNotSupported: "Auto-update is not available in this build.",
+      loudnessNormalizeHint:
+        "Bring local files and every online source to one loudness level (EBU R128 / LUFS). Measured on demand: only tracks you actually play, cached locally.",
+      loudnessTarget: "Target loudness (LUFS)",
+      loudnessTargetHint:
+        "-14 is the streaming common value; lower is quieter. Gain is clamped to ±12 dB.",
       obsceneMask: "Explicit lyric masking",
       obsceneMaskHint:
         "How to display words marked explicit in AMLL TTML (amll:obscene). Only affects lyrics carrying that marker.",

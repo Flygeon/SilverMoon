@@ -297,8 +297,31 @@ jobs:
           path: release-assets
           merge-multiple: true
 
+      - name: Verify update metadata present
+        # 自动更新（electron-updater）靠 latest.yml 判断"有没有新版"、
+        # 靠 .blockmap 做差分下载。少了这两个文件，更新器会直接报
+        # "Cannot find latest.yml"——所以在发版前硬校验，别等用户反馈才发现。
+        run: |
+          set -euo pipefail
+          ls -l release-assets/ || true
+          for f in latest.yml latest-linux.yml; do
+            if ls release-assets/**/"$f" >/dev/null 2>&1 || [ -f "release-assets/$f" ]; then
+              echo "found $f"
+            else
+              echo "::error::missing $f — 自动更新将不可用"
+              exit 1
+            fi
+          done
+          find release-assets -name '*.blockmap' | head -5
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: release-assets/**/*
+          # 必须把 latest*.yml 与 *.blockmap 一起传上去，否则自动更新拿不到元数据
+          files: |
+            release-assets/**/*.exe
+            release-assets/**/*.AppImage
+            release-assets/**/*.blockmap
+            release-assets/**/latest*.yml
+            release-assets/latest*.yml

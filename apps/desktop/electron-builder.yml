@@ -6,6 +6,25 @@ directories:
   output: release
   buildResources: build
 
+# ---------------------------------------------------------------------------
+# 自动更新
+# ---------------------------------------------------------------------------
+# 自动更新需要**两样东西**，缺一样都不成立：
+# 1) 这里声明发布源，electron-builder 才会生成 `latest.yml`（版本/安装包/sha512）
+#    与 `*.blockmap`（差分下载用的分块哈希）—— 没有它们，更新器连"有没有新版"
+#    都无从判断。
+# 2) CI 打包时带上 `--publish always`（见 .github/workflows/build.yml）把这些文件
+#    真的传上去，否则本地生成了也没人下载得到。
+#
+# ⚠️ 暂未启用代码签名：无签名的安装包每次更新都会触发 SmartScreen「未知发布者」，
+# 且杀软更容易拦下 NSIS 静默安装（/S）。功能可用，但**不建议大范围推开**。
+# 详见 doc/splash-feature.md 同目录的发布约定；签名方案定下来后在此处补
+# `win.verifyUpdateCodeSignature` 与 publisherName。
+publish:
+  provider: github
+  owner: Flygeon
+  repo: SilverMoon
+
 # `files` 是**顺序敏感**的 minimatch 列表：app-builder-lib/out/util/filter.js 的
 # minimatchAll 逐条走「已命中就只再测排除项、未命中就只再测包含项」。
 # 所以「勾回 taglib-wasm」必须写在「排除整个 node_modules」**之后**，否则永远匹配不上。

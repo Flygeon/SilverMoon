@@ -1486,16 +1486,17 @@ export async function biliDanmaku(cid: string): Promise<ArtDanmu[]> {
     const bytes = new Uint8Array(await res.arrayBuffer());
     let text = new TextDecoder("utf-8").decode(bytes);
     if (!text.includes("<d ") && !text.includes("<?xml")) {
-      const pako = await import("pako").catch(() => null);
-      if (pako) {
+      // fflate 的 `unzlibSync` 覆盖 raw deflate 与 zlib 两种情况（自动识别 gzip 头），
+      // 正好对应原先 pako 的 `inflateRaw` → `inflate` 两段兜底。
+      // fflate 是 CJS：动态 import 拿到的是 `{ default: module }` 包装，
+      // 所以要从 default 上取具名导出。
+      const fflate = (await import("fflate").catch(() => null))?.default;
+      const decompressSync = fflate?.decompressSync;
+      if (decompressSync) {
         try {
-          text = pako.inflateRaw(bytes, { to: "string" }) as string;
+          text = new TextDecoder("utf-8").decode(decompressSync(bytes));
         } catch {
-          try {
-            text = pako.inflate(bytes, { to: "string" }) as string;
-          } catch {
-            return [];
-          }
+          return [];
         }
       }
     }

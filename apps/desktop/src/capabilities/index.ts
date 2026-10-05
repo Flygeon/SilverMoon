@@ -1050,6 +1050,36 @@ export const capabilities = {
     void callBridge("app", { op: "logBoot", mark, since: sinceMs }).catch(() => undefined);
   },
 
+  // ---- 自动更新 ----
+  /**
+   * 自动更新状态。
+   *
+   * 走主进程 `app` 通道而不是 Rust 命令：更新器完全在主进程内，
+   * 不该因为后端没起来就用不了。开发模式 / 未启用时返回 idle。
+   */
+  updaterState(): Promise<{ status: string; info?: { version: string }; percent?: number }> {
+    if (!isDesktop) {
+      return Promise.resolve({ status: "idle" });
+    }
+    return callBridge<{ status: string; info?: { version: string }; percent?: number }>("updater", {
+      op: "status",
+    }).catch(() => ({ status: "idle" }));
+  },
+  /** 主动检查更新（设置页的「检查更新」按钮） */
+  checkForUpdates(): Promise<void> {
+    if (!isDesktop) return Promise.resolve();
+    return callBridge("updater", { op: "check" })
+      .then(() => undefined)
+      .catch(() => undefined);
+  },
+  /** 重启并安装已下载的更新 */
+  installUpdate(): Promise<void> {
+    if (!isDesktop) return Promise.resolve();
+    return callBridge("updater", { op: "install" })
+      .then(() => undefined)
+      .catch(() => undefined);
+  },
+
   // ---- 皮肤系统（方案书 §7/§8）----
   /** 启动参数含 --safe-mode：皮肤逃生通道 */
   appSafeMode(): Promise<boolean> {

@@ -142,6 +142,19 @@ const DEFAULTS = {
   /** 自动识别前奏/间奏：隐藏作词/作曲/编曲为三点，长间奏插入三点 */
   detectInstrumental: true,
   /**
+   * 响度归一化：把各来源统一到同一音量。
+   *
+   * 曲库混着本地文件、网易云、酷狗、B 站取流，响度差异很大（老录音 -20 LUFS、
+   * 现代流媒体 -9 LUFS 都很常见），不归一化的话用户每切一首歌都要手动调音量。
+   * 开启后按 EBU R128 测量（懒测量：只测实际播过的歌，缓存进 IndexedDB），
+   * 播放时施加增益把各首歌拉到目标响度。
+   *
+   * 默认**关闭**：增益会改变听感，有些用户就是想按素材原始响度听。
+   */
+  loudnessNormalize: false,
+  /** 响度归一化的目标响度（LUFS）。-14 是流媒体常用值。 */
+  loudnessTarget: -14 as number,
+  /**
    * 不雅用语遮蔽（AMLL TTML 的 amll:obscene）：
    * off 不遮蔽 / partial 保留首尾字符 / full 全部遮蔽为 *。
    */
@@ -392,6 +405,8 @@ export const useSettingsStore = defineStore("settings", () => {
   const amllLyricBase = ref(DEFAULTS.amllLyricBase);
   const lyricSourcePrefs = ref<Record<string, LyricSourcePref>>({ ...DEFAULTS.lyricSourcePrefs });
   const detectInstrumental = ref(DEFAULTS.detectInstrumental);
+  const loudnessNormalize = ref(DEFAULTS.loudnessNormalize);
+  const loudnessTarget = ref(DEFAULTS.loudnessTarget);
   const obsceneMask = ref<ObsceneMode>(DEFAULTS.obsceneMask);
   const playerBg = ref<PlayerBgMode>(DEFAULTS.playerBg);
   const lyricBlur = ref(DEFAULTS.lyricBlur);
@@ -521,6 +536,8 @@ export const useSettingsStore = defineStore("settings", () => {
     amllLyricBase,
     lyricSourcePrefs,
     detectInstrumental,
+    loudnessNormalize,
+    loudnessTarget,
     obsceneMask,
     playerBg,
     lyricBlur,

@@ -5,7 +5,7 @@
  *   - LDDC/core/decryptor/__init__.py::krc_decrypt（异或 + zlib）
  *   - LDDC/core/parser/krc.py::krc2mdata
  */
-import pako from "pako";
+import { unzlibSync } from "fflate";
 import type { LyricLine, WordUnit } from "@shared/types";
 
 /** KRC 异或密钥：b"@Gaw^2tGQ61-\xce\xd2ni" */
@@ -31,7 +31,7 @@ export async function krcDecrypt(b64content: string): Promise<string> {
   for (let i = 0; i < data.length; i++) {
     decrypted[i] = data[i] ^ KRC_KEY[i % KRC_KEY.length];
   }
-  const inflated = pako.inflate(decrypted);
+  const inflated = unzlibSync(decrypted);
   return new TextDecoder("utf-8").decode(inflated);
 }
 

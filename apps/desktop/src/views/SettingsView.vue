@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import PageHeader from "@/components/PageHeader.vue";
 import {
@@ -28,6 +28,7 @@ import { activeSkinDoc, skinModeLock, skinSafeMode } from "@/utils/skinRuntime";
 import { SB_CATEGORIES } from "@/utils/sponsorBlock";
 import { translate } from "@shared/i18n";
 import type { FfmpegStatus, SkinEntry } from "@shared/types";
+import { listen } from "@/ipc/events";
 
 const settings = useSettingsStore();
 const library = useLibraryStore();
@@ -62,6 +63,44 @@ const devtoolsEnabled = ref(
 
 /** 应用版本号：构建期由 vite define 注入（来源 package.json），勿再写死字符串 */
 const APP_VERSION = __APP_VERSION__;
+
+/**
+ * 自动更新状态。
+ *
+ * 事件在主进程里就绪时可能早于本组件挂载，所以挂载时先拉一次当前状态，
+ * 之后靠 `updater:status` 事件增量更新（见 electron/updater.ts 的 emit）。
+ */
+interface UpdateState {
+  status:
+    "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "error";
+  info?: { version: string };
+  percent?: number;
+}
+const updateState = ref<UpdateState>({ status: "idle" });
+import { isDesktop } from "@/capabilities";
+
+async function onCheckUpdate() {
+  updateState.value = { status: "checking" };
+  await capabilities.checkForUpdates();
+}
+async function onInstallUpdate() {
+  await capabilities.installUpdate();
+}
+let unlistenUpdate: (() => void) | null = null;
+onMounted(() => {
+  void capabilities.updaterState().then((s) => {
+    updateState.value = s as UpdateState;
+  });
+  void listen<UpdateState>("updater:status", (e) => {
+    updateState.value = e.payload;
+  }).then((un) => {
+    unlistenUpdate = un;
+  });
+});
+onBeforeUnmount(() => {
+  unlistenUpdate?.();
+  unlistenUpdate = null;
+});
 
 function t(key: string) {
   return translate(settings.lang, key);
@@ -364,6 +403,7 @@ type BoolSettingKey =
   | "preciseLyrics"
   | "amllLyricsEnabled"
   | "detectInstrumental"
+  | "loudnessNormalize"
   | "desktopLyricsEnabled"
   | "desktopLyricsShowNext"
   | "desktopLyricsShowTranslation"
@@ -986,6 +1026,26 @@ function selectSection(id: string) {
           />
         </label>
         <p class="hint">{{ t("settings.detectInstrumentalHint") }}</p>
+        <label class="row switch-row">
+          <span class="row-label">{{ t("settings.loudnessNormalize") }}</span>
+          <m3e-switch
+            :checked="settings.loudnessNormalize"
+            @change="setSwitch('loudnessNormalize', $event)"
+          />
+        </label>
+        <p class="hint">{{ t("settings.loudnessNormalizeHint") }}</p>
+        <div v-if="settings.loudnessNormalize" class="row">
+          <span class="row-label">{{ t("settings.loudnessTarget") }}</span>
+          <m3e-slider
+            :min="-20"
+            :max="-8"
+            :value="settings.loudnessTarget"
+            @input="settings.loudnessTarget = $event.detail ?? $event"
+          />
+        </div>
+        <p v-if="settings.loudnessNormalize" class="hint">
+          {{ t("settings.loudnessTargetHint") }}
+        </p>
         <div class="row">
           <div class="row-label">
             <span>{{ t("settings.obsceneMask") }}</span>
@@ -1873,6 +1933,44 @@ function selectSection(id: string) {
           <span class="row-label">{{ t("settings.version") }}</span>
           <span class="value">{{ APP_VERSION }}</span>
         </div>
+        <div class="row">
+          <span class="row-label">{{ t("settings.checkUpdate") }}</span>
+          <m3e-button
+            variant="outlined"
+            size="small"
+            :disabled="updateState.status === 'checking' || updateState.status === 'downloading'"
+            @click="onCheckUpdate"
+          >
+            {{ t("settings.checkUpdate") }}
+          </m3e-button>
+        </div>
+        <p v-if="updateState.status === 'idle' && !isDesktop" class="hint">
+          {{ t("settings.updateNotSupported") }}
+        </p>
+        <p v-else-if="updateState.status === 'checking'" class="hint">…</p>
+        <p v-else-if="updateState.status === 'available'" class="hint">
+          {{ t("settings.updateAvailable").replace("{version}", updateState.info?.version ?? "") }}
+        </p>
+        <p v-else-if="updateState.status === 'downloading'" class="hint">
+          {{
+            t("settings.updateDownloading").replace(
+              "{percent}",
+              (updateState.percent ?? 0).toFixed(0),
+            )
+          }}
+        </p>
+        <p v-else-if="updateState.status === 'not-available'" class="hint">
+          {{ t("settings.updateUpToDate") }}
+        </p>
+        <div v-else-if="updateState.status === 'downloaded'" class="actions">
+          <m3e-button variant="filled" size="small" @click="onInstallUpdate">
+            {{ t("settings.updateRestartNow") }}
+          </m3e-button>
+        </div>
+        <p v-else-if="updateState.status === 'error'" class="hint">
+          {{ t("settings.updateNotSupported") }}
+        </p>
+        <p class="hint">{{ t("settings.checkUpdateHint") }}</p>
         <label class="row switch-row">
           <span class="row-label">{{ t("settings.devtools") }}</span>
           <m3e-switch :checked="devtoolsEnabled" @change="toggleDevtools" />

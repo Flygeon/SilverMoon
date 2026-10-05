@@ -29,6 +29,8 @@ import {
   logDir,
   migrateLegacyData,
 } from "./config";
+import { installCsp } from "./csp";
+import { initUpdater } from "./updater";
 import { initLog, log } from "./log";
 import { initStore, flushAllStores } from "./store";
 import {
@@ -156,6 +158,11 @@ async function bootstrap(): Promise<void> {
   mark("宿主服务器就绪");
   registerIpc();
   hardenSession();
+  // CSP 默认只上报不阻断（见 electron/csp.ts 的「为什么分两步走」）。
+  // 必须在这之后：onHeadersReceived 依赖 app:// 协议已注册。
+  installCsp();
+  // 自动更新：开发模式内部会自行跳过（见 electron/updater.ts）
+  void initUpdater();
 
   const sidecar = new Sidecar();
   setSidecar(sidecar);

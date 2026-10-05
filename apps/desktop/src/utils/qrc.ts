@@ -9,7 +9,7 @@
  *
  * 注意：Python 的 >> 作用于无符号位模式；JS 位运算为 int32，凡涉及高位一律用 >>>。
  */
-import pako from "pako";
+import { unzlibSync } from "fflate";
 import type { LyricLine, WordUnit } from "@shared/types";
 
 // ==================== 3DES（QQ 系，ECB 每 8 字节一块） ====================
@@ -437,13 +437,19 @@ function hexToBytes(hex: string): Uint8Array {
 }
 
 /**
- * zlib 解压（pako）。
- * 注意：QRC 密文按 8 字节块 3DES 解密，末块带填充字节（trailing junk），
- * Python 的 zlib.decompress 与 pako 都会忽略流结束后的尾部数据，
- * 而浏览器原生 DecompressionStream 会报错，因此这里用 pako。
+ * zlib 解压（fflate）。
+ *
+ * ⚠️ **这里对解压库的硬约束**：QRC 密文按 8 字节块 3DES 解密，末块带填充字节
+ * （trailing junk）。Python 的 zlib.decompress、pako、fflate 都会忽略流结束之后的
+ * 尾部数据，而**浏览器原生 DecompressionStream 会报错**
+ * （实测：「Trailing junk found after the end of the compressed stream」）。
+ *
+ * 也就是说这个位置**不能**换成 DecompressionStream。原来用 pako，2026-10 换成了
+ * 更小更快的 fflate —— 换之前先确认它同样容忍尾部填充，并把这个性质写进了单测
+ * （src/utils/__tests__/qrc.test.ts 的「解压实现选型守门人」）。
  */
 function inflateZlib(data: Uint8Array): Uint8Array {
-  return pako.inflate(data);
+  return unzlibSync(data);
 }
 
 export interface QrcDecryptOptions {

@@ -1,9 +1,11 @@
 /**
- * 在线音乐本地缓存（IndexedDB）：
- * - 封面图：URL → dataURL，重启/重新进入不再请求网络
- * - meting 歌词：歌曲 id → LRC 文本
+ * meting 歌词本地缓存（IndexedDB）：歌曲 id → LRC 文本。
  *
  * 独立数据库（lumiluna-online），与 wordCache 的 lumiluna 互不干扰。
+ *
+ * ⚠️ 这里**曾经**还缓存封面（URL → dataURL），现已删除：主进程的 `app-cover://`
+ * 已经接管封面缓存，那份 dataURL 副本没有上限、只会让磁盘单向增长。
+ * 详见下方 `resolveCover` 的注释。
  */
 import { capabilities } from "@/capabilities";
 
@@ -57,8 +59,6 @@ async function kvSet(key: string, value: unknown): Promise<void> {
 
 // ---- 封面 ----
 
-const COVER_PREFIX = "cover:";
-
 /**
  * 把原始封面 URL 转成 `app-cover://` 代理 URL，由主进程统一取图
  * （Referer/UA 按域伪装 → 绕开防盗链；不经过页面 fetch → 不受 CORS 约束；
@@ -90,29 +90,40 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-/** 取缓存封面（dataURL）；无缓存返回 null */
-export async function coverGet(url: string): Promise<string | null> {
-  const v = await kvGet(COVER_PREFIX + url);
-  return typeof v === "string" && v ? v : null;
-}
-
 /**
- * 解析封面：缓存命中直接返回 dataURL；否则下载 → 转 dataURL → 写入缓存。
+ * 取封面的 dataURL，供 **canvas 取色** 用（dataURL 不受跨域污染限制）。
+ *
+ * ## 为什么不再做 IndexedDB 缓存
+ *
+ * 这里曾经把 dataURL 写进 IndexedDB，理由是「下次进入/重启直接读本地」。
+ * 但主进程侧后来有了 `app-cover://` —— 它已经自带**磁盘缓存（256MB LRU）+ 并发去重
+ * + 负缓存**（见 `electron/protocols.ts`）。于是同一张封面被缓存了两遍：
+ *
+ * 1. 主进程磁盘：字节本体
+ * 2. 渲染进程 IndexedDB：**dataURL 字符串**（base64 比原图大 ~33%）
+ *
+ * 而 IndexedDB 那份**没有条数/体积上限、没有淘汰**（`kvSet` 只 `put`），
+ * 库越听越久，磁盘只会单向增长 —— 这就是主报告里的 M2。
+ *
+ * 更关键的是：`resolveCover` 的返回值**只喂给 canvas 取色**（`getDominantColors`），
+ * 真正展示封面的组件（`CachedCover.vue`）走的是 `toCoverProxyUrl` → `app-cover://`，
+ * 根本不用这个 dataURL。既然数据是**当场用完即弃**的，就没必要落盘。
+ *
+ * 现在这里的开销是「每次取色下载一次」，但那一次通常命中 `app-cover://` 的磁盘缓存，
+ * 实际不产生网络请求 —— 换掉的是一份无上限的 base64 副本。
+ *
  * 失败时返回原始 URL（优雅降级，不阻塞展示）。
  */
 export async function resolveCover(url: string): Promise<string> {
   if (!url) return url;
-  const cached = await coverGet(url);
-  if (cached) return cached;
   try {
     const dataUrl = needsProxiedCover(url)
       ? await capabilities.kugouCover(url)
       : await fetchDataUrl(url);
     if (!dataUrl) throw new Error("空响应");
-    await kvSet(COVER_PREFIX + url, dataUrl);
     return dataUrl;
   } catch (e) {
-    console.warn("[封面缓存] 获取失败，回退原 URL:", e instanceof Error ? e.message : e);
+    console.warn("[封面取色] 获取失败，回退原 URL:", e instanceof Error ? e.message : e);
     return url;
   }
 }

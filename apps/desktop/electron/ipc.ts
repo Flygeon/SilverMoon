@@ -24,6 +24,7 @@ import {
 import { handleStore } from "./store";
 import { handleMusicTags } from "./tags";
 import { clearCoverCache } from "./protocols";
+import { checkForUpdates, getUpdateState, quitAndInstall } from "./updater";
 import { log } from "./log";
 import { callSidecar, callSidecarBatch } from "./main-bridge";
 
@@ -111,6 +112,23 @@ const handlers: Record<string, Handler> = {
       return { __commandError: reply.error ?? "批量命令失败" };
     }
     return reply.data ?? [];
+  },
+
+  // -------------------------------------------------------------------------
+  // 自动更新
+  // -------------------------------------------------------------------------
+  updater: async (payload) => {
+    switch (String(payload.op ?? "status")) {
+      case "check":
+        await checkForUpdates();
+        return null;
+      case "install":
+        quitAndInstall();
+        return null;
+      case "status":
+      default:
+        return getUpdateState();
+    }
   },
 
   // -------------------------------------------------------------------------

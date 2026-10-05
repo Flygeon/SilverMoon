@@ -28,6 +28,8 @@ import {
 } from "@/utils/preciseLyrics";
 import { translate } from "@shared/i18n";
 import { applyPreciseWordTimes, getPreciseWordTimes } from "@/utils/wordAnalysis";
+import { getLoudness } from "@/utils/loudnessAnalysis";
+import { loudnessGain } from "@/utils/loudness";
 import { maskObsceneUnits } from "@/utils/obscene";
 import { DualDeck } from "@/utils/dualDeck";
 import { audioEffectEngine } from "@/utils/audioEffects";
@@ -1408,6 +1410,29 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   /** 应用一首已取回的本地完整 Song（解析歌词、提取封面主色、推送 SMTC） */
+  /**
+   * 响度归一化：测出当前曲响度并把增益施加到 Web Audio 链上。
+   *
+   * 异步、不阻塞起播：先按 1.0（不改音量）起播，测完再平滑切到目标增益。
+   * 测不出来（格式不支持 / 网络失败 / 全静音）就一直是 1.0 —— 按原音量播。
+   *
+   * 用歌曲 id 做「结果归属」检查：快速切歌时上一首的异步结果不能污染当前曲。
+   */
+  async function applyLoudness(
+    source: { kind: "local" | "online" | "webdav"; filePath?: string; url?: string },
+    key: string,
+  ): Promise<void> {
+    const st = useSettingsStore();
+    if (!st.loudnessNormalize) {
+      audioEffectEngine.setLoudnessGain(1);
+      return;
+    }
+    const lufs = await getLoudness(source, key);
+    if (song.value?.id !== key) return; // 已经切歌了，丢弃这次结果
+    const gain = loudnessGain(lufs, st.loudnessTarget);
+    audioEffectEngine.setLoudnessGain(gain);
+  }
+
   async function loadSong(s: Song) {
     const title = s.meta.title ?? s.file.name.replace(/\.[^.]+$/, "");
     const artist = s.meta.artist ?? "";
@@ -1443,6 +1468,8 @@ export const usePlayerStore = defineStore("player", () => {
       };
       img.src = s.coverBase64;
     }
+    // 响度归一化：懒测量，异步不阻塞起播（见 applyLoudness）
+    void applyLoudness({ kind: "local", filePath: s.file.path }, s.file.id);
     // 「更精确的逐字歌词」：QQ → 酷狗 → [登录网易云后 Meting] → 本地回退链（同名 + 时长差 ≤1s），
     // 云端全部失败再走本地 FFT 精排（schedulePreciseQqLyrics 内部串行处理）
     void schedulePreciseQqLyrics(
@@ -1648,6 +1675,8 @@ export const usePlayerStore = defineStore("player", () => {
       };
       // 听歌时长统计：开始新会话
       beginSession(song.value);
+      // 响度归一化：在线源同样参与（网易云/酷狗/B 站各来源响度差异很大）
+      void applyLoudness({ kind: "online", url: item.url }, item.id);
       activeLine.value = -1;
       // 与 loadSong 一致：歌词挂在 store 的 lyrics ref 上，LyricsView 读它
       setLyrics(parsed);

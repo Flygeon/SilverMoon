@@ -1,6 +1,6 @@
 [package]
 name = "silvermoon"
-version = "0.0.2"
+version = "0.1.0"
 description = "SilverMoon —— 本地优先全媒体库应用（Electron + Vue 3 + Rust 后端）"
 authors = ["SilverMoon"]
 license = "GPL-3.0-only"
