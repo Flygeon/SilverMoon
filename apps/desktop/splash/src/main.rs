@@ -18,6 +18,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod animation;
+mod boot_trace;
 mod handshake;
 mod pathfind;
 mod prefs;
@@ -51,8 +52,11 @@ fn read_theme_pref() -> Option<&'static str> {
     let path = std::path::Path::new(&appdata)
         .join(APP_IDENTIFIER)
         .join("settings.json");
+    boot_trace::info(&format!("读主题设置：{}", path.display()));
     let text = std::fs::read_to_string(path).ok()?;
-    prefs::theme_from_settings(&text)
+    let theme = prefs::theme_from_settings(&text);
+    boot_trace::info(&format!("设置里的 theme = {theme:?}"));
+    theme
 }
 
 /// 读系统亮暗（Windows「应用模式」）。任何失败都当作亮色（系统默认）。
@@ -62,6 +66,7 @@ fn system_is_dark() -> bool {
         RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ, REG_DWORD,
     };
 
+    boot_trace::step("读注册表 AppsUseLightTheme");
     unsafe {
         let subkey: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
             .encode_utf16()
@@ -81,6 +86,7 @@ fn system_is_dark() -> bool {
             &mut key,
         ) != ERROR_SUCCESS
         {
+            boot_trace::warn("注册表键不存在（Win7 无此键是正常的），按亮色处理");
             return false;
         }
 
@@ -98,7 +104,9 @@ fn system_is_dark() -> bool {
         let _ = RegCloseKey(key);
 
         // AppsUseLightTheme == 0 表示深色
-        status == ERROR_SUCCESS && size >= 4 && u32::from_le_bytes(buf) == 0
+        let dark = status == ERROR_SUCCESS && size >= 4 && u32::from_le_bytes(buf) == 0;
+        boot_trace::info(&format!("系统亮暗：dark={dark}"));
+        dark
     }
 }
 
@@ -195,22 +203,49 @@ fn locate_electron() -> (std::path::PathBuf, std::path::PathBuf) {
 }
 
 fn main() {
+    // ⚠️ 必须是 main 的第一件事（Win7 上启动器实测以 c0000005 崩溃，而它是
+    // 无控制台的 GUI 进程，崩溃后没有任何可见输出）。详见 boot_trace 模块文档。
+    let boot_logs = boot_trace::init("splash");
+    boot_trace::mark_session_start("splash");
+    boot_trace::info("启动器已进入 main（Rust 运行时启动成功）");
+    boot_trace::env_probe();
+    boot_trace::info(&format!(
+        "启动轨迹写入：{}",
+        boot_logs
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    ));
+
     // debug 构建支持 `--dump-frame=<前缀>`：渲染动画帧后退出，便于检查绘制。
     // 放在最前，避免走窗口/管道流程。
     #[cfg(debug_assertions)]
     if let Some(arg) = std::env::args().find(|a| a.starts_with("--dump-frame=")) {
+        boot_trace::step("dump-frame 模式：渲染若干帧后退出");
         dump_frames(&arg);
         return;
     }
 
     // 先解析 Electron 位置（发布布局与直觉不同，见 locate_electron 的说明）
+    boot_trace::step("定位 Electron 主程序");
     let (electron_exe, app_root) = locate_electron();
+    boot_trace::info(&format!("Electron = {}", electron_exe.display()));
+    boot_trace::info(&format!("应用根目录 = {}", app_root.display()));
+    if !electron_exe.is_file() {
+        // 这是「双击后什么也没发生」类问题的头号原因，必须显式记下来。
+        // 注意不能直接返回：启动器仍要把画面画出来再体面退出（见下方流程）。
+        boot_trace::warn("Electron 主程序**不存在**于该路径（后续会转交报错）");
+    }
 
     // 1) 先建管道：Electron 一起来就会连，管道必须先就绪
+    boot_trace::step("创建命名管道（handshake::listen）");
     let name = handshake::pipe_name();
+    boot_trace::info(&format!("管道名 = {name}"));
     let hs = match Handshake::listen(&name) {
         Ok(h) => h,
         Err(e) => {
+            boot_trace::error(&format!("命名管道创建失败：{e}；退化为直接拉起主程序"));
             // 管道建不起来（极罕见）：退化为「直接拉起 Electron 并退出」，
             // 至少不让用户因为启动器自身故障而完全打不开应用。
             eprintln!("[splash] 命名管道创建失败：{e}；将直接启动主程序");
@@ -218,29 +253,46 @@ fn main() {
             return;
         }
     };
+    boot_trace::info("命名管道已就绪");
     *handshake_slot().lock().unwrap() = Some(hs);
 
     // 2) 显示 splash（亮/暗跟随应用设置，与主界面首屏连续）
+    //
+    // 这一段是 Win7 崩溃的**首要嫌疑区**：resolve_mode 要读注册表、create 要
+    // 走 RegisterClassW/CreateWindowExW/GDI，任何一处踩到缺失的入口都会 AV。
+    // 因此拆成三个子阶段分别打点，而不是笼统一句「显示窗口」。
+    boot_trace::step("解析主题偏好（读 %APPDATA% 设置 + 注册表亮暗）");
     let mode = resolve_mode();
+    boot_trace::info(&format!("主题模式 = {mode:?}"));
+
+    boot_trace::step("创建 splash 窗口（RegisterClassW + CreateWindowExW + GDI）");
     let hwnd = match window::create(theme::WIN_W, theme::WIN_H, mode) {
         Ok(h) => h,
         Err(e) => {
+            boot_trace::error(&format!("窗口创建失败：{e}；退化为直接拉起主程序"));
             eprintln!("[splash] 窗口创建失败：{e}；将直接启动主程序");
             let _ = Command::new(&electron_exe).current_dir(&app_root).spawn();
             return;
         }
     };
+    boot_trace::info(&format!("splash 窗口已显示（hwnd={:?}）", hwnd));
 
     // 3) 拉起 Electron（它的窗口先隐藏，等我们的 FADING 再显示）
+    boot_trace::step("拉起 Electron 子进程");
     let ready = Arc::new(AtomicBool::new(false));
     if spawn_electron(&electron_exe, &app_root, &name).is_err() {
         // 拉起失败：没有子进程会来握手，立刻收起 splash，别让用户对着动画干等
+        boot_trace::error(&format!("启动 {ELECTRON_EXE} 失败"));
         eprintln!("[splash] 启动 {ELECTRON_EXE} 失败");
         window::notify_ready();
     } else {
+        boot_trace::info("Electron 子进程已拉起，启动后台等待线程");
+
         let ready_bg = Arc::clone(&ready);
         std::thread::spawn(move || {
+            boot_trace::step("后台线程：等待 Electron 的 READY");
             let got = wait_and_ack(READY_TIMEOUT);
+            boot_trace::info(&format!("READY 等待结束：got={got}"));
             ready_bg.store(got, Ordering::SeqCst);
         });
 
@@ -249,17 +301,22 @@ fn main() {
         let ready_timeout = Arc::clone(&ready);
         std::thread::spawn(move || {
             std::thread::sleep(CONNECT_TIMEOUT);
+            boot_trace::warn("CONNECT_TIMEOUT 兜底触发，强制开始淡出");
             ready_timeout.store(true, Ordering::SeqCst);
         });
     }
 
     // 4) 消息循环 + 动画（阻塞直到淡出完成）
+    boot_trace::step("进入消息循环 + 动画（每帧 GDI 绘制）");
     animation_loop(hwnd, &ready);
+    boot_trace::info("消息循环已退出（动画完成）");
 
     // 5) 收尾：销毁窗口；Electron 是长期运行的应用，**不**杀它
+    boot_trace::step("销毁 splash 窗口并退出");
     unsafe {
         let _ = DestroyWindow(hwnd);
     }
+    boot_trace::info("启动器正常退出（能走到这一行说明启动器本身没崩）");
 }
 
 /// 后台线程：等 READY，收到就回发 FADING 告知淡出时长。

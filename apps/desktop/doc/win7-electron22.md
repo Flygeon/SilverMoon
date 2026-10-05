@@ -163,13 +163,28 @@ cargo +nightly build --release -Z build-std=std,panic_abort \
 node scripts/verify-win7-build.mjs
 ```
 
-静态断言四组：
+静态断言五组：
 
 1. **主进程产物** —— 不残留 `protocol.handle` 直调、已内联 undici、无 taglib-wasm 硬依赖
 2. **语法** —— 可被 Node 16 解析
-3. **Windows 二进制** —— `objdump` 检查**不得**导入 `WaitOnAddress` 等 Win8+ 符号
-   （现成的 `splash/target/.../silvermoon-splash.exe` 就是反面样本，已复现）
-4. **渲染层产物**存在
+3. **Windows 二进制** —— `objdump` 检查**不得**导入 Win8+ 符号（14 个符号 + 3 类 API set
+   + 子系统版本 ≤ 6.1）。
+   > ⚠️ **缺 `objdump` 时本检查直接失败**，不再降级成「跳过」。
+   > 上一版是跳过 —— 那等于闸门根本不存在，而 CI 的 win7 作业本来就固定装了
+   > binutils，跳过只会制造「检查过了」的错觉。
+4. **启动诊断设施在位** —— 两个 exe 内置启动轨迹（`silvermoon-boot-*` 指纹）、
+   主进程产物含 `boot-diagnostics` 收集逻辑（本轮新增，见第 8 节）
+5. **渲染层产物**存在
+
+### 静态闸门的**能力边界**（重要，别误以为它全能）
+
+`objdump -p` 只能看到 **PE 导入表**。以下两类 Win8+ 依赖它**查不出来**：
+
+- **静态链接的 C 代码**（`rusqlite` 的 bundled SQLite、CRT 自身）在运行期通过
+  `GetProcAddress` 动态解析的调用；
+- 通过函数指针 / 延迟加载解析的调用。
+
+这类只能靠**运行时诊断**（第 8 节的启动轨迹）。所以两者是互补的，不能互相替代。
 
 ---
 
@@ -208,10 +223,34 @@ node scripts/verify-win7-build.mjs
   内部 **Electron 22.3.27**，`resources/bin/silvermoon-server.exe` 与
   `resources/silvermoon-splash.exe` 均就位
 
-### ⚠️ 未验证（必须用真实 Win7 收尾）
+### ❌ 真实 Win7 实测结果（第一次上机）
 
-- **在 Windows 7 上实际运行**。以上全部是 Linux + Electron 22 的等价验证，
-  PE 符号检查也只是**静态**的；真机上仍可能出现未预见的加载/渲染差异。
+以上全部是 Linux + Electron 22 的**等价**验证。真机跑第一轮就暴露出两个崩溃 ——
+这正说明「静态检查全绿」与「能在 Win7 上跑」是两件事。
+
+环境：`OS 版本 6.1.7601`（Win7 SP1，区域 2052）。
+
+| 进程 | 现象 | 证据 |
+| --- | --- | --- |
+| 启动器 `silvermoon-splash.exe` | **APPCRASH**，双击快捷方式即崩 | `异常代码 c0000005`、`异常偏移 0x5da3`、`故障模块 = silvermoon-splash.exe` |
+| 后端 `silvermoon-server.exe` | **静默退出** | Electron 侧 `侧车退出：code=3221225477`（= `0xC0000005`） |
+
+两点关键判读：
+
+1. **`0xC0000005` 是访问违例，不是加载失败**（后者是 `0xC0000135` 缺 DLL /
+   `0xC000007B` 镜像无效）。也就是说：**符号能解析、进程能起来**，
+   死在**执行期某一步**。这与「导入表里有 Win8+ 符号导致加载即失败」是
+   **不同的**失败类别 —— 第 5 节的静态闸门拦不住这一种。
+2. **两个崩溃都在 Rust 进程里**，且启动器是「Electron 起来之前」就崩 ——
+   那段时间 Electron 侧完全没有观测机会。这就是第 8 节那套诊断设施存在的原因。
+
+> 已知有效信息：**手动到安装目录双击本体（`SilverMoon.exe`）能打开**
+> —— 即 Electron 主进程 + 渲染层本身没问题，问题集中在两个原生 Rust 进程。
+
+### ⚠️ 仍待真机确认
+
+- 上述两个崩溃的**确切崩溃点** —— 需要用户跑一次带诊断的构建并回报轨迹
+  （第 8 节给了操作步骤与判读方法）。
 - **完整 NSIS 安装包**：`--dir` 产物已验证，但容器里 Wine 无法跑自解压，
   安装步骤未走完。Windows CI（`windows-latest`）可直接产出。
 - 启动器与主程序的**握手**在 Win7 上的表现（命名管道 + GDI 自绘分层窗口）。
@@ -326,3 +365,104 @@ npm run build:renderer       && npm run verify:colormix -- --mode=modern
 而 `:root` 上被写入 `--sm-mix-md-sys-color-primary-12 = rgba(59, 96, 143, 0.12)`
 （base `#3b608f` × 12%）、`--sm-mix-md-sys-color-scrim-60 = rgba(0, 0, 0, 0.42)`
 （0.7 × 60%），元素实际渲染出的 background 即为该 rgba。
+
+---
+
+## 8. 启动诊断（崩溃定位）
+
+### 问题
+
+两个原生进程都是 `#![windows_subsystem = "windows"]` 的 **GUI 程序** ——
+**没有控制台**。打包后的 Win7 上：
+
+- `eprintln!` / `println!` 的输出**没有任何地方可看**；
+- panic hook 写文件的前提是 **panic 发生了**，而访问违例（`0xC0000005`）
+  是**硬崩溃**，不走 panic 通道，hook 根本不会被调用；
+- 若是更早的加载期失败，连 Rust 运行时都还没接管。
+
+结果就是进程**静默消失**，Electron 侧只能看到一个退出码 `3221225477`。
+
+### 方案：不依赖崩溃处理器，改成**主动打点**
+
+每个阶段**进入之前**先写一行到日志并 `flush` 到磁盘。进程若在下一步死掉，
+日志的**最后一行就是「最后成功进入的阶段」**，直接圈定崩溃区间。
+
+```
+[+     0ms] STEP   启动器已进入 main（Rust 运行时启动成功）
+[+     1ms] INFO   可执行文件：D:\SilverMoon\resources\silvermoon-splash.exe
+[+     2ms] STEP   定位 Electron 主程序
+[+     3ms] INFO   Electron = D:\SilverMoon\SilverMoon.exe
+[+     3ms] STEP   创建命名管道（handshake::listen）
+[+     4ms] INFO   命名管道已就绪                       ← 若日志到此为止，
+[+     4ms] STEP   解析主题偏好（读 %APPDATA% 设置 + 注册表亮暗）  ← 崩溃点就在这一段
+```
+
+### 日志落在哪
+
+**优先写到可执行文件旁边**（用户知道应用装在哪，一眼能找到），
+同时**额外**写一份到 `%TEMP%` 兜底：
+
+| 进程 | 文件名 | 位置（按优先级） |
+| --- | --- | --- |
+| 启动器 | `silvermoon-boot-splash.log` | ① `silvermoon-splash.exe` 同目录 ② 当前目录 ③ `%TEMP%` |
+| 后端 | `silvermoon-boot-backend.log` | ① `silvermoon-server.exe` 同目录 ② `<数据目录>\logs\` ③ `%TEMP%` |
+
+> **设计权衡**：第一版只写 `%TEMP%`，但 `%TEMP%` 在 Win7 上是
+> `C:\Users\<用户>\AppData\Local\Temp`，**资源管理器默认不显示隐藏目录**。
+> 多写几份的代价是每次启动几十字节，换来的是「无论权限与习惯如何，总有线索在」。
+>
+> 文件用**追加**模式（两次崩溃可对照），每次启动会写一条醒目的
+> `===== SilverMoon <tag> 启动会话 =====` 分隔头，避免把两次启动的行读串。
+
+### 覆盖的阶段
+
+**启动器**（`splash/src/main.rs`）：
+
+```
+进入 main → 定位 Electron → 建命名管道 → 读主题设置（文件 + 注册表）
+→ 创建窗口（RegisterClassW / CreateWindowExW / GDI）→ 拉起 Electron
+→ 后台等 READY → 消息循环（每帧绘制）→ 销毁窗口
+```
+
+**后端**（`backend/src/main.rs` + `lib.rs`）：
+
+```
+进入 main → 安装 panic hook → run() 开始
+→ setup 闭包进入 → open_db（细分：解析路径 / 建目录 / 开库 / 建表）
+→ SMTC（Win7 版会显式记「跳过」）→ 扩展框架 → 托盘 → 番剧 → Pixiv
+→ IPC 服务启动并阻塞 → run() 返回
+```
+
+`open_db` 之所以拆得最细：`rusqlite` 开了 **`bundled`**，SQLite 的 C 代码被
+静态编进二进制，其中的 `GetSystemTimePreciseAsFileTime` 等 Win8+ 调用
+**不会出现在 PE 导入表里**（由 CRT 动态解析），第 5 节的 `objdump` 闸门
+原理上就查不出来 —— 只能靠运行期定位。
+
+### 崩溃时应用会做什么
+
+Electron 在侧车 `exit` 事件里自动：
+
+1. 收集三份文件（后端轨迹 / 启动器轨迹 / `lumiluna_login_debug.log`）+ `main.log` 尾部；
+2. 从轨迹里**提取最后一行 `STEP`** 写进日志；
+3. **落盘**到 `<数据目录>\logs\boot-diagnostics.txt`；
+4. 在崩溃弹窗里**直接显示**「崩溃前最后阶段」与诊断文件路径。
+
+这样用户不需要去 `%TEMP%` 里翻文件、也不需要判断该看哪一份。
+
+若轨迹文件**一个都没有**，说明崩溃发生在进程进入 `main` 之前
+（加载期 / 运行时初始化）—— 这与「跑到一半崩」是完全不同的两类问题，
+日志里会明确标注。
+
+### 怎么用（Win7 收尾步骤）
+
+1. 装上带诊断的构建，**双击快捷方式**，等它崩（或正常起来）；
+2. 打开**安装目录**（安装时若改过路径，就是那个目录），找
+   `silvermoon-splash.log` 与 `silvermoon-backend.log`；
+   找不到就去 `%TEMP%`（在地址栏直接粘 `%TEMP%` 回车即可）；
+   或者看 `<数据目录>\logs\boot-diagnostics.txt`（应用崩溃弹窗里给了完整路径）；
+3. 把日志**最后 20 行**发回来即可 —— 最后一行 `STEP` 就是崩溃区间下界。
+
+### 如何彻底关闭
+
+设环境变量 `SILVERMOON_BOOT_TRACE=0`（`false` / `off` 同样识别）。
+默认**开启**：开销是每次启动写十几行，而 Win7 排查期正需要它。

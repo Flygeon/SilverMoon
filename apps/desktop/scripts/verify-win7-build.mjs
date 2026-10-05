@@ -91,22 +91,88 @@ function checkExe(label, exePath) {
       maxBuffer: 256 * 1024 * 1024,
     });
   } catch (error) {
-    // 区分「真的没有 objdump」与「objdump 跑失败」，后者不能静默放过
-    if (error && error.code === "ENOENT") {
-      notes.push(`${label}: 无 objdump，跳过 PE 检查`);
-      return;
-    }
-    check(`${label} 可被 objdump 解析`, false, String(error?.message ?? error).slice(0, 120));
+    // 区分「真的没有 objdump」与「objdump 跑失败」。
+    //
+    // ⚠️ 上一版把「没有 objdump」降级成一条 note 就放过了 —— 那是错的：
+    // 这个脚本是发布前的最后一道静态闸门，工具缺失等于**闸门根本不存在**，
+    // 而 CI 的 win7 作业已经显式安装 binutils 并写明了「不能降级」。
+    // 静默跳过会让人误以为「检查过了」。
+    check(
+      `${label} 能执行 objdump（缺 binutils 时闸门失效，必须显式失败）`,
+      false,
+      error && error.code === "ENOENT"
+        ? "系统里没有 objdump；请安装 binutils（CI 的 win7 作业已固定依赖）"
+        : String(error?.message ?? error).slice(0, 160),
+    );
     return;
   }
-  // WaitOnAddress / WakeByAddressSingle 属于 Windows 8+ 的 API set；
-  // 一旦导入，Win7 上加载即失败（已在本仓库现成 splash exe 上实测复现）。
-  const win8Apis = ["WaitOnAddress", "WakeByAddressAll", "WakeByAddressSingle"];
+  // -------------------------------------------------------------------------
+  // Win8+ 专属符号黑名单。
+  //
+  // 只查 WaitOnAddress 那一组是**不够的**（这是上一版的真实缺陷）：它只覆盖
+  // 内核同步原语这一条线索。同类的还有几个高频来源，任一命中都会让 Win7 上
+  // 「加载即失败」或「首次调用即 AV」：
+  //
+  //   * WaitOnAddress / WakeByAddress*        —— Rust std 的 futex 实现（最经典）
+  //   * GetSystemTimePreciseAsFileTime        —— UCRT / SQLite / 各类时间库
+  //   * SetThreadDescription / GetThreadDescription —— std 的线程命名，debug 构建常见
+  //   * GetTempPath2W / CreateFile2           —— 部分较新 CRT 的路径解析
+  //   * DiscardVirtualMemory / OfferVirtualMemory —— Rust std 的内存建议
+  //   * GetOverlappedResultEx / CancelIoEx2   —— 新版 I/O 辅助
+  //   * RtlGetVersion 之外的 ntdll 新导出（Precise/Ex 后缀一类）
+  //
+  // ⚠️ 这份名单只能拦住「**导入表里可见**」的符号。真正危险的另一类是
+  // **静态链接进去的 C 代码**（比如 `rusqlite` 的 bundled SQLite、CRT 自身）
+  // 在运行期通过 `GetProcAddress` 动态解析的调用 —— 它们不会出现在 PE 导入表中，
+  // 静态检查原理上就查不出来。那部分只能靠运行时诊断（见下面 [5] 的检查项
+  // 与运行时启动轨迹）。
+  const win8Apis = [
+    "WaitOnAddress",
+    "WakeByAddressAll",
+    "WakeByAddressSingle",
+    "GetSystemTimePreciseAsFileTime",
+    "SetThreadDescription",
+    "GetThreadDescription",
+    "GetTempPath2W",
+    "CreateFile2",
+    "DiscardVirtualMemory",
+    "OfferVirtualMemory",
+    "GetOverlappedResultEx",
+    "CancelIoEx",
+    "SetThreadStackGuarantee",
+    "GetPackageFamilyName",
+  ];
   const hit = win8Apis.filter((a) => new RegExp(`\\b${a}\\b`).test(out));
-  check(`${label} 未导入 Win8+ 同步原语`, hit.length === 0, hit.join(", "));
+  check(`${label} 未导入 Win8+ 专属符号`, hit.length === 0, hit.join(", "));
 
-  const apisets = out.split("\n").filter((l) => /DLL Name:\s*api-ms-win-core-synch-l1-2/.test(l));
-  check(`${label} 未依赖 api-ms-win-core-synch-l1-2`, apisets.length === 0);
+  // 依赖的 API set 里，synch-l1-2-0 是最常见的一个来源；其余几个同样只在
+  // Win8+ 上存在，一并纳入检测，避免「换了实现方式就从闸门底下溜过去」。
+  const badApiSets = out
+    .split("\n")
+    .filter((l) => /DLL Name:\s*api-ms-win-core-(synch-l1-2|winrt|threadpool-l1-2)/.test(l));
+  check(
+    `${label} 未依赖 Win8+ 的 API set`,
+    badApiSets.length === 0,
+    badApiSets.map((l) => l.trim()).join(", "),
+  );
+
+  // 子系统的下限：Win7 是 6.1。部分工具链会把 subsystem version 写成 6.2，
+  // 这在 Win7 上会直接拒绝加载（错误 0xC000007B / 「不是有效的 Win32 应用程序」）。
+  const subsys = /MajorSubsystemVersion\s+(\d+)/.exec(out);
+  if (subsys) {
+    const major = Number(subsys[1]);
+    check(
+      `${label} 子系统版本不高于 6.1（Win7）`,
+      major <= 6,
+      `实际 MajorSubsystemVersion=${major}`,
+    );
+  } else {
+    notes.push(`${label}: objdump 未给出 MajorSubsystemVersion，跳过子系统版本检查`);
+  }
+
+  // 记录实际依赖的 DLL 清单（便于人工对照「是不是多了一个可疑的 Win8+ 库」）
+  const dlls = [...out.matchAll(/DLL Name:\s*(\S+)/g)].map((m) => m[1]);
+  notes.push(`${label}: 依赖 ${dlls.length} 个 DLL（${dlls.slice(0, 8).join(", ")}…）`);
 }
 
 // 本仓库实际使用的路径是 `--target-dir <crate>/target/win7`，因此产物落在
@@ -136,6 +202,48 @@ console.log("\n[4] 渲染层产物（Chromium 108 安全）");
 
 const dist = path.join(root, "dist");
 check("dist/ 存在（先跑 npm run build:renderer）", existsSync(dist));
+
+// ---------------------------------------------------------------------------
+console.log("\n[5] 启动诊断设施（Win7 收尾验收的必备条件）");
+// ---------------------------------------------------------------------------
+//
+// 背景：Win7 上的崩溃是**GUI 进程静默消失**，没有控制台、没有堆栈。
+// 「做 C 方案」（让用户跑一次就能定位崩溃点）依赖三样东西同时在位：
+//
+//   a) 后端 exe 里带着启动轨迹代码（否则跑到哪一步死无从得知）；
+//   b) 启动器 exe 里同样带着（它的崩溃发生在 Electron 起来之前，
+//      Electron 侧根本没有任何观测机会）；
+//   c) 主进程产物里有 boot-diagnostics 的收集逻辑（崩溃弹窗要直接给出轨迹路径）。
+//
+// 这三项都是**运行期行为**，静态检查抓不到真实效果，但可以确认「代码在产物里」——
+// 至少能拦住「改完了但打包没带上」这类低级失误。
+
+function checkTraceInExe(label, exePath) {
+  if (!existsSync(exePath)) {
+    notes.push(`${label}: 未找到产物，跳过轨迹设施检查`);
+    return;
+  }
+  // 轨迹文件的文件名会被编成字符串常量进二进制，用它作为「代码在不在」的指纹。
+  const marker = Buffer.from("silvermoon-boot-", "utf8");
+  let buf;
+  try {
+    buf = readFileSync(exePath);
+  } catch (e) {
+    check(`${label} 可读取以检查轨迹设施`, false, String(e).slice(0, 120));
+    return;
+  }
+  check(`${label} 内置启动轨迹（silvermoon-boot-* 指纹存在）`, buf.includes(marker));
+}
+
+checkTraceInExe("后端 exe", findExe("backend", "silvermoon.exe"));
+checkTraceInExe("启动器 exe", findExe("splash", "silvermoon-splash.exe"));
+
+// 主进程产物里的诊断收集模块
+if (existsSync(mainCjs)) {
+  const src = readFileSync(mainCjs, "utf8");
+  check("主进程产物含启动诊断收集（boot-diagnostics）", src.includes("silvermoon-boot-"));
+  check("主进程产物含诊断落盘逻辑（boot-diagnostics.txt）", src.includes("boot-diagnostics.txt"));
+}
 
 // ---------------------------------------------------------------------------
 console.log("");

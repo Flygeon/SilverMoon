@@ -1,4 +1,5 @@
 pub mod anime;
+pub mod boot_trace;
 pub mod commands;
 pub mod error;
 pub mod kugou;
@@ -119,31 +120,73 @@ pub struct Song {
 
 #[cfg_attr(mobile, silvermoon_ipc::mobile_entry_point)]
 pub fn run() {
+    // Win7 诊断：`run()` 内部有若干库初始化（SQLite、TLS、正则引擎等），
+    // 任何一处踩到 Win8+ API 都会让进程在**没有输出**的情况下消失。
+    // 每阶段进入前先落盘一行，崩溃时最后一行即区间下界。
+    // 详见 `boot_trace` 的模块文档。
+    use boot_trace::{step, Phase};
+
+    step("run() 开始：准备构造 IPC Builder（此前的静态初始化已完成）");
+
     // 桌面框架的插件机制在这里整体不存在：dialog / fs / store / http 是纯前端能力，
     // 由渲染进程经 Electron 主进程实现；opener / global-shortcut 在 Rust 侧各只有
     // 一处调用点，已在 IPC 层里直接实现（见 crates/silvermoon-ipc/src/plugins.rs）。
     silvermoon_ipc::Builder::default()
         .setup(|app| {
+            step("setup 闭包已进入（IPC 框架初始化完成）");
+
             // 索引库落盘在 app data 目录，重启后保留扫描结果
+            let db_phase = Phase::begin("打开数据库（rusqlite bundled SQLite）");
             let conn = open_db(app.handle())?;
+            db_phase.done();
             app.manage(commands::DbState(std::sync::Mutex::new(conn)));
             app.manage(commands::JobState(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )));
+
             // Windows 系统媒体控件（SMTC）会话
-            commands::smtc::setup(app.handle());
+            #[cfg(all(windows, feature = "smtc"))]
+            {
+                step("初始化 SMTC（Win10+ 系统媒体控件）");
+                commands::smtc::setup(app.handle());
+                boot_trace::info("SMTC 初始化完成");
+            }
+            #[cfg(not(all(windows, feature = "smtc")))]
+            {
+                // Win7 版走这条：SMTC 是 WinRT/Win10+ API，win7 feature 会关掉它。
+                // 显式记一行，避免日后误判「SMTC 没跑是因为坏了」。
+                boot_trace::info("跳过 SMTC（非 Windows 或 win7 feature 未启用）");
+            }
+
             // 扩展框架：发现 extensions/、拉起引擎、注册热键（须在 tray 之前，托盘菜单要读扩展贡献）
+            step("初始化扩展框架（扫描 extensions/、引擎、热键）");
             if let Err(error) = commands::extension::setup(app.handle()) {
+                boot_trace::error(&format!("扩展框架初始化失败（不致命）：{error}"));
                 eprintln!("setup extensions failed: {error}");
+            } else {
+                boot_trace::info("扩展框架初始化完成");
             }
+
             // 系统托盘（播放控制 / 显示主界面 / 退出）
+            step("初始化系统托盘");
             if let Err(error) = tray::setup(app.handle()) {
+                boot_trace::error(&format!("托盘初始化失败（不致命）：{error}"));
                 eprintln!("setup tray failed: {error}");
+            } else {
+                boot_trace::info("系统托盘初始化完成");
             }
+
             // 在线番剧：内置规则种子 + 隐藏取流 webview
+            step("初始化在线番剧模块（规则种子）");
             anime::setup(app.handle());
+            boot_trace::info("在线番剧模块初始化完成");
+
             // 在线图片（Pixiv）：加载持久化登录态
+            step("初始化在线图片模块（Pixiv 登录态）");
             pixiv::setup(app.handle());
+            boot_trace::info("在线图片模块初始化完成");
+
+            step("setup 闭包全部完成，交还给 IPC 框架");
             Ok(())
         })
         .invoke_handler(silvermoon_ipc::generate_handler![
@@ -321,6 +364,8 @@ pub fn run() {
         ])
         .run(silvermoon_ipc::generate_context!())
         .expect("SilverMoon 后端启动失败");
+    // 正常返回时也记一笔（`expect` 已处理失败路径，能走到这里是优雅退出）。
+    boot_trace::info("IPC 服务已退出，run() 收尾");
 }
 
 /// 打开磁盘数据库；目录不可用时退回内存库，保证应用仍能启动。
@@ -330,16 +375,46 @@ fn open_db(app: &silvermoon_ipc::Host) -> LumiLunaResult<rusqlite::Connection> {
     open_db_inner(app).map_err(|e| LumiLunaError::Other(e.to_string()))
 }
 
+/// `open_db` 的细分打点版。
+///
+/// 拆到这个粒度是因为 **`rusqlite` 开了 `bundled`**：SQLite 的 C 代码被静态编进
+/// 我们的二进制，其中的 `GetSystemTimePreciseAsFileTime` 等调用属于 Win8+ API。
+/// 这类调用**不会**出现在 PE 导入表里（由 CRT 动态解析），因此 `objdump -p` 那套
+/// 静态闸门查不出来 —— 只能靠运行时打点。见 `doc/win7-electron22.md` 第 6 节。
 fn open_db_inner(app: &silvermoon_ipc::Host) -> anyhow::Result<rusqlite::Connection> {
     use anyhow::Context;
+    use boot_trace::{note_result, step};
+
+    step("解析 app_data_dir");
     let conn = match app.path().app_data_dir() {
         Ok(dir) => {
-            std::fs::create_dir_all(&dir)
-                .with_context(|| format!("create app data dir {:?}", dir))?;
-            rusqlite::Connection::open(dir.join("library.db")).context("open library.db")?
+            boot_trace::info(&format!("app_data_dir = {}", dir.display()));
+            step("创建 app data 目录");
+            note_result(
+                "创建 app data 目录",
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("create app data dir {:?}", dir)),
+            )?;
+            step("打开 library.db（进入 rusqlite/SQLite C 代码）");
+            note_result(
+                "打开 library.db",
+                rusqlite::Connection::open(dir.join("library.db")).context("open library.db"),
+            )?
         }
-        Err(_) => rusqlite::Connection::open_in_memory().context("open in-memory db")?,
+        Err(e) => {
+            boot_trace::warn(&format!("app_data_dir 不可用（{e:?}），改用内存库"));
+            step("打开内存库");
+            note_result(
+                "打开内存库",
+                rusqlite::Connection::open_in_memory().context("open in-memory db"),
+            )?
+        }
     };
-    commands::init_db(&conn).context("init db schema")?;
+    boot_trace::info("数据库连接已建立，开始建表");
+    note_result(
+        "初始化数据库 schema",
+        commands::init_db(&conn).context("init db schema"),
+    )?;
+    boot_trace::info("数据库 schema 就绪");
     Ok(conn)
 }

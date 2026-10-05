@@ -8,5 +8,6 @@
 //! `theme` 与 `window` 依赖 GDI，只在 Windows 目标编译，因此不在此列。
 
 pub mod animation;
+pub mod boot_trace;
 pub mod pathfind;
 pub mod prefs;

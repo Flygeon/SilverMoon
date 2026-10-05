@@ -17,9 +17,11 @@
  * ```
  */
 import { app, dialog, shell } from "electron";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import { installWebGlobals } from "./compat/web-globals";
+import { collectBootDiagnostics, persistBootDiagnostics } from "./boot-diagnostics";
 import { config, cacheDir, dataDir, ensureDir, isDev, logDir, migrateLegacyData } from "./config";
 
 // ⚠️ 必须在使用 fetch / Response 之前执行。Electron < 25（Node < 18）没有这些
@@ -112,6 +114,23 @@ if (migration.migrated) {
 let hostServer: HostServer | null = null;
 let quitting = false;
 
+/**
+ * 读主进程日志的尾部（用于崩溃诊断快照）。
+ *
+ * 只取尾部：日志会跨多次启动累积，崩溃时关心的必然是最近这一段；
+ * 整份读进来既慢又会把弹窗撑爆。
+ */
+function readLogTail(maxChars = 4000): string | undefined {
+  try {
+    const file = path.join(logDir(appDataRoot), "main.log");
+    if (!existsSync(file)) return undefined;
+    const text = readFileSync(file, "utf8");
+    return text.length <= maxChars ? text : `…（已截断）…\n${text.slice(-maxChars)}`;
+  } catch {
+    return undefined;
+  }
+}
+
 async function bootstrap(): Promise<void> {
   // 启动打点：一次日志看清时间花在哪段（验收优化用，保持低成本）
   const bootT0 = performance.now();
@@ -142,16 +161,36 @@ async function bootstrap(): Promise<void> {
 
   // 侧车 → 渲染进程：SSE 事件转发
   sidecar.on("event", (frame: EventFrame) => dispatchEvent(frame));
-  sidecar.on("crashed", ({ code }: { code: number | null }) => {
+  sidecar.on("crashed", ({ code, signal }: { code: number | null; signal: string | null }) => {
     if (quitting) return;
-    log.error(`后端进程异常退出（code=${code}）`);
+    log.error(`后端进程异常退出（code=${code} signal=${signal}）`);
+
+    // 原生侧车没有控制台，崩溃时只会「静默消失」，Electron 这边原本只有一个
+    // 退出码可看。这里把它的**启动轨迹**收集起来 —— 轨迹最后一行 STEP 就是
+    // 崩溃区间下界，这比任何错误码都更有指向性（Win7 上实测 code=3221225477
+    // = 0xC0000005 访问违例，光看码无法知道崩在哪一步）。
+    const diag = collectBootDiagnostics(readLogTail());
+    const saved = persistBootDiagnostics(logDir(appDataRoot), diag.text);
+    if (diag.backendLastStep) {
+      log.warn(`后端崩溃前最后阶段：${diag.backendLastStep}`);
+    } else if (diag.found === 0) {
+      // 两个原生进程的轨迹都不存在 → 崩溃发生在 Rust main 之前（加载期），
+      // 或者轨迹目录不可写。这是与「跑到一半崩」完全不同的两类问题。
+      log.warn("未找到任何启动轨迹文件（崩溃可能发生在进程进入 main 之前）");
+    }
+
     void dialog.showMessageBox({
       type: "error",
       title: config.productName,
       message: "后端进程已退出",
       detail:
         "媒体库后端（后端进程）意外停止，界面上的操作会陆续失败。\n" +
-        "建议重启应用。若反复出现，请查看日志目录下的 main.log。",
+        "建议重启应用。\n\n" +
+        `退出码：${code}${signal ? `（signal=${signal}）` : ""}\n` +
+        (diag.backendLastStep
+          ? `崩溃前最后阶段：\n  ${diag.backendLastStep}\n\n`
+          : "未捕获到启动轨迹（崩溃可能发生在进程初始化之前）。\n\n") +
+        (saved ? `完整诊断已保存到：\n${saved}` : ""),
       buttons: ["知道了"],
     });
   });
