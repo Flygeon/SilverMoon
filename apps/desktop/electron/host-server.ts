@@ -21,6 +21,31 @@ import {
 import { createTray, setTrayVisible } from "./tray";
 import { log } from "./log";
 
+/**
+ * Host 必须是环回地址。
+ *
+ * 服务只绑 `127.0.0.1`，但挡不住 **DNS rebinding**：攻击者把域名解析到 127.0.0.1，
+ * 浏览器请求就带上了攻击者控制的 Host。只认环回字面量即可挡住这一类。
+ */
+function isLoopbackHost(hostHeader: string): boolean {
+  const host = hostHeader.trim();
+  const name = host.startsWith("[")
+    ? host.slice(1, host.indexOf("]") === -1 ? undefined : host.indexOf("]"))
+    : host.split(":")[0];
+  return name === "127.0.0.1" || name === "localhost" || name === "::1";
+}
+
+/**
+ * 交给系统默认程序前校验协议：`shell.openExternal` 会把 `file:` / `ms-msdt:`
+ * / `search-ms:` 一并交给系统，是 Electron 的经典 RCE 入口。
+ */
+function assertExternalUrl(url: string): string {
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error(`拒绝打开非 http(s) 链接：${url.slice(0, 80)}`);
+  }
+  return url;
+}
+
 export interface HostServer {
   port: number;
   token: string;
@@ -183,7 +208,7 @@ function buildOps(): Record<string, HostOpHandler> {
 
     "opener.openPath": async (args) => {
       if (typeof args.url === "string" && args.url) {
-        await shell.openExternal(args.url);
+        await shell.openExternal(assertExternalUrl(args.url));
         return null;
       }
       const target = String(args.path ?? "");
@@ -256,6 +281,24 @@ async function handleRequest(
 
   if (req.method !== "POST" || !req.url?.startsWith("/rpc")) {
     reply(404, { ok: false, error: "not found" });
+    return;
+  }
+  // Host 校验挡 DNS rebinding；Origin 校验挡「网页直接驱动宿主」。
+  // 侧车（reqwest）走的是 node 侧，两者都不带，因此不受影响。
+  if (!isLoopbackHost(String(req.headers["host"] ?? ""))) {
+    log.warn(`已拒绝非环回 Host 的宿主调用：${String(req.headers["host"] ?? "")}`);
+    reply(403, { ok: false, error: "Host 非环回地址" });
+    return;
+  }
+  const requestOrigin = req.headers["origin"];
+  if (
+    requestOrigin !== undefined &&
+    !/^(app:\/\/silvermoon|http:\/\/localhost:1420|http:\/\/127\.0\.0\.1:1420)$/i.test(
+      String(requestOrigin).replace(/\/+$/, ""),
+    )
+  ) {
+    log.warn(`已拒绝不受信任 Origin 的宿主调用：${String(requestOrigin)}`);
+    reply(403, { ok: false, error: "Origin 不受信任" });
     return;
   }
   if (req.headers["x-silvermoon-token"] !== token) {

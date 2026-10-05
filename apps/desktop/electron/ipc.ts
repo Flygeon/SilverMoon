@@ -12,7 +12,7 @@ import { BrowserWindow, app, dialog, ipcMain, shell, screen } from "electron";
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { config, iconPath } from "./config";
+import { APP_ORIGIN, DEV_SERVER_URL, config, iconPath } from "./config";
 import {
   dispatchEvent,
   getWindow,
@@ -37,6 +37,51 @@ type Handler = (
   payload: Record<string, unknown>,
   sender: Electron.WebContents,
 ) => Promise<unknown> | unknown;
+
+/**
+ * 远程页窗口（Pixiv / 文库8 / 番剧取流）只允许调用的命令。
+ *
+ * 那些窗口的预加载（`electron/webview-preload.ts`）为了挂钩 `HTMLMediaElement`
+ * 与读 `document.cookie`，跑在**页面世界**且 `contextIsolation: false`，
+ * 它暴露的 `invoke` 此前是一条**任意命令直通车**：第三方网页（或其中被注入的脚本）
+ * 可以直接调用后端全部命令——`ext_install`（安装并执行扩展）、`ffmpeg_set_path`
+ * （指定可执行文件后可被拉起）、`skin_read_external_file`（读任意文件）、
+ * `empty_trash`（永久删除）。这里把可达面收敛到下面这一张白名单。
+ */
+const REMOTE_WINDOW_ALLOWED_COMMANDS = new Set([
+  "app_log",
+  "wenku8_login_log",
+  // 文库8 注入脚本在提交登录表单时调用它（backend/src/novel_auth.rs:447）。
+  // 漏掉这一条会直接让文库8 登录失效 —— 新增注入调用必须同步加到这里。
+  "wenku8_login_submit",
+]);
+
+/** 发送方是否是自家前端（打包态 `app://`、开发态 dev server）。 */
+function isTrustedRenderer(sender: Electron.WebContents): boolean {
+  let url = "";
+  try {
+    url = sender.getURL();
+  } catch {
+    // 窗口已销毁等情况一律按不可信处理
+    return false;
+  }
+  if (!url) return false;
+  return url.startsWith(APP_ORIGIN) || url.startsWith(DEV_SERVER_URL);
+}
+
+/**
+ * 交给系统默认程序之前必须校验协议。
+ *
+ * `shell.openExternal` 会把 `file:` / `ms-msdt:` / `search-ms:` 这类协议一并交给
+ * 系统处理，历史上是 Electron 的经典 RCE 入口。`main.ts` 的 setWindowOpenHandler
+ * 已经限了 `^https?:`，但 `opener` 与宿主 op 这两条路径此前是裸传。
+ */
+function assertExternalUrl(url: string): string {
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error(`拒绝打开非 http(s) 链接：${url.slice(0, 80)}`);
+  }
+  return url;
+}
 
 const handlers: Record<string, Handler> = {
   // -------------------------------------------------------------------------
@@ -339,7 +384,11 @@ const handlers: Record<string, Handler> = {
       case "appConfigDir":
         return app.getPath("userData");
       case "appLogDir":
-        return app.getPath("logs");
+        // 必须是 `config.logDir()` = `<dataDir>/logs`，也就是 `main.log` 真正所在的目录。
+        // 此前用 `app.getPath("logs")`，那是 Electron 默认的 `<userData>/logs`；虽然
+        // userData 已被改指到 dataDir，但两者的解析结果并不相同 —— 表现为用户点
+        // 「打开日志目录」却看不到 main.log。
+        return path.join(dataRoot(), "logs");
       case "homeDir":
         return app.getPath("home");
       case "tempDir":
@@ -410,7 +459,7 @@ const handlers: Record<string, Handler> = {
   opener: async (payload) => {
     const op = String(payload.op ?? "");
     if (op === "openUrl") {
-      await shell.openExternal(String(payload.url ?? ""));
+      await shell.openExternal(assertExternalUrl(String(payload.url ?? "")));
       return null;
     }
     const target = String(payload.path ?? "");
@@ -520,6 +569,26 @@ async function respond(
   if (!handler) {
     return { ok: false, error: `未知通道：${channel}` };
   }
+
+  // 远程页窗口只能走白名单：见 REMOTE_WINDOW_ALLOWED_COMMANDS 的注释。
+  if ((channel === "invoke" || channel === "invokeBatch") && !isTrustedRenderer(sender)) {
+    if (channel === "invokeBatch") {
+      log.warn("已拒绝来自非受信页面的批量命令调用");
+      return { ok: false, error: "该窗口无权调用批量命令" };
+    }
+    const cmd = String(payload.cmd ?? "");
+    if (!REMOTE_WINDOW_ALLOWED_COMMANDS.has(cmd)) {
+      let from = "";
+      try {
+        from = sender.getURL();
+      } catch {
+        /* 窗口已销毁 */
+      }
+      log.warn(`已拒绝来自远程页的命令调用：${cmd}（来源 ${from}）`);
+      return { ok: false, error: `该窗口无权调用命令 ${cmd}` };
+    }
+  }
+
   try {
     const data = await handler(payload, sender);
     // `invoke` 的命令错误需要保留原始字符串，单独走这个标记

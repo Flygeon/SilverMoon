@@ -33,7 +33,14 @@ import { createHash } from "node:crypto";
 
 import { net, protocol } from "electron";
 
-import { APP_SCHEME, ASSET_SCHEME, COVER_SCHEME, projectRoot } from "./config";
+import {
+  APP_ORIGIN,
+  APP_SCHEME,
+  ASSET_SCHEME,
+  COVER_SCHEME,
+  DEV_SERVER_URL,
+  projectRoot,
+} from "./config";
 import { log } from "./log";
 
 /** 必须在 `app.whenReady()` **之前**调用。 */
@@ -74,6 +81,35 @@ export function registerSchemes(): void {
       },
     },
   ]);
+}
+
+/**
+ * 允许跨源读取本应用资源的来源：打包态 `app://silvermoon`、开发态 Vite。
+ *
+ * 之所以要白名单而不是回 `*`：`asset://` 会**服务磁盘上的任意文件**（媒体库需要
+ * 播放任意扫描路径），配上 `Access-Control-Allow-Origin: *` 之后，任何来源——
+ * 包括被注入了脚本的远程页——都能用 `fetch("asset:///C:/...")` 把本机文件读出来。
+ * 改成只回显受信任来源后，自家前端照旧能读像素取主色，其它来源被 CORS 挡死。
+ */
+/** 归一化来源：去空白、去尾斜杠、转小写（Chromium 对自定义协议的序列化不完全一致）。 */
+function normalizeOrigin(origin: string): string {
+  return origin.trim().replace(/\/+$/, "").toLowerCase();
+}
+
+const TRUSTED_ORIGINS = new Set<string>([
+  normalizeOrigin(APP_ORIGIN),
+  normalizeOrigin(DEV_SERVER_URL),
+  "http://127.0.0.1:1420",
+]);
+
+/** 计算应答的 `Access-Control-Allow-Origin`；不受信任（缺 Origin / `null`）时返回 null。 */
+function corsAllowOrigin(request: Request): string | null {
+  const origin = request.headers.get("origin");
+  if (!origin) return null;
+  const normalized = normalizeOrigin(origin);
+  // 沙箱 iframe / file 上下文会发字面量 "null"，一律视为不可信
+  if (normalized === "null") return null;
+  return TRUSTED_ORIGINS.has(normalized) ? origin : null;
 }
 
 const MIME: Record<string, string> = {
@@ -131,8 +167,11 @@ export function handleAppProtocol(): void {
       if (rel === "/" || rel === "") rel = "/index.html";
 
       const target = path.normalize(path.join(root, rel));
-      // 目录穿越保护
-      if (!target.startsWith(root)) {
+      // 目录穿越保护。
+      //
+      // 必须把分隔符一起比：只写 `startsWith(root)` 时，兄弟目录 `<…>/dist-evil/…`
+      // 同样满足前缀，等于把校验绕过去了。
+      if (target !== root && !target.startsWith(root + path.sep)) {
         return new Response("forbidden", { status: 403 });
       }
 
@@ -165,7 +204,7 @@ export function handleAssetProtocol(): void {
       if (!existsSync(target) || !statSync(target).isFile()) {
         return new Response("not found", { status: 404 });
       }
-      return serveFile(target, request.headers.get("range"));
+      return serveFile(target, request.headers.get("range"), corsAllowOrigin(request));
     } catch (error) {
       log.error("asset:// 处理失败：", error);
       return new Response("internal error", { status: 500 });
@@ -469,14 +508,14 @@ export function handleCoverProtocol(cacheDir: string): void {
       const hit = await inflight;
       if (!hit) return new Response("cover unavailable", { status: 502 });
 
-      return new Response(hit.body, {
-        status: 200,
-        headers: {
-          "Content-Type": hit.ct,
-          "Access-Control-Allow-Origin": "*",
-          "Cache-Control": "public, max-age=604800",
-        },
-      });
+      const headers: Record<string, string> = {
+        "Content-Type": hit.ct,
+        "Cache-Control": "public, max-age=604800",
+      };
+      const corsOrigin = corsAllowOrigin(request);
+      if (corsOrigin) headers["Access-Control-Allow-Origin"] = corsOrigin;
+
+      return new Response(hit.body, { status: 200, headers });
     } catch (error) {
       log.error("app-cover:// 处理失败：", error);
       return new Response("internal error", { status: 500 });
@@ -489,17 +528,21 @@ export function handleCoverProtocol(cacheDir: string): void {
  *
  * 大体积媒体走流式响应，避免把整个视频读进内存。
  */
-function serveFile(file: string, rangeHeader: string | null): Response {
+function serveFile(
+  file: string,
+  rangeHeader: string | null,
+  corsOrigin: string | null = null,
+): Response {
   const size = statSync(file).size;
   const type = mimeOf(file);
 
   const baseHeaders: Record<string, string> = {
     "Content-Type": type,
     "Accept-Ranges": "bytes",
-    // canvas 取主色需要可读像素
-    "Access-Control-Allow-Origin": "*",
     "Cache-Control": "no-cache",
   };
+  // canvas 取主色 / Web Audio 处理跨源媒体都需要可读，但**只对自家前端**放行
+  if (corsOrigin) baseHeaders["Access-Control-Allow-Origin"] = corsOrigin;
 
   const range = rangeHeader ? parseRange(rangeHeader, size) : null;
   if (range === "invalid") {
