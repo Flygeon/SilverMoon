@@ -23,8 +23,8 @@ splash/target/win7/
 # 以及在 apps/desktop 下整体构建时的 --target-dir target/win7
 target/win7/
 # 本地验证 parking_lot_core 补丁时可能在 patches 目录下留下 target/
-backend/patches/*/target/
-backend/patches/*/Cargo.lock
+patches/*/target/
+patches/*/Cargo.lock
 
 # logs
 *.log

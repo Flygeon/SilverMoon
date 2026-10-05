@@ -1,0 +1,63 @@
+--- a/std/src/sys/pal/windows/compat.rs
++++ b/std/src/sys/pal/windows/compat.rs
+@@ -338,24 +338,40 @@
+ }
+ 
+ /// Load all needed functions from "api-ms-win-core-synch-l1-2-0".
++///
++/// ---------------------------------------------------------------------------
++/// SilverMoon patch (Win7)：本函数在真机上会**直接 AV**，故改为 no-op。
++///
++/// 原实现是：
++/// ```text
++/// let library = Module::new(c"api-ms-win-core-synch-l1-2-0")?;   // → GetModuleHandleA
++/// ```
++/// `GetModuleHandleA` 在 Win7 上遇到 apiset 形态的名字（`api-ms-win-*`）
++/// **不是返回 NULL，而是抛 STATUS_ACCESS_VIOLATION (0xC0000005)**。
++/// 原因：API Set 重定向（apiset schema）是 Win8 才引入的机制，Win7 的
++/// `kernelbase!BasepGetModuleHandleExW` 解析这种名字时会去读一张**未初始化**
++/// 的表，于是直接崩。
++///
++/// 为什么后果特别严重：
++///   * 本函数由 `.CRT$XCT` 段注册，在 **CRT 静态构造期**执行，
++///     早于 `main()` 第一行 —— 进程连一个字节日志都写不出；
++///   * `Module::new()` 里的 NULL 兜底永远执行不到，`None` 分支不可达；
++///   * 现象：双击即「已停止工作」，退出码 0xC0000005 / 3221225477。
++///
++/// 为什么跳过是**语义正确**的，而不是「绕过检查」：
++///   `WaitOnAddress` / `WakeByAddressSingle` 是 Windows 8 才引入的 API，
++///   对应的 apiset `api-ms-win-core-synch-l1-2-0` 在 Win7 上**本来就不存在**。
++///   因此在 Win7 上，这里唯一正确的结果本来就是「加载失败」。
++///   跳过 = 把「本该失败但会崩」变成「干净地失败」。
++///   下游 `compat_fn_optional!` 生成的 `option()` 会照常返回 `None`，
++///   调用方走既有 fallback 路径 —— 与 Win8 上探测失败的语义完全一致。
++///
++/// 为什么不加 `RtlGetVersion` 运行期判断：本函数**只**在
++/// `target_vendor = "win7"` 时参与编译，该 target 的唯一目的就是跑在 Win7 上。
++/// 多一层运行期判断既多余，又是一旦被绕开就重新崩的隐患；直接 no-op 面更小。
++///
++/// 上游背景：这段代码自述是为兼容老 Windows 而写，却在 Win7 上崩，
++/// 说明该分支从未在真机验证过。
++/// ---------------------------------------------------------------------------
+ #[cfg(target_vendor = "win7")]
+-pub(super) fn load_synch_functions() {
+-    fn try_load() -> Option<()> {
+-        use crate::sync::atomic::Ordering;
+-        const MODULE_NAME: &CStr = c"api-ms-win-core-synch-l1-2-0";
+-        const WAIT_ON_ADDRESS: &CStr = c"WaitOnAddress";
+-        const WAKE_BY_ADDRESS_SINGLE: &CStr = c"WakeByAddressSingle";
+-
+-        // Try loading the library and all the required functions.
+-        // If any step fails, then they all fail.
+-        let library = unsafe { Module::new(MODULE_NAME) }?;
+-        let wait_on_address = library.proc_address(WAIT_ON_ADDRESS)?;
+-        let wake_by_address_single = library.proc_address(WAKE_BY_ADDRESS_SINGLE)?;
+-
+-        c::WaitOnAddress::PTR.store(wait_on_address.as_ptr(), Ordering::Relaxed);
+-        c::WakeByAddressSingle::PTR.store(wake_by_address_single.as_ptr(), Ordering::Relaxed);
+-        Some(())
+-    }
+-
+-    try_load();
+-}
++pub(super) fn load_synch_functions() {}

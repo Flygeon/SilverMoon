@@ -392,13 +392,20 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       # ---- 构建三块产物 ----
-      # 1) Win7 后端（无 SMTC；lofty 写标签替代 taglib-wasm）
-      - name: Build Rust backend for Win7
-        run: npm run build:backend:win7
-
-      # 2) Win7 原生启动器
-      - name: Build native launcher for Win7
-        run: npm run build:splash:win7
+      # 1) + 2) Win7 后端与原生启动器
+      #
+      # 合成**一步**跑，而不是分两条 npm run：两者都要用打过补丁的 libstd，
+      # 而准备补丁那一步涉及复制 ~75MB 的 rust-src 并替换 sysroot/library。
+      # 分成两次会把这件事做两遍（虽然幂等，但纯属浪费 CI 时间）。
+      # run-win7-build.mjs 会「准备一次 → 依次构建 → 还原」，
+      # 且带 SIGINT 与 finally 双保险，保证 sysroot 不会留在被改状态。
+      #
+      # ⚠️ 依赖 `patch` 命令（应用 std 补丁）。ubuntu runner 自带，这里显式
+      #    检查一次，免得将来换镜像时以「命令找不到」的模糊形式失败。
+      - name: Build Rust backend + native launcher for Win7
+        run: |
+          command -v patch >/dev/null || { echo "缺少 patch 命令"; exit 1; }
+          npm run build:rust:win7
 
       # 3) 渲染层（启用 color-mix 回退）+ Win7 主进程
       - name: Build renderer (color-mix fallback) + electron main

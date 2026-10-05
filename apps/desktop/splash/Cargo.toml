@@ -46,6 +46,52 @@ windows = { version = "0.58", features = [
 [build-dependencies]
 winresource = "0.1"
 
+# ===========================================================================
+# Win7 兼容补丁（本 crate 命中真正的根因：**libstd 自己**）
+#
+# 现象（真机实测）：双击快捷方式后弹「SilverMoon 启动器 已停止工作」，
+# APPCRASH / 故障模块 = silvermoon-splash.exe / 异常代码 c0000005。
+# 崩的是**启动器**，Electron 主程序来不及被拉起，所以既没有主程序日志、
+# 也没有任何启动轨迹文件。
+#
+# 根因**不在本 crate 的代码里**，而是 Rust 标准库：
+# `library/std/src/sys/pal/windows/compat.rs` 里有一段
+# `#[cfg(target_vendor = "win7")]` 的代码，用 `.CRT$XCT` 段注册了一个
+# **CRT 静态构造期**执行的初始化函数，无条件调用
+#
+#     GetModuleHandleA("api-ms-win-core-synch-l1-2-0")
+#
+# 而 `api-ms-win-*` 是 apiset 桩名（API Set 重定向是 Win8 引入的机制）。
+# Win7 解析这种名字时读未初始化的表 → **直接 0xC0000005**，不是返回 NULL。
+# 上游的 `NonNull::new(module)` 兜底永远执行不到。
+#
+# 因为它在 CRT 静态构造期执行（早于 main），**任何 exe 双击即崩**，
+# 且写不出一个字节的日志 —— 启动器就是最直接的受害者。
+#
+# 修法**不在这个文件里**：见 `patches/rust-std-win7/` 与
+# `scripts/setup-win7-toolchain.mjs` —— 给 libstd 的那段代码打补丁改成 no-op，
+# 由 run-win7-build.mjs 在构建期把打过补丁的源码接到 sysroot 上。
+#
+# ---------------------------------------------------------------------------
+# 下面这个 `[patch.crates-io]` 是**另一件事**，与本 crate 的实际崩溃无关：
+#
+# `parking_lot` crate 里有**一模一样**的探测代码，是同一个机制、另一个受害者。
+# 本 crate 目前**不依赖**它（`std::sync::Mutex` 在这个 target 上走的是
+# `std/src/sys/sync/mutex/windows7.rs` 的 SRWLOCK 实现，不经过 parking_lot），
+# 所以 cargo 会在 Cargo.lock 里标注 `[[patch.unused]]` —— **这是预期的**。
+#
+# 仍然保留这条声明的两个理由：
+#   1) 万一以后本 crate 引入依赖 `parking_lot` 的库（线程池之类），
+#      补丁会自动生效，不会等到上机才发现崩溃；
+#   2) 它是一份**可见的文档**：本项目在 Win7 上需要这个补丁。
+#
+# 补丁与 backend 共用同一份（`../patches/parking_lot_core`），
+# 不要各自维护拷贝 —— 分叉了以后必然只修一边。
+# 详见 apps/desktop/doc/win7-electron22.md 第 6 节。
+# ---------------------------------------------------------------------------
+[patch.crates-io]
+parking_lot_core = { path = "../patches/parking_lot_core" }
+
 # 体积优先：启动器要在双击瞬间出画面，且不能给安装包增重。
 # 实测 release 约 0.23MB（opt-level="z" + LTO + strip）。
 [profile.release]

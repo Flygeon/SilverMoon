@@ -134,16 +134,36 @@ strip = true
 #   * `objdump -p` 查导入表**完全看不出问题** ——
 #     `WaitOnAddress` 等符号由 `GetProcAddress` 动态解析，不在导入表里。
 #
-# **修法**：见 `patches/parking_lot_core/` —— 在 `WaitAddress::create()`
+# **修法**：见 `../patches/parking_lot_core/`（**仓库级共享**，backend 与
+# splash 都指向同一份，避免两份补丁日后分叉）—— 在 `WaitAddress::create()`
 # 开头加一次真实版本判断（`RtlGetVersion`），Win7 及更早直接 `return None`，
-# 强制回退到 `KeyedEvent`。**只改这一处**，其余逻辑与上游一致。
+# 强制回退到 `KeyedEvent`。**只改这一处**，其余逻辑与上游一致。# ⚠️ 这个补丁**不是** Win7 崩溃的主因 —— 别误以为打了它就没事了。
+#
+# 真机实测表明，**真正的首发受害者是 Rust 标准库自己**：std 在
+# `target_vendor = "win7"` 时也有一段一模一样的 apiset 探测，而且它跑在
+# **CRT 静态构造期（早于 main）**，导致**所有链接 libstd 的 exe 双击即崩**：
+#
+#   * 后端 `silvermoon-server.exe`：Electron 报 `侧车退出：code=3221225477`；
+#   * 启动器 `silvermoon-splash.exe`：APPCRASH，异常代码 `c0000005`。
+#
+# libstd 那个补丁在 `patches/rust-std-win7/`（由
+# `scripts/setup-win7-toolchain.mjs` 在构建期应用到 sysroot）。
+#
+# 本文件的 `[patch.crates-io]` 修的是**另一处**：
+# `parking_lot` crate 里有同样的探测（同一个机制、另一个受害者）。
+# 后端经过 parking_lot，所以这处**也必须修** ——
+# 它会在 libstd 补丁让进程能进 main 之后，于首次用到其 Mutex 时再次崩。
+#
+# 两个补丁都要留，作用范围不同：
+#   libstd 补丁  → 解决「进不了 main」；
+#   本补丁       → 解决「进了 main 之后还可能崩」。
 #
 # 为什么用 `[patch]` 而不是升级版本：`parking_lot_core` 0.9.12 已是最新，
 # 上游这条路径对 Win7 就是坏的（它在 CI 上跑 Win10+，永远看不到这个问题）。
 #
 # 维护提示：升级 `parking_lot` / `parking_lot_core` 时，
 # **必须**检查该文件在上一版基础上是否被改过，并把补丁重新应用一次。
-# 校验命令：`grep -n "SilverMoon 补丁" patches/parking_lot_core/src/thread_parker/windows/waitaddress.rs`
+# 校验命令：`grep -n "SilverMoon 补丁" ../patches/parking_lot_core/src/thread_parker/windows/waitaddress.rs`
 # ---------------------------------------------------------------------------
 [patch.crates-io]
-parking_lot_core = { path = "patches/parking_lot_core" }
+parking_lot_core = { path = "../patches/parking_lot_core" }

@@ -163,7 +163,7 @@ cargo +nightly build --release -Z build-std=std,panic_abort \
 node scripts/verify-win7-build.mjs
 ```
 
-静态断言六组：
+静态断言七组：
 
 1. **主进程产物** —— 不残留 `protocol.handle` 直调、已内联 undici、无 taglib-wasm 硬依赖
 2. **语法** —— 可被 Node 16 解析
@@ -172,29 +172,48 @@ node scripts/verify-win7-build.mjs
    > ⚠️ **缺 `objdump` 时本检查直接失败**，不再降级成「跳过」。
    > 上一版是跳过 —— 那等于闸门根本不存在，而 CI 的 win7 作业本来就固定装了
    > binutils，跳过只会制造「检查过了」的错觉。
-4. **[4.5] `parking_lot_core` Win7 补丁**（本轮新增）—— 防第 6 节那个
-   「运行期 apiset 探测 → `0xC0000005`」的崩溃回归。四道断言：
+4. **[4.5] `parking_lot_core` Win7 补丁**（防第 6 节那类「运行期 apiset 探测 →
+   `0xC0000005`」的回归）。四道断言：
    - 补丁文件在位，且 `create()` **函数体**内含版本闸门；
    - 闸门位于 apiset 探测**之前**（顺序错了等于没打）；
    - 用 `RtlGetVersion` 而非会谎报的 `GetVersionEx`；
-   - `backend/Cargo.toml` 有 `[patch.crates-io]` 转发，且**产物**里含
-     `RtlGetVersion` 导入（证明补丁真进了二进制，不只是"文件里有"）。
+   - **backend 与 splash 两个 crate 都要有 `[patch.crates-io]` 转发**，
+     且**产物**里含 `RtlGetVersion` 导入（证明补丁真进了二进制）。
+   > ⚠️ 「两个 crate 都查」是第二轮补上的 —— 第一版只查了 backend，
+   > 而补丁目录此后移到了仓库级共享位置，两边都要转发。
+   >
    > 写这组检查时的两个坑，都记在脚本注释里：
-   > ① **不能扫二进制字符串**判断「有没有 apiset 探测」—— 打了补丁后
-   > `api-ms-win-core-synch-l1-2-0.dll` 这个字面量**依然在二进制里**
+   > ① **不能扫二进制字符串**判断「有没有 apiset 探测」—— 这个补丁是加闸门
+   > 而非删代码，`api-ms-win-core-synch-l1-2-0.dll` 这个字面量**依然在二进制里**
    > （`&'static str` 编译器不会删），会假阳性；
    > ② **判定顺序前必须先剥注释** —— 补丁在函数体开头引用上游代码写的
    > 解释性注释里也含 `GetModuleHandleA(b"api-ms-win-core-synch...`，
    > 不剥注释就会命中注释、报出「闸门晚于探测」的假失败。
    >
    > 这组检查做过**负向测试**：手动把补丁的闸门删掉后，脚本确实报错。
-5. **启动诊断设施在位** —— 两个 exe 内置启动轨迹（`silvermoon-boot-*` 指纹）、
+5. **[4.6] libstd Win7 补丁**（**本轮真正的主因**，见第 6 节）——
+   上面 [4.5] 修的是 crates.io 上的 `parking_lot_core`，而**首发受害者是
+   Rust 标准库自己**。三道源码断言 + 两道产物断言：
+   - 补丁文件 `patches/rust-std-win7/compat.rs.patch` 在位；
+   - 补丁内容确实把 `load_synch_functions` 改成 no-op；
+   - 补丁带 `SilverMoon` 标记（便于核对上游变动）；
+   - **产物**里 `api-ms-win` 出现次数不超过上限：
+     **启动器必须为 0**（它不依赖 parking_lot，唯一来源就是 libstd）；
+     **后端允许 1**（那是 parking_lot 补丁保留的字面量，见 [4.5] 的坑①）。
+   > 这组的判据与 [4.5] **正好相反** —— 那边不能扫字符串，这边**必须**扫。
+   > 区别在于：libstd 补丁是把代码**删掉**（字面量随之消失），
+   > 而 parking_lot 补丁是**加闸门**（字面量保留）。
+   > 两者来源在同一个二进制里混着，所以对后端只能设「上限」而非「必须为 0」。
+   >
+   > 同样做过**负向测试**：还原 sysroot 用未打补丁的 std 重建启动器后，
+   > 该断言如期报红（实测 1 处 > 上限 0）。
+6. **启动诊断设施在位** —— 两个 exe 内置启动轨迹（`silvermoon-boot-*` 指纹）、
    主进程产物含 `boot-diagnostics` 收集逻辑（见第 8 节）
-6. **渲染层产物**存在
+7. **渲染层产物**存在
 
 ### 静态闸门的**能力边界**（重要，别误以为它全能）
 
-`objdump -p` 只能看到 **PE 导入表**。以下三类 Win8+ 依赖它**查不出来**：
+`objdump -p` 只能看到 **PE 导入表**。以下四类 Win8+ 依赖它**查不出来**：
 
 - **静态链接的 C 代码**（`rusqlite` 的 bundled SQLite、CRT 自身）在运行期通过
   `GetProcAddress` 动态解析的调用；
@@ -202,18 +221,22 @@ node scripts/verify-win7-build.mjs
 - **运行期按名字探测 API set**（`GetModuleHandleA("api-ms-win-*-l1-2-0.dll")`）。
   —— 这正是第 6 节那个真实崩溃的形态：导入表**完全干净**，
   但 Win7 上执行到探测那一句就 AV。
+- **在 CRT 静态构造期（`.CRT$XCT` 等段）执行的代码** —— 包含第 3 类，
+  但因为时机更早，**连 `main` 里的运行期诊断也抓不到**（见第 8 节）。
 
-第 3 类靠**第 4.5 组的定向检查**兜（只覆盖已知的那一处），
+第 3 类靠**第 4.5 / 4.6 组的定向检查**兜（覆盖已知的两处），
 其余只能靠**运行时诊断**（第 8 节的启动轨迹）。三者互补，不能互相替代。
 
 ### CI 与交付现状
 
-- 分支 `feat/win7-electron22`，CI run `37270785466`（head `9e4bcdd`）**全绿**：
-  `lint` / `build (linux)` / `build (windows)` / **`build (win7 / Electron 22)`** 均 success。
-- CI 日志里可确认补丁**确实被编进去了**：
-  `Compiling parking_lot_core v0.9.12 (…/apps/desktop/backend/patches/parking_lot_core)`。
-- 新增的 `[4.5]` 闸门在 CI 中同步通过（两条断言都打勾）。
-- 产物：`windows-win7-build`（约 73 MB），从该 run 的 Actions 页面下载。
+- 分支 `feat/win7-electron22`。
+- 产物：`windows-win7-build`，从对应 run 的 Actions 页面下载。
+- CI 日志里可确认补丁**确实被编进去了**：会出现
+  `Compiling parking_lot_core v0.9.12 (…/apps/desktop/patches/parking_lot_core)`。
+- `verify:win7` 的 `[4.5]` / `[4.6]` 两组闸门在 CI 中同步跑（详见上文）。
+  > ⚠️ `[4.6]` 是**产物级**断言，所以它能同时证明「补丁写对了」
+  > 和「cargo 真用了打过补丁的 sysroot」—— 这两件事在 CI 里都可能悄悄失败。
+
 
 > ⚠️ 后续有一个**纯清理提交**（`204ce1d`：修一条 deprecated 警告 + 复原
 > `.gitignore` 编码）尚未推送 —— 当时执行环境没有 GitHub 写凭据。
@@ -290,27 +313,120 @@ node scripts/verify-win7-build.mjs
 
 于是绕开运行期观察，改从**二进制静态分析**入手，结论如下。
 
-#### 结论：`parking_lot_core` 在运行期探测 Win8+ 的 API set
+#### 结论：**Rust 标准库自己**在 CRT 静态构造期探测 Win8+ 的 API set
 
-`parking_lot_core` 0.9.12 的 Windows 线程停靠后端在选择实现时会做一次探测：
+> **先说清楚**：这一节在第二次上机前一度写成「`parking_lot_core` 是元凶」，
+> 那是**错的**。`parking_lot_core` 确实是同一个 bug 的另一个受害者，
+> 但**它不是首发、也不是主因**。真正的根因在更早、也更底层的地方 ——
+> 下面按实际排查顺序重述。
+
+**第一步：谁在调 `GetModuleHandleA`？**
+
+手工解析 `silvermoon-splash.exe` 的 PE，定位 `GetModuleHandleA` 的 IAT 槽
+（RVA `0x5c7e0`），再搜所有引用它的指令 —— 只有一处调用桩，最终追到
+`.CRT` 段初始化表里的第 2 个函数：
+
+```asm
+; .CRT 段注册的静态构造函数（地址随构建浮动，此处为某版实测值）
+14002f665:  lea rcx, "api-ms-win-core-synch-l1-2-0"   ← 就是这个字符串
+14002f66c:  call GetModuleHandleA                     ← Win7 上崩在这一句
+14002f671:  test rax, rax
+14002f674:  je   ...                                  ← 上游的 NULL 兜底，永远到不了
+14002f679:  lea rdx, "WaitOnAddress"
+14002f683:  call GetProcAddress
+14002f690:  lea rdx, "WakeByAddressSingle"
+14002f69a:  call GetProcAddress
+```
+
+三个字符串与源码常量**逐字对应**。
+
+**第二步：这段代码属于谁？**
+
+它不在我们仓库里，也不在 `parking_lot_core` 里 —— 它在 **Rust 标准库**中：
 
 ```rust
-// src/thread_parker/windows/waitaddress.rs:22
-pub fn create() -> Option<WaitAddress> {
-    let synch_dll = GetModuleHandleA(b"api-ms-win-core-synch-l1-2-0.dll\0");
-    if synch_dll == 0 { return None; }        // 看起来有 NULL 检查……
-    let WaitOnAddress = GetProcAddress(synch_dll, b"WaitOnAddress\0")?;
-    ...
+// library/std/src/sys/pal/windows/compat.rs
+
+#[cfg(target_vendor = "win7")]
+#[used]
+#[unsafe(link_section = ".CRT$XCT")]        // ← CRT 静态构造期执行
+static INIT_TABLE_ENTRY: unsafe extern "C" fn() = init;
+
+unsafe extern "C" fn init() {
+    load_synch_functions();                  // → Module::new("api-ms-win-...")
+}
+
+/// Load all needed functions from "api-ms-win-core-synch-l1-2-0".
+#[cfg(target_vendor = "win7")]
+pub(super) fn load_synch_functions() {
+    fn try_load() -> Option<()> {
+        const MODULE_NAME: &CStr = c"api-ms-win-core-synch-l1-2-0";
+        let library = unsafe { Module::new(MODULE_NAME) }?;   // → GetModuleHandleA
+        ...
+    }
+    try_load();
+}
+
+// 而 Module::new 是：
+pub unsafe fn new(name: &CStr) -> Option<Self> {
+    let module = unsafe { c::GetModuleHandleA(name.as_ptr().cast::<u8>()) };
+    NonNull::new(module).map(Self)           // ← 这个 NULL 兜底永远执行不到
 }
 ```
 
-`api-ms-win-core-synch-l1-2-0.dll` 是一个 **API Set 桩名**，而 API Set
+**第三步：为什么在 Win7 上会崩？**
+
+`api-ms-win-core-synch-l1-2-0` 是一个 **API Set 桩名**，而 API Set
 重定向（apiset schema）是 **Windows 8 才引入**的机制：
 
 | 系统 | `GetModuleHandleA("<apiset 名>")` 的行为 |
 | --- | --- |
 | Win8+ | 经 apex 表重定向到 `kernel32.dll`，正常返回句柄 |
 | **Win7** | `kernelbase!GetModuleHandleA` → `BasepGetModuleHandleExW` 解析 apiset 时读到**未初始化的表** → **`0xC0000005` 访问违例** |
+
+关键在于：代码写了 `NonNull::new(module)` 这个 NULL 兜底，**看起来很稳妥，
+但它对访问违例无效** —— 进程在 `GetModuleHandleA` 内部就死了。
+
+**第四步：为什么后果特别严重？**
+
+`.CRT$XCT` 是 CRT **静态构造期**的初始化段，在所有用户代码之前执行。
+所以：
+
+- **所有链接 libstd 的 exe** 都带着这段代码 → 一启动就崩；
+- 崩点早于 `main()` 第一条语句 → **任何「在 main 里打点」的诊断都收不到日志**
+  （这就是第 8 节那套启动轨迹为什么一个字都没写出来的原因）；
+- 表现为双击即「已停止工作」，退出码 `0xC0000005`。
+
+**第五步：为什么启动器和后端都崩？**
+
+| 程序 | 为什么带这段代码 |
+| --- | --- |
+| `silvermoon-splash.exe` | 纯 Rust + std，**直接**链接 libstd |
+| `silvermoon-server.exe` | 同样链接 libstd（额外还依赖 `parking_lot`，见下） |
+
+这就是「修好后端也救不了启动器」的原因 —— 它们是**两个独立编译的 exe**，
+各自链接同一份有问题的 libstd。
+
+**第六步：那 `parking_lot_core` 呢？**
+
+它有**一模一样**的探测代码（同一个 apiset 名、同一个 API）：
+
+```rust
+// parking_lot_core 0.9.12: src/thread_parker/windows/waitaddress.rs:22
+pub fn create() -> Option<WaitAddress> {
+    let synch_dll = GetModuleHandleA(b"api-ms-win-core-synch-l1-2-0.dll\0");
+    if synch_dll == 0 { return None; }        // 同样永远执行不到
+    ...
+}
+```
+
+它是**第二个受害者**，必须一起修（否则等 libstd 补丁让进程能进 `main` 之后，
+后端会在首次用到 `parking_lot` 的 `Mutex` 时再崩一次）。
+
+> **一个容易踩的坑**：`parking_lot_core` 与 libstd 撞了**同一个字符串**。
+> 一开始只扫「二进制里有没有 `api-ms-win-*`」，结果两个来源混在一起分不清
+> 谁是谁，导致第一轮修复打错了地方。**必须结合调用点（`.CRT` 段 vs 运行期）
+> 才能区分。**
 
 **不是返回 NULL，是直接崩。** 所以那句 `if synch_dll == 0 { return None; }`
 **永远执行不到**，回退到 `KeyedEvent`（用 ntdll 的 `NtCreateKeyedEvent`，
@@ -373,9 +489,65 @@ XP+ 就有）的 `else if` 分支根本没机会运行。
 **必须**检查 `waitaddress.rs` 是否变动，并把补丁重新应用；
 `verify:win7` 里有一组检查专门防它被悄悄覆盖（见第 5 节 [4.5]）。
 
+#### 修法（主因）：给 libstd 打补丁
+
+libstd 在 `sysroot` 里，**`[patch.crates-io]` 够不着它**。
+而 `-Zbuild-std` 也没有「指定源码目录」的参数 —— 它固定读
+`$(rustc --print sysroot)/lib/rustlib/src/rust/library`。
+
+所以只能**替换那个目录**。为避免污染本机全局工具链，
+`scripts/run-win7-build.mjs` 把「准备 → 构建 → 还原」包成一个事务：
+
+```
+scripts/run-win7-build.mjs both
+  └─ setup-win7-toolchain.mjs
+       ├─ 备份 library/ → library.silvermoon-orig/     （仅首次）
+       ├─ 复制一份到 $TMPDIR/silvermoon-win7-std/library
+       ├─ patch -p1 < patches/rust-std-win7/compat.rs.patch
+       ├─ 校验目标文件里出现「SilverMoon patch」标记
+       └─ sysroot/library → 符号链接指向副本
+  └─ cargo +nightly build … -Z build-std=std,panic_abort
+  └─ 还原 sysroot/library（finally + SIGINT 双保险）
+```
+
+补丁本身极小 —— 把那个函数改成 no-op：
+
+```rust
+#[cfg(target_vendor = "win7")]
+pub(super) fn load_synch_functions() {}
+```
+
+**为什么 no-op 是语义正确的**，不是「绕过检查」：
+`WaitOnAddress` / `WakeByAddressSingle` 是 **Windows 8 才引入的 API**，
+对应的 apiset 在 Win7 上**本来就不存在**。所以这段代码在 Win7 上唯一
+正确的结果**本来就是「加载失败」**。
+
+原来的实现把「应当失败」变成了「崩溃」；补丁把它改回「干净地失败」——
+下游 `compat_fn_optional!` 生成的 `option()` 照常返回 `None`
+（`PTR` 保持 `null_mut()`），调用方走既有 fallback 路径，
+**与 Win8 上探测失败的语义完全一致**。
+
+> 为什么不用 `RtlGetVersion` 加运行期判断：这个函数**只**在
+> `target_vendor = "win7"` 时参与编译，该 target 的唯一目的就是跑在 Win7 上。
+> 多一层判断既多余，又是一旦被绕开就重新崩的隐患。
+
+**上游变动怎么办**：补丁用带上下文的 `patch(1)` 应用，上游改了 `compat.rs`
+会**显式失败**（而不是静默改错地方）。重建步骤写在
+`patches/rust-std-win7/README.md`。
+
+**防回归**：`verify:win7` 的 [4.6] 组在**产物级**断言两个 exe 里的
+`api-ms-win` 出现次数不超过上限（启动器必须为 0）——
+这同时证明了「补丁写对了」和「cargo 真用了补丁版 std」。
+
+`[[patch.unused]]` 的说明：`splash/Cargo.lock` 里会出现
+`[[patch.unused]] parking_lot_core` —— 这是**预期**的，因为启动器不依赖
+`parking_lot`（它的 `Mutex` 走 std 的 `windows7.rs` SRWLOCK 实现）。
+保留那条 `[patch.crates-io]` 是为了将来引入相关依赖时自动生效，以及作文档。
+
 ### ⚠️ 仍待真机确认
 
 - **补丁后的构建在真实 Win7 上能否启动** —— 本轮修复尚未上机验证。
+  （若仍崩，这次**轨迹日志应当会生成**，因为崩点已挪到 `main` 之后。）
 - **完整 NSIS 安装包**：`--dir` 产物已验证，但容器里 Wine 无法跑自解压，
   安装步骤未走完。Windows CI（`windows-latest`）可直接产出。
 - 启动器与主程序的**握手**在 Win7 上的表现（命名管道 + GDI 自绘分层窗口）。
@@ -602,11 +774,36 @@ Electron 在侧车 `exit` 事件里自动：
 ### 怎么用（Win7 收尾步骤）
 
 1. 装上带诊断的构建，**双击快捷方式**，等它崩（或正常起来）；
-2. 打开**安装目录**（安装时若改过路径，就是那个目录），找
-   `silvermoon-boot-splash.log` 与 `silvermoon-boot-backend.log`；
-   找不到就去 `%TEMP%`（在地址栏直接粘 `%TEMP%` 回车即可）；
-   或者看 `<数据目录>\logs\boot-diagnostics.txt`（应用崩溃弹窗里给了完整路径）；
-3. 把日志**最后 20 行**发回来即可 —— 最后一行 `STEP` 就是崩溃区间下界。
+2. 先看这份**必定会生成**的汇总诊断（路径由 `app.getPath("logs")` 决定）：
+
+   ```
+   %APPDATA%\cn.cool.silvermoon\logs\boot-diagnostics.txt
+   ```
+
+   > 实测（Win7 / 用户 `Administrator`）完整路径为
+   > `C:\Users\Administrator\AppData\Roaming\cn.cool.silvermoon\logs\boot-diagnostics.txt`。
+   > 注意是 **Roaming**（`%APPDATA%`），不是 `Local`。应用崩溃弹窗里也会给全路径。
+
+3. 再找**轨迹**文件（这三份只有真正进到 `main` 之后才会生成）：
+
+   ```
+   silvermoon-boot-backend.log
+   silvermoon-boot-splash.log
+   ```
+
+   它们在**进程自己的目录**里先试写一次；同时也会往 `%TEMP%` 写一份。
+   ⚠️ Win7 实测 `%TEMP%` 可能带序号子目录（例如 `...\Temp\1\`），
+   直接用地址栏粘 `%TEMP%` 进去可能看不到 —— 按文件名搜更稳。
+4. 把 `boot-diagnostics.txt` 发回来即可；**若轨迹文件存在**，连它们一起发。
+   轨迹里最后一行 `STEP` 就是崩溃区间下界。
+
+**三种情形的判读**：
+
+| 现象 | 含义 |
+| --- | --- |
+| 轨迹文件**存在** | 已进入 `main`，崩点在运行期 —— 看最后一行 `STEP` |
+| 轨迹文件**不存在**，诊断说「未找到任何启动轨迹文件」 | 崩在**进 `main` 之前**（加载期 / CRT 静态构造期） |
+| 都正常起来 | 修复生效 |
 
 ### 如何彻底关闭
 

@@ -235,7 +235,6 @@ function checkExe(label, exePath) {
 function checkRuntimeApisetProbeGuard() {
   const patched = path.join(
     root,
-    "backend",
     "patches",
     "parking_lot_core",
     "src",
@@ -247,7 +246,7 @@ function checkRuntimeApisetProbeGuard() {
     check(
       "parking_lot_core Win7 补丁在位",
       false,
-      "backend/patches/parking_lot_core/src/thread_parker/windows/waitaddress.rs 缺失 —— " +
+      "patches/parking_lot_core/src/thread_parker/windows/waitaddress.rs 缺失 —— " +
         "补丁被删会让「Win7 上运行期探测 apiset → 0xC0000005」的崩溃回归，且**没有任何日志**",
     );
     return;
@@ -296,7 +295,6 @@ function checkRuntimeApisetProbeGuard() {
   // 版本判断的实现必须在 bindings.rs 里（用 RtlGetVersion，不用会撒谎的 GetVersionEx）
   const bindings = path.join(
     root,
-    "backend",
     "patches",
     "parking_lot_core",
     "src",
@@ -313,14 +311,25 @@ function checkRuntimeApisetProbeGuard() {
 
 // Cargo.toml 里的 [patch.crates-io] 转发 —— 少了这一段，
 // patches 目录形同虚设（源码在，但 cargo 根本不会用它）。
+//
+// **两个 crate 都要查**：补丁放在仓库级共享目录（`apps/desktop/patches/`），
+// backend 与 splash 各自独立声明转发。第一轮修复只给 backend 加了，
+// 结果启动器仍崩 —— 所以这里必须逐个断言，不能只看一个。
 {
-  const cargoToml = path.join(root, "backend", "Cargo.toml");
-  if (existsSync(cargoToml)) {
+  const crates = [
+    { name: "backend", dir: "backend" },
+    { name: "splash", dir: "splash" },
+  ];
+  for (const c of crates) {
+    const cargoToml = path.join(root, c.dir, "Cargo.toml");
+    if (!existsSync(cargoToml)) continue;
     const t = readFileSync(cargoToml, "utf8");
     check(
-      "backend/Cargo.toml 已声明 [patch.crates-io] 指向本地 parking_lot_core",
-      /\[patch\.crates-io\][\s\S]*parking_lot_core\s*=\s*\{\s*path\s*=/.test(t),
-      "[patch.crates-io] 缺失或未指向 patches/parking_lot_core",
+      `${c.name}/Cargo.toml 已声明 [patch.crates-io] 指向共享 parking_lot_core`,
+      /\[patch\.crates-io\][\s\S]*parking_lot_core\s*=\s*\{\s*path\s*=\s*"[^"]*patches\/parking_lot_core"\s*\}/.test(
+        t,
+      ),
+      `${c.name} 未转发补丁 —— 该 crate 在 Win7 上会重新踩「运行期探测 apiset」的崩溃`,
     );
   }
 }
@@ -375,6 +384,111 @@ checkRuntimeApisetProbeGuard(findExe("backend", "silvermoon.exe"));
         "产物里没有 RtlGetVersion —— [patch.crates-io] 可能没生效",
       );
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n[4.6] libstd Win7 补丁（`target_vendor = win7` 的 CRT 静态构造期崩溃）");
+// ---------------------------------------------------------------------------
+//
+// **这是本轮真正的根因所在，务必读完。**
+//
+// 上一组 [4.5] 盯的是 crates.io 上的 `parking_lot_core`。但真机实测表明：
+// **首发受害者是 Rust 标准库自己。**
+//
+// `library/std/src/sys/pal/windows/compat.rs` 里有一段
+// `#[cfg(target_vendor = "win7")]` 的代码，用 `.CRT$XCT` 段注册了一个
+// **CRT 静态构造期**的初始化函数，无条件执行：
+//
+//     GetModuleHandleA("api-ms-win-core-synch-l1-2-0")
+//
+// 而 `api-ms-win-*` 是 **apiset 桩名**（API Set 重定向是 Win8 才引入的机制）。
+// Win7 解析这种名字时会读未初始化的表 → **直接 0xC0000005**，
+// 不是返回 NULL。上游那句 `NonNull::new(module)` 的 NULL 兜底**永远执行不到**。
+//
+// 后果比 [4.5] 那类更严重：
+//   * 它跑在 **CRT 静态构造期，早于 main()** —— 任何「在 main 里打点」的
+//     诊断手段都收不到一个字节；
+//   * 它影响**所有链接 libstd 的 exe** —— 包括启动器 `silvermoon-splash.exe`，
+//     所以快捷方式双击时**启动器先崩**，Electron 主程序压根没被拉起来。
+//
+// 修法：给 libstd 打补丁，把那个函数改成 no-op（语义正确 —— 因为
+// `WaitOnAddress` 本来就是 Win8+ 的 API，Win7 上该探测本来就该失败）。
+// 详见 patches/rust-std-win7/README.md 与 scripts/setup-win7-toolchain.mjs。
+//
+// **这条检查是产物级的**，而且判据与 [4.5] 正好相反：
+// 这里**扫字符串是对的** —— 对 libstd 补丁而言，`api-ms-win-*` 这个字面量
+// 只存在于那段被删掉的代码里，补丁生效后它应当**彻底消失**。
+// （[4.5] 那个补丁保留了字面量，所以不能这么查 —— 两者判据不同，别混淆。）
+{
+  const patchPath = path.join(root, "patches", "rust-std-win7", "compat.rs.patch");
+  check(
+    "libstd Win7 补丁文件在位",
+    existsSync(patchPath),
+    "patches/rust-std-win7/compat.rs.patch 缺失 —— " +
+      "Win7 上「双击即崩且无任何日志」的根因会回归",
+  );
+
+  // 补丁内容本身也要对：必须把 load_synch_functions 改成 no-op
+  if (existsSync(patchPath)) {
+    const p = readFileSync(patchPath, "utf8");
+    check(
+      "libstd 补丁把 load_synch_functions 改成 no-op",
+      /load_synch_functions\(\)\s*\{\s*\}/.test(p) ||
+        /pub\(super\) fn load_synch_functions\(\) \{\}/.test(p),
+      "补丁里找不到 `fn load_synch_functions() {}` —— 补丁可能被改坏了",
+    );
+    check("libstd 补丁带 SilverMoon 标记（便于日后核对上游变动）", p.includes("SilverMoon patch"));
+  }
+
+  // 产物级断言：确认 libstd 那段探测**不再存在于二进制里**。
+  //
+  // 判据要分产物看 —— 这是本轮踩过的坑，别想当然地统一成「必须为 0」：
+  //
+  //   * **启动器**：它只依赖 libstd（`std::sync::Mutex` 走 `windows7.rs` 的
+  //     SRWLOCK 实现，根本不经过 parking_lot）。所以 apiset 字面量的唯一来源
+  //     就是 libstd 那段代码，补丁生效后应当**归零**。
+  //
+  //   * **后端**：它额外直接依赖 `parking_lot`，而 `patches/parking_lot_core`
+  //     的修法是**加版本闸门**（不是删代码），所以
+  //     `"api-ms-win-core-synch-l1-2-0.dll"` 这个字面量**仍然在二进制里**
+  //     （实测残留 1 处）。这是**预期内**的，不是失败。
+  //
+  //   所以对后端只能用「有上限」的判据：不得出现**多个**——因为 libstd 那份
+  //   已经被删掉了，剩下的应当只有 parking_lot 那一个。出现 2 个以上就说明
+  //   libstd 补丁没生效。
+  //
+  // 想要更严格的判据（查那段代码有没有被 `GetModuleHandleA` 引用）需要反汇编，
+  // 成本高且脆弱；这里的近似足够拦住「补丁整个没生效」这类回归。
+  const TARGETS = [
+    { label: "后端", exe: findExe("backend", "silvermoon.exe"), maxApiset: 1 },
+    { label: "启动器", exe: findExe("splash", "silvermoon-splash.exe"), maxApiset: 0 },
+  ];
+  for (const t of TARGETS) {
+    if (!existsSync(t.exe)) {
+      check(`${t.label}产物已消除 libstd 的 apiset 运行期探测`, false, `产物不存在：${t.exe}`);
+      continue;
+    }
+    let buf = null;
+    try {
+      buf = readFileSync(t.exe);
+    } catch (e) {
+      check(`${t.label}产物已消除 libstd 的 apiset 运行期探测`, false, `读取失败：${e.message}`);
+      continue;
+    }
+    // `api-ms-win` 是 apiset 名字的公共前缀，出现即说明有代码在引用它。
+    // 用 latin1 避免把二进制当 UTF-8 处理时出问题。
+    const text = buf.toString("latin1");
+    const hits = (text.match(/api-ms-win/g) || []).length;
+    check(
+      `${t.label}产物已消除 libstd 的 apiset 运行期探测（${path.basename(t.exe)}，实测 ${hits} 处，上限 ${t.maxApiset}）`,
+      hits <= t.maxApiset,
+      t.maxApiset === 0
+        ? `产物里出现 ${hits} 次 "api-ms-win" —— libstd 补丁没生效` +
+            "（build-std 可能没用打过补丁的 sysroot）"
+        : `产物里出现 ${hits} 次 "api-ms-win"（上限 ${t.maxApiset} = 仅 parking_lot 的那一处）` +
+            "—— 多出来的说明 libstd 那一段还在，补丁没生效",
+    );
   }
 }
 
