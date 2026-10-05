@@ -282,14 +282,25 @@ jobs:
         run: npm run build:renderer && npm run build:main
 
       - name: Package
-        # ⚠️ **不要**加 --publish never：那会让 electron-builder 跳过更新元数据
-        # （latest*.yml / *.blockmap），自动更新直接失效 —— 0.1.0 首次发版就栽在这。
-        # 也不要加 --publish always：那要求 GH_TOKEN，且会和下面的 release job
-        # 抢同一个 Release。
+        # ⚠️ 关于 --publish，这里踩过两次坑，结论如下（0.1.0 发版实测）：
         #
-        # 正确做法是**不传** --publish（默认 undefined）：只要 electron-builder.yml
-        # 里配了 publish provider，就会在本地 release/ 生成元数据；上传统一交给
-        # release job（那里有 GITHUB_TOKEN，且能同时处理两个平台的产物）。
+        # 1) `--publish never` —— electron-builder 会**跳过更新元数据**的生成，
+        #    latest*.yml / *.blockmap 根本不会出现在 release/，自动更新直接失效。
+        # 2) `--publish always` —— 元数据有了，但要求 GH_TOKEN，且会和下面的
+        #    release job 争抢同一个 Release。
+        #
+        # 正确做法：**不传 --publish**，同时把 GITHUB_TOKEN 以 GH_TOKEN 注入 ——
+        # 检出 tag 时 electron-builder 的默认行为就是发布（onTag），没有 token
+        # 会直接报 'GitHub Personal Access Token is not set'。
+        # GITHUB_TOKEN 自带 contents:write，权限足够建 Release 与上传资产。
+        #
+        # 两个平台的打包作业会并发向同一个 Release 上传；electron-builder 复用
+        # 已存在的 Release 只补缺失资产，workflow 顶部的 concurrency 也会串行化，
+        # 两者叠加是安全的。release job 负责补齐另一平台的产物与自动生成的说明。
+        #
+        # 非 tag 构建（main 的普通推送）不会触发发布，此时也无需 token。
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder ${{ matrix.package-args }}
 
       - name: Upload artifacts
