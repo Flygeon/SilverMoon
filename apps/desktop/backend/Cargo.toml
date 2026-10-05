@@ -109,3 +109,41 @@ opt-level = "s"
 strip = true
 # 注意：**不要**开 `panic = "abort"`。后端现在是长期驻留的独立进程，
 # 保留 unwind 语义才能让某个命令的 panic 只影响当次调用，而不是整块后端一起退出。
+
+# ---------------------------------------------------------------------------
+# Win7 兼容补丁：parking_lot_core 的 apiset 探测
+#
+# **Bug**（已在真实 Win7 上复现）：
+#
+#   `parking_lot_core` 的 Windows 线程停靠后端在选择实现时，会先用
+#   `GetModuleHandleA("api-ms-win-core-synch-l1-2-0.dll")` 探测 Win8+ 的
+#   `WaitOnAddress`。该名字是 **API Set 桩名**，而 API Set 重定向是
+#   Win8 才引入的机制。在 Win7 上，`kernelbase!GetModuleHandleA` 解析
+#   apiset 名时会读一张未初始化的表 —— **不是返回 NULL，而是直接抛
+#   STATUS_ACCESS_VIOLATION (0xC0000005)**。
+#
+#   于是上游代码里那句 `if synch_dll == 0 { return None; }` 永远执行不到，
+#   回退到 `KeyedEvent`（XP+ 可用）的 `else if` 分支根本没机会跑。
+#   进程在 CRT 静态构造期就死掉 —— **连 main 的第一行都到不了**，
+#   所以任何「在 main 里打点」的诊断都收不到日志。
+#
+# **症状**（与实测完全吻合）：
+#   * 退出码 0xC0000005 / 3221225477（是 AV，不是缺 DLL 的 0xC0000135）；
+#   * 无任何日志文件生成（崩在 main 之前）；
+#   * 每次启动稳定复现，耗时一致；
+#   * `objdump -p` 查导入表**完全看不出问题** ——
+#     `WaitOnAddress` 等符号由 `GetProcAddress` 动态解析，不在导入表里。
+#
+# **修法**：见 `patches/parking_lot_core/` —— 在 `WaitAddress::create()`
+# 开头加一次真实版本判断（`RtlGetVersion`），Win7 及更早直接 `return None`，
+# 强制回退到 `KeyedEvent`。**只改这一处**，其余逻辑与上游一致。
+#
+# 为什么用 `[patch]` 而不是升级版本：`parking_lot_core` 0.9.12 已是最新，
+# 上游这条路径对 Win7 就是坏的（它在 CI 上跑 Win10+，永远看不到这个问题）。
+#
+# 维护提示：升级 `parking_lot` / `parking_lot_core` 时，
+# **必须**检查该文件在上一版基础上是否被改过，并把补丁重新应用一次。
+# 校验命令：`grep -n "SilverMoon 补丁" patches/parking_lot_core/src/thread_parker/windows/waitaddress.rs`
+# ---------------------------------------------------------------------------
+[patch.crates-io]
+parking_lot_core = { path = "patches/parking_lot_core" }

@@ -201,6 +201,130 @@ function checkExe(label, exePath) {
   notes.push(`${label}: 依赖 ${dlls.length} 个 DLL（${dlls.slice(0, 8).join(", ")}…）`);
 }
 
+// ---------------------------------------------------------------------------
+// [4.5] 运行期 apiset 探测检测（**本节的由来，务必读完再改**）
+// ---------------------------------------------------------------------------
+//
+// 前面 [4] 那一组检查全部盯着 **PE 导入表**。但有一类 Win8+ 依赖**根本不在
+// 导入表里** —— 它是用 `GetModuleHandleA("api-ms-win-core-synch-l1-2-0.dll")` +
+// `GetProcAddress` 在**运行期**动态探测的。
+//
+// 这类代码踩的坑比静态导入更狠：
+//
+//   * 静态导入 Win8+ 符号 → Win7 加载器报 `0xC0000135`（缺模块），**干净失败**；
+//   * 运行期探测 apiset 名 → Win7 的 `kernelbase!GetModuleHandleA` 在解析
+//     API Set 时（API Set 是 Win8 才引入的机制）会读未初始化的表，
+//     直接 **`0xC0000005` 访问违例**。
+//
+// 而且 `0xC0000005` 发生在 CRT 静态构造期 —— **早于 main**，
+// 所以「在 main 里打启动轨迹」的诊断手段一行日志都收不到。
+// 实测现场：后端连 `silvermoon-boot-backend.log` 都不会被创建。
+//
+// 实测踩坑记录：`parking_lot_core` 0.9.12 就是这么死的。
+// 修法见 `backend/Cargo.toml` 的 `[patch.crates-io]` 注释与
+// `backend/patches/parking_lot_core/`。
+//
+// **为什么本检查不扫字符串常量**（一开始想这么做，验证后否掉了）：
+// 打了补丁之后，`api-ms-win-core-synch-l1-2-0.dll` 这个字面量**依然在二进制里** ——
+// 它是个 `&'static str`，编译器不会因为运行期不走到就把它删掉。
+// 实测打了补丁的产物里该字符串仍出现 1 次。所以「扫字符串」会把修复后的产物
+// 也判成失败，是个**假阳性**，不能用。
+//
+// 正确的判据是：**看 WaitAddress::create() 里有没有那道版本闸门**。
+// 直接查源码比反汇编稳定得多 —— 反正这个补丁本来就是我们自己的文件。
+function checkRuntimeApisetProbeGuard() {
+  const patched = path.join(
+    root,
+    "backend",
+    "patches",
+    "parking_lot_core",
+    "src",
+    "thread_parker",
+    "windows",
+    "waitaddress.rs",
+  );
+  if (!existsSync(patched)) {
+    check(
+      "parking_lot_core Win7 补丁在位",
+      false,
+      "backend/patches/parking_lot_core/src/thread_parker/windows/waitaddress.rs 缺失 —— " +
+        "补丁被删会让「Win7 上运行期探测 apiset → 0xC0000005」的崩溃回归，且**没有任何日志**",
+    );
+    return;
+  }
+  const src = readFileSync(patched, "utf8");
+
+  // -------------------------------------------------------------------------
+  // 分析前**先剥掉注释**。这一步是必须的，不是洁癖：
+  //
+  // 补丁在 `create()` 函数体开头写了一大段解释性注释，其中**引用**了上游的
+  // 探测代码（`GetModuleHandleA(b"api-ms-win-core-synch-l1-2-0.dll\0")`）
+  // 和闸门变量名（`is_win7_or_lower`）。如果直接在原文里 indexOf，
+  // 注释会先被命中 —— 实测报出「闸门@2468 晚于探测@357」这个**假失败**，
+  // 而真实代码里闸门是紧跟在函数签名之后的（顺序完全正确）。
+  //
+  // 剥注释的做法：去掉 `//` 行注释与 `/* */` 块注释。
+  // 这段源码里没有包含 `//` 的字符串字面量（没有 URL 之类），
+  // 所以按行丢弃注释是安全的。
+  // -------------------------------------------------------------------------
+  const noComments = src
+    .replace(/\/\*[\s\S]*?\*\//g, "") // 块注释
+    .split("\n")
+    .map((l) => l.replace(/\/\/.*$/, "")) // 行注释
+    .join("\n");
+
+  const fnStart = noComments.indexOf("pub fn create()");
+  const body = fnStart === -1 ? "" : noComments.slice(fnStart);
+
+  const gateAt = body.indexOf("is_win7_or_lower");
+  const probeAt = body.indexOf("GetModuleHandleA(b");
+  check(
+    "parking_lot_core 补丁含 Win7 版本闸门（在 create() 函数体内）",
+    fnStart !== -1 && gateAt !== -1,
+    fnStart === -1
+      ? "waitaddress.rs 里找不到 `pub fn create()` —— 文件结构变了，补丁需重新应用"
+      : "create() 体内找不到 is_win7_or_lower —— 补丁被覆盖回上游版本了",
+  );
+  check(
+    "版本闸门位于 apiset 探测之前（顺序正确）",
+    gateAt !== -1 && probeAt !== -1 && gateAt < probeAt,
+    gateAt === -1 || probeAt === -1
+      ? `闸门或探测点其一在函数体内找不到（gate=${gateAt}, probe=${probeAt}）`
+      : `闸门@${gateAt} 晚于探测@${probeAt} —— 顺序反了，等于没打`,
+  );
+
+  // 版本判断的实现必须在 bindings.rs 里（用 RtlGetVersion，不用会撒谎的 GetVersionEx）
+  const bindings = path.join(
+    root,
+    "backend",
+    "patches",
+    "parking_lot_core",
+    "src",
+    "thread_parker",
+    "windows",
+    "bindings.rs",
+  );
+  if (existsSync(bindings)) {
+    const b = readFileSync(bindings, "utf8");
+    check("补丁用 RtlGetVersion 取真实版本（GetVersionEx 会谎报）", b.includes("RtlGetVersion"));
+    check("补丁声明了 os_version() 辅助函数", b.includes("pub fn os_version"));
+  }
+}
+
+// Cargo.toml 里的 [patch.crates-io] 转发 —— 少了这一段，
+// patches 目录形同虚设（源码在，但 cargo 根本不会用它）。
+{
+  const cargoToml = path.join(root, "backend", "Cargo.toml");
+  if (existsSync(cargoToml)) {
+    const t = readFileSync(cargoToml, "utf8");
+    check(
+      "backend/Cargo.toml 已声明 [patch.crates-io] 指向本地 parking_lot_core",
+      /\[patch\.crates-io\][\s\S]*parking_lot_core\s*=\s*\{\s*path\s*=/.test(t),
+      "[patch.crates-io] 缺失或未指向 patches/parking_lot_core",
+    );
+  }
+}
+
 // 本仓库实际使用的路径是 `--target-dir <crate>/target/win7`，因此产物落在
 // `<crate>/target/win7/<triple>/release/` 下。两条可行路线的 triple 不同
 // （见 doc/win7-electron22.md 第 4 节），这里两种都探一遍。
@@ -221,6 +345,38 @@ function findExe(crate, exeName) {
 
 checkExe("后端 silvermoon-server.exe", findExe("backend", "silvermoon.exe"));
 checkExe("启动器 silvermoon-splash.exe", findExe("splash", "silvermoon-splash.exe"));
+
+// ---------------------------------------------------------------------------
+console.log("\n[4.5] parking_lot_core Win7 补丁（导入表查不到的那一类崩溃）");
+// ---------------------------------------------------------------------------
+//
+// 详细背景见下方 checkRuntimeApisetProbeGuard 的注释。
+// 一句话：不检查「字符串在不在」（补丁后字符串依然在，会假阳性），
+// 而是检查「那道版本闸门在不在、顺序对不对、有没有真的进二进制」。
+checkRuntimeApisetProbeGuard(findExe("backend", "silvermoon.exe"));
+
+// 产物侧的最后一道：确认补丁真的被编进了二进制。
+// `RtlGetVersion` 是补丁**新增**的导入（上游 parking_lot_core 从不用它），
+// 它出现在导入表即证明补丁生效 —— 这是只属于本补丁的可靠指纹。
+// （前面查源码只能证明「文件里有这道闸门」，查产物才能证明「cargo 真用了它」。）
+{
+  const exePath = findExe("backend", "silvermoon.exe");
+  if (existsSync(exePath)) {
+    let out = "";
+    try {
+      out = execFileSync("objdump", ["-p", exePath], { encoding: "utf8", maxBuffer: 64 << 20 });
+    } catch {
+      /* checkExe 已经报过 objdump 的问题，这里不重复报 */
+    }
+    if (out) {
+      check(
+        "后端产物含 RtlGetVersion 导入（parking_lot_core 补丁已编进二进制）",
+        /RtlGetVersion/.test(out),
+        "产物里没有 RtlGetVersion —— [patch.crates-io] 可能没生效",
+      );
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 console.log("\n[4] 渲染层产物（Chromium 108 安全）");

@@ -163,7 +163,7 @@ cargo +nightly build --release -Z build-std=std,panic_abort \
 node scripts/verify-win7-build.mjs
 ```
 
-静态断言五组：
+静态断言六组：
 
 1. **主进程产物** —— 不残留 `protocol.handle` 直调、已内联 undici、无 taglib-wasm 硬依赖
 2. **语法** —— 可被 Node 16 解析
@@ -172,19 +172,39 @@ node scripts/verify-win7-build.mjs
    > ⚠️ **缺 `objdump` 时本检查直接失败**，不再降级成「跳过」。
    > 上一版是跳过 —— 那等于闸门根本不存在，而 CI 的 win7 作业本来就固定装了
    > binutils，跳过只会制造「检查过了」的错觉。
-4. **启动诊断设施在位** —— 两个 exe 内置启动轨迹（`silvermoon-boot-*` 指纹）、
-   主进程产物含 `boot-diagnostics` 收集逻辑（本轮新增，见第 8 节）
-5. **渲染层产物**存在
+4. **[4.5] `parking_lot_core` Win7 补丁**（本轮新增）—— 防第 6 节那个
+   「运行期 apiset 探测 → `0xC0000005`」的崩溃回归。四道断言：
+   - 补丁文件在位，且 `create()` **函数体**内含版本闸门；
+   - 闸门位于 apiset 探测**之前**（顺序错了等于没打）；
+   - 用 `RtlGetVersion` 而非会谎报的 `GetVersionEx`；
+   - `backend/Cargo.toml` 有 `[patch.crates-io]` 转发，且**产物**里含
+     `RtlGetVersion` 导入（证明补丁真进了二进制，不只是"文件里有"）。
+   > 写这组检查时的两个坑，都记在脚本注释里：
+   > ① **不能扫二进制字符串**判断「有没有 apiset 探测」—— 打了补丁后
+   > `api-ms-win-core-synch-l1-2-0.dll` 这个字面量**依然在二进制里**
+   > （`&'static str` 编译器不会删），会假阳性；
+   > ② **判定顺序前必须先剥注释** —— 补丁在函数体开头引用上游代码写的
+   > 解释性注释里也含 `GetModuleHandleA(b"api-ms-win-core-synch...`，
+   > 不剥注释就会命中注释、报出「闸门晚于探测」的假失败。
+   >
+   > 这组检查做过**负向测试**：手动把补丁的闸门删掉后，脚本确实报错。
+5. **启动诊断设施在位** —— 两个 exe 内置启动轨迹（`silvermoon-boot-*` 指纹）、
+   主进程产物含 `boot-diagnostics` 收集逻辑（见第 8 节）
+6. **渲染层产物**存在
 
 ### 静态闸门的**能力边界**（重要，别误以为它全能）
 
-`objdump -p` 只能看到 **PE 导入表**。以下两类 Win8+ 依赖它**查不出来**：
+`objdump -p` 只能看到 **PE 导入表**。以下三类 Win8+ 依赖它**查不出来**：
 
 - **静态链接的 C 代码**（`rusqlite` 的 bundled SQLite、CRT 自身）在运行期通过
   `GetProcAddress` 动态解析的调用；
-- 通过函数指针 / 延迟加载解析的调用。
+- 通过函数指针 / 延迟加载解析的调用；
+- **运行期按名字探测 API set**（`GetModuleHandleA("api-ms-win-*-l1-2-0.dll")`）。
+  —— 这正是第 6 节那个真实崩溃的形态：导入表**完全干净**，
+  但 Win7 上执行到探测那一句就 AV。
 
-这类只能靠**运行时诊断**（第 8 节的启动轨迹）。所以两者是互补的，不能互相替代。
+第 3 类靠**第 4.5 组的定向检查**兜（只覆盖已知的那一处），
+其余只能靠**运行时诊断**（第 8 节的启动轨迹）。三者互补，不能互相替代。
 
 ---
 
@@ -247,10 +267,102 @@ node scripts/verify-win7-build.mjs
 > 已知有效信息：**手动到安装目录双击本体（`SilverMoon.exe`）能打开**
 > —— 即 Electron 主进程 + 渲染层本身没问题，问题集中在两个原生 Rust 进程。
 
+### ✅ 根因已定位并修复（第二次上机，2026-10-05）
+
+第一轮上机后做了「主动打点」的诊断构建（第 8 节），结果**两个日志文件都
+根本不存在** —— 不是空文件，是**没有生成**。这个「空结果」本身就是最强线索：
+
+> 打点是 `main()` 的**第一条语句**。文件不存在 ⇒ 进程**连 main 都没进** ⇒
+> 崩在**加载期 / CRT 静态构造期**，早于一切 Rust 代码。
+
+于是绕开运行期观察，改从**二进制静态分析**入手，结论如下。
+
+#### 结论：`parking_lot_core` 在运行期探测 Win8+ 的 API set
+
+`parking_lot_core` 0.9.12 的 Windows 线程停靠后端在选择实现时会做一次探测：
+
+```rust
+// src/thread_parker/windows/waitaddress.rs:22
+pub fn create() -> Option<WaitAddress> {
+    let synch_dll = GetModuleHandleA(b"api-ms-win-core-synch-l1-2-0.dll\0");
+    if synch_dll == 0 { return None; }        // 看起来有 NULL 检查……
+    let WaitOnAddress = GetProcAddress(synch_dll, b"WaitOnAddress\0")?;
+    ...
+}
+```
+
+`api-ms-win-core-synch-l1-2-0.dll` 是一个 **API Set 桩名**，而 API Set
+重定向（apiset schema）是 **Windows 8 才引入**的机制：
+
+| 系统 | `GetModuleHandleA("<apiset 名>")` 的行为 |
+| --- | --- |
+| Win8+ | 经 apex 表重定向到 `kernel32.dll`，正常返回句柄 |
+| **Win7** | `kernelbase!GetModuleHandleA` → `BasepGetModuleHandleExW` 解析 apiset 时读到**未初始化的表** → **`0xC0000005` 访问违例** |
+
+**不是返回 NULL，是直接崩。** 所以那句 `if synch_dll == 0 { return None; }`
+**永远执行不到**，回退到 `KeyedEvent`（用 ntdll 的 `NtCreateKeyedEvent`，
+XP+ 就有）的 `else if` 分支根本没机会运行。
+
+#### 为什么这一条解释了**全部**观测现象
+
+| 观测 | 解释 |
+| --- | --- |
+| `0xC0000005` 而非 `0xC0000135` | `GetModuleHandle` 不查磁盘，走的是 apiset 解析路径 |
+| **轨迹日志一个都没生成** | 这条路在 CRT 静态构造期被触发，**早于 `main`** |
+| 每次启动稳定复现、耗时一致 | 确定性的代码路径 |
+| 第 5 节的 `objdump` 导入表检查**全绿** | `WaitOnAddress` 等由 `GetProcAddress` **动态**解析，**不在导入表**；名字只以字符串常量存在 |
+| 两个 Rust 进程都崩 | 两者都链了 Rust std → `parking_lot_core` |
+
+#### 为什么「只有 win7 target 会崩」
+
+这是整件事最反直觉的一点。对比同一份代码的两种构建：
+
+| 构建目标 | `api-ms-win-core-synch-l1-2-0` 的呈现方式 | Win7 上的结果 |
+| --- | --- | --- |
+| `x86_64-pc-windows-gnu`（稳定版） | **静态导入**（在 PE 导入表里，带 `WaitOnAddress` 等） | 加载器报 `0xC0000135` 缺模块 —— **干净失败**，不会 AV |
+| `x86_64-win7-windows-gnu`（本项目用的 tier-3） | **运行期 `GetModuleHandleA` 探测**（导入表里 0 次） | 走进 apiset 解析 → **`0xC0000005`** |
+
+**换句话说：为了 Win7 而选的 tier-3 target，反而把这个 bug 从「干净的加载
+失败」变成了「加载期访问违例」。** 而 CI 跑在 Win10+ 的 runner 上，
+`GetModuleHandleA` 走的是正常 apiset 重定向，**永远看不到这个问题**。
+
+> 附带收获：这也**实证**了「`objdump` 只能看导入表」的能力边界
+> （第 5 节）。这个 bug 用导入表检查**原理上**就查不出来。
+
+#### 修法：`[patch.crates-io]` 打一个最小补丁
+
+`parking_lot_core` 0.9.12 已是最新，上游这条路径对 Win7 就是坏的
+（它的 CI 跑 Win10+，看不到）。所以用 `[patch.crates-io]` 把 crate 指向
+仓库内的 `backend/patches/parking_lot_core/`，**只改一处**：
+
+```rust
+// waitaddress.rs —— 函数体开头，仅新增这一段
+#[cfg(windows)]
+{
+    use super::bindings::os_version;
+    let is_win7_or_lower = match os_version() {
+        Some((major, minor)) => major < 6 || (major == 6 && minor <= 1),
+        None => true,      // 读不到版本时保守按 Win7 处理
+    };
+    if is_win7_or_lower {
+        return None;       // 强制回退 KeyedEvent（XP+ 可用）
+    }
+}
+```
+
+* 版本判断用 **`RtlGetVersion`**（读 PEB 真实版本），**不用** `GetVersionEx`
+  —— 后者从 Win8.1 起会对没有 manifest 的进程**谎报** 6.2。
+* 判据放在**运行时**而不是 `cfg`：`target_os = "windows"` 覆盖 Win7~Win11，
+  编译期分不出来（这也是项目里 Win7 兼容要靠显式 `win7` feature 的同一个原因）。
+* 其余逻辑与上游逐字一致。非 Win7 系统行为**完全不变**。
+
+**维护提示**：升级 `parking_lot` / `parking_lot_core` 时，
+**必须**检查 `waitaddress.rs` 是否变动，并把补丁重新应用；
+`verify:win7` 里有一组检查专门防它被悄悄覆盖（见第 5 节 [4.5]）。
+
 ### ⚠️ 仍待真机确认
 
-- 上述两个崩溃的**确切崩溃点** —— 需要用户跑一次带诊断的构建并回报轨迹
-  （第 8 节给了操作步骤与判读方法）。
+- **补丁后的构建在真实 Win7 上能否启动** —— 本轮修复尚未上机验证。
 - **完整 NSIS 安装包**：`--dir` 产物已验证，但容器里 Wine 无法跑自解压，
   安装步骤未走完。Windows CI（`windows-latest`）可直接产出。
 - 启动器与主程序的**握手**在 Win7 上的表现（命名管道 + GDI 自绘分层窗口）。
@@ -264,6 +376,10 @@ node scripts/verify-win7-build.mjs
   Win7 版需要为 Rust 侧补等价验证（尚未写）。
 - `color-mix()` 回退见第 7 节；`@m3e/web` 的禁用态/阴影类混色依赖运行期补丁，
   真实 Win7 上的观感仍待确认。
+- 修复只覆盖了 `parking_lot_core` 这一处。全仓扫描过一遍依赖源码，
+  **运行期 apiset 探测只有这一处**（其余 `api-ms-win-*` 引用都来自
+  `windows-sys` / `windows` crate 的自动生成绑定，是静态声明，无运行期探测）。
+  但**不排除**静态链接的第三方 C 代码里还有别的漏网之鱼 —— 这类只能靠上机实测。
 
 ---
 
