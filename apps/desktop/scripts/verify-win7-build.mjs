@@ -163,9 +163,7 @@ function checkExe(label, exePath) {
     InitializeCriticalSectionEx: "Windows Vista",
     GetTickCount64: "Windows Vista",
   };
-  const goodHit = Object.keys(knownGood).filter((a) =>
-    new RegExp(`\\b${a}\\b`).test(out),
-  );
+  const goodHit = Object.keys(knownGood).filter((a) => new RegExp(`\\b${a}\\b`).test(out));
   if (goodHit.length) {
     notes.push(
       `${label}: 含以下 Win7 可用的导入（已核实，勿再加入黑名单）：` +

@@ -219,11 +219,17 @@ pub fn env_probe() {
 }
 
 /// 阶段计时辅助。
+///
+/// 启动器侧目前只用单点 `step()`；保留 `Phase` 是为了与后端的 `boot_trace`
+/// 保持同一套 API（两边日志格式一致，排查时不用切换心算）。后端在
+/// `lib.rs::run()` 里大量使用它，启动器将来若也出现耗时阶段可直接接上。
+#[allow(dead_code)]
 pub struct Phase {
     label: &'static str,
     start: std::time::Instant,
 }
 
+#[allow(dead_code)]
 impl Phase {
     pub fn begin(label: &'static str) -> Self {
         step(label);
