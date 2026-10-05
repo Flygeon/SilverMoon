@@ -12,10 +12,26 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    # main 与特性分支都要跑。
+    #
+    # ⚠️ 为什么必须显式加 `feat/**`（本轮补的记录）：
+    # 本仓库的推送走 GitHub **Git Data API**（沙箱里 HTTPS git push 直连不通），
+    # 而用 API 更新 ref **不会**产生能让 PR 复用的 synchronize 事件 ——
+    # 实测推完 `feat/win7-electron22` 后 GitHub 上**一个新 run 都不出现**，
+    # 连 PR #1 的 head 明明已经更新了也一样。
+    #
+    # 于是「写完 push → 盯 CI 绿」这条流程在特性分支上其实是不成立的：
+    # 看起来推成功了，其实没有任何检查在跑。之前那轮之所以有 CI，
+    # 是因为它在 GitHub 界面上被触发过（event=pull_request），是运气而非机制。
+    #
+    # 加 `feat/**` 之后，特性分支的推送本身就会直接触发 push 事件，不再依赖 PR。
+    branches: [main, 'feat/**']
     tags: ['v*']
+  # PR 触发保留：从 GitHub 界面改 PR 时同样要跑。
   pull_request:
     branches: [main]
+  # 手动兜底：万一推送仍未触发（网络/权限异常），可在 Actions 页面直接点运行。
+  workflow_dispatch:
 
 permissions:
   contents: write
