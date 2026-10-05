@@ -282,10 +282,15 @@ jobs:
         run: npm run build:renderer && npm run build:main
 
       - name: Package
-        # 用 --publish always 而不是 never：electron-builder 只有在「会发布」时
-        # 才生成 latest*.yml 与 *.blockmap。never 的话安装包能出、但更新元数据
-        # 不会生成，自动更新会报 Cannot find latest.yml。
-        run: npx electron-builder ${{ matrix.package-args }} --publish always
+        # ⚠️ **不要**加 --publish never：那会让 electron-builder 跳过更新元数据
+        # （latest*.yml / *.blockmap），自动更新直接失效 —— 0.1.0 首次发版就栽在这。
+        # 也不要加 --publish always：那要求 GH_TOKEN，且会和下面的 release job
+        # 抢同一个 Release。
+        #
+        # 正确做法是**不传** --publish（默认 undefined）：只要 electron-builder.yml
+        # 里配了 publish provider，就会在本地 release/ 生成元数据；上传统一交给
+        # release job（那里有 GITHUB_TOKEN，且能同时处理两个平台的产物）。
+        run: npx electron-builder ${{ matrix.package-args }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
