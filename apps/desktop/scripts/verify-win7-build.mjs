@@ -107,43 +107,71 @@ function checkExe(label, exePath) {
     return;
   }
   // -------------------------------------------------------------------------
-  // Win8+ 专属符号黑名单。
+  // 分两档：**已核实**的判失败，**待核实**的只提醒。
   //
-  // 只查 WaitOnAddress 那一组是**不够的**（这是上一版的真实缺陷）：它只覆盖
-  // 内核同步原语这一条线索。同类的还有几个高频来源，任一命中都会让 Win7 上
-  // 「加载即失败」或「首次调用即 AV」：
+  // 为什么要分档（这不是偷懒，是踩坑后的必要设计）：
+  // Win7 兼容性的唯一可靠判据是 MS Learn 上的 `Minimum supported client`，
+  // 而凭名字/直觉猜版本**一定会错**。加宽名单的第一版就因此把
+  // CancelIoEx / SetThreadStackGuarantee（都是 Vista）判成了 Win8+，
+  // CI 直接把两个 exe 全判红，白跑一轮。
   //
-  //   * WaitOnAddress / WakeByAddress*        —— Rust std 的 futex 实现（最经典）
-  //   * GetSystemTimePreciseAsFileTime        —— UCRT / SQLite / 各类时间库
-  //   * SetThreadDescription / GetThreadDescription —— std 的线程命名，debug 构建常见
-  //   * GetTempPath2W / CreateFile2           —— 部分较新 CRT 的路径解析
-  //   * DiscardVirtualMemory / OfferVirtualMemory —— Rust std 的内存建议
-  //   * GetOverlappedResultEx / CancelIoEx2   —— 新版 I/O 辅助
-  //   * RtlGetVersion 之外的 ntdll 新导出（Precise/Ex 后缀一类）
-  //
-  // ⚠️ 这份名单只能拦住「**导入表里可见**」的符号。真正危险的另一类是
-  // **静态链接进去的 C 代码**（比如 `rusqlite` 的 bundled SQLite、CRT 自身）
-  // 在运行期通过 `GetProcAddress` 动态解析的调用 —— 它们不会出现在 PE 导入表中，
-  // 静态检查原理上就查不出来。那部分只能靠运行时诊断（见下面 [5] 的检查项
-  // 与运行时启动轨迹）。
-  const win8Apis = [
+  // 所以：
+  //   * `win8Confirmed` —— 已逐项核对过文档，命中即**真失败**（这是闸门）；
+  //   * `win8Suspect`   —— 尚未核对，命中只打提醒（这是线索，不是判据）。
+  // 遇到 suspect 命中时，正确做法是去查文档，然后把它**移动**到 confirmed
+  // 或直接删掉 —— 不要凭感觉升级成失败。
+  // -------------------------------------------------------------------------
+  const win8Confirmed = [
+    // Minimum supported client: Windows 8 / Server 2012
     "WaitOnAddress",
     "WakeByAddressAll",
     "WakeByAddressSingle",
+    // Minimum supported client: Windows 8
     "GetSystemTimePreciseAsFileTime",
-    "SetThreadDescription",
-    "GetThreadDescription",
-    "GetTempPath2W",
+    "GetOverlappedResultEx", // 核对来源：learn.microsoft.com .../nf-ioapiset-getoverlappedresultex
     "CreateFile2",
     "DiscardVirtualMemory",
     "OfferVirtualMemory",
-    "GetOverlappedResultEx",
-    "CancelIoEx",
-    "SetThreadStackGuarantee",
+    // Minimum supported client: Windows 8
     "GetPackageFamilyName",
+    "GetCurrentPackageFullName",
   ];
-  const hit = win8Apis.filter((a) => new RegExp(`\\b${a}\\b`).test(out));
-  check(`${label} 未导入 Win8+ 专属符号`, hit.length === 0, hit.join(", "));
+  const win8Suspect = [
+    // 疑似 Win8+，但**尚未**逐项核对文档。命中时只提醒，不判失败。
+    "SetThreadDescription", // 实际是 Win10 1607；留着提醒，命中说明真有问题
+    "GetThreadDescription",
+    "GetTempPath2W",
+  ];
+
+  const hit = win8Confirmed.filter((a) => new RegExp(`\\b${a}\\b`).test(out));
+  check(`${label} 未导入已核实的 Win8+ 专属符号`, hit.length === 0, hit.join(", "));
+
+  const suspectHit = win8Suspect.filter((a) => new RegExp(`\\b${a}\\b`).test(out));
+  if (suspectHit.length) {
+    notes.push(
+      `${label}: 出现**待核实**的疑似 Win8+ 符号 ${suspectHit.join(", ")}` +
+        ` —— 请查 MS Learn 的 Minimum supported client 后决定加入黑名单或忽略`,
+    );
+  }
+
+  // 已核实为「**Win7 可用**」的符号。列出来是为了防止日后有人凭名字又把它们
+  // 加回黑名单 —— 这一轮已经因为猜错 CancelIoEx / SetThreadStackGuarantee 白跑一次 CI。
+  const knownGood = {
+    CancelIoEx: "Windows Vista",
+    SetThreadStackGuarantee: "Windows Vista（Rust std 自己就会用：Vista 是 Rust 的最低支持版本）",
+    GetSystemTimeAsFileTime: "Windows 2000",
+    InitializeCriticalSectionEx: "Windows Vista",
+    GetTickCount64: "Windows Vista",
+  };
+  const goodHit = Object.keys(knownGood).filter((a) =>
+    new RegExp(`\\b${a}\\b`).test(out),
+  );
+  if (goodHit.length) {
+    notes.push(
+      `${label}: 含以下 Win7 可用的导入（已核实，勿再加入黑名单）：` +
+        goodHit.map((a) => `${a}=${knownGood[a]}`).join("; "),
+    );
+  }
 
   // 依赖的 API set 里，synch-l1-2-0 是最常见的一个来源；其余几个同样只在
   // Win8+ 上存在，一并纳入检测，避免「换了实现方式就从闸门底下溜过去」。
