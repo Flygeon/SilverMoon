@@ -25,7 +25,14 @@ export const DEFAULT_EQ_BANDS: EqBand[] = [
   { frequency: 16000, gain: 0 },
 ];
 
-const EQ_Q = 1;
+/**
+ * 10 段 EQ 的滤波器 Q。
+ *
+ * 频点 31…16000 是**严格一个倍频程**一个。相邻 peaking 滤波器在 1 倍频程间距下，
+ * 要让各段交叠处的合成响应尽量平坦，Q 应取 √2 ≈ 1.414；此前取 1 会让每段更窄，
+ * 段与段之间出现波纹（听感上是某些频段「塌下去」）。
+ */
+const EQ_Q = Math.SQRT2;
 const REVERB_SECONDS = 1.8;
 const REVERB_DECAY = 3;
 
@@ -90,7 +97,24 @@ export class AudioEffectEngine {
     primaryGain.connect(input);
     input.connect(bypass);
     bypass.connect(output);
-    output.connect(ctx.destination);
+
+    /**
+     * 末端限幅器。
+     *
+     * 整条链路此前**没有任何限幅**，而有三个环节都在抬高峰值：
+     * EQ 各段提升、低音增强、以及立体声加宽（100% 时增益矩阵是
+     * [[1.5, -0.5], [-0.5, 1.5]]，单侧峰值可达 1.5×）。
+     * 三者叠加越 0 dBFS 就是硬削波，表现为破音。这里用低阈值 + 高比例兜底，
+     * 正常电平下几乎不介入（knee = 0，阈值 -1.5 dBFS）。
+     */
+    const limiter = ctx.createDynamicsCompressor();
+    limiter.threshold.value = -1.5;
+    limiter.knee.value = 0;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.003;
+    limiter.release.value = 0.1;
+    output.connect(limiter);
+    limiter.connect(ctx.destination);
 
     // EQ 链
     let prev: AudioNode = input;
@@ -110,6 +134,15 @@ export class AudioEffectEngine {
       this.eqFilters.push(filter);
     }
 
+    /**
+     * 低音增强：独立的 120 Hz low shelf。
+     *
+     * 注意这里与 EQ 的第 0 段（31 Hz，同为 `lowshelf`）**是两级串联的 shelf**，
+     * 所以「低音增强」和「31 Hz 滑块」在低频上会相互叠加。
+     * 之所以保留这个拓扑：两者语义确实不同（一个是用户滑块、一个是快捷增强），
+     * 且 bassBoost 默认 0；改成单一 shelf 会静默改变已有用户预设的听感。
+     * 真要收敛，应作为一次带听感评估的独立改动，而不是顺手重构。
+     */
     const bass = ctx.createBiquadFilter();
     bass.type = "lowshelf";
     bass.frequency.value = 120;
@@ -219,10 +252,15 @@ export class AudioEffectEngine {
     // 低音增强
     this.bassFilter?.gain.setTargetAtTime(config.bassBoost, this.ctx.currentTime, 0.03);
 
-    // 混响干湿比
+    // 混响干湿比（等功率交叉淡化）
+    //
+    // 此前是线性 `dry = 1-r, wet = r`。干湿两路在 `sum` 上是**相加**的，线性律在
+    // 中点会让总能量抬起来（各 0.5），听感就是「混响开到一半声音反而变大、发糊」。
+    // 等功率律保证 dry² + wet² = 1：一路降一路升，总功率恒定。
     const reverb = Math.max(0, Math.min(100, config.reverb));
-    const dryValue = 1 - reverb / 100;
-    const wetValue = reverb / 100;
+    const theta = (reverb / 100) * (Math.PI / 2);
+    const dryValue = Math.cos(theta);
+    const wetValue = Math.sin(theta);
     this.dryGain?.gain.setTargetAtTime(dryValue, this.ctx.currentTime, 0.03);
     this.wetGain?.gain.setTargetAtTime(wetValue, this.ctx.currentTime, 0.03);
 
