@@ -180,7 +180,12 @@ jobs:
             label: windows
             package-args: --win nsis
             artifact-name: windows-build
-            artifact-path: apps/desktop/release/*.exe
+            # latest*.yml / *.blockmap 是自动更新的元数据（版本判断 + 差分下载），
+            # 必须和安装包一起进 artifact，否则 release job 拿不到、自动更新直接失效。
+            artifact-path: |
+              apps/desktop/release/*.exe
+              apps/desktop/release/latest*.yml
+              apps/desktop/release/*.blockmap
             # @electron/get 的下载缓存与 electron-builder 的 nsis/appimage 工具链缓存
             # 不在 npm 缓存范围内，单独缓存后打包步骤能省下大量下载时间
             cache-paths: |
@@ -190,7 +195,10 @@ jobs:
             label: linux
             package-args: --linux AppImage
             artifact-name: linux-build
-            artifact-path: apps/desktop/release/*.AppImage
+            artifact-path: |
+              apps/desktop/release/*.AppImage
+              apps/desktop/release/latest*.yml
+              apps/desktop/release/*.blockmap
             cache-paths: |
               ~/.cache/electron
               ~/.cache/electron-builder
@@ -274,7 +282,10 @@ jobs:
         run: npm run build:renderer && npm run build:main
 
       - name: Package
-        run: npx electron-builder ${{ matrix.package-args }} --publish never
+        # 用 --publish always 而不是 never：electron-builder 只有在「会发布」时
+        # 才生成 latest*.yml 与 *.blockmap。never 的话安装包能出、但更新元数据
+        # 不会生成，自动更新会报 Cannot find latest.yml。
+        run: npx electron-builder ${{ matrix.package-args }} --publish always
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
@@ -298,30 +309,62 @@ jobs:
           merge-multiple: true
 
       - name: Verify update metadata present
-        # 自动更新（electron-updater）靠 latest.yml 判断"有没有新版"、
-        # 靠 .blockmap 做差分下载。少了这两个文件，更新器会直接报
-        # "Cannot find latest.yml"——所以在发版前硬校验，别等用户反馈才发现。
+        # 自动更新（electron-updater）靠 latest*.yml 判断有没有新版、
+        # 靠 *.blockmap 做差分下载。少了这些文件，更新器会直接报
+        # Cannot find latest.yml —— 所以在发版前硬校验，别等用户反馈才发现。
+        # （0.1.0 首次发版就被这条校验拦下过一次：--publish never 时
+        #   electron-builder 根本不生成这两个文件。）
         run: |
           set -euo pipefail
-          ls -l release-assets/ || true
-          for f in latest.yml latest-linux.yml; do
-            if ls release-assets/**/"$f" >/dev/null 2>&1 || [ -f "release-assets/$f" ]; then
-              echo "found $f"
-            else
-              echo "::error::missing $f — 自动更新将不可用"
-              exit 1
-            fi
-          done
-          find release-assets -name '*.blockmap' | head -5
-
+          find release-assets -maxdepth 3 -type f | sort
+          echo '--- update metadata ---'
+          find release-assets -type f \( -name 'latest*.yml' -o -name '*.blockmap' \) | sort
+          if ! find release-assets -type f -name 'latest*.yml' | grep -q .; then
+            echo '::error::missing latest*.yml — 自动更新不可用（确认打包用了 --publish always）'
+            exit 1
+          fi
+          if ! find release-assets -type f -name '*.blockmap' | grep -q .; then
+            echo '::error::missing *.blockmap — 差分下载不可用'
+            exit 1
+          fi
+          echo 'update metadata OK'
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          # 必须把 latest*.yml 与 *.blockmap 一起传上去，否则自动更新拿不到元数据
+          # 打包作业已用 --publish always 建好 Release 并上传安装包；
+          # 这里补齐元数据（softprops 在 Release 已存在时会继续追加资产）。
           files: |
             release-assets/**/*.exe
             release-assets/**/*.AppImage
             release-assets/**/*.blockmap
             release-assets/**/latest*.yml
             release-assets/latest*.yml
+      - name: Ensure release is published (not draft / not prerelease)
+        # electron-updater 的 GitHub provider 会**跳过** draft 与 prerelease，
+        # Release 必须以正式状态存在，否则客户端永远看不到更新。
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          json=''
+          for i in $(seq 1 10); do
+            json=$(gh release view ${{ github.ref_name }} --json isDraft,isPrerelease 2>/dev/null || true)
+            [ -n "$json" ] && break
+            sleep 6
+          done
+          echo "$json"
+          if [ -z "$json" ]; then
+            echo '::error::Release 不存在'
+            exit 1
+          fi
+          if echo "$json" | grep -q '"isDraft":true'; then
+            echo '::error::Release 仍是 draft，自动更新看不到'
+            exit 1
+          fi
+          if echo "$json" | grep -q '"isPrerelease":true'; then
+            echo '::error::Release 是 prerelease，自动更新看不到'
+            exit 1
+          fi
+          echo 'release published OK'
+
