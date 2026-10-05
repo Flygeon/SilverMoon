@@ -16,7 +16,7 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Map, Value};
@@ -105,13 +105,147 @@ fn spawn_stdin_watchdog() {
 
 fn authorized(headers: &HeaderMap, token: &str) -> bool {
     if token.is_empty() {
-        return true; // 未配置令牌（独立调试模式）
+        // 未配置令牌：默认**拒绝**。
+        //
+        // 这里此前是 `return true`（"独立调试模式"）。但令牌由宿主用 randomBytes(24)
+        // 生成后经环境变量传入，**正常运行永远非空**；空令牌只可能出现在「有人手动
+        // 直接起后端」的场景。原来的写法意味着：只要 SILVERMOON_TOKEN 缺失或被清空，
+        // 本机任意进程（含被 DNS rebinding 的网页）都能无凭据调用全部命令。
+        // 独立调试后端时显式设 SILVERMOON_ALLOW_NO_TOKEN=1 才放行。
+        return std::env::var("SILVERMOON_ALLOW_NO_TOKEN").is_ok_and(|v| v == "1");
     }
     headers
         .get("x-silvermoon-token")
         .and_then(|v| v.to_str().ok())
         .map(|v| v == token)
         .unwrap_or(false)
+}
+
+/// Host 必须是环回地址。
+///
+/// 服务只绑 `127.0.0.1`，但这挡不住 **DNS rebinding**：攻击者把自己的域名解析到
+/// 127.0.0.1，浏览器发出的请求就带上了攻击者控制的 `Host`。只认环回字面量即可挡住。
+fn host_is_loopback(headers: &HeaderMap) -> bool {
+    let Some(raw) = headers.get("host").and_then(|v| v.to_str().ok()) else {
+        return false;
+    };
+    let host = raw.trim();
+    // 去掉端口：`127.0.0.1:1234` / `[::1]:1234`
+    let name = if let Some(rest) = host.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host)
+    };
+    matches!(name, "127.0.0.1" | "localhost" | "::1")
+}
+
+/// Origin 检查。
+///
+/// 主进程用 Node 的 `fetch` 调用本服务，**不带 Origin** → 放行；
+/// 浏览器发起的请求一定带 Origin，只认自家前端的两个来源（打包态 `app://`，
+/// 开发态 Vite）。这样即使 token 泄漏，网页也无法直接驱动后端。
+fn origin_is_trusted(headers: &HeaderMap) -> bool {
+    let Some(raw) = headers.get("origin").and_then(|v| v.to_str().ok()) else {
+        return true;
+    };
+    let origin = raw.trim().to_ascii_lowercase();
+    // 打包态 app://，开发态 Vite（localhost 与 127.0.0.1 两种写法）
+    origin == "app://silvermoon"
+        || origin == "http://localhost:1420"
+        || origin == "http://127.0.0.1:1420"
+}
+
+/// 统一的请求守卫：Host → Origin → 令牌，逐项给出拒绝原因。
+fn deny_reason(headers: &HeaderMap, token: &str) -> Option<&'static str> {
+    if !host_is_loopback(headers) {
+        Some("Host 非环回地址")
+    } else if !origin_is_trusted(headers) {
+        Some("Origin 不受信任")
+    } else if !authorized(headers, token) {
+        Some("令牌无效")
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    fn headers(pairs: &[(&'static str, &'static str)]) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        for (k, v) in pairs {
+            map.insert(*k, HeaderValue::from_static(v));
+        }
+        map
+    }
+
+    #[test]
+    fn host_accepts_loopback_forms() {
+        for host in ["127.0.0.1", "127.0.0.1:51234", "localhost:9", "[::1]:9"] {
+            let mut map = HeaderMap::new();
+            map.insert("host", HeaderValue::from_static(host));
+            assert!(host_is_loopback(&map), "应接受环回 Host：{host}");
+        }
+    }
+
+    #[test]
+    fn host_rejects_rebinding_and_missing() {
+        // 攻击者域名解析到 127.0.0.1 → Host 仍是攻击者域名，必须拒绝
+        assert!(!host_is_loopback(&headers(&[("host", "evil.example.com")])));
+        assert!(!host_is_loopback(&headers(&[("host", "evil.example.com:80")])));
+        // 完全没有 Host 头
+        assert!(!host_is_loopback(&headers(&[])));
+    }
+
+    #[test]
+    fn origin_allows_node_client_and_own_frontend() {
+        // 主进程 fetch 不带 Origin
+        assert!(origin_is_trusted(&headers(&[])));
+        assert!(origin_is_trusted(&headers(&[("origin", "app://silvermoon")])));
+        assert!(origin_is_trusted(&headers(&[("origin", "http://localhost:1420")])));
+        assert!(origin_is_trusted(&headers(&[("origin", "APP://SilverMoon")])));
+        // 网页来源必须拒绝
+        assert!(!origin_is_trusted(&headers(&[("origin", "https://evil.example.com")])));
+    }
+
+    #[test]
+    fn empty_token_is_rejected_by_default() {
+        // 没有 SILVERMOON_TOKEN 时不得放行（除非显式 opt-in，测试内不设该变量）
+        assert!(!authorized(&headers(&[]), ""));
+    }
+
+    #[test]
+    fn token_mismatch_is_rejected() {
+        assert!(!authorized(&headers(&[("x-silvermoon-token", "nope")]), "secret"));
+        assert!(authorized(&headers(&[("x-silvermoon-token", "secret")]), "secret"));
+    }
+
+    #[test]
+    fn deny_reason_reports_first_failing_check() {
+        let token = "secret";
+
+        // Host 先失败
+        let bad_host = headers(&[("host", "evil.example.com")]);
+        assert_eq!(deny_reason(&bad_host, token), Some("Host 非环回地址"));
+
+        // Host 通过、Origin 失败
+        let origin_pairs = [
+            ("host", "127.0.0.1:1"),
+            ("origin", "https://evil.example.com"),
+        ];
+        let bad_origin = headers(&origin_pairs);
+        assert_eq!(deny_reason(&bad_origin, token), Some("Origin 不受信任"));
+
+        // Host/Origin 通过、令牌失败
+        let no_token = headers(&[("host", "127.0.0.1:1")]);
+        assert_eq!(deny_reason(&no_token, token), Some("令牌无效"));
+
+        // 全部通过
+        let ok = headers(&[("host", "127.0.0.1:1"), ("x-silvermoon-token", "secret")]);
+        assert_eq!(deny_reason(&ok, token), None);
+    }
 }
 
 async fn health() -> impl IntoResponse {
@@ -127,10 +261,10 @@ async fn handle_command(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if let Some(reason) = deny_reason(&headers, &state.token) {
         return (
             StatusCode::UNAUTHORIZED,
-            Json(json!({ "ok": false, "error": "令牌无效" })),
+            Json(json!({ "ok": false, "error": reason })),
         );
     }
 
@@ -180,10 +314,10 @@ async fn handle_batch(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if let Some(reason) = deny_reason(&headers, &state.token) {
         return (
             StatusCode::UNAUTHORIZED,
-            Json(json!({ "ok": false, "error": "令牌无效" })),
+            Json(json!({ "ok": false, "error": reason })),
         );
     }
 
@@ -230,9 +364,13 @@ async fn handle_batch(
 // GET /events
 // ---------------------------------------------------------------------------
 
-async fn handle_events(
-    State(state): State<ServerState>,
-) -> Sse<impl tokio_stream::Stream<Item = std::result::Result<Event, Infallible>>> {
+async fn handle_events(State(state): State<ServerState>, headers: HeaderMap) -> Response {
+    // 守卫放在最前：SSE 是长连接，一旦建立就会持续泄漏事件，必须先拦。
+    if let Some(reason) = deny_reason(&headers, &state.token) {
+        let denied = Json(json!({ "ok": false, "error": reason }));
+        return (StatusCode::UNAUTHORIZED, denied).into_response();
+    }
+
     let rx = state.inner.subscribe();
     let stream = BroadcastStream::new(rx).filter_map(|item| match item {
         // 显式标注错误类型：否则 `None` 分支无从定型，`Sse` 推断不出 `Infallible`
@@ -240,7 +378,9 @@ async fn handle_events(
         // 落后于环形缓冲时只丢帧，不中断连接
         Err(_) => None,
     });
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -252,10 +392,10 @@ async fn handle_host_callback(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if let Some(reason) = deny_reason(&headers, &state.token) {
         return (
             StatusCode::UNAUTHORIZED,
-            Json(json!({ "ok": false, "error": "令牌无效" })),
+            Json(json!({ "ok": false, "error": reason })),
         );
     }
 
