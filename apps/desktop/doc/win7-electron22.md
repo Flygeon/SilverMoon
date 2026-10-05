@@ -457,7 +457,7 @@ Electron 在侧车 `exit` 事件里自动：
 
 1. 装上带诊断的构建，**双击快捷方式**，等它崩（或正常起来）；
 2. 打开**安装目录**（安装时若改过路径，就是那个目录），找
-   `silvermoon-splash.log` 与 `silvermoon-backend.log`；
+   `silvermoon-boot-splash.log` 与 `silvermoon-boot-backend.log`；
    找不到就去 `%TEMP%`（在地址栏直接粘 `%TEMP%` 回车即可）；
    或者看 `<数据目录>\logs\boot-diagnostics.txt`（应用崩溃弹窗里给了完整路径）；
 3. 把日志**最后 20 行**发回来即可 —— 最后一行 `STEP` 就是崩溃区间下界。
