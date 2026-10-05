@@ -12,9 +12,28 @@
  *   （mousedown 已覆盖空白处右键关闭）。
  */
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { closeContextMenu, useContextMenu } from "@/composables/useContextMenu";
+import { closeContextMenu, useContextMenu, type MenuItem } from "@/composables/useContextMenu";
 
 const menu = useContextMenu();
+
+/**
+ * 子菜单的 DOM id。
+ *
+ * 每次打开菜单都重新生成一批，避免「上一次打开的菜单还没卸载、新菜单 id 撞车」
+ * 导致 m3e-menu-trigger 连到旧节点上。
+ */
+let menuSeq = 0;
+const submenuIds = new WeakMap<MenuItem, string>();
+
+function submenuId(item: MenuItem): string {
+  let id = submenuIds.get(item);
+  if (!id) {
+    id = `ctx-sub-${++menuSeq}`;
+    submenuIds.set(item, id);
+  }
+  return id;
+}
+
 const menuRef = ref<HTMLElement | null>(null);
 const anchorRef = ref<HTMLDivElement | null>(null);
 
@@ -88,19 +107,49 @@ onBeforeUnmount(() => {
     <div ref="anchorRef" class="ctx-anchor"></div>
 
     <m3e-menu ref="menuRef" class="ctx-menu">
-      <m3e-menu-item
-        v-for="item in menu.items"
-        :key="item.id"
-        class="ctx-item"
-        :class="{ danger: item.danger }"
-        :disabled="item.disabled"
-        @click="select(item.id)"
-      >
-        <span v-if="item.icon" slot="icon" class="material-symbols-outlined ctx-icon">{{
-          item.icon
-        }}</span>
-        {{ item.label }}
-      </m3e-menu-item>
+      <template v-for="item in menu.items" :key="item.id">
+        <!-- 有子项：父项本身不可点，靠嵌套的 m3e-menu-trigger 展开子菜单 -->
+        <m3e-menu-item v-if="item.children?.length" :class="{ danger: item.danger }">
+          <m3e-menu-trigger :for="submenuId(item)">{{ item.label }}</m3e-menu-trigger>
+          <span v-if="item.icon" slot="icon" class="material-symbols-outlined ctx-icon">{{
+            item.icon
+          }}</span>
+          <!--
+            子菜单的 m3e-menu 必须与自己的 trigger 配对（for 指向唯一 id）。
+            放在 item 内部即可，组件会把它渲染成浮层。
+          -->
+          <m3e-menu :id="submenuId(item)" submenu>
+            <m3e-menu-item
+              v-for="child in item.children"
+              :key="child.id"
+              class="ctx-item"
+              :class="{ danger: child.danger }"
+              :disabled="child.disabled"
+              @click="select(child.id)"
+            >
+              <span v-if="child.icon" slot="icon" class="material-symbols-outlined ctx-icon">{{
+                child.icon
+              }}</span>
+              {{ child.label }}
+            </m3e-menu-item>
+          </m3e-menu>
+        </m3e-menu-item>
+
+        <!-- 普通项 -->
+        <m3e-menu-item
+          v-else
+          :key="item.id"
+          class="ctx-item"
+          :class="{ danger: item.danger }"
+          :disabled="item.disabled"
+          @click="select(item.id)"
+        >
+          <span v-if="item.icon" slot="icon" class="material-symbols-outlined ctx-icon">{{
+            item.icon
+          }}</span>
+          {{ item.label }}
+        </m3e-menu-item>
+      </template>
     </m3e-menu>
   </Teleport>
 </template>

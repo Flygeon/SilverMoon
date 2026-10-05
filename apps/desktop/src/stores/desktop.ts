@@ -115,14 +115,20 @@ export const useDesktopStore = defineStore("desktop", () => {
     }
   }
 
-  /** 设为系统壁纸。返回是否成功；失败时错误信息写进 `lastError`。 */
+  /**
+   * 设为系统壁纸。返回是否成功。
+   *
+   * 失败原因分两类，调用方据此决定提示文案：
+   * - 平台不支持 → `lastError` 保持 null（这是**正常状态**，不是错误），返回 false；
+   * - 后端报错 → `lastError` 写后端原始信息（已是人话，直接展示即可）。
+   */
   async function setWallpaper(
     path: string,
     mode: WallpaperMode = "fill",
     dark = false,
   ): Promise<boolean> {
     if (!canWallpaper.value) {
-      lastError.value = "当前平台不支持设置壁纸";
+      lastError.value = null;
       return false;
     }
     try {

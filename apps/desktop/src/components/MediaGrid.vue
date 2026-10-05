@@ -11,12 +11,13 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useLibraryStore } from "@/stores/library";
 import { useSettingsStore } from "@/stores/settings";
+import { useDesktopStore } from "@/stores/desktop";
 import { capabilities } from "@/capabilities";
 import { openContextMenu, type MenuItem } from "@/composables/useContextMenu";
 import { localTagTarget, openMusicTagDialog } from "@/composables/useMusicTagDialog";
 import { TYPE_ICONS, formatDuration, formatResolution, formatSize } from "@/utils/format";
 import { translate } from "@shared/i18n";
-import type { MediaEntry } from "@shared/types";
+import type { MediaEntry, WallpaperMode } from "@shared/types";
 
 const props = withDefaults(
   defineProps<{
@@ -46,6 +47,17 @@ const emit = defineEmits<{
 
 const library = useLibraryStore();
 const settings = useSettingsStore();
+const desktopEnv = useDesktopStore();
+
+/** 页内提示（壁纸设置成功 / 失败），与音乐页同样式的轻量 toast */
+const toast = ref("");
+let toastTimer: number | null = null;
+
+function flash(message: string) {
+  toast.value = message;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => (toast.value = ""), 2600);
+}
 
 function t(key: string) {
   return translate(settings.lang, key);
@@ -54,9 +66,12 @@ function t(key: string) {
 /**
  * 右键卡片菜单。
  *
- * 网格是所有媒体类型共用的，因此菜单按类型给：音频多一个「写音乐标签」——
- * 本地音乐的网格视图此前没有任何写标签入口（列表视图 TrackList 有），
- * 用户右键本地歌曲找不到那个选项，就是这个缺口。
+ * 网格是所有媒体类型共用的，因此菜单按类型给：
+ * - 音频多一个「写音乐标签」——本地音乐的网格视图此前没有任何写标签入口
+ *   （列表视图 TrackList 有），用户右键本地歌曲找不到那个选项，就是这个缺口。
+ * - 图片多一个「设为壁纸」二级菜单（UDA）。四种填充模式做成子项而不是
+ *   「点了再弹选择框」，是因为这个操作天然是「选一种模式」，
+ *   做成子菜单一步到位，也不打断右键菜单的交互节奏。
  */
 function onContextMenu(e: MouseEvent, item: MediaEntry) {
   const items: MenuItem[] = [
@@ -67,10 +82,49 @@ function onContextMenu(e: MouseEvent, item: MediaEntry) {
   if (item.type === "audio" && !item.deleted) {
     items.push({ id: "write-tags", label: t("musicTag.menu"), icon: "sell" });
   }
+  // 只给**在位**的图片：壁纸后端要读真实文件，回收站条目可能已被删。
+  // 平台不支持时（capabilities.canWallpaper 为 false）连菜单都不出现，
+  // 而不是点了才报错。
+  if (item.type === "image" && !item.deleted && desktopEnv.canWallpaper) {
+    items.push({
+      id: "wallpaper",
+      label: t("context.setAsWallpaper"),
+      icon: "wallpaper",
+      children: (
+        [
+          ["crop", "context.wallpaperCrop"],
+          ["fill", "context.wallpaperFill"],
+          ["fit", "context.wallpaperFit"],
+          ["stretch", "context.wallpaperStretch"],
+        ] as const
+      ).map(([mode, key]) => ({
+        id: `wallpaper:${mode}`,
+        label: t(key),
+      })),
+    });
+  }
   openContextMenu(e, items, (id) => {
     if (id === "reveal") void capabilities.revealInExplorer(item.path);
     else if (id === "write-tags") openMusicTagDialog(localTagTarget(item));
+    else if (id.startsWith("wallpaper:")) {
+      void applyWallpaper(item, id.slice("wallpaper:".length) as WallpaperMode);
+    }
   });
+}
+
+/** 应用壁纸并给出反馈：平台不支持时静默吞掉，后端报错才提示 */
+async function applyWallpaper(item: MediaEntry, mode: WallpaperMode) {
+  const ok = await desktopEnv.setWallpaper(item.path, mode);
+  if (ok) {
+    flash(t("context.wallpaperApplied"));
+    return;
+  }
+  // lastError 为空 = 平台不支持（正常状态，不打扰用户）；
+  // 有值 = 后端报错，原文已是人话，直接拼上展示。
+  const reason = desktopEnv.lastError;
+  if (reason) {
+    flash(`${t("context.wallpaperFailed")}：${reason}`);
+  }
 }
 
 const GAP_X = 16;
@@ -175,6 +229,7 @@ onMounted(attach);
 onBeforeUnmount(() => {
   detach();
   if (thumbTimer !== null) clearTimeout(thumbTimer);
+  if (toastTimer !== null) clearTimeout(toastTimer);
 });
 
 // 换类型/重新搜索后回到顶部，否则会停在旧的滚动位置看到空白
@@ -217,82 +272,115 @@ function subtitleOf(item: MediaEntry): string {
 </script>
 
 <template>
-  <!-- 骨架屏：加载中用普通网格，数量固定不需要虚拟化 -->
-  <div
-    v-if="loading"
-    class="skeleton-grid"
-    :style="{ gridTemplateColumns: `repeat(auto-fill, minmax(${minWidth}px, 1fr))` }"
-  >
-    <div v-for="n in skeletonCount" :key="n" class="cell">
-      <div class="thumb lm-skeleton" :style="{ aspectRatio: aspect }"></div>
-      <div class="meta">
-        <div class="lm-skeleton line"></div>
-        <div class="lm-skeleton line short"></div>
+  <div class="grid-host">
+    <!-- 骨架屏：加载中用普通网格，数量固定不需要虚拟化 -->
+    <div
+      v-if="loading"
+      class="skeleton-grid"
+      :style="{ gridTemplateColumns: `repeat(auto-fill, minmax(${minWidth}px, 1fr))` }"
+    >
+      <div v-for="n in skeletonCount" :key="n" class="cell">
+        <div class="thumb lm-skeleton" :style="{ aspectRatio: aspect }"></div>
+        <div class="meta">
+          <div class="lm-skeleton line"></div>
+          <div class="lm-skeleton line short"></div>
+        </div>
       </div>
     </div>
-  </div>
 
-  <div v-else ref="scroller" class="virtual-root" :style="{ height: totalH + 'px' }">
-    <div
-      class="layer"
-      :class="{ 'is-refreshing': library.refreshing }"
-      :style="{ transform: `translateY(${offsetY}px)` }"
-    >
-      <article
-        v-for="v in visible"
-        :key="v.item.id"
-        class="cell"
-        :style="cellStyle(v.index)"
-        tabindex="0"
-        @click="emit('open', v.item, v.index)"
-        @contextmenu="onContextMenu($event, v.item)"
-        @keydown.enter="emit('open', v.item, v.index)"
-        @keydown.space.prevent="emit('open', v.item, v.index)"
+    <div v-else ref="scroller" class="virtual-root" :style="{ height: totalH + 'px' }">
+      <div
+        class="layer"
+        :class="{ 'is-refreshing': library.refreshing }"
+        :style="{ transform: `translateY(${offsetY}px)` }"
       >
-        <div class="thumb" :style="{ aspectRatio: aspect }">
-          <img
-            v-if="thumbOf(v.item)"
-            :src="thumbOf(v.item)"
-            :alt="v.item.name"
-            loading="lazy"
-            decoding="async"
-          />
-          <span v-else class="placeholder material-symbols-outlined">
-            {{ TYPE_ICONS[v.item.type] ?? "draft" }}
-          </span>
+        <article
+          v-for="v in visible"
+          :key="v.item.id"
+          class="cell"
+          :style="cellStyle(v.index)"
+          tabindex="0"
+          @click="emit('open', v.item, v.index)"
+          @contextmenu="onContextMenu($event, v.item)"
+          @keydown.enter="emit('open', v.item, v.index)"
+          @keydown.space.prevent="emit('open', v.item, v.index)"
+        >
+          <div class="thumb" :style="{ aspectRatio: aspect }">
+            <img
+              v-if="thumbOf(v.item)"
+              :src="thumbOf(v.item)"
+              :alt="v.item.name"
+              loading="lazy"
+              decoding="async"
+            />
+            <span v-else class="placeholder material-symbols-outlined">
+              {{ TYPE_ICONS[v.item.type] ?? "draft" }}
+            </span>
 
-          <span v-if="v.item.durationMs" class="badge tabular-nums">
-            {{ formatDuration(v.item.durationMs) }}
-          </span>
+            <span v-if="v.item.durationMs" class="badge tabular-nums">
+              {{ formatDuration(v.item.durationMs) }}
+            </span>
 
-          <div class="overlay" :class="{ pinned: v.item.favorite }">
-            <button
-              class="fav"
-              :class="{ on: v.item.favorite }"
-              :title="v.item.favorite ? '取消收藏' : '收藏'"
-              @click.stop="emit('favorite', v.item)"
-            >
-              <span class="material-symbols-outlined" :class="{ filled: v.item.favorite }"
-                >favorite</span
+            <div class="overlay" :class="{ pinned: v.item.favorite }">
+              <button
+                class="fav"
+                :class="{ on: v.item.favorite }"
+                :title="v.item.favorite ? '取消收藏' : '收藏'"
+                @click.stop="emit('favorite', v.item)"
               >
-            </button>
+                <span class="material-symbols-outlined" :class="{ filled: v.item.favorite }"
+                  >favorite</span
+                >
+              </button>
+            </div>
           </div>
-        </div>
 
-        <div class="meta">
-          <div class="title" :title="v.item.name">
-            {{ v.item.title || v.item.name }}
+          <div class="meta">
+            <div class="title" :title="v.item.name">
+              {{ v.item.title || v.item.name }}
+            </div>
+            <div v-if="subtitle !== 'none'" class="subtitle">
+              {{ subtitleOf(v.item) }}
+            </div>
           </div>
-          <div v-if="subtitle !== 'none'" class="subtitle">
-            {{ subtitleOf(v.item) }}
-          </div>
-        </div>
-      </article>
+        </article>
+      </div>
     </div>
+
+    <!-- 壁纸设置等操作的轻量回执；系统通知看不到时才靠它兜底 -->
+    <div v-if="toast" class="grid-toast">{{ toast }}</div>
   </div>
 </template>
 
 <style scoped>
+.grid-host {
+  position: relative;
+  display: contents;
+}
+/*
+ * 轻量回执：贴在网格底部居中。
+ * 用 fixed 而不是 absolute —— 网格本体是虚拟滚动的，
+ * absolute 会随滚动卷走，用户点完壁纸可能看不到这条提示。
+ */
+.grid-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 40;
+  max-width: min(70vw, 520px);
+  padding: 10px 18px;
+  border-radius: var(--md-sys-shape-corner-full, 999px);
+  background: var(--md-sys-color-inverse-surface);
+  color: var(--md-sys-color-inverse-on-surface);
+  font-size: var(--md-sys-typescale-body-medium-size);
+  box-shadow: var(--md-sys-elevation-level3, 0 4px 12px rgb(0 0 0 / 30%));
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .virtual-root {
   position: relative;
   width: 100%;

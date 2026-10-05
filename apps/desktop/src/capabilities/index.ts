@@ -962,6 +962,74 @@ export const capabilities = {
     const bytes = new Uint8Array(await res.arrayBuffer());
     await writeFile(dest, bytes);
   },
+
+  /**
+   * 下载并上报进度。
+   *
+   * 与 `downloadTo` 的区别只有一点：**读响应体的方式**。
+   * `downloadTo` 用 `arrayBuffer()` 一次性读完，拿不到中间态；
+   * 这里改用 `body.getReader()` 逐块读、边读边累加，从而能算出已下载字节数。
+   *
+   * 只在两种情况下回调 `onProgress`：
+   * - 服务器给了 `Content-Length` → 回调 `0..1` 的真实比例；
+   * - 没给（chunked / 直播流）→ 回调 `null`。此时调用方应展示「不确定进度」
+   *   而不是硬编一个百分比——那只会是假的。
+   *
+   * 注意：进度回调是**按网络到达节奏**来的，很密集（每秒可能几十次）。
+   * 调用方自己负责节流，别在回调里直接改 DOM。
+   *
+   * @returns 实际写入的字节数
+   */
+  async downloadWithProgress(
+    url: string,
+    dest: string,
+    onProgress?: (ratio: number | null, loaded: number, total: number | null) => void,
+  ): Promise<number> {
+    if (!isDesktop) return 0;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`下载失败 (HTTP ${res.status})`);
+
+    // Content-Length 缺失或非法（0 / NaN）时按「总量未知」处理
+    const lenHeader = res.headers.get("content-length");
+    const parsed = lenHeader ? Number.parseInt(lenHeader, 10) : Number.NaN;
+    const total = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+
+    onProgress?.(total === null ? null : 0, 0, total);
+
+    const body = res.body;
+    // 没有流式 body（极老的宿主或已被消费）时退回一次性读，进度只能给 0 → 1
+    if (!body) {
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      await writeFile(dest, bytes);
+      onProgress?.(1, bytes.byteLength, bytes.byteLength);
+      return bytes.byteLength;
+    }
+
+    const reader = body.getReader();
+    const chunks: Uint8Array[] = [];
+    let loaded = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      chunks.push(value);
+      loaded += value.byteLength;
+      onProgress?.(total === null ? null : Math.min(loaded / total, 1), loaded, total);
+    }
+
+    // 拼成一块再交给 writeFile：桥通道一次传一整块，
+    // 分多次 writeFile 会反复打开文件句柄且无法保证原子性。
+    const merged = new Uint8Array(loaded);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    await writeFile(dest, merged);
+    // 实际收到的可能和 Content-Length 对不上（连接被截断等），收尾统一广播 1
+    onProgress?.(1, loaded, total ?? loaded);
+    return loaded;
+  },
   /** 打开开发者工具 */
   openDevtools(): Promise<void> {
     return safeInvoke("open_devtools");

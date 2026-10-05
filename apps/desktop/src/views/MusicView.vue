@@ -14,6 +14,7 @@ import SegmentedTabs from "@/components/SegmentedTabs.vue";
 import { useLibraryStore } from "@/stores/library";
 import { usePlayerStore } from "@/stores/player";
 import { useSettingsStore } from "@/stores/settings";
+import { useDesktopStore } from "@/stores/desktop";
 import { useNeteaseStore } from "@/stores/netease";
 import { useKugouStore } from "@/stores/kugou";
 import { capabilities } from "@/capabilities";
@@ -44,6 +45,22 @@ const hasScanDirs = computed(() => settings.scanDirs.length > 0);
 const error = ref("");
 const toast = ref("");
 let toastTimer: number | null = null;
+
+/**
+ * 当前下载任务。
+ *
+ * 只维护**一个**：下载是用户逐个右键发起的，并发多任务既没有 UI 承载，
+ * 也会让「进度条该显示谁的进度」变得没法回答。新的下载会顶掉旧的显示
+ * （但旧的那次下载不会被取消 —— 见 downloadAudio 的注释）。
+ */
+const download = reactive<{
+  active: boolean;
+  name: string;
+  /** 0..1；`null` 表示服务器没给 Content-Length，进度不可知 */
+  ratio: number | null;
+  loaded: number;
+  total: number | null;
+}>({ active: false, name: "", ratio: null, loaded: 0, total: null });
 
 function t(key: string) {
   return translate(settings.lang, key);
@@ -483,14 +500,55 @@ function onSongContext(e: MouseEvent, song: OnlineSong) {
   );
 }
 
+/**
+ * 下载音频到本地。
+ *
+ * 反馈分三层，各司其职：
+ * - **进行中**：页内进度条（`download`）。用页内而不是系统通知，是因为
+ *   Windows 的 toast 无法原地更新 —— 想表达进度只能反复发新通知，
+ *   通知中心会被几十条「45% / 46% / 47%」撑爆。
+ * - **结束**：系统通知（UDA）。这时候用户可能已经切走了，页内提示看不见，
+ *   正需要系统通知来兜。
+ * - **同时**保留页内 toast，作为系统通知不可用（平台不支持 / 用户关了通知 /
+ *   Windows 缺 AUMID 权限）时的兜底。
+ */
 async function downloadAudio(song: OnlineSong) {
   const path = await capabilities.pickSavePath(`${song.name} - ${song.artist}.mp3`);
   if (!path) return;
+
+  download.active = true;
+  download.name = song.name;
+  download.ratio = null;
+  download.loaded = 0;
+  download.total = null;
+
   try {
-    await capabilities.downloadTo(song.url, path);
-    notify(`${song.name} ${t("context.downloaded")}`);
+    await capabilities.downloadWithProgress(song.url, path, (ratio, loaded, total) => {
+      download.ratio = ratio;
+      download.loaded = loaded;
+      download.total = total;
+    });
+    flashDownloadResult(song, true);
   } catch (e) {
-    notify(`${t("context.downloadFailed")}：${e instanceof Error ? e.message : String(e)}`);
+    flashDownloadResult(song, false, e instanceof Error ? e.message : String(e));
+  } finally {
+    download.active = false;
+  }
+}
+
+/** 下载结束的统一回执：系统通知 + 页内 toast 双通道 */
+function flashDownloadResult(song: OnlineSong, ok: boolean, reason?: string) {
+  const desktopEnv = useDesktopStore();
+  const desc = `${song.name} - ${song.artist}`;
+  if (ok) {
+    notify(`${song.name} ${t("context.downloaded")}`);
+    // 完成属于「不用立刻处理」的信息，用 normal 而不是 critical
+    void desktopEnv.notify(t("context.downloadDoneTitle"), desc, { urgency: 0 });
+  } else {
+    const text = `${t("context.downloadFailed")}：${reason ?? ""}`;
+    notify(`${song.name} ${text}`);
+    // 失败需要用户知晓并可能重试，提到 critical
+    void desktopEnv.notify(t("context.downloadFailedTitle"), `${desc}\n${text}`, { urgency: 2 });
   }
 }
 
@@ -498,6 +556,7 @@ async function downloadCover(song: OnlineSong) {
   const path = await capabilities.pickSavePath(`${song.name}.jpg`);
   if (!path) return;
   try {
+    // 封面只有几百 KB，用不上进度条，走原来的整块下载
     await capabilities.downloadTo(song.pic, path);
     notify(`${song.name} ${t("context.downloaded")}`);
   } catch (e) {
@@ -1158,6 +1217,29 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
     </transition>
 
     <transition name="toast">
+      <div v-if="download.active" class="dl-progress">
+        <div class="dl-head">
+          <span class="material-symbols-outlined dl-icon">download</span>
+          <span class="dl-name" :title="download.name">{{ download.name }}</span>
+          <span class="dl-pct">
+            <template v-if="download.ratio === null">{{ t("context.downloading") }}…</template>
+            <template v-else>{{ Math.round(download.ratio * 100) }}%</template>
+          </span>
+        </div>
+        <!--
+          进度未知（服务器未给 Content-Length）时不画假进度：
+          改成一条来回滑动的 indeterminate 条，明确表达「在跑，但不知道还剩多少」。
+        -->
+        <div class="dl-track" :class="{ indeterminate: download.ratio === null }">
+          <div
+            class="dl-bar"
+            :style="download.ratio === null ? undefined : { width: `${download.ratio * 100}%` }"
+          ></div>
+        </div>
+      </div>
+    </transition>
+
+    <transition name="toast">
       <div v-if="toast" class="toast">{{ toast }}</div>
     </transition>
   </div>
@@ -1493,6 +1575,75 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
   --m3e-icon-button-small-default-leading-space: 6.5px;
   --m3e-icon-button-small-default-trailing-space: 6.5px;
   --m3e-standard-icon-button-icon-color: inherit;
+}
+
+/*
+ * 下载进度条：固定在底部，位置比 toast 略高（两者可能同屏出现）。
+ * 宽度收敛到 420px，避免长歌名把进度条拉成横贯全屏的一条。
+ */
+.dl-progress {
+  position: fixed;
+  left: 50%;
+  bottom: 148px;
+  transform: translateX(-50%);
+  width: min(90vw, 420px);
+  padding: 12px 16px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
+  box-shadow: var(--md-elevation-3);
+  z-index: 100;
+}
+.dl-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: var(--md-sys-typescale-body-medium-size);
+}
+.dl-icon {
+  font-size: 20px;
+  flex: none;
+  color: var(--md-sys-color-primary);
+}
+.dl-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dl-pct {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--md-sys-color-on-surface-variant);
+}
+.dl-track {
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--md-sys-color-surface-container-highest);
+  overflow: hidden;
+}
+.dl-bar {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--md-sys-color-primary);
+  /* 只过渡宽度：读到的进度是跳着来的，硬切会显得一顿一顿 */
+  transition: width 160ms linear;
+}
+/* 进度未知：一条 40% 宽的滑块来回跑 */
+.dl-track.indeterminate .dl-bar {
+  width: 40%;
+  animation: dl-slide 1.1s ease-in-out infinite;
+}
+@keyframes dl-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
 }
 
 .toast {

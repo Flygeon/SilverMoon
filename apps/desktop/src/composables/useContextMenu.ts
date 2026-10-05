@@ -10,6 +10,13 @@ export interface MenuItem {
   icon?: string;
   danger?: boolean;
   disabled?: boolean;
+  /**
+   * 子菜单项。有值时该项渲染成「父项 + 右侧箭头」，悬停 / 聚焦展开子菜单。
+   *
+   * 子项点击回调仍走同一个 onSelect，id 由调用方自己保证与顶层项不冲突
+   * （约定用 `父id:子id` 形式，例如 `wallpaper:crop`）。
+   */
+  children?: MenuItem[];
 }
 
 interface ContextMenuState {
