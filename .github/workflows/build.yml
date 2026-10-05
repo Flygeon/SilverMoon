@@ -92,6 +92,12 @@ jobs:
       - name: Unit tests
         run: npm test
 
+      # mock 与后端路由表的漂移检查。
+      # mock 是「纯浏览器预览」的唯一依赖，路由表改名/删除后 mock 会留下永远命中
+      # 不到的死分支（脚本对此报错）；新增命令未补 mock 则只提示覆盖率。
+      - name: Mock / route-table drift check
+        run: npm run verify:mock-coverage
+
       - name: Rustfmt check (backend)
         working-directory: apps/desktop/backend
         run: cargo fmt --check
@@ -106,6 +112,18 @@ jobs:
       - name: Clippy (backend)
         working-directory: apps/desktop/backend
         run: cargo clippy --all-targets -- -D warnings
+
+      # 在此之前 CI 只做「编译 + clippy」，从不执行任何 Rust 测试：
+      # 后端业务与 IPC 层的回归完全靠人工。这里把两侧的单元测试都跑起来。
+      - name: Unit tests (backend lib)
+        working-directory: apps/desktop/backend
+        run: cargo test --lib
+
+      # silvermoon-ipc 不是 workspace 成员（见上面的 fmt 说明），
+      # 请求守卫（Host / Origin / 令牌）的单元测试挂在它下面，必须显式指定 manifest。
+      # 对应 src/server.rs 的 `mod guard_tests`。
+      - name: Unit tests (ipc request guards)
+        run: cargo test --manifest-path backend/crates/silvermoon-ipc/Cargo.toml
 
       # 启动器是 Windows 专用程序，但 fmt/clippy 都能在 Linux 上跑，
       # 因此质量检查留在最快的 lint 作业里，不必等 Windows 构建。
