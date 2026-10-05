@@ -348,8 +348,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          # 打包作业已用 --publish always 建好 Release 并上传安装包；
-          # 这里补齐元数据（softprops 在 Release 已存在时会继续追加资产）。
+          # 打包作业（检出 tag 时）已由 electron-builder 建好 Release 并上传安装包；
+          # 这里补齐另一平台的产物与元数据（softprops 在 Release 已存在时会继续追加资产）。
           files: |
             release-assets/**/*.exe
             release-assets/**/*.AppImage
@@ -361,11 +361,16 @@ jobs:
         # Release 必须以正式状态存在，否则客户端永远看不到更新。
         env:
           GH_TOKEN: ${{ github.token }}
+          # 用环境变量而不是在 run 里内插 ${{ }}：
+          # 表达式直接写进 shell 容易被 PowerShell/引号处理搞坏，
+          # 而一旦展开失败 gh 会拿到空 tag，报「Release 不存在」这种假错误。
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          echo "tag=$TAG"
           json=''
           for i in $(seq 1 10); do
-            json=$(gh release view ${{ github.ref_name }} --json isDraft,isPrerelease 2>/dev/null || true)
+            json=$(gh release view "$TAG" --json isDraft,isPrerelease 2>/dev/null || true)
             [ -n "$json" ] && break
             sleep 6
           done
