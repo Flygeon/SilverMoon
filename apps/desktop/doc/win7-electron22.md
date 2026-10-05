@@ -206,6 +206,19 @@ node scripts/verify-win7-build.mjs
 第 3 类靠**第 4.5 组的定向检查**兜（只覆盖已知的那一处），
 其余只能靠**运行时诊断**（第 8 节的启动轨迹）。三者互补，不能互相替代。
 
+### CI 与交付现状
+
+- 分支 `feat/win7-electron22`，CI run `37270785466`（head `9e4bcdd`）**全绿**：
+  `lint` / `build (linux)` / `build (windows)` / **`build (win7 / Electron 22)`** 均 success。
+- CI 日志里可确认补丁**确实被编进去了**：
+  `Compiling parking_lot_core v0.9.12 (…/apps/desktop/backend/patches/parking_lot_core)`。
+- 新增的 `[4.5]` 闸门在 CI 中同步通过（两条断言都打勾）。
+- 产物：`windows-win7-build`（约 73 MB），从该 run 的 Actions 页面下载。
+
+> ⚠️ 后续有一个**纯清理提交**（`204ce1d`：修一条 deprecated 警告 + 复原
+> `.gitignore` 编码）尚未推送 —— 当时执行环境没有 GitHub 写凭据。
+> 该提交**不改变任何产物行为**，因此 `9e4bcdd` 的产物可以直接验收。
+
 ---
 
 ## 6. 本分支已验证 / 未验证
@@ -380,6 +393,23 @@ XP+ 就有）的 `else if` 分支根本没机会运行。
   **运行期 apiset 探测只有这一处**（其余 `api-ms-win-*` 引用都来自
   `windows-sys` / `windows` crate 的自动生成绑定，是静态声明，无运行期探测）。
   但**不排除**静态链接的第三方 C 代码里还有别的漏网之鱼 —— 这类只能靠上机实测。
+
+#### 踩过的坑：`.gitignore` 的双重编码
+
+`apps/desktop/.gitignore` 里有一批**非 UTF-8 的历史文件名字面量**（早期在
+Windows 上提交时混进了 GBK 字节）。这个文件被测过两次：
+
+1. 第一次改它加 win7 忽略项时，工具链按西文写回，中文注释变成 `¡ª¡ª` 这类乱码；
+2. 后来一次推送脚本的 **latin-1 兜底**（本意只是「非 UTF-8 也别崩」）把读进来的
+   乱码原样推上去，于是远端存下了一份「UTF-8 外壳包着乱码内容」的版本 ——
+   看着是合法 UTF-8，内容却是错的。
+
+最终处理：以更早的干净提交（`c759566`）为底，按语义把注释重写回正常中文，
+并保留后来新增的全部条目。现为合法 UTF-8。
+
+**教训**：仓库里存在非 UTF-8 文件时，「能读进来」和「写回正确的字节」是两件事。
+latin-1 兜底只保证前者，**不要**把它的结果直接当成待提交内容。
+排查命令：`file apps/desktop/.gitignore`（应为 `Unicode text, UTF-8 text`）。
 
 ---
 

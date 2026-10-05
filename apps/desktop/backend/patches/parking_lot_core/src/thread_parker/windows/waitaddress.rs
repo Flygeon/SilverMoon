@@ -132,7 +132,10 @@ impl WaitAddress {
                 .checked_mul(1000)
                 .and_then(|x| x.checked_add((diff.subsec_nanos() as u64 + 999999) / 1000000))
                 .map(|ms| {
-                    if ms > std::u32::MAX as u64 {
+                    // `std::u32::MAX` 已被 `u32::MAX` 取代（nightly 上会报
+                    // deprecated 警告）。上游还没改，本仓库 fork 之后顺手修掉 ——
+                    // 这个 crate 的告警会出现在我们自己的 CI 日志里，不好看。
+                    if ms > u32::MAX as u64 {
                         INFINITE
                     } else {
                         ms as u32
