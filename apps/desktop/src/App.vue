@@ -308,9 +308,36 @@ router.afterEach((to) => {
         <main ref="mainEl" class="main-content">
           <router-view v-slot="{ Component }">
             <transition :name="isPlayerPage ? 'player' : 'page'" mode="out-in">
-              <!-- max：keep-alive 默认永不淘汰，访问过的每个页面都会常驻（含其 DOM 与虚拟滚动层），
-                 会话越长内存/GC 压力越大，表现为"用一会儿越来越卡"。8 个足够覆盖常用来回切换。 -->
-              <keep-alive :exclude="['PlayerView']" :max="8">
+              <!--
+                keep-alive 的取舍（内存相关，改之前先读这段）：
+
+                - max：默认永不淘汰，访问过的每个页面都会常驻（含其 DOM 与虚拟滚动层），
+                  会话越长内存/GC 压力越大。8 个足够覆盖常用来回切换。
+                - exclude：**只对路由级组件生效**。注意媒体页里的在线源
+                  （PixivOnlineView / AnimeOnlineView / BilibiliOnlineView / NovelOnlineView）
+                  是 ImagesView / VideosView / BooksView 的**子组件**，不是路由组件，
+                  在这里写它们没有任何效果 —— 它们的常驻与否取决于所属视图是否被缓存。
+                - 这里排除的是「缓存了也没有收益」的轻量页：它们要么每次都由 store/SQLite
+                  快速重建，要么本身只有几十个节点。排除后 keep-alive 的槽位留给
+                  四个媒体页与设置页这类真正重的页面，避免被工具页挤掉。
+                  （exclude 按组件名匹配；<script setup> 下 Vue 从文件名推导，
+                   与现有的 PlayerView 同一机制，无需 defineOptions。）
+
+                注意：把 max 从 8 继续下调是**有 UX 代价**的（用户刚滚过的媒体网格会被销毁重建）。
+                要不要降、降到几，应当用设置页「内存诊断」实测后再定，不要凭感觉调。
+              -->
+              <keep-alive
+                :exclude="[
+                  'PlayerView',
+                  'PresetMarket',
+                  'OsuView',
+                  'ExtensionsView',
+                  'NovelStatsView',
+                  'DesktopLyrics',
+                  'ExtensionHost',
+                ]"
+                :max="8"
+              >
                 <component :is="Component" />
               </keep-alive>
             </transition>

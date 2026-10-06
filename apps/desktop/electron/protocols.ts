@@ -244,6 +244,41 @@ const COVER_UA =
 let coverCacheDir: string | null = null;
 /** 同 URL 的并发去重：只允许一次网络请求在途。 */
 const coverInflight = new Map<string, Promise<{ ct: string; body: ArrayBuffer } | null>>();
+
+/**
+ * 同时在途的封面网络请求上限。
+ *
+ * 每个在途请求都会把**整张图**放进主进程内存（`fetchCover` 里的 `arrayBuffer()`），
+ * 而网格滚动一次可能同时触发几十张 —— 不设上限时主进程占用会被明显抬高。
+ * 8 与渲染层缩略图池同量级：不打满带宽，队列也不会排太久。
+ */
+const COVER_MAX_CONCURRENT = 8;
+
+/**
+ * 单次取图超时。
+ *
+ * 没有它时，一个挂死的连接会**永久占住一个并发槽位**；8 个槽位被占满后
+ * 整个封面系统就停摆了（表现为"封面全都不出来"）。所以上限与超时必须一起加。
+ */
+const COVER_FETCH_TIMEOUT_MS = 15_000;
+
+let coverActive = 0;
+const coverWaiters: (() => void)[] = [];
+
+/** 取一个并发槽位；超出上限时排队。 */
+async function acquireCoverSlot(): Promise<void> {
+  if (coverActive < COVER_MAX_CONCURRENT) {
+    coverActive++;
+    return;
+  }
+  await new Promise<void>((resolve) => coverWaiters.push(resolve));
+  coverActive++;
+}
+
+function releaseCoverSlot(): void {
+  coverActive--;
+  coverWaiters.shift()?.();
+}
 /** 负缓存：url → 首次失败时间戳。 */
 const coverFailedAt = new Map<string, number>();
 
@@ -456,7 +491,11 @@ async function fetchCover(target: string): Promise<CoverCacheHit | null> {
   if (referer) headers.Referer = referer;
 
   try {
-    const res = await net.fetch(target, { headers });
+    const res = await net.fetch(target, {
+      headers,
+      // 超时：否则挂死的连接会永久占住并发槽位（见 COVER_FETCH_TIMEOUT_MS）
+      signal: AbortSignal.timeout(COVER_FETCH_TIMEOUT_MS),
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const buf = await res.arrayBuffer();
     if (!buf.byteLength || buf.byteLength > COVER_MAX_BYTES) throw new Error("响应体异常");
@@ -502,7 +541,15 @@ export function handleCoverProtocol(cacheDir: string): void {
 
       let inflight = coverInflight.get(target);
       if (!inflight) {
-        inflight = fetchCover(target).finally(() => coverInflight.delete(target));
+        // 先排队拿并发槽位，再真正取图；finally 保证槽位一定归还。
+        inflight = (async () => {
+          await acquireCoverSlot();
+          try {
+            return await fetchCover(target);
+          } finally {
+            releaseCoverSlot();
+          }
+        })().finally(() => coverInflight.delete(target));
         coverInflight.set(target, inflight);
       }
       const hit = await inflight;

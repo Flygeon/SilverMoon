@@ -249,6 +249,15 @@ export const messages = {
       updateRestartNow: "重启并更新",
       updateLater: "稍后",
       updateNotSupported: "当前构建不支持自动更新。",
+      memoryDiagnostics: "内存诊断",
+      memoryDiagnosticsHint:
+        "按进程显示 Electron 各进程的内存（工作集）。用于验收内存优化：改动前后跑同一套操作再对比。",
+      memoryRefresh: "刷新",
+      memoryTotal: "合计",
+      memoryProcessType: "类型",
+      memoryProcessName: "进程 / 窗口",
+      memoryWorkingSet: "工作集",
+      memoryPeak: "峰值",
       loudnessNormalizeHint:
         "把本地文件与各在线源统一到同一音量（EBU R128 / LUFS）。按需测量：只测实际播放过的歌，结果缓存在本地。",
       loudnessTarget: "目标响度（LUFS）",
@@ -1390,6 +1399,15 @@ export const messages = {
       updateRestartNow: "Restart & update",
       updateLater: "Later",
       updateNotSupported: "Auto-update is not available in this build.",
+      memoryDiagnostics: "Memory diagnostics",
+      memoryDiagnosticsHint:
+        "Per-process memory (working set) of the Electron processes. Use it to verify memory work: run the same steps before and after a change, then compare.",
+      memoryRefresh: "Refresh",
+      memoryTotal: "Total",
+      memoryProcessType: "Type",
+      memoryProcessName: "Process / window",
+      memoryWorkingSet: "Working set",
+      memoryPeak: "Peak",
       loudnessNormalizeHint:
         "Bring local files and every online source to one loudness level (EBU R128 / LUFS). Measured on demand: only tracks you actually play, cached locally.",
       loudnessTarget: "Target loudness (LUFS)",

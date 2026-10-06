@@ -463,6 +463,31 @@ const handlers: Record<string, Handler> = {
         }
         return null;
       }
+      /**
+       * 按进程内存诊断。
+       *
+       * `app.getAppMetrics()` 是 Electron 内置的**按进程**指标（Browser / Tab / GPU /
+       * Utility 各一条），给出 workingSetSize 与 peakWorkingSetSize。内存优化若没有它，
+       * 就只能靠任务管理器目测，改动前后无法做可比对照——而"少一个渲染进程"
+       * 这类结论恰恰只能靠它验证。
+       *
+       * workingSetSize 的单位是 **KB**，这里统一换算成 MB 并保留一位小数，
+       * 渲染层直接展示即可。
+       */
+      case "metrics": {
+        const processes = app.getAppMetrics().map((m) => ({
+          pid: m.pid,
+          type: m.type,
+          name: m.name ?? "",
+          workingSetMB: Math.round(((m.memory?.workingSetSize ?? 0) / 1024) * 10) / 10,
+          peakMB: Math.round(((m.memory?.peakWorkingSetSize ?? 0) / 1024) * 10) / 10,
+          cpu: Math.round((m.cpu?.percentCPUUsage ?? 0) * 10) / 10,
+        }));
+        const totalMB = Math.round(processes.reduce((sum, p) => sum + p.workingSetMB, 0) * 10) / 10;
+        // 窗口 label 一并带出：把「某个进程」和「哪个窗口」对上，
+        // 才能判断"隐藏窗口占了一个渲染进程"这类问题。
+        return { totalMB, processes, labels: listLabels() };
+      }
       case "exit":
         quitApp();
         return null;

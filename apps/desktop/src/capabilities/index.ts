@@ -10,6 +10,24 @@ import { openPath, openUrl, revealItemInDir } from "@/ipc/opener";
 import { open as dialogOpen, save as dialogSave } from "@/ipc/dialog";
 import { writeFile } from "@/ipc/fs";
 import { clearCoverCache as clearCoverCacheIpc } from "@/ipc/app";
+
+/** 单个 Electron 进程的内存快照（见 `app.getAppMetrics()`）。 */
+export interface MemoryProcessMetrics {
+  pid: number;
+  /** Browser / Tab / GPU / Utility 等 */
+  type: string;
+  name: string;
+  workingSetMB: number;
+  peakMB: number;
+  cpu: number;
+}
+
+/** 内存诊断结果：各进程快照 + 窗口 label 列表。 */
+export interface MemoryMetrics {
+  totalMB: number;
+  processes: MemoryProcessMetrics[];
+  labels: string[];
+}
 import type {
   AppliedOnlineTags,
   BookProgress,
@@ -1048,6 +1066,19 @@ export const capabilities = {
   appLogBoot(mark: string, sinceMs: number): void {
     if (!isDesktop) return;
     void callBridge("app", { op: "logBoot", mark, since: sinceMs }).catch(() => undefined);
+  },
+
+  // ---- 内存诊断 ----
+  /**
+   * 按进程内存诊断（见 `electron/ipc.ts` 的 `app.metrics`）。
+   *
+   * 用途是**验收内存优化**：改动前后各跑一次同一套操作，比较各进程 workingSet。
+   * 浏览器预览下返回空数组。
+   */
+  memoryMetrics(): Promise<MemoryMetrics> {
+    const empty: MemoryMetrics = { totalMB: 0, processes: [], labels: [] };
+    if (!isDesktop) return Promise.resolve(empty);
+    return callBridge<MemoryMetrics>("app", { op: "metrics" }).catch(() => empty);
   },
 
   // ---- 自动更新 ----

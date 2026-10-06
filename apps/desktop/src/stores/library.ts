@@ -32,8 +32,29 @@ const THUMB_BATCH = 16;
 const PAGE_SIZE = 400;
 
 export const useLibraryStore = defineStore("library", () => {
-  /** 按类型缓存列表 */
-  const entriesByType = ref<Record<string, MediaEntry[]>>({});
+  /**
+   * 按类型缓存列表。
+   *
+   * ## 为什么是 `shallowRef` 而不是 `ref`
+   *
+   * `ref` 对对象是**深响应**：`fillRemaining` 会把**全库**条目都塞进来，
+   * 于是每个 `MediaEntry`、每个数组都被 Proxy 包一层。5 万条曲库下这是实打实的
+   * 内存与 CPU 开销（滚动/筛选时每次字段访问都要过 Proxy）—— 而列表根本不需要
+   * 逐字段响应。同文件的 `thumbCache` 早就因为同样的理由用了 `shallowRef`。
+   *
+   * ## ⚠️ 因此必须遵守的不变量
+   *
+   * **所有写入都要「替换外层对象」**，例如：
+   *
+   * ~~~ts
+   * entriesByType.value = { ...entriesByType.value, [type]: next };
+   * ~~~
+   *
+   * 只就地改数组/字段（`list.push(...)`、`entry.favorite = x`）**不会触发更新**。
+   * 确需就地改字段时，改完必须再替换一次外层对象（见 `toggleFavorite`）。
+   * 若哪天真需要原地触发，用 `triggerRef(entriesByType)`。
+   */
+  const entriesByType = shallowRef<Record<string, MediaEntry[]>>({});
   const counts = ref<Record<string, number>>({});
   const loading = ref(false);
   const error = ref<string | null>(null);
@@ -392,6 +413,8 @@ export const useLibraryStore = defineStore("library", () => {
       const hit = list.find((e) => e.id === entry.id);
       if (hit) hit.favorite = next;
     }
+    // ⚠️ 这一行**不能删**：entriesByType 是 shallowRef，就地改 `favorite` 不会触发更新，
+    // 必须替换外层对象才能让列表重渲染（见 entriesByType 的注释）。
     entriesByType.value = { ...entriesByType.value };
   }
 

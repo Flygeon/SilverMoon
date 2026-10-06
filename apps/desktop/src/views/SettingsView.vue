@@ -22,7 +22,7 @@ import { useBangumiCollectStore } from "@/stores/bangumiCollect";
 import { useLibraryStore } from "@/stores/library";
 import AudioEffectsPanel from "@/components/AudioEffectsPanel.vue";
 import SegmentedTabs from "@/components/SegmentedTabs.vue";
-import { capabilities } from "@/capabilities";
+import { capabilities, type MemoryMetrics } from "@/capabilities";
 import { formatSize } from "@/utils/format";
 import { activeSkinDoc, skinModeLock, skinSafeMode } from "@/utils/skinRuntime";
 import { SB_CATEGORIES } from "@/utils/sponsorBlock";
@@ -86,6 +86,22 @@ async function onCheckUpdate() {
 async function onInstallUpdate() {
   await capabilities.installUpdate();
 }
+/**
+ * 内存诊断：按进程列出 Electron 各进程的工作集。
+ *
+ * 只在用户点「刷新」时拉一次 —— 它本身要遍历所有进程，没必要常驻轮询。
+ */
+const memoryMetrics = ref<MemoryMetrics | null>(null);
+const memoryLoading = ref(false);
+async function refreshMemory() {
+  memoryLoading.value = true;
+  try {
+    memoryMetrics.value = await capabilities.memoryMetrics();
+  } finally {
+    memoryLoading.value = false;
+  }
+}
+
 let unlistenUpdate: (() => void) | null = null;
 onMounted(() => {
   void capabilities.updaterState().then((s) => {
@@ -1971,6 +1987,40 @@ function selectSection(id: string) {
           {{ t("settings.updateNotSupported") }}
         </p>
         <p class="hint">{{ t("settings.checkUpdateHint") }}</p>
+
+        <!-- 内存诊断：按进程列出 Electron 各进程的工作集（内存优化的验收工具） -->
+        <div class="row">
+          <span class="row-label">{{ t("settings.memoryDiagnostics") }}</span>
+          <m3e-button
+            variant="outlined"
+            size="small"
+            :disabled="memoryLoading"
+            @click="refreshMemory"
+          >
+            {{ t("settings.memoryRefresh") }}
+          </m3e-button>
+        </div>
+        <p class="hint">{{ t("settings.memoryDiagnosticsHint") }}</p>
+        <div v-if="memoryMetrics && memoryMetrics.processes.length" class="mem-table">
+          <div class="mem-row mem-head">
+            <span>{{ t("settings.memoryProcessType") }}</span>
+            <span>{{ t("settings.memoryProcessName") }}</span>
+            <span class="tabular-nums">{{ t("settings.memoryWorkingSet") }}</span>
+            <span class="tabular-nums">{{ t("settings.memoryPeak") }}</span>
+          </div>
+          <div v-for="p in memoryMetrics.processes" :key="p.pid" class="mem-row">
+            <span>{{ p.type }}</span>
+            <span class="mem-name">{{ p.name || p.pid }}</span>
+            <span class="tabular-nums">{{ p.workingSetMB }} MB</span>
+            <span class="tabular-nums">{{ p.peakMB }} MB</span>
+          </div>
+          <div class="mem-row mem-total">
+            <span></span>
+            <span>{{ t("settings.memoryTotal") }}</span>
+            <span class="tabular-nums">{{ memoryMetrics.totalMB }} MB</span>
+            <span></span>
+          </div>
+        </div>
         <label class="row switch-row">
           <span class="row-label">{{ t("settings.devtools") }}</span>
           <m3e-switch :checked="devtoolsEnabled" @change="toggleDevtools" />
@@ -1992,6 +2042,36 @@ function selectSection(id: string) {
 </template>
 
 <style scoped>
+/* 内存诊断表：4 列（类型 / 进程 / 工作集 / 峰值），等宽数字便于纵向比较 */
+.mem-table {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0 2px;
+  font-size: var(--md-sys-typescale-body-small-size, 12px);
+}
+.mem-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) 84px 84px;
+  gap: 8px;
+  align-items: center;
+  padding: 3px 0;
+}
+.mem-head,
+.mem-total {
+  color: var(--md-sys-color-on-surface-variant);
+}
+.mem-total {
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+  padding-top: 5px;
+  font-weight: 500;
+}
+.mem-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settings-view {
   display: grid;
   grid-template-columns: 180px minmax(0, 800px);

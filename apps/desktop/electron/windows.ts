@@ -166,6 +166,10 @@ export function createMainWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      // 关掉拼写检查：Electron 默认开启，会在每个含可编辑控件的渲染进程里
+      // 加载拼写检查器与词典；本应用没有需要拼写检查的输入场景（搜索框/笔记/写作台），
+      // 属于纯开销。
+      spellcheck: false,
       additionalArguments: ["--silvermoon-label=main"],
     },
   });
@@ -247,6 +251,7 @@ export function createChildWindow(label: string, options: CreateOptions): Browse
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      spellcheck: false,
       additionalArguments: [`--silvermoon-label=${label}`],
     },
   });
@@ -313,6 +318,7 @@ export function createRustWindow(payload: {
       contextIsolation: !needsInjection,
       nodeIntegration: false,
       sandbox: false,
+      spellcheck: false,
       additionalArguments: [
         `--silvermoon-label=${label}`,
         ...(initScriptFile ? [`--silvermoon-init-script=${initScriptFile}`] : []),

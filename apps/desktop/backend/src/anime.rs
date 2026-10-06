@@ -1305,7 +1305,24 @@ const STALE_BUILTIN_RULES: &[(&str, &str)] = &[(
 }"#,
 )];
 
-/// 在 setup 阶段预创建隐藏 webview（桌面端 webview 创建需主线程，懒建在部分平台会失败）
+/// 番剧模块的启动初始化。
+///
+/// ## 这里**不再**预创建隐藏取流 webview（2026-10 改）
+///
+/// 原来在 setup 阶段就 `WindowBuilder::build()` 一个隐藏窗口，注释理由是
+/// 「桌面端 webview 创建需主线程，懒建在部分平台会失败」。那是 **Tauri 时代**的约束：
+/// Tauri 的 `WebviewWindowBuilder::build()` 必须在主线程调用。
+///
+/// 现在窗口的实体在 **Electron** 侧，Rust 只是发一次同步的宿主调用
+/// （`window.rs` 的 `host::op(HostOp::WebviewCreate)`），**不存在主线程约束**。
+///
+/// 而按需创建的代码路径本来就已经存在：`ensure_webview()` 在窗口不存在时会用
+/// **完全相同的参数**再 build 一次（同一个 label、同一个 INIT_SCRIPT、
+/// 同样是 `about:blank` + `visible(false)`）。所以这次改动只是把「同一次调用」
+/// 从启动时推迟到首次取流时 —— 不引入任何新的失败模式。
+///
+/// 收益：不用番剧的用户不再常驻一个隐藏渲染进程（约 30~50 MB）。
+/// 代价：首次取流时多约 1~2 s 建窗耗时（此后复用）。
 pub fn setup(app: &silvermoon_ipc::Host) {
     // 内置规则同步：缺失时写入；站点结构变化致内置版本前进时，用新内置覆盖旧副本
     // （老用户首次启动即拿到修复后的规则）。仅当磁盘副本与旧内置内容完全一致时
@@ -1345,18 +1362,8 @@ pub fn setup(app: &silvermoon_ipc::Host) {
             }
         }
     }
-    use silvermoon_ipc::{WindowBuilder, WindowUrl};
-    let result = WindowBuilder::new(
-        app,
-        WEBVIEW_LABEL,
-        WindowUrl::External("about:blank".parse().unwrap()),
-    )
-    .visible(false)
-    .initialization_script(INIT_SCRIPT)
-    .build();
-    if let Err(e) = result {
-        eprintln!("[anime] 隐藏取流 webview 创建失败（将按需重建）: {e}");
-    }
+    // 隐藏取流 webview 交给 ensure_webview() 按需创建（见函数头注释）。
+    // 这里刻意不再预建：不用番剧的用户不该为此常驻一个渲染进程。
 }
 
 fn ensure_webview(app: &silvermoon_ipc::Host) -> Result<silvermoon_ipc::Window, String> {

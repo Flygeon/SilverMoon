@@ -46,32 +46,58 @@ async function getAudioBytes(source: LoudnessSource): Promise<ArrayBuffer> {
 }
 
 /**
- * 解码开头 `seconds` 秒为单声道 PCM。
+ * 取开头 `seconds` 秒的单声道 PCM。
  *
- * 用 `OfflineAudioContext` 的 `source.start(0, 0, duration)` 截断，
- * 避免把整首歌都解出来 —— 这是这里唯一和 wordAnalysis 不同的地方。
+ * ## 为什么不是"渲染一段"
+ *
+ * 之前的实现是「整曲解码两次 + 渲染出前 N 秒」：
+ *
+ * ~~~text
+ * decodeAudioData(bytes.slice(0))   // ← 整曲解码 #1（只为拿 duration）
+ * decodeAudioData(bytes.slice(0))   // ← 整曲解码 #2（真正用来渲染）
+ * startRendering()                  // ← 再产出一份
+ * ~~~
+ *
+ * `decodeAudioData` **没有"只解一段"的 API**，它总是把整个文件解成 AudioBuffer。
+ * 4 分钟立体声 44.1 kHz ≈ 85 MB，解两次就是 **~170 MB 峰值** —— 而响度只需要前 30 秒。
+ *
+ * 现在改成：**只解一次**，然后直接从解码结果里拷出需要的那一段。
+ * 既省掉第二次解码，也省掉渲染产物。
+ *
+ * ## 立体声 → 单声道
+ *
+ * 刻意保留"多声道取平均"而不是只取第 0 声道：原实现用一个单声道
+ * `OfflineAudioContext` 承接立体声源，浏览器会做 L/R 平均；只取左声道
+ * 会改变读数（虽然通常 < 0.5 LU）。这里手工平均，语义与原来一致。
  */
 async function decodeHeadPcm(
   bytes: ArrayBuffer,
   seconds: number,
 ): Promise<{ pcm: Float32Array; sampleRate: number }> {
-  // 先整段解一次拿到真实时长（decodeAudioData 不接受截断输入）
-  const probe = new OfflineAudioContext(1, 1, DECODE_RATE);
-  const decoded = await probe.decodeAudioData(bytes.slice(0));
-  const duration = Math.min(seconds, decoded.duration);
-  if (!Number.isFinite(duration) || duration <= 0) {
+  const ctx = new OfflineAudioContext(1, 1, DECODE_RATE);
+  // 不再 slice(0)：decodeAudioData 会 detach 传入的 buffer，而调用方之后不再使用它，
+  // 因此省掉一份压缩字节的拷贝。
+  const decoded = await ctx.decodeAudioData(bytes);
+
+  const take = Math.min(seconds, decoded.duration);
+  if (!Number.isFinite(take) || take <= 0) {
     throw new Error("音频时长无效");
   }
+  const frames = Math.min(decoded.length, Math.ceil(take * decoded.sampleRate));
+  const channels = decoded.numberOfChannels;
 
-  const frames = Math.ceil(duration * DECODE_RATE);
-  const ctx = new OfflineAudioContext(1, frames, DECODE_RATE);
-  const buf = await ctx.decodeAudioData(bytes.slice(0));
-  const src = ctx.createBufferSource();
-  src.buffer = buf;
-  src.connect(ctx.destination);
-  src.start(0, 0, duration);
-  const rendered = await ctx.startRendering();
-  return { pcm: rendered.getChannelData(0), sampleRate: rendered.sampleRate };
+  // 只分配"要用的那一段"（30 s ≈ 5 MB），而不是整曲。
+  const pcm = new Float32Array(frames);
+  for (let c = 0; c < channels; c++) {
+    const data = decoded.getChannelData(c);
+    for (let i = 0; i < frames; i++) pcm[i] += data[i];
+  }
+  if (channels > 1) {
+    for (let i = 0; i < frames; i++) pcm[i] /= channels;
+  }
+
+  // 这里之后不再引用 decoded —— 整个 AudioBuffer（~85 MB）即可被 GC。
+  return { pcm, sampleRate: decoded.sampleRate };
 }
 
 /**
