@@ -86,9 +86,20 @@ export interface MediaMetadata {
   hasLyrics: boolean;
 }
 
+/**
+ * 扫描范围模式。
+ *
+ * - `whitelist`：只扫描 `dirs` 里的目录。
+ * - `blacklist`：扫描**所有固定驱动器**，但排除 `dirs` 里的目录（及其子树）。
+ */
+export type ScanMode = "whitelist" | "blacklist";
+
 /** 扫描配置 */
 export interface ScanConfig {
+  /** 含义随 `mode` 变化：whitelist = 要扫描的目录；blacklist = 要排除的目录 */
   dirs: string[];
+  /** 不传时后端按 `whitelist` 处理（与历史行为一致，零回归） */
+  mode?: ScanMode;
   maxDepth?: number;
   followLinks?: boolean;
   forceReparse?: boolean;

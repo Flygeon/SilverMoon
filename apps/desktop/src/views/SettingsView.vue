@@ -166,6 +166,8 @@ const shareCodeTabs = opts(["chinese", "original", "both"] as ShareCodePreferenc
   t("settings.shareCodePreference_" + v),
 );
 const musicServerTabs = opts(["netease", "kugou"] as const, (v) => t("settings.onlineServer_" + v));
+/** 扫描范围模式：白名单（只扫列表）/ 黑名单（扫全局但排除列表） */
+const scanModeTabs = opts(["whitelist", "blacklist"] as const, (v) => t("settings.scanMode_" + v));
 const wenku8NodeTabs = opts(["cc", "net"] as const, (v) => t("settings.wenku8Node_" + v));
 const novelCharsetTabs = opts(["gbk", "big5"] as const, (v) => t("settings.novelCharset_" + v));
 const pixivQualityTabs = opts(["squareMedium", "medium", "large", "original"] as const, (v) =>
@@ -940,7 +942,18 @@ onBeforeUnmount(() => {
     >
       <div slot="content">
         <h3>{{ t("settings.scanDirs") }}</h3>
-        <p class="hint">{{ t("settings.scanDirsHint") }}</p>
+
+        <!-- 扫描范围模式：白名单 = 只扫列表；黑名单 = 扫全局但排除列表 -->
+        <SettingRow :label="t('settings.scanMode')" setting-key="settings.scanMode">
+          <SegmentedTabs v-model="settings.scanMode" bare :tabs="scanModeTabs" />
+        </SettingRow>
+        <p class="hint">
+          {{
+            settings.scanMode === "blacklist"
+              ? t("settings.scanBlacklistHint")
+              : t("settings.scanWhitelistHint")
+          }}
+        </p>
 
         <div v-if="settings.scanDirs.length" class="dir-list">
           <div v-for="(dir, i) in settings.scanDirs" :key="dir" class="dir-item">
@@ -951,12 +964,27 @@ onBeforeUnmount(() => {
             </m3e-icon-button>
           </div>
         </div>
-        <div v-else class="notice">{{ t("settings.globalScanHint") }}</div>
+        <!--
+          空列表的含义随模式变化，提示必须跟着变：
+          白名单下「空」= 扫不了（必须先加目录）；黑名单下「空」= 全局扫描且不排除任何目录。
+          此前这里不分模式一律显示「当前：全局扫描」，而白名单下点扫描只会报错 —— 界面在说谎。
+        -->
+        <div v-else class="notice">
+          {{
+            settings.scanMode === "blacklist"
+              ? t("settings.globalScanHint")
+              : t("settings.scanWhitelistEmpty")
+          }}
+        </div>
 
         <div class="actions">
           <m3e-button variant="tonal" size="small" @click="addScanDir">
             <span slot="icon" class="material-symbols-outlined">create_new_folder</span>
-            {{ t("settings.addScanDir") }}
+            {{
+              settings.scanMode === "blacklist"
+                ? t("settings.addScanDirExclude")
+                : t("settings.addScanDir")
+            }}
           </m3e-button>
           <m3e-button
             v-if="settings.scanDirs.length"

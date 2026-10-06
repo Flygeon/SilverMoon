@@ -348,10 +348,17 @@ export const messages = {
       devtools: "开发者工具 (DevTools)",
       devtoolsHint: "开启后可按 F12 打开开发者工具，便于定位前端问题。",
       scanDirs: "扫描目录",
-      scanDirsHint: "不选择目录则全局扫描，选择目录后仅扫描指定目录内的文件。",
+      scanMode: "扫描范围",
+      scanMode_whitelist: "白名单",
+      scanMode_blacklist: "黑名单",
+      scanWhitelistHint: "白名单：只扫描下面列出的目录。",
+      scanBlacklistHint:
+        "黑名单：扫描所有固定驱动器（自动跳过 Windows / Program Files 等系统目录），但排除下面列出的目录及其子目录。首次扫描可能较慢，可随时取消。",
+      scanWhitelistEmpty: "尚未选择目录 —— 白名单模式下必须先添加至少一个目录才能扫描。",
       addScanDir: "添加目录",
-      clearScanDirs: "清除目录（全局扫描）",
-      globalScanHint: "当前：全局扫描",
+      addScanDirExclude: "添加排除目录",
+      clearScanDirs: "清空列表",
+      globalScanHint: "当前：全局扫描（不排除任何目录）",
       appearance: "外观",
       minSize: "最小文件体积",
       minSizeHint:
@@ -1528,11 +1535,18 @@ export const messages = {
       devtools: "Developer Tools (DevTools)",
       devtoolsHint: "Press F12 to open DevTools when enabled, useful for frontend debugging.",
       scanDirs: "Scan Directories",
-      scanDirsHint:
-        "No directory selected = global scan. Select a directory to scan only that folder.",
+      scanMode: "Scan scope",
+      scanMode_whitelist: "Whitelist",
+      scanMode_blacklist: "Blacklist",
+      scanWhitelistHint: "Whitelist: scan only the directories listed below.",
+      scanBlacklistHint:
+        "Blacklist: scan every fixed drive (Windows / Program Files and other system folders are skipped automatically), but exclude the directories listed below and their subfolders. The first scan can take a while — you can cancel it at any time.",
+      scanWhitelistEmpty:
+        "No directory selected — whitelist mode needs at least one directory before it can scan.",
       addScanDir: "Add Directory",
-      clearScanDirs: "Clear Directories (Global Scan)",
-      globalScanHint: "Current: Global scan",
+      addScanDirExclude: "Add Excluded Directory",
+      clearScanDirs: "Clear list",
+      globalScanHint: "Current: global scan (nothing excluded)",
       appearance: "Appearance",
       minSize: "Minimum File Size",
       minSizeHint:

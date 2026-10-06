@@ -297,7 +297,15 @@ export const useLibraryStore = defineStore("library", () => {
     if (scanning.value) return;
     const settings = useSettingsStore();
     const scanDirs = dirs?.length ? dirs : settings.scanDirs;
-    if (!scanDirs.length) {
+    const mode = settings.scanMode;
+    /*
+     * 只有白名单模式才要求非空目录。
+     *
+     * 黑名单模式的 scanDirs 是「排除项」，空列表完全合法 —— 那就是
+     * 「全局扫描且不排除任何目录」。此前这里不分模式一律拦下，于是设置页
+     * 写着「不选择目录则全局扫描」、实际却连扫都扫不了（界面与实现不一致）。
+     */
+    if (mode === "whitelist" && !scanDirs.length) {
       error.value = "empty-dirs";
       return;
     }
@@ -321,7 +329,7 @@ export const useLibraryStore = defineStore("library", () => {
     });
 
     try {
-      const { jobId } = await capabilities.scanStart({ dirs: scanDirs });
+      const { jobId } = await capabilities.scanStart({ dirs: scanDirs, mode });
       currentJobId.value = jobId;
       // 浏览器 mock 无事件通道，回落到一次性查询
       await pollIfNoEvents(jobId);

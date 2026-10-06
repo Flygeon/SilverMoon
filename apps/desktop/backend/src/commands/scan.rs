@@ -18,10 +18,28 @@ use walkdir::WalkDir;
 use crate::commands::{init_db, now_secs, DbState, JobState, ScanJob, ScanJobInfo};
 use crate::media::{classify, ext_of};
 
+/// 扫描范围模式。
+///
+/// 界面上的语义（设置 → 扫描与索引）：
+/// - **白名单**：只扫描 `dirs` 里的目录。
+/// - **黑名单**：扫描**所有固定驱动器**，但排除 `dirs` 里的目录（及其子树）。
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ScanMode {
+    /// 只扫 `dirs`（默认，与历史行为一致）
+    #[default]
+    Whitelist,
+    /// 扫全局（所有固定驱动器），排除 `dirs`
+    Blacklist,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanConfig {
+    /// 含义随 `mode` 变化：白名单 = 要扫描的目录；黑名单 = 要**排除**的目录。
     pub dirs: Vec<String>,
+    #[serde(default)]
+    pub mode: ScanMode,
     #[serde(default)]
     pub max_depth: Option<usize>,
     /// 是否跟随符号链接（默认否，避免成环）
@@ -32,23 +50,106 @@ pub struct ScanConfig {
     pub force_reparse: bool,
 }
 
+/// 枚举「全局扫描」的根目录：所有固定驱动器。
+///
+/// 刻意**不引入新依赖**（不拉 windows-sys / sysinfo），而是直接探测盘符 ——
+/// `std::fs::metadata` 底层是 `GetFileAttributesW`，对空光驱 / 未就绪的可移动盘
+/// 会立即返回错误，不会像 `SetCurrentDirectory` 那类旧 API 一样弹「请插入磁盘」。
+///
+/// ⚠️ **已知局限**：`metadata` 没有超时。如果机器上有「已连接但不可达」的
+/// 网络驱动器（映射盘掉线），这一句可能阻塞几十秒，而且它在取消检查之前 ——
+/// 用户点取消也打断不了。断开的映射通常会立刻返回错误，真正会挂的是
+/// 「连着但对面没响应」。真遇到这种情况，正解是换成 `GetDriveTypeW` 只取
+/// `DRIVE_FIXED`（需要引入 windows-sys）。
+#[cfg(windows)]
+fn enumerate_fixed_roots() -> Vec<String> {
+    let mut roots = Vec::new();
+    for c in b'A'..=b'Z' {
+        let root = format!("{}:\\", c as char);
+        if std::fs::metadata(&root).is_ok() {
+            roots.push(root);
+        }
+    }
+    roots
+}
+
+/// 非 Windows：以文件系统根为全局范围。
+#[cfg(not(windows))]
+fn enumerate_fixed_roots() -> Vec<String> {
+    vec!["/".to_string()]
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanStartResult {
     pub job_id: String,
 }
 
-/// 扫描时始终跳过的目录名（系统 / 版本控制 / 依赖）
+/// 扫描时**始终**跳过的目录名（按名字匹配，任意层级生效）。
+///
+/// 黑名单模式会从盘符根开始遍历，必须把系统目录挡在外面 —— 否则光 C:\Windows
+/// 就有几十万文件，枚举阶段会被拖到不可接受。这些名字在任何模式下跳过都不会
+/// 误伤真实媒体（没人把媒体库叫 WinSxS）。
 const SKIP_DIRS: &[&str] = &[
+    // Windows 系统 / 回收站 / 应用数据
     "$RECYCLE.BIN",
     "System Volume Information",
+    "Windows",
+    "Program Files",
+    "Program Files (x86)",
+    "ProgramData",
+    "PerfLogs",
+    "Recovery",
+    "$WinREAgent",
+    "MSOCache",
+    "Config.Msi",
+    "WinSxS",
+    "System32",
+    "SysWOW64",
+    "OneDriveTemp",
+    "AppData",
+    // Unix 系统目录
+    "proc",
+    "sys",
+    "dev",
+    "run",
+    "boot",
+    "lost+found",
+    "snap",
+    // 版本控制 / 依赖 / 构建产物
     "node_modules",
     ".git",
     ".svn",
-    "AppData",
     "__pycache__",
     "target",
 ];
+
+/// 该目录名是否应当跳过（隐藏目录 / 系统目录 / 依赖目录）。
+///
+/// 单独抽出来是为了让 `filter_entry` 里的条件保持短行 —— 长条件在 rustfmt 下
+/// 的折行位置很微妙，短条件没有歧义。
+fn is_skipped_dir_name(name: &str) -> bool {
+    name.starts_with('.') || SKIP_DIRS.iter().any(|s| s.eq_ignore_ascii_case(name))
+}
+
+/// 路径是否落在任一排除目录内（**含其自身**）。
+///
+/// 用 `Path::starts_with`（按路径分量比较）而不是字符串前缀 ——
+/// 后者会让 `/media/music2` 被 `/media/music` 误伤。
+fn is_excluded(path: &std::path::Path, excludes: &[std::path::PathBuf]) -> bool {
+    excludes.iter().any(|ex| path == ex.as_path() || path.starts_with(ex))
+}
+
+/// 按模式算出「实际要遍历的根」与「要排除的目录」。
+fn resolve_scope(config: &ScanConfig) -> (Vec<String>, Vec<std::path::PathBuf>) {
+    match config.mode {
+        ScanMode::Whitelist => (config.dirs.clone(), Vec::new()),
+        ScanMode::Blacklist => (
+            enumerate_fixed_roots(),
+            config.dirs.iter().map(std::path::PathBuf::from).collect(),
+        ),
+    }
+}
 
 fn xxh3_hex(s: &str) -> String {
     format!("{:016x}", xxhash_rust::xxh3::xxh3_64(s.as_bytes()))
@@ -79,8 +180,10 @@ pub fn scan_start(
     state: State<'_, JobState>,
     config: ScanConfig,
 ) -> Result<ScanStartResult, String> {
-    if config.dirs.is_empty() {
-        return Err("未指定扫描目录".into());
+    // 白名单模式必须有目录；黑名单模式的 dirs 是「排除项」，可以为空
+    // （= 全局扫描且不排除任何目录）。
+    if config.mode == ScanMode::Whitelist && config.dirs.is_empty() {
+        return Err("白名单模式下至少要选择一个扫描目录".into());
     }
 
     let job_id = format!("scan-{}", uuid4());
@@ -116,10 +219,20 @@ fn run_scan(
     set_stage(app, job_id, "enumerate", 0, 0, "");
 
     let max_depth = config.max_depth.unwrap_or(usize::MAX);
+    // 按模式解析真实范围：白名单 = dirs；黑名单 = 所有固定驱动器 − dirs
+    let (roots, excludes) = resolve_scope(&config);
+    if roots.is_empty() {
+        return Err("没有可扫描的目录（未找到任何固定驱动器）".into());
+    }
+    if config.mode == ScanMode::Blacklist {
+        let msg = format!("全局扫描 {} 个驱动器根，排除 {} 个目录", roots.len(), excludes.len());
+        set_stage(app, job_id, "enumerate", 0, 0, &msg);
+    }
+
     let mut candidates: Vec<Candidate> = Vec::new();
     let mut seen_paths: HashSet<String> = HashSet::new();
 
-    for dir in &config.dirs {
+    for dir in &roots {
         let walker = WalkDir::new(dir)
             .max_depth(max_depth)
             .follow_links(config.follow_links)
@@ -130,7 +243,11 @@ fn run_scan(
                 }
                 let name = e.file_name().to_string_lossy();
                 // 跳过隐藏目录与已知的系统/依赖目录
-                !name.starts_with('.') && !SKIP_DIRS.iter().any(|s| s.eq_ignore_ascii_case(&name))
+                if is_skipped_dir_name(&name) {
+                    return false;
+                }
+                // 黑名单模式：跳过用户排除的目录及其整棵子树
+                !is_excluded(e.path(), &excludes)
             });
 
         for entry in walker {
@@ -391,6 +508,102 @@ fn set_stage(
 
 /// 取消扫描：置位取消标志，由扫描循环在下一个文件边界响应。
 #[silvermoon_ipc::command]
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    fn ex(list: &[&str]) -> Vec<PathBuf> {
+        list.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn is_excluded_matches_self_and_descendants() {
+        let excludes = ex(&["/media/games"]);
+        assert!(is_excluded(Path::new("/media/games"), &excludes));
+        assert!(is_excluded(Path::new("/media/games/x.mp4"), &excludes));
+        assert!(is_excluded(Path::new("/media/games/sub/y.mp4"), &excludes));
+    }
+
+    #[test]
+    fn is_excluded_is_component_wise_not_string_prefix() {
+        // 关键：/media/games2 不能被 /media/games 误伤（字符串前缀判断会错）
+        let excludes = ex(&["/media/games"]);
+        assert!(!is_excluded(Path::new("/media/games2"), &excludes));
+        assert!(!is_excluded(Path::new("/media/games2/x.mp4"), &excludes));
+    }
+
+    #[test]
+    fn is_excluded_false_when_list_empty() {
+        assert!(!is_excluded(Path::new("/media/anything"), &[]));
+    }
+
+    #[test]
+    fn whitelist_scope_uses_dirs_and_excludes_nothing() {
+        let cfg = ScanConfig {
+            dirs: vec!["/media/music".into()],
+            mode: ScanMode::Whitelist,
+            max_depth: None,
+            follow_links: false,
+            force_reparse: false,
+        };
+        let (roots, excludes) = resolve_scope(&cfg);
+        assert_eq!(roots, vec!["/media/music".to_string()]);
+        assert!(excludes.is_empty());
+    }
+
+    #[test]
+    fn blacklist_scope_uses_dirs_as_exclusions() {
+        let cfg = ScanConfig {
+            dirs: vec!["/media/games".into()],
+            mode: ScanMode::Blacklist,
+            max_depth: None,
+            follow_links: false,
+            force_reparse: false,
+        };
+        let (roots, excludes) = resolve_scope(&cfg);
+        // 根来自驱动器枚举（CI 上是 "/"），排除项来自 dirs
+        assert!(!roots.is_empty(), "全局模式必须能解析出根目录");
+        assert_eq!(excludes, ex(&["/media/games"]));
+    }
+
+    #[test]
+    fn default_mode_is_whitelist() {
+        // 缺省必须是白名单：老前端不传 mode 时行为与历史一致（零回归）
+        let cfg: ScanConfig = serde_json::from_str(r#"{"dirs":["/media"]}"#).unwrap();
+        assert_eq!(cfg.mode, ScanMode::Whitelist);
+    }
+
+    #[test]
+    fn mode_parses_lowercase_from_json() {
+        let cfg: ScanConfig =
+            serde_json::from_str(r#"{"dirs":[],"mode":"blacklist"}"#).unwrap();
+        assert_eq!(cfg.mode, ScanMode::Blacklist);
+    }
+
+    #[test]
+    fn is_skipped_dir_name_covers_hidden_system_and_deps() {
+        assert!(is_skipped_dir_name(".git"));
+        assert!(is_skipped_dir_name(".hidden"));
+        assert!(is_skipped_dir_name("node_modules"));
+        assert!(is_skipped_dir_name("Windows"));
+        assert!(is_skipped_dir_name("windows"), "匹配应忽略大小写");
+        assert!(!is_skipped_dir_name("Music"));
+        assert!(!is_skipped_dir_name("我的视频"));
+    }
+
+    #[test]
+    fn skip_dirs_covers_system_directories() {
+        // 黑名单模式从盘符根遍历，这些必须被挡住，否则枚举量会失控
+        for name in ["Windows", "Program Files", "ProgramData", "WinSxS", "System32"] {
+            assert!(
+                SKIP_DIRS.iter().any(|s| s.eq_ignore_ascii_case(name)),
+                "{name} 必须在 SKIP_DIRS 里"
+            );
+        }
+    }
+}
+
 pub fn scan_cancel(state: State<'_, JobState>, job_id: String) {
     if let Ok(jobs) = state.0.lock() {
         if let Some(job) = jobs.get(&job_id) {

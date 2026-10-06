@@ -6,7 +6,7 @@ import { applySeedColor, clearSeedTokens } from "@/utils/dynamicTheme";
 import { applySkin } from "@/utils/skinLoader";
 import { activePrepared, activeSkinDoc, skinModeLock, skinSafeMode } from "@/utils/skinRuntime";
 import { useDesktopStore } from "./desktop";
-import type { MusicServer, OnlinePlaylistEntry, Rgba } from "@shared/types";
+import type { MusicServer, OnlinePlaylistEntry, Rgba, ScanMode } from "@shared/types";
 import type { LyricSourcePref } from "@/utils/preciseLyrics";
 import type { ObsceneMode } from "@/utils/obscene";
 
@@ -170,6 +170,13 @@ const DEFAULTS = {
    */
   lyricLineMotion: "spring" as LyricLineMotion,
   scanDirs: [] as string[],
+  /**
+   * 扫描范围模式。
+   *
+   * 默认 `whitelist`（只扫 scanDirs）—— 与历史行为一致，不改变老用户的范围。
+   * `blacklist` 会扫描所有固定驱动器并排除 scanDirs。
+   */
+  scanMode: "whitelist" as ScanMode,
   gridColumns: 6,
   /** 最小文件体积过滤（MB）；0 表示不过滤 */
   minFileSizeMb: 0,
@@ -412,6 +419,7 @@ export const useSettingsStore = defineStore("settings", () => {
   const lyricBlur = ref(DEFAULTS.lyricBlur);
   const lyricLineMotion = ref<LyricLineMotion>(DEFAULTS.lyricLineMotion);
   const scanDirs = ref<string[]>([...DEFAULTS.scanDirs]);
+  const scanMode = ref<ScanMode>(DEFAULTS.scanMode);
   const gridColumns = ref(DEFAULTS.gridColumns);
   const minFileSizeMb = ref(DEFAULTS.minFileSizeMb);
   const pdfReadMode = ref<PdfReadMode>(DEFAULTS.pdfReadMode);
@@ -543,6 +551,7 @@ export const useSettingsStore = defineStore("settings", () => {
     lyricBlur,
     lyricLineMotion,
     scanDirs,
+    scanMode,
     gridColumns,
     minFileSizeMb,
     pdfReadMode,
