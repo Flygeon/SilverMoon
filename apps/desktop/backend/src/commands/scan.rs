@@ -137,7 +137,9 @@ fn is_skipped_dir_name(name: &str) -> bool {
 /// 用 `Path::starts_with`（按路径分量比较）而不是字符串前缀 ——
 /// 后者会让 `/media/music2` 被 `/media/music` 误伤。
 fn is_excluded(path: &std::path::Path, excludes: &[std::path::PathBuf]) -> bool {
-    excludes.iter().any(|ex| path == ex.as_path() || path.starts_with(ex))
+    excludes
+        .iter()
+        .any(|ex| path == ex.as_path() || path.starts_with(ex))
 }
 
 /// 按模式算出「实际要遍历的根」与「要排除的目录」。
@@ -225,7 +227,11 @@ fn run_scan(
         return Err("没有可扫描的目录（未找到任何固定驱动器）".into());
     }
     if config.mode == ScanMode::Blacklist {
-        let msg = format!("全局扫描 {} 个驱动器根，排除 {} 个目录", roots.len(), excludes.len());
+        let msg = format!(
+            "全局扫描 {} 个驱动器根，排除 {} 个目录",
+            roots.len(),
+            excludes.len()
+        );
         set_stage(app, job_id, "enumerate", 0, 0, &msg);
     }
 
@@ -508,102 +514,6 @@ fn set_stage(
 
 /// 取消扫描：置位取消标志，由扫描循环在下一个文件边界响应。
 #[silvermoon_ipc::command]
-#[cfg(test)]
-mod scope_tests {
-    use super::*;
-    use std::path::{Path, PathBuf};
-
-    fn ex(list: &[&str]) -> Vec<PathBuf> {
-        list.iter().map(PathBuf::from).collect()
-    }
-
-    #[test]
-    fn is_excluded_matches_self_and_descendants() {
-        let excludes = ex(&["/media/games"]);
-        assert!(is_excluded(Path::new("/media/games"), &excludes));
-        assert!(is_excluded(Path::new("/media/games/x.mp4"), &excludes));
-        assert!(is_excluded(Path::new("/media/games/sub/y.mp4"), &excludes));
-    }
-
-    #[test]
-    fn is_excluded_is_component_wise_not_string_prefix() {
-        // 关键：/media/games2 不能被 /media/games 误伤（字符串前缀判断会错）
-        let excludes = ex(&["/media/games"]);
-        assert!(!is_excluded(Path::new("/media/games2"), &excludes));
-        assert!(!is_excluded(Path::new("/media/games2/x.mp4"), &excludes));
-    }
-
-    #[test]
-    fn is_excluded_false_when_list_empty() {
-        assert!(!is_excluded(Path::new("/media/anything"), &[]));
-    }
-
-    #[test]
-    fn whitelist_scope_uses_dirs_and_excludes_nothing() {
-        let cfg = ScanConfig {
-            dirs: vec!["/media/music".into()],
-            mode: ScanMode::Whitelist,
-            max_depth: None,
-            follow_links: false,
-            force_reparse: false,
-        };
-        let (roots, excludes) = resolve_scope(&cfg);
-        assert_eq!(roots, vec!["/media/music".to_string()]);
-        assert!(excludes.is_empty());
-    }
-
-    #[test]
-    fn blacklist_scope_uses_dirs_as_exclusions() {
-        let cfg = ScanConfig {
-            dirs: vec!["/media/games".into()],
-            mode: ScanMode::Blacklist,
-            max_depth: None,
-            follow_links: false,
-            force_reparse: false,
-        };
-        let (roots, excludes) = resolve_scope(&cfg);
-        // 根来自驱动器枚举（CI 上是 "/"），排除项来自 dirs
-        assert!(!roots.is_empty(), "全局模式必须能解析出根目录");
-        assert_eq!(excludes, ex(&["/media/games"]));
-    }
-
-    #[test]
-    fn default_mode_is_whitelist() {
-        // 缺省必须是白名单：老前端不传 mode 时行为与历史一致（零回归）
-        let cfg: ScanConfig = serde_json::from_str(r#"{"dirs":["/media"]}"#).unwrap();
-        assert_eq!(cfg.mode, ScanMode::Whitelist);
-    }
-
-    #[test]
-    fn mode_parses_lowercase_from_json() {
-        let cfg: ScanConfig =
-            serde_json::from_str(r#"{"dirs":[],"mode":"blacklist"}"#).unwrap();
-        assert_eq!(cfg.mode, ScanMode::Blacklist);
-    }
-
-    #[test]
-    fn is_skipped_dir_name_covers_hidden_system_and_deps() {
-        assert!(is_skipped_dir_name(".git"));
-        assert!(is_skipped_dir_name(".hidden"));
-        assert!(is_skipped_dir_name("node_modules"));
-        assert!(is_skipped_dir_name("Windows"));
-        assert!(is_skipped_dir_name("windows"), "匹配应忽略大小写");
-        assert!(!is_skipped_dir_name("Music"));
-        assert!(!is_skipped_dir_name("我的视频"));
-    }
-
-    #[test]
-    fn skip_dirs_covers_system_directories() {
-        // 黑名单模式从盘符根遍历，这些必须被挡住，否则枚举量会失控
-        for name in ["Windows", "Program Files", "ProgramData", "WinSxS", "System32"] {
-            assert!(
-                SKIP_DIRS.iter().any(|s| s.eq_ignore_ascii_case(name)),
-                "{name} 必须在 SKIP_DIRS 里"
-            );
-        }
-    }
-}
-
 pub fn scan_cancel(state: State<'_, JobState>, job_id: String) {
     if let Ok(jobs) = state.0.lock() {
         if let Some(job) = jobs.get(&job_id) {
@@ -792,4 +702,105 @@ pub fn library_counts(
         })
         .map_err(|e| e.to_string())?;
     Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    fn ex(list: &[&str]) -> Vec<PathBuf> {
+        list.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn is_excluded_matches_self_and_descendants() {
+        let excludes = ex(&["/media/games"]);
+        assert!(is_excluded(Path::new("/media/games"), &excludes));
+        assert!(is_excluded(Path::new("/media/games/x.mp4"), &excludes));
+        assert!(is_excluded(Path::new("/media/games/sub/y.mp4"), &excludes));
+    }
+
+    #[test]
+    fn is_excluded_is_component_wise_not_string_prefix() {
+        // 关键：/media/games2 不能被 /media/games 误伤（字符串前缀判断会错）
+        let excludes = ex(&["/media/games"]);
+        assert!(!is_excluded(Path::new("/media/games2"), &excludes));
+        assert!(!is_excluded(Path::new("/media/games2/x.mp4"), &excludes));
+    }
+
+    #[test]
+    fn is_excluded_false_when_list_empty() {
+        assert!(!is_excluded(Path::new("/media/anything"), &[]));
+    }
+
+    #[test]
+    fn whitelist_scope_uses_dirs_and_excludes_nothing() {
+        let cfg = ScanConfig {
+            dirs: vec!["/media/music".into()],
+            mode: ScanMode::Whitelist,
+            max_depth: None,
+            follow_links: false,
+            force_reparse: false,
+        };
+        let (roots, excludes) = resolve_scope(&cfg);
+        assert_eq!(roots, vec!["/media/music".to_string()]);
+        assert!(excludes.is_empty());
+    }
+
+    #[test]
+    fn blacklist_scope_uses_dirs_as_exclusions() {
+        let cfg = ScanConfig {
+            dirs: vec!["/media/games".into()],
+            mode: ScanMode::Blacklist,
+            max_depth: None,
+            follow_links: false,
+            force_reparse: false,
+        };
+        let (roots, excludes) = resolve_scope(&cfg);
+        // 根来自驱动器枚举（CI 上是 "/"），排除项来自 dirs
+        assert!(!roots.is_empty(), "全局模式必须能解析出根目录");
+        assert_eq!(excludes, ex(&["/media/games"]));
+    }
+
+    #[test]
+    fn default_mode_is_whitelist() {
+        // 缺省必须是白名单：老前端不传 mode 时行为与历史一致（零回归）
+        let cfg: ScanConfig = serde_json::from_str(r#"{"dirs":["/media"]}"#).unwrap();
+        assert_eq!(cfg.mode, ScanMode::Whitelist);
+    }
+
+    #[test]
+    fn mode_parses_lowercase_from_json() {
+        let cfg: ScanConfig = serde_json::from_str(r#"{"dirs":[],"mode":"blacklist"}"#).unwrap();
+        assert_eq!(cfg.mode, ScanMode::Blacklist);
+    }
+
+    #[test]
+    fn is_skipped_dir_name_covers_hidden_system_and_deps() {
+        assert!(is_skipped_dir_name(".git"));
+        assert!(is_skipped_dir_name(".hidden"));
+        assert!(is_skipped_dir_name("node_modules"));
+        assert!(is_skipped_dir_name("Windows"));
+        assert!(is_skipped_dir_name("windows"), "匹配应忽略大小写");
+        assert!(!is_skipped_dir_name("Music"));
+        assert!(!is_skipped_dir_name("我的视频"));
+    }
+
+    #[test]
+    fn skip_dirs_covers_system_directories() {
+        // 黑名单模式从盘符根遍历，这些必须被挡住，否则枚举量会失控
+        for name in [
+            "Windows",
+            "Program Files",
+            "ProgramData",
+            "WinSxS",
+            "System32",
+        ] {
+            assert!(
+                SKIP_DIRS.iter().any(|s| s.eq_ignore_ascii_case(name)),
+                "{name} 必须在 SKIP_DIRS 里"
+            );
+        }
+    }
 }
