@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import PageHeader from "@/components/PageHeader.vue";
 import {
@@ -22,11 +22,14 @@ import { useBangumiCollectStore } from "@/stores/bangumiCollect";
 import { useLibraryStore } from "@/stores/library";
 import AudioEffectsPanel from "@/components/AudioEffectsPanel.vue";
 import SegmentedTabs from "@/components/SegmentedTabs.vue";
+import SettingRow from "@/components/SettingRow.vue";
 import { capabilities, type MemoryMetrics } from "@/capabilities";
 import { formatSize } from "@/utils/format";
 import { activeSkinDoc, skinModeLock, skinSafeMode } from "@/utils/skinRuntime";
 import { SB_CATEGORIES } from "@/utils/sponsorBlock";
 import { translate } from "@shared/i18n";
+import { SETTINGS_INDEX } from "@/views/settingsIndex.generated";
+import { matchSettings, type SettingsHit } from "@/views/settingsSearch";
 import type { FfmpegStatus, SkinEntry } from "@shared/types";
 import { listen } from "@/ipc/events";
 
@@ -622,13 +625,109 @@ function selectSection(id: string) {
   // 不同分类高度差很大，不回到顶部会让短分类停在上一屏的滚动位置
   document.querySelector(".settings-view")?.scrollIntoView({ block: "start" });
 }
+
+// ---------------------------------------------------------------- 设置搜索
+
+/**
+ * 设置搜索。
+ *
+ * ## 为什么必须有
+ *
+ * 改版后分类从 6 个变成 19 个、设置项有 163 个。分类重排解决的是「浏览」——
+ * 想看有什么可调的；而「我记得有个开关叫…」是**检索**，只能靠搜索一步到位。
+ * 两者不能互相替代。
+ *
+ * ## 索引从哪来
+ *
+ * `SETTINGS_INDEX`（i18n 键 → 所属分类）由 `scripts/gen-settings-index.mjs`
+ * **从模板结构生成**，并有守卫测试保证它不会过期 —— 手写映射表必然漂移。
+ */
+const settingsQuery = ref("");
+
+/** 分类 id → 该分类的显示名 */
+const sectionLabelById = computed<Record<string, string>>(() => {
+  const out: Record<string, string> = {};
+  for (const group of settingNav) {
+    for (const item of group.items) out[item.id] = t(item.labelKey);
+  }
+  return out;
+});
+
+const settingsHits = computed<SettingsHit[]>(() =>
+  matchSettings(
+    SETTINGS_INDEX,
+    settingsQuery.value,
+    /*
+     * 中英双语文案都参与匹配：中文界面下用户也可能敲英文关键词
+     * （例如 UI 是中文但习惯打 "loudness"）。匹配逻辑本身是纯函数，见 settingsSearch.ts。
+     */
+    (key) => t(key) + " " + translate("en", key),
+    (id) => sectionLabelById.value[id] ?? id,
+  ),
+);
+
+/** 刚刚跳转过去、正在闪烁高亮的那一项 */
+const flashKey = ref<string | null>(null);
+let flashTimer: number | null = null;
+
+/** 跳到具体某一项：切分类 → 等 DOM 换出 → 滚动并闪烁高亮。 */
+async function goToSetting(hit: SettingsHit) {
+  activeSection.value = hit.section;
+  settingsQuery.value = "";
+  // 目标卡片此刻还没渲染出来（v-if 刚翻转），必须等一次 DOM 更新再找锚点
+  await nextTick();
+  const el = document.querySelector('[data-setting="' + hit.key + '"]');
+  el?.scrollIntoView({ block: "center", behavior: "smooth" });
+  el?.classList.add("setting-flash");
+  flashKey.value = hit.key;
+  if (flashTimer !== null) window.clearTimeout(flashTimer);
+  flashTimer = window.setTimeout(() => {
+    document.querySelector('[data-setting="' + hit.key + '"]')?.classList.remove("setting-flash");
+    flashKey.value = null;
+    flashTimer = null;
+  }, 1600);
+}
+
+onBeforeUnmount(() => {
+  if (flashTimer !== null) window.clearTimeout(flashTimer);
+});
 </script>
 
 <template>
   <div class="settings-view">
     <PageHeader :title="t('nav.settings')" :description="t('navDesc.settings')" />
     <aside class="settings-nav" aria-label="设置分类">
-      <m3e-nav-menu>
+      <!--
+        设置搜索：163 个设置项里一步定位。
+        分类重排解决的是「浏览」（想看有什么可调的），这里解决「检索」
+        （我记得有个开关叫…）—— 两者不能互相替代。
+      -->
+      <div class="settings-search">
+        <span class="material-symbols-outlined settings-search-icon">search</span>
+        <input
+          v-model="settingsQuery"
+          type="search"
+          :placeholder="t('settings.searchPlaceholder')"
+          :aria-label="t('settings.searchPlaceholder')"
+          spellcheck="false"
+        />
+      </div>
+      <div v-if="settingsQuery.trim()" class="settings-hits">
+        <p v-if="!settingsHits.length" class="settings-hit-empty">
+          {{ t("settings.searchNoResult") }}
+        </p>
+        <button
+          v-for="hit in settingsHits"
+          :key="hit.key"
+          type="button"
+          class="settings-hit"
+          @click="goToSetting(hit)"
+        >
+          <span class="settings-hit-label">{{ hit.label }}</span>
+          <span class="settings-hit-where">{{ hit.where }}</span>
+        </button>
+      </div>
+      <m3e-nav-menu v-else>
         <m3e-nav-menu-item-group v-for="group in settingNav" :key="group.titleKey">
           <div slot="label" class="settings-nav-group">{{ t(group.titleKey) }}</div>
           <m3e-nav-menu-item
@@ -1001,30 +1100,39 @@ function selectSection(id: string) {
 
         <!-- AMLL 引擎专属动效设置：仅在选用 AMLL 时展示，避免与自研视图的选项混在一起 -->
         <template v-if="settings.lyricEngine === 'amll'">
-          <label class="row switch-row">
-            <span class="row-label">{{ t("settings.amllEnableScale") }}</span>
+          <SettingRow
+            :label="t('settings.amllEnableScale')"
+            setting-key="settings.amllEnableScale"
+            clickable
+          >
             <m3e-switch
               :checked="settings.amllEnableScale"
               @change="setSwitch('amllEnableScale', $event)"
             />
-          </label>
+          </SettingRow>
           <p class="hint">{{ t("settings.amllEnableScaleHint") }}</p>
 
-          <label class="row switch-row">
-            <span class="row-label">{{ t("settings.amllHidePassedLines") }}</span>
+          <SettingRow
+            :label="t('settings.amllHidePassedLines')"
+            setting-key="settings.amllHidePassedLines"
+            clickable
+          >
             <m3e-switch
               :checked="settings.amllHidePassedLines"
               @change="setSwitch('amllHidePassedLines', $event)"
             />
-          </label>
+          </SettingRow>
 
-          <label class="row switch-row">
-            <span class="row-label">{{ t("settings.amllEnableSpring") }}</span>
+          <SettingRow
+            :label="t('settings.amllEnableSpring')"
+            setting-key="settings.amllEnableSpring"
+            clickable
+          >
             <m3e-switch
               :checked="settings.amllEnableSpring"
               @change="setSwitch('amllEnableSpring', $event)"
             />
-          </label>
+          </SettingRow>
           <p class="hint">{{ t("settings.amllEnableSpringHint") }}</p>
 
           <div class="row">
@@ -1056,26 +1164,27 @@ function selectSection(id: string) {
           </div>
         </template>
 
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.wordLyrics") }}</span>
+        <SettingRow :label="t('settings.wordLyrics')" setting-key="settings.wordLyrics" clickable>
           <m3e-switch :checked="settings.wordLyrics" @change="setSwitch('wordLyrics', $event)" />
-        </label>
+        </SettingRow>
         <p class="hint">{{ t("settings.wordLyricsHint") }}</p>
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.preciseLyrics") }}</span>
+        <SettingRow
+          :label="t('settings.preciseLyrics')"
+          setting-key="settings.preciseLyrics"
+          clickable
+        >
           <m3e-switch
             :checked="settings.preciseLyrics"
             @change="setSwitch('preciseLyrics', $event)"
           />
-        </label>
+        </SettingRow>
         <p class="hint">{{ t("settings.preciseLyricsHint") }}</p>
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.amllLyrics") }}</span>
+        <SettingRow :label="t('settings.amllLyrics')" setting-key="settings.amllLyrics" clickable>
           <m3e-switch
             :checked="settings.amllLyricsEnabled"
             @change="setSwitch('amllLyricsEnabled', $event)"
           />
-        </label>
+        </SettingRow>
         <p class="hint">{{ t("settings.amllLyricsHint") }}</p>
         <!-- 地址框仅在源开启时展示：关掉 AMLL 后该地址不会被使用，避免误导 -->
         <m3e-form-field v-if="settings.amllLyricsEnabled" variant="filled" class="field">
@@ -1085,21 +1194,27 @@ function selectSection(id: string) {
         <p v-if="settings.amllLyricsEnabled" class="hint">
           {{ t("settings.amllLyricBaseHint") }}
         </p>
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.detectInstrumental") }}</span>
+        <SettingRow
+          :label="t('settings.detectInstrumental')"
+          setting-key="settings.detectInstrumental"
+          clickable
+        >
           <m3e-switch
             :checked="settings.detectInstrumental"
             @change="setSwitch('detectInstrumental', $event)"
           />
-        </label>
+        </SettingRow>
         <p class="hint">{{ t("settings.detectInstrumentalHint") }}</p>
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.loudnessNormalize") }}</span>
+        <SettingRow
+          :label="t('settings.loudnessNormalize')"
+          setting-key="settings.loudnessNormalize"
+          clickable
+        >
           <m3e-switch
             :checked="settings.loudnessNormalize"
             @change="setSwitch('loudnessNormalize', $event)"
           />
-        </label>
+        </SettingRow>
         <p class="hint">{{ t("settings.loudnessNormalizeHint") }}</p>
         <div v-if="settings.loudnessNormalize" class="row">
           <span class="row-label">{{ t("settings.loudnessTarget") }}</span>
@@ -1204,29 +1319,38 @@ function selectSection(id: string) {
         <h3>{{ t("settings.desktopLyrics") }}</h3>
         <p class="hint">{{ t("settings.desktopLyricsHint") }}</p>
 
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.desktopLyricsEnable") }}</span>
+        <SettingRow
+          :label="t('settings.desktopLyricsEnable')"
+          setting-key="settings.desktopLyricsEnable"
+          clickable
+        >
           <m3e-switch
             :checked="settings.desktopLyricsEnabled"
             @change="setSwitch('desktopLyricsEnabled', $event)"
           />
-        </label>
+        </SettingRow>
 
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.desktopLyricsShowNext") }}</span>
+        <SettingRow
+          :label="t('settings.desktopLyricsShowNext')"
+          setting-key="settings.desktopLyricsShowNext"
+          clickable
+        >
           <m3e-switch
             :checked="settings.desktopLyricsShowNext"
             @change="setSwitch('desktopLyricsShowNext', $event)"
           />
-        </label>
+        </SettingRow>
 
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.desktopLyricsShowTranslation") }}</span>
+        <SettingRow
+          :label="t('settings.desktopLyricsShowTranslation')"
+          setting-key="settings.desktopLyricsShowTranslation"
+          clickable
+        >
           <m3e-switch
             :checked="settings.desktopLyricsShowTranslation"
             @change="setSwitch('desktopLyricsShowTranslation', $event)"
           />
-        </label>
+        </SettingRow>
 
         <div class="row">
           <div class="row-label">
@@ -1287,30 +1411,39 @@ function selectSection(id: string) {
           </div>
         </div>
 
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.desktopLyricsLocked") }}</span>
+        <SettingRow
+          :label="t('settings.desktopLyricsLocked')"
+          setting-key="settings.desktopLyricsLocked"
+          clickable
+        >
           <m3e-switch
             :checked="settings.desktopLyricsLocked"
             @change="setSwitch('desktopLyricsLocked', $event)"
           />
-        </label>
+        </SettingRow>
 
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.desktopLyricsClickThrough") }}</span>
+        <SettingRow
+          :label="t('settings.desktopLyricsClickThrough')"
+          setting-key="settings.desktopLyricsClickThrough"
+          clickable
+        >
           <m3e-switch
             :checked="settings.desktopLyricsClickThrough"
             @change="setSwitch('desktopLyricsClickThrough', $event)"
           />
-        </label>
+        </SettingRow>
         <p class="hint">{{ t("settings.desktopLyricsClickThroughHint") }}</p>
 
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.desktopLyricsAlwaysOnTop") }}</span>
+        <SettingRow
+          :label="t('settings.desktopLyricsAlwaysOnTop')"
+          setting-key="settings.desktopLyricsAlwaysOnTop"
+          clickable
+        >
           <m3e-switch
             :checked="settings.desktopLyricsAlwaysOnTop"
             @change="setSwitch('desktopLyricsAlwaysOnTop', $event)"
           />
-        </label>
+        </SettingRow>
 
         <div class="actions">
           <m3e-button variant="outlined" size="small" @click="resetDesktopLyricsBounds">
@@ -1338,10 +1471,9 @@ function selectSection(id: string) {
           <SegmentedTabs v-model="settings.musicViewMode" bare :tabs="musicViewTabs" />
         </div>
         <p class="hint">{{ t("player.hotkeysHint") }}</p>
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.lyricBlur") }}</span>
+        <SettingRow :label="t('settings.lyricBlur')" setting-key="settings.lyricBlur" clickable>
           <m3e-switch :checked="settings.lyricBlur" @change="setSwitch('lyricBlur', $event)" />
-        </label>
+        </SettingRow>
       </div>
     </m3e-card>
 
@@ -1349,13 +1481,16 @@ function selectSection(id: string) {
     <m3e-card v-if="activeSection === 'settings-automix'" class="card" variant="outlined">
       <div slot="content">
         <h3>{{ t("settings.autoMix") }}</h3>
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.autoMixEnabled") }}</span>
+        <SettingRow
+          :label="t('settings.autoMixEnabled')"
+          setting-key="settings.autoMixEnabled"
+          clickable
+        >
           <m3e-switch
             :checked="settings.autoMixEnabled"
             @change="setSwitch('autoMixEnabled', $event)"
           />
-        </label>
+        </SettingRow>
         <p class="hint">{{ t("settings.autoMixHint") }}</p>
 
         <template v-if="settings.autoMixEnabled">
@@ -1373,21 +1508,27 @@ function selectSection(id: string) {
             <span class="value">{{ settings.autoMixDuration }}s</span>
           </div>
 
-          <label class="row switch-row">
-            <span class="row-label">{{ t("settings.autoMixBeatMatch") }}</span>
+          <SettingRow
+            :label="t('settings.autoMixBeatMatch')"
+            setting-key="settings.autoMixBeatMatch"
+            clickable
+          >
             <m3e-switch
               :checked="settings.autoMixBeatMatch"
               @change="setSwitch('autoMixBeatMatch', $event)"
             />
-          </label>
+          </SettingRow>
 
-          <label class="row switch-row">
-            <span class="row-label">{{ t("settings.autoMixTrimSilence") }}</span>
+          <SettingRow
+            :label="t('settings.autoMixTrimSilence')"
+            setting-key="settings.autoMixTrimSilence"
+            clickable
+          >
             <m3e-switch
               :checked="settings.autoMixTrimSilence"
               @change="setSwitch('autoMixTrimSilence', $event)"
             />
-          </label>
+          </SettingRow>
 
           <div class="row">
             <div class="row-label">
@@ -1434,13 +1575,16 @@ function selectSection(id: string) {
       <div slot="content">
         <h3>{{ t("nav.settingsOnlineMusic") }}</h3>
         <p class="hint">{{ t("settings.onlineHint") }}</p>
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.onlineEnable") }}</span>
+        <SettingRow
+          :label="t('settings.onlineEnable')"
+          setting-key="settings.onlineEnable"
+          clickable
+        >
           <m3e-switch
             :checked="settings.enableOnlineMusic"
             @change="setSwitch('enableOnlineMusic', $event)"
           />
-        </label>
+        </SettingRow>
         <div v-if="settings.enableOnlineMusic" class="row">
           <div class="row-label">
             <span>{{ t("settings.onlineServer") }}</span>
@@ -1459,13 +1603,16 @@ function selectSection(id: string) {
     >
       <div slot="content">
         <h3>{{ t("nav.settingsNetease") }}</h3>
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.neteaseEnable") }}</span>
+        <SettingRow
+          :label="t('settings.neteaseEnable')"
+          setting-key="settings.neteaseEnable"
+          clickable
+        >
           <m3e-switch
             :checked="settings.neteaseEnabled"
             @change="setSwitch('neteaseEnabled', $event)"
           />
-        </label>
+        </SettingRow>
         <p class="hint">{{ t("settings.neteaseHint") }}</p>
       </div>
     </m3e-card>
@@ -1479,21 +1626,24 @@ function selectSection(id: string) {
     >
       <div slot="content">
         <h3>{{ t("nav.settingsKugou") }}</h3>
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.kugouEnable") }}</span>
+        <SettingRow :label="t('settings.kugouEnable')" setting-key="settings.kugouEnable" clickable>
           <m3e-switch
             :checked="settings.kugouEnabled"
             @change="setSwitch('kugouEnabled', $event)"
           />
-        </label>
+        </SettingRow>
         <p class="hint">{{ t("settings.kugouHint") }}</p>
-        <label v-if="settings.kugouEnabled" class="row switch-row">
-          <span class="row-label">{{ t("settings.kugouAutoSignIn") }}</span>
+        <SettingRow
+          v-if="settings.kugouEnabled"
+          :label="t('settings.kugouAutoSignIn')"
+          setting-key="settings.kugouAutoSignIn"
+          clickable
+        >
           <m3e-switch
             :checked="settings.kugouAutoSignIn"
             @change="setSwitch('kugouAutoSignIn', $event)"
           />
-        </label>
+        </SettingRow>
       </div>
     </m3e-card>
 
@@ -1502,20 +1652,26 @@ function selectSection(id: string) {
       <div slot="content">
         <h3>{{ t("settings.onlineNovel") }}</h3>
         <p class="hint">{{ t("settings.onlineNovelHint") }}</p>
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.onlineNovelEnable") }}</span>
+        <SettingRow
+          :label="t('settings.onlineNovelEnable')"
+          setting-key="settings.onlineNovelEnable"
+          clickable
+        >
           <m3e-switch
             :checked="settings.onlineNovelEnabled"
             @change="setSwitch('onlineNovelEnabled', $event)"
           />
-        </label>
-        <label class="row switch-row">
-          <span class="row-label">是否启用笔趣阁小说阅读</span>
+        </SettingRow>
+        <SettingRow
+          :label="t('settings.bqgNovelEnable')"
+          setting-key="settings.bqgNovelEnable"
+          clickable
+        >
           <m3e-switch
             :checked="settings.bqgNovelEnabled"
             @change="setSwitch('bqgNovelEnabled', $event)"
           />
-        </label>
+        </SettingRow>
         <div v-if="settings.onlineNovelEnabled" class="row">
           <div class="row-label">
             <span>{{ t("settings.wenku8Node") }}</span>
@@ -1536,83 +1692,107 @@ function selectSection(id: string) {
       <div slot="content">
         <h3>{{ t("settings.bilibili") }}</h3>
         <p class="hint">{{ t("settings.bilibiliHint") }}</p>
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.bilibiliEnable") }}</span>
+        <SettingRow
+          :label="t('settings.bilibiliEnable')"
+          setting-key="settings.bilibiliEnable"
+          clickable
+        >
           <m3e-switch
             :checked="settings.bilibiliEnabled"
             @change="setSwitch('bilibiliEnabled', $event)"
           />
-        </label>
+        </SettingRow>
         <p v-if="settings.bilibiliEnabled" class="hint">
           {{ t("settings.bilibiliLoginHint") }}
         </p>
 
         <!-- 反诈 / 带货过滤 / AI 总结：仅在启用 B 站视频后才有意义 -->
         <template v-if="settings.bilibiliEnabled">
-          <label class="row switch-row">
-            <span class="row-label">{{ t("settings.biliAntifraud") }}</span>
+          <SettingRow
+            :label="t('settings.biliAntifraud')"
+            setting-key="settings.biliAntifraud"
+            clickable
+          >
             <m3e-switch
               :checked="settings.biliAntifraudEnabled"
               @change="setSwitch('biliAntifraudEnabled', $event)"
             />
-          </label>
+          </SettingRow>
           <p class="hint">{{ t("settings.biliAntifraudHint") }}</p>
 
-          <label class="row switch-row">
-            <span class="row-label">{{ t("settings.biliDynAntifraud") }}</span>
+          <SettingRow
+            :label="t('settings.biliDynAntifraud')"
+            setting-key="settings.biliDynAntifraud"
+            clickable
+          >
             <m3e-switch
               :checked="settings.biliDynAntifraudEnabled"
               @change="setSwitch('biliDynAntifraudEnabled', $event)"
             />
-          </label>
+          </SettingRow>
           <p class="hint">{{ t("settings.biliDynAntifraudHint") }}</p>
 
-          <label class="row switch-row">
-            <span class="row-label">{{ t("settings.biliAntiGoodsDyn") }}</span>
+          <SettingRow
+            :label="t('settings.biliAntiGoodsDyn')"
+            setting-key="settings.biliAntiGoodsDyn"
+            clickable
+          >
             <m3e-switch
               :checked="settings.biliAntiGoodsDyn"
               @change="setSwitch('biliAntiGoodsDyn', $event)"
             />
-          </label>
+          </SettingRow>
           <p class="hint">{{ t("settings.biliAntiGoodsDynHint") }}</p>
 
-          <label class="row switch-row">
-            <span class="row-label">{{ t("settings.biliAntiGoodsReply") }}</span>
+          <SettingRow
+            :label="t('settings.biliAntiGoodsReply')"
+            setting-key="settings.biliAntiGoodsReply"
+            clickable
+          >
             <m3e-switch
               :checked="settings.biliAntiGoodsReply"
               @change="setSwitch('biliAntiGoodsReply', $event)"
             />
-          </label>
+          </SettingRow>
           <p class="hint">{{ t("settings.biliAntiGoodsReplyHint") }}</p>
 
-          <label class="row switch-row">
-            <span class="row-label">{{ t("settings.biliAiSummary") }}</span>
+          <SettingRow
+            :label="t('settings.biliAiSummary')"
+            setting-key="settings.biliAiSummary"
+            clickable
+          >
             <m3e-switch
               :checked="settings.biliAiSummaryEnabled"
               @change="setSwitch('biliAiSummaryEnabled', $event)"
             />
-          </label>
+          </SettingRow>
           <p class="hint">{{ t("settings.biliAiSummaryHint") }}</p>
 
-          <label class="row switch-row">
-            <span class="row-label">{{ t("settings.biliAntiGoodsPublish") }}</span>
+          <SettingRow
+            :label="t('settings.biliAntiGoodsPublish')"
+            setting-key="settings.biliAntiGoodsPublish"
+            clickable
+          >
             <m3e-switch
               :checked="settings.biliAntiGoodsPublish"
               @change="setSwitch('biliAntiGoodsPublish', $event)"
             />
-          </label>
+          </SettingRow>
           <p class="hint">{{ t("settings.biliAntiGoodsPublishHint") }}</p>
         </template>
 
         <!-- 空降助手（SponsorBlock）：跳过赞助/广告段 -->
         <template v-if="settings.bilibiliEnabled">
-          <label class="row switch-row">
-            <span class="row-label">{{ t("settings.sponsorBlock") }}</span>
+          <SettingRow
+            :label="t('settings.sponsorBlock')"
+            setting-key="settings.sponsorBlock"
+            clickable
+          >
             <m3e-switch
               :checked="settings.sponsorBlockEnabled"
               @change="setSwitch('sponsorBlockEnabled', $event)"
             />
-          </label>
+          </SettingRow>
           <p class="hint">{{ t("settings.sponsorBlockHint") }}</p>
 
           <template v-if="settings.sponsorBlockEnabled">
@@ -1638,25 +1818,27 @@ function selectSection(id: string) {
             </div>
             <p class="hint">{{ t("settings.sponsorBlockCategoriesHint") }}</p>
 
-            <label class="row switch-row">
-              <span class="row-label">{{ t("settings.sponsorBlockToast") }}</span>
+            <SettingRow
+              :label="t('settings.sponsorBlockToast')"
+              setting-key="settings.sponsorBlockToast"
+              clickable
+            >
               <m3e-switch
                 :checked="settings.sponsorBlockToast"
                 @change="setSwitch('sponsorBlockToast', $event)"
               />
-            </label>
+            </SettingRow>
           </template>
         </template>
 
         <!-- 氛围光（ambient light）：默认关闭，参数可调 -->
         <template v-if="settings.bilibiliEnabled">
-          <label class="row switch-row">
-            <span class="row-label">{{ t("settings.ambilight") }}</span>
+          <SettingRow :label="t('settings.ambilight')" setting-key="settings.ambilight" clickable>
             <m3e-switch
               :checked="settings.ambilightEnabled"
               @change="setSwitch('ambilightEnabled', $event)"
             />
-          </label>
+          </SettingRow>
           <p class="hint">{{ t("settings.ambilightHint") }}</p>
 
           <template v-if="settings.ambilightEnabled">
@@ -1715,13 +1897,16 @@ function selectSection(id: string) {
       <div slot="content">
         <h3>{{ t("settings.onlineAnime") }}</h3>
         <p class="hint">{{ t("settings.onlineAnimeHint") }}</p>
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.onlineAnimeEnable") }}</span>
+        <SettingRow
+          :label="t('settings.onlineAnimeEnable')"
+          setting-key="settings.onlineAnimeEnable"
+          clickable
+        >
           <m3e-switch
             :checked="settings.onlineAnimeEnabled"
             @change="setSwitch('onlineAnimeEnabled', $event)"
           />
-        </label>
+        </SettingRow>
         <template v-if="settings.onlineAnimeEnabled">
           <p class="hint">{{ t("settings.bangumiHint") }}</p>
           <div class="dav-form">
@@ -1781,13 +1966,16 @@ function selectSection(id: string) {
       <div slot="content">
         <h3>{{ t("settings.onlinePixivEnabled") }}</h3>
         <p class="hint">{{ t("settings.onlinePixivHint") }}</p>
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.onlinePixivEnabled") }}</span>
+        <SettingRow
+          :label="t('settings.onlinePixivEnabled')"
+          setting-key="settings.onlinePixivEnabled"
+          clickable
+        >
           <m3e-switch
             :checked="settings.onlinePixivEnabled"
             @change="setSwitch('onlinePixivEnabled', $event)"
           />
-        </label>
+        </SettingRow>
         <template v-if="settings.onlinePixivEnabled">
           <div class="row">
             <div class="row-label">
@@ -1824,13 +2012,16 @@ function selectSection(id: string) {
       <div slot="content">
         <h3>{{ t("settings.danmaku") }}</h3>
         <p class="hint">{{ t("settings.danmakuHint") }}</p>
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.danmakuEnable") }}</span>
+        <SettingRow
+          :label="t('settings.danmakuEnable')"
+          setting-key="settings.danmakuEnable"
+          clickable
+        >
           <m3e-switch
             :checked="settings.danmakuEnabled"
             @change="setSwitch('danmakuEnabled', $event)"
           />
-        </label>
+        </SettingRow>
         <template v-if="settings.danmakuEnabled">
           <div class="dav-form">
             <m3e-form-field variant="filled" class="field">
@@ -1905,13 +2096,16 @@ function selectSection(id: string) {
                 @change="onDanmakuOffsetChange"
               />
             </m3e-form-field>
-            <label class="row switch-row">
-              <span class="row-label">{{ t("settings.danmakuAntiOverlap") }}</span>
+            <SettingRow
+              :label="t('settings.danmakuAntiOverlap')"
+              setting-key="settings.danmakuAntiOverlap"
+              clickable
+            >
               <m3e-switch
                 :checked="settings.danmakuAntiOverlap"
                 @change="setSwitch('danmakuAntiOverlap', $event)"
               />
-            </label>
+            </SettingRow>
           </div>
         </template>
       </div>
@@ -1928,13 +2122,16 @@ function selectSection(id: string) {
         <h3>{{ t("settings.webdav") }}</h3>
         <p class="hint">{{ t("settings.webdavHint") }}</p>
 
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.webdavEnable") }}</span>
+        <SettingRow
+          :label="t('settings.webdavEnable')"
+          setting-key="settings.webdavEnable"
+          clickable
+        >
           <m3e-switch
             :checked="settings.webdavEnabled"
             @change="setSwitch('webdavEnabled', $event)"
           />
-        </label>
+        </SettingRow>
 
         <div v-if="settings.webdavEnabled" class="dav-form">
           <m3e-form-field variant="filled" class="field">
@@ -2094,10 +2291,9 @@ function selectSection(id: string) {
             <span></span>
           </div>
         </div>
-        <label class="row switch-row">
-          <span class="row-label">{{ t("settings.devtools") }}</span>
+        <SettingRow :label="t('settings.devtools')" setting-key="settings.devtools" clickable>
           <m3e-switch :checked="devtoolsEnabled" @change="toggleDevtools" />
-        </label>
+        </SettingRow>
         <p class="hint">{{ t("settings.devtoolsHint") }}</p>
         <div class="actions">
           <m3e-button variant="outlined" size="small" @click="clearCache">
@@ -2175,6 +2371,89 @@ function selectSection(id: string) {
   overscroll-behavior: contain;
   scrollbar-width: thin;
 }
+/* ---- 设置搜索 ---- */
+.settings-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.settings-search-icon {
+  position: absolute;
+  left: 10px;
+  font-size: 18px;
+  color: var(--md-sys-color-on-surface-variant);
+  pointer-events: none;
+}
+.settings-search input {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px 0 34px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-surface-container-low);
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+  font-size: var(--md-sys-typescale-body-small-size);
+  outline: none;
+}
+.settings-search input:focus {
+  border-color: var(--md-sys-color-primary);
+}
+.settings-hits {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+}
+.settings-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.settings-hit:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+.settings-hit-label {
+  font-size: var(--md-sys-typescale-body-small-size);
+}
+.settings-hit-where {
+  font-size: 11px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+.settings-hit-empty {
+  margin: 4px 0;
+  padding: 0 10px;
+  font-size: var(--md-sys-typescale-body-small-size);
+  color: var(--md-sys-color-on-surface-variant);
+}
+/*
+ * 跳转后的闪烁高亮。
+ * 用 :deep() 是因为目标行可能来自 SettingRow 子组件（scoped 不穿透），
+ * 也可能仍是本文件里的裸行 —— 两种都要能高亮。
+ */
+.settings-view :deep([data-setting].setting-flash) {
+  animation: setting-flash 1.6s ease-out;
+  border-radius: var(--md-sys-shape-corner-small);
+}
+@keyframes setting-flash {
+  0%,
+  60% {
+    background: var(--md-sys-color-primary-container);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
 .settings-nav-group {
   padding: 6px 0 2px;
   color: var(--md-sys-color-on-surface-variant);

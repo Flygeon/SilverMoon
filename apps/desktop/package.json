@@ -23,6 +23,8 @@
     "build:splash": "cargo build --release --manifest-path splash/Cargo.toml",
     "verify:tag-sources": "node scripts/verify-music-tag-sources.mjs",
     "verify:mock-coverage": "node scripts/check-mock-coverage.mjs",
+    "gen:settings-index": "node scripts/gen-settings-index.mjs",
+    "verify:settings-index": "node scripts/gen-settings-index.mjs --check",
     "build:backend": "cargo build --manifest-path backend/Cargo.toml",
     "build:backend:release": "cargo build --release --manifest-path backend/Cargo.toml",
     "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.electron.json",

@@ -283,6 +283,9 @@ export const messages = {
       memoryProcessName: "进程 / 窗口",
       memoryWorkingSet: "工作集",
       memoryPeak: "峰值",
+      bqgNovelEnable: "启用笔趣阁小说阅读",
+      searchPlaceholder: "搜索设置项…",
+      searchNoResult: "没有匹配的设置项",
       loudnessNormalizeHint:
         "把本地文件与各在线源统一到同一音量（EBU R128 / LUFS）。按需测量：只测实际播放过的歌，结果缓存在本地。",
       loudnessTarget: "目标响度（LUFS）",
@@ -1458,6 +1461,9 @@ export const messages = {
       memoryProcessName: "Process / window",
       memoryWorkingSet: "Working set",
       memoryPeak: "Peak",
+      bqgNovelEnable: "Enable Biquge novel reading",
+      searchPlaceholder: "Search settings…",
+      searchNoResult: "No matching setting",
       loudnessNormalizeHint:
         "Bring local files and every online source to one loudness level (EBU R128 / LUFS). Measured on demand: only tracks you actually play, cached locally.",
       loudnessTarget: "Target loudness (LUFS)",
