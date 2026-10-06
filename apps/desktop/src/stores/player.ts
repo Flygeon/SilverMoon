@@ -370,6 +370,20 @@ export const usePlayerStore = defineStore("player", () => {
     });
     el.addEventListener("ended", () => {
       if (!isActive()) return;
+      /**
+       * 过渡进行中：这次「自然播完」正是交叉淡化的收尾，切歌由 runMix 负责。
+       *
+       * ⚠️ 这道闸不能删，删了会**切歌后没声音**：
+       * planMix 的 fadeOutAt = 曲长 − 过渡时长，过渡恰好收在曲尾，所以本事件
+       * 必然与进行中的过渡撞上。此时若照常 next()，playFromQueue →
+       * invalidatePrepared 会把**正在淡入的那个 deck** 的源清掉
+       * （pause + removeAttribute("src") + load()），而 runMix 随后仍会把 audioEl
+       * 提升到那个已经没源的 deck 上；提升时的 playFromQueue(skipStart) 又抑制了起播
+       * → 结果就是「进度条跑完切下一首，直接没声音」。
+       *
+       * 与 maybeAutoMix 开头的 `if (mixing.value) return;` 是同一道闸，此处此前遗漏。
+       */
+      if (mixing.value) return;
       playing.value = false;
       // 听歌时长：标记完成
       flushSession(true);
@@ -451,6 +465,17 @@ export const usePlayerStore = defineStore("player", () => {
   let prepared: { index: number; analysis: TrackAnalysis | null; src: string } | null = null;
   /** 过渡是否已为本曲触发过（避免 timeupdate 反复触发） */
   let mixTriggeredFor: string | null = null;
+
+  /**
+   * 过渡世代号。
+   *
+   * 切歌/预载失效时自增，进行中的 runMix 据此**立即放弃**，而不是继续走完
+   * 「淡出 → 淡入 → 提升 deck」。否则一旦淡入的那个 deck 的源被清掉
+   * （invalidatePrepared 会这么做），提升它就会得到一个没有源的元素 → 没声音。
+   *
+   * 与 Rust 侧 anime.rs 的 RESOLVE_GEN 是同一个套路。
+   */
+  let mixGeneration = 0;
   /** 预载进行中（避免 timeupdate 反复触发 prepareNext） */
   let preparing: Promise<void> | null = null;
   /**
@@ -498,6 +523,9 @@ export const usePlayerStore = defineStore("player", () => {
     if (!item) return false;
 
     mixing.value = true;
+    // 领一个世代号：过渡途中若有切歌/失效（invalidatePrepared 会自增），
+    // 下面的检查会让我们放弃这次过渡（见 mixGeneration 的注释）。
+    const myGen = ++mixGeneration;
     try {
       const cur = currentSource();
       const curDur = duration.value || (song.value?.durationMs ?? 0) / 1000;
@@ -557,6 +585,24 @@ export const usePlayerStore = defineStore("player", () => {
       while (el.currentTime < plan.fadeOutAt - 0.05) {
         await new Promise((r) => setTimeout(r, 50));
         if (!mixing.value) break;
+        if (myGen !== mixGeneration) break;
+      }
+
+      /*
+       * 中断检查：必须在 crossfade **之前**。
+       *
+       * 走到这里说明过渡期间发生了切歌/预载失效 —— invalidatePrepared 已经把
+       * 淡入 deck（to）的源清掉了。此时若继续 crossfade 并把 audioEl 提升到 to，
+       * 就会得到一个「有增益、没源」的元素：界面在走、但完全没声音。
+       *
+       * 正确做法是放弃过渡并**把当前 deck 的增益恢复成 1**，让控制权干净地
+       * 交回给正常切歌路径（runMix 的返回值调用方并不使用，兜底是 ended 事件）。
+       */
+      if (myGen !== mixGeneration) {
+        decks.setGain(currentDeck, 1);
+        decks.setGain(to, 0);
+        mixWarn("过渡途中发生切歌/失效，放弃本次混音（已恢复当前 deck 增益）");
+        return false;
       }
 
       await decks.crossfade(currentDeck, to, plan.durationSec * 1000);
@@ -1871,6 +1917,9 @@ export const usePlayerStore = defineStore("player", () => {
    * 若继续用，AutoMix 会把**另一首歌**混进来（听起来像随机插入了一段别人的音乐）。
    */
   function invalidatePrepared(reason: string): void {
+    // 无论有没有预载都要自增：进行中的过渡据此放弃，避免它继续提升一个
+    // 已经被本函数清源的 deck（那会表现为切歌后没声音）。
+    mixGeneration++;
     if (!prepared) return;
     mixLog("预载的下一曲已失效（" + reason + "）", { index: prepared.index });
     prepared = null;
