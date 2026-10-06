@@ -542,24 +542,75 @@ function resetDesktopLyricsBounds() {
   settings.desktopLyricsBounds = { width: 420, height: 120 };
 }
 
-/** 左侧分类导航：一次只显示一个分类，点谁切谁。 */
+/**
+ * 左侧分类导航：一次只显示一个分类，点谁切谁。
+ *
+ * ## 为什么拆得这么细（2026-10 改版）
+ *
+ * 改版前只有 6 个分类，却装了 116 个设置项 / 18 张卡 —— 其中「播放」一个分类里
+ * 塞了 7 张卡（约 510 行），想改「歌词字体」要滚 4~5 屏；而「关于」只有 1 张卡。
+ * 更要命的是**分类名无法预测内容**：「播放」里装着**阅读排版**和 **ffmpeg 路径**，
+ * 「在线服务」把网易云/酷狗/Pixiv/番剧/B站/小说全塞在一起。
+ *
+ * 现在按「一个分类 ≈ 一屏」重排，并让分类名能直接预测内容：
+ * - **阅读** 从「播放」搬到「媒体库」：它管的是 EPUB/PDF 排版，与播放无关；
+ * - **ffmpeg** 从「播放」搬到「系统 · 外部依赖」：它是外部程序路径；
+ * - **在线源各自独立**：用户找的是"某个源"，分类名就该是源名。
+ *
+ * ## i18n
+ *
+ * 改版前这里的 `title` / `label` 是**硬编码中文**，英文界面下导航仍然显示中文。
+ * 现在一律走 i18n 键（`nav.settings*`），由模板 `t()` 渲染。
+ *
+ * ## 注意
+ *
+ * 分类变多后导航会超出一屏，所以 `.settings-nav` 必须可滚动
+ * （见样式里的 max-height + overflow-y）——sticky 元素高于视口时，
+ * 不加滚动会让**底部几个分类永远点不到**。
+ */
 const settingNav = [
-  { title: "通用", items: [{ id: "settings-appearance", label: "外观", icon: "palette" }] },
   {
-    title: "媒体",
+    titleKey: "nav.settingsGroupGeneral",
+    items: [{ id: "settings-appearance", labelKey: "nav.settingsAppearance", icon: "palette" }],
+  },
+  {
+    titleKey: "nav.settingsGroupLibrary",
     items: [
-      { id: "settings-library", label: "媒体库", icon: "video_library" },
-      { id: "settings-playback", label: "播放", icon: "play_circle" },
+      { id: "settings-scan", labelKey: "nav.settingsScan", icon: "folder_open" },
+      { id: "settings-reading", labelKey: "nav.settingsReading", icon: "menu_book" },
     ],
   },
   {
-    title: "在线",
+    titleKey: "nav.settingsGroupPlayback",
     items: [
-      { id: "settings-online", label: "在线服务", icon: "public" },
-      { id: "settings-sync", label: "同步与网络", icon: "cloud" },
+      { id: "settings-playback", labelKey: "nav.settingsPlayback", icon: "play_circle" },
+      { id: "settings-lyrics", labelKey: "nav.settingsLyrics", icon: "lyrics" },
+      { id: "settings-dlyrics", labelKey: "nav.settingsDesktopLyrics", icon: "subtitles" },
+      { id: "settings-effects", labelKey: "nav.settingsAudioEffects", icon: "equalizer" },
+      { id: "settings-automix", labelKey: "nav.settingsAutoMix", icon: "shuffle" },
     ],
   },
-  { title: "系统", items: [{ id: "settings-other", label: "关于", icon: "info" }] },
+  {
+    titleKey: "nav.settingsGroupOnline",
+    items: [
+      { id: "settings-onlinemusic", labelKey: "nav.settingsOnlineMusic", icon: "library_music" },
+      { id: "settings-netease", labelKey: "nav.settingsNetease", icon: "cloud_queue" },
+      { id: "settings-kugou", labelKey: "nav.settingsKugou", icon: "music_note" },
+      { id: "settings-bilibili", labelKey: "nav.settingsBilibili", icon: "smart_display" },
+      { id: "settings-anime", labelKey: "nav.settingsAnime", icon: "movie" },
+      { id: "settings-danmaku", labelKey: "nav.settingsDanmaku", icon: "chat" },
+      { id: "settings-novel", labelKey: "nav.settingsNovel", icon: "auto_stories" },
+      { id: "settings-pixiv", labelKey: "nav.settingsPixiv", icon: "image" },
+    ],
+  },
+  {
+    titleKey: "nav.settingsGroupSystem",
+    items: [
+      { id: "settings-sync", labelKey: "nav.settingsSync", icon: "cloud" },
+      { id: "settings-deps", labelKey: "nav.settingsDeps", icon: "extension" },
+      { id: "settings-about", labelKey: "nav.settingsAbout", icon: "info" },
+    ],
+  },
 ];
 
 const activeSection = ref(settingNav[0].items[0].id);
@@ -578,8 +629,8 @@ function selectSection(id: string) {
     <PageHeader :title="t('nav.settings')" :description="t('navDesc.settings')" />
     <aside class="settings-nav" aria-label="设置分类">
       <m3e-nav-menu>
-        <m3e-nav-menu-item-group v-for="group in settingNav" :key="group.title">
-          <div slot="label" class="settings-nav-group">{{ group.title }}</div>
+        <m3e-nav-menu-item-group v-for="group in settingNav" :key="group.titleKey">
+          <div slot="label" class="settings-nav-group">{{ t(group.titleKey) }}</div>
           <m3e-nav-menu-item
             v-for="item in group.items"
             :key="item.id"
@@ -587,7 +638,7 @@ function selectSection(id: string) {
             @click="selectSection(item.id)"
           >
             <span slot="icon" class="material-symbols-outlined">{{ item.icon }}</span>
-            <span slot="label" class="settings-nav-label">{{ item.label }}</span>
+            <span slot="label" class="settings-nav-label">{{ t(item.labelKey) }}</span>
           </m3e-nav-menu-item>
         </m3e-nav-menu-item-group>
       </m3e-nav-menu>
@@ -783,8 +834,8 @@ function selectSection(id: string) {
 
     <!-- 扫描目录 -->
     <m3e-card
-      v-if="activeSection === 'settings-library'"
-      id="settings-library"
+      v-if="activeSection === 'settings-scan'"
+      id="settings-scan"
       class="card"
       variant="outlined"
     >
@@ -821,7 +872,7 @@ function selectSection(id: string) {
     </m3e-card>
 
     <!-- 体积过滤 -->
-    <m3e-card v-if="activeSection === 'settings-library'" class="card" variant="outlined">
+    <m3e-card v-if="activeSection === 'settings-scan'" class="card" variant="outlined">
       <div slot="content">
         <h3>{{ t("settings.minSize") }}</h3>
         <p class="hint">{{ t("settings.minSizeHint") }}</p>
@@ -848,7 +899,7 @@ function selectSection(id: string) {
     </m3e-card>
 
     <!-- 阅读 -->
-    <m3e-card v-if="activeSection === 'settings-library'" class="card" variant="outlined">
+    <m3e-card v-if="activeSection === 'settings-reading'" class="card" variant="outlined">
       <div slot="content">
         <h3>{{ t("settings.reading") }}</h3>
         <p class="hint">{{ t("settings.pdfModeHint") }}</p>
@@ -863,8 +914,8 @@ function selectSection(id: string) {
 
     <!-- FFmpeg -->
     <m3e-card
-      v-if="activeSection === 'settings-playback'"
-      id="settings-playback"
+      v-if="activeSection === 'settings-deps'"
+      id="settings-deps"
       class="card"
       variant="outlined"
     >
@@ -923,7 +974,7 @@ function selectSection(id: string) {
     </m3e-card>
 
     <!-- 歌词 -->
-    <m3e-card v-if="activeSection === 'settings-playback'" class="card" variant="outlined">
+    <m3e-card v-if="activeSection === 'settings-lyrics'" class="card" variant="outlined">
       <div slot="content">
         <h3>{{ t("settings.lyrics") }}</h3>
         <div class="row">
@@ -1148,7 +1199,7 @@ function selectSection(id: string) {
       </div>
     </m3e-card>
     <!-- 桌面歌词 -->
-    <m3e-card v-if="activeSection === 'settings-playback'" class="card" variant="outlined">
+    <m3e-card v-if="activeSection === 'settings-dlyrics'" class="card" variant="outlined">
       <div slot="content">
         <h3>{{ t("settings.desktopLyrics") }}</h3>
         <p class="hint">{{ t("settings.desktopLyricsHint") }}</p>
@@ -1295,7 +1346,7 @@ function selectSection(id: string) {
     </m3e-card>
 
     <!-- AutoMix 自动混音 -->
-    <m3e-card v-if="activeSection === 'settings-playback'" class="card" variant="outlined">
+    <m3e-card v-if="activeSection === 'settings-automix'" class="card" variant="outlined">
       <div slot="content">
         <h3>{{ t("settings.autoMix") }}</h3>
         <label class="row switch-row">
@@ -1358,7 +1409,7 @@ function selectSection(id: string) {
     </m3e-card>
 
     <!-- 音效 -->
-    <m3e-card v-if="activeSection === 'settings-playback'" class="card" variant="outlined">
+    <m3e-card v-if="activeSection === 'settings-effects'" class="card" variant="outlined">
       <div slot="content">
         <h3>{{ t("settings.audioEffects") }}</h3>
         <p class="hint">{{ t("settings.audioEffectsHint") }}</p>
@@ -1373,15 +1424,15 @@ function selectSection(id: string) {
       </div>
     </m3e-card>
 
-    <!-- 实验性：在线音乐 -->
+    <!-- 在线音乐：分组级开关 + 默认音源（两个源共用的部分） -->
     <m3e-card
-      v-if="activeSection === 'settings-online'"
-      id="settings-online"
+      v-if="activeSection === 'settings-onlinemusic'"
+      id="settings-onlinemusic"
       class="card"
       variant="outlined"
     >
       <div slot="content">
-        <h3>{{ t("settings.online") }}</h3>
+        <h3>{{ t("nav.settingsOnlineMusic") }}</h3>
         <p class="hint">{{ t("settings.onlineHint") }}</p>
         <label class="row switch-row">
           <span class="row-label">{{ t("settings.onlineEnable") }}</span>
@@ -1390,6 +1441,24 @@ function selectSection(id: string) {
             @change="setSwitch('enableOnlineMusic', $event)"
           />
         </label>
+        <div v-if="settings.enableOnlineMusic" class="row">
+          <div class="row-label">
+            <span>{{ t("settings.onlineServer") }}</span>
+          </div>
+          <SegmentedTabs v-model="settings.musicServer" bare :tabs="musicServerTabs" />
+        </div>
+      </div>
+    </m3e-card>
+
+    <!-- 网易云 -->
+    <m3e-card
+      v-if="activeSection === 'settings-netease'"
+      id="settings-netease"
+      class="card"
+      variant="outlined"
+    >
+      <div slot="content">
+        <h3>{{ t("nav.settingsNetease") }}</h3>
         <label class="row switch-row">
           <span class="row-label">{{ t("settings.neteaseEnable") }}</span>
           <m3e-switch
@@ -1398,6 +1467,18 @@ function selectSection(id: string) {
           />
         </label>
         <p class="hint">{{ t("settings.neteaseHint") }}</p>
+      </div>
+    </m3e-card>
+
+    <!-- 酷狗 -->
+    <m3e-card
+      v-if="activeSection === 'settings-kugou'"
+      id="settings-kugou"
+      class="card"
+      variant="outlined"
+    >
+      <div slot="content">
+        <h3>{{ t("nav.settingsKugou") }}</h3>
         <label class="row switch-row">
           <span class="row-label">{{ t("settings.kugouEnable") }}</span>
           <m3e-switch
@@ -1413,17 +1494,11 @@ function selectSection(id: string) {
             @change="setSwitch('kugouAutoSignIn', $event)"
           />
         </label>
-        <div v-if="settings.enableOnlineMusic" class="row">
-          <div class="row-label">
-            <span>{{ t("settings.onlineServer") }}</span>
-          </div>
-          <SegmentedTabs v-model="settings.musicServer" bare :tabs="musicServerTabs" />
-        </div>
       </div>
     </m3e-card>
 
     <!-- 在线小说 -->
-    <m3e-card v-if="activeSection === 'settings-online'" class="card" variant="outlined">
+    <m3e-card v-if="activeSection === 'settings-novel'" class="card" variant="outlined">
       <div slot="content">
         <h3>{{ t("settings.onlineNovel") }}</h3>
         <p class="hint">{{ t("settings.onlineNovelHint") }}</p>
@@ -1457,7 +1532,7 @@ function selectSection(id: string) {
     </m3e-card>
 
     <!-- 在线 B 站视频 -->
-    <m3e-card v-if="activeSection === 'settings-online'" class="card" variant="outlined">
+    <m3e-card v-if="activeSection === 'settings-bilibili'" class="card" variant="outlined">
       <div slot="content">
         <h3>{{ t("settings.bilibili") }}</h3>
         <p class="hint">{{ t("settings.bilibiliHint") }}</p>
@@ -1636,7 +1711,7 @@ function selectSection(id: string) {
     </m3e-card>
 
     <!-- 在线番剧 -->
-    <m3e-card v-if="activeSection === 'settings-online'" class="card" variant="outlined">
+    <m3e-card v-if="activeSection === 'settings-anime'" class="card" variant="outlined">
       <div slot="content">
         <h3>{{ t("settings.onlineAnime") }}</h3>
         <p class="hint">{{ t("settings.onlineAnimeHint") }}</p>
@@ -1702,7 +1777,7 @@ function selectSection(id: string) {
     </m3e-card>
 
     <!-- 在线 Pixiv -->
-    <m3e-card v-if="activeSection === 'settings-online'" class="card" variant="outlined">
+    <m3e-card v-if="activeSection === 'settings-pixiv'" class="card" variant="outlined">
       <div slot="content">
         <h3>{{ t("settings.onlinePixivEnabled") }}</h3>
         <p class="hint">{{ t("settings.onlinePixivHint") }}</p>
@@ -1741,10 +1816,8 @@ function selectSection(id: string) {
 
     <!-- 弹幕：番剧走 DanDanPlay，B 站走站内弹幕，但「是否显示弹幕」是同一个开关 -->
     <m3e-card
-      v-if="
-        activeSection === 'settings-online' &&
-        (settings.onlineAnimeEnabled || settings.bilibiliEnabled)
-      "
+      v-if="activeSection === 'settings-danmaku'"
+      id="settings-danmaku"
       class="card"
       variant="outlined"
     >
@@ -1938,8 +2011,8 @@ function selectSection(id: string) {
 
     <!-- 关于 -->
     <m3e-card
-      v-if="activeSection === 'settings-other'"
-      id="settings-other"
+      v-if="activeSection === 'settings-about'"
+      id="settings-about"
       class="card"
       variant="outlined"
     >
@@ -2094,6 +2167,13 @@ function selectSection(id: string) {
   flex-direction: column;
   gap: 1px;
   padding: 2px 0;
+  /* 19 个分类 + 5 个组标题约 730px，会超出一屏。
+     sticky 元素一旦高于视口，底部内容就**永远滚不到**（它不会跟着页面滚），
+     所以这里必须自己带滚动条，并留出上下呼吸空间。 */
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 .settings-nav-group {
   padding: 6px 0 2px;
