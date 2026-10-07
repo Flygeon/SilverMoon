@@ -30,6 +30,7 @@ import {
   migrateLegacyData,
 } from "./config";
 import { installCsp } from "./csp";
+import { applyPerfSwitches, describePerfSwitches } from "./perf";
 import { initUpdater } from "./updater";
 import { initLog, log } from "./log";
 import { initStore, flushAllStores } from "./store";
@@ -64,6 +65,11 @@ import {
 
 // 自定义协议必须在 app ready 之前登记
 registerSchemes();
+
+// Chromium / V8 启动参数同样必须在 ready 之前设置（见 electron/perf.ts）。
+// 计划先存下来：此刻 log 还没初始化，等 bootstrap 里再写进启动日志，
+// 这样「开关到底生效没有」有据可查，而不是只存在于代码里。
+const perfPlan = applyPerfSwitches(app.commandLine, process.env);
 
 // 单实例：第二次启动直接聚焦已有窗口。
 //
@@ -147,6 +153,7 @@ async function bootstrap(): Promise<void> {
   const bootT0 = performance.now();
   const mark = (label: string) =>
     log.info(`[启动] ${label}: ${Math.round(performance.now() - bootT0)}ms`);
+  log.info(`[启动] 运行时开关：${describePerfSwitches(perfPlan)}`);
 
   handleAppProtocol();
   handleAssetProtocol();

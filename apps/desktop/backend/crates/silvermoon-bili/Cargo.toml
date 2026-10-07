@@ -1,0 +1,18 @@
+[package]
+name = "silvermoon-bili"
+version = "0.1.0"
+description = "B 站协议层：WBI 签名 / 弹幕解析 / 模型归一化（纯逻辑，无 IO）"
+authors = ["SilverMoon"]
+license = "GPL-3.0-only"
+edition = "2021"
+rust-version = "1.82"
+publish = false
+
+# 本 crate 刻意**不依赖任何 IO 库**（无 reqwest / 无 tokio / 无 rusqlite）：
+# 它只做纯计算（签名、解析、归一化），因此可以独立编译与单测，
+# 也让 backend 的 HTTP 层与协议层解耦——换 HTTP 客户端不必动协议。
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+md-5 = "0.10"
+regex = "1"

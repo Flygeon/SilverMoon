@@ -1,4 +1,5 @@
 pub mod anime;
+pub mod bilibili;
 pub mod commands;
 pub mod error;
 pub mod kugou;
@@ -150,6 +151,8 @@ pub fn run() {
             commands::app::exit_app,
             commands::app::open_devtools,
             commands::app::is_safe_mode,
+            // ---- B 站（协议在 silvermoon-bili crate，网络在本模块）----
+            bilibili::bili_danmaku,
             // ---- 桌面环境集成（UDA：壁纸 / 常亮锁 / 系统通知 / 系统强调色）----
             commands::desktop::desktop_capabilities,
             commands::desktop::desktop_set_wallpaper,

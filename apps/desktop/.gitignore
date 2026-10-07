@@ -56,3 +56,7 @@ ECHOæ’­æ”¾å™¨å‚è€ƒ/
 # local reference projects and workspace artifacts
 # Flutter WebView ÓÃµÄÒÆ¶¯¶Ë Web ²úÎï£¨WebView ÒÑÒÆ³ı£¬²»ÒªÔÙÌá½»£©
 dist-mobile/
+
+# nested path-dependency crates generate their own target/ too
+# (the backend/target/ rule above does not cover subdirectories)
+backend/crates/*/target/

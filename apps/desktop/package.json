@@ -31,6 +31,7 @@
     "dist": "npm run build && electron-builder",
     "dist:dir": "npm run build && electron-builder --dir",
     "test": "vitest run",
+    "bench:memory": "node scripts/bench-memory.mjs",
     "pack:skins": "node scripts/pack-example-skins.mjs",
     "lint": "node scripts/check-version.mjs && eslint .",
     "lint:fix": "eslint . --fix",

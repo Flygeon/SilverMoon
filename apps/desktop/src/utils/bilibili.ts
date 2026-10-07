@@ -15,7 +15,7 @@
  * 而网页端扫码登录（passport web qrcode）与 WBI 签名都不需要内置密钥，
  * PC 端 playurl 也能直接给出 `<video>` 可播的整段 MP4（durl）。
  */
-import { isDesktop } from "@/capabilities";
+import { capabilities, isDesktop } from "@/capabilities";
 import { JsonStore } from "@/ipc/store";
 import { mapDanmakuMode, mergeDuplicates, type ArtDanmu } from "@/utils/danmaku";
 import { md5 } from "@/utils/md5";
@@ -1477,6 +1477,26 @@ export function biliFormatLabel(play: BiliPlayUrl, qn: number): string {
  */
 export async function biliDanmaku(cid: string): Promise<ArtDanmu[]> {
   if (!cid) return [];
+  // 桌面端：拉取与解析都在 Rust（见 backend/src/bilibili.rs）。
+  // 渲染主线程不再解析几千条 XML —— 这正是本次迁移的收益。
+  if (isDesktop) {
+    try {
+      return mergeDuplicates(await capabilities.biliDanmaku(cid), 5);
+    } catch (e) {
+      console.warn("[bilibili] 弹幕拉取失败：", e);
+      return [];
+    }
+  }
+  return biliDanmakuLocal(cid);
+}
+
+/**
+ * 浏览器预览用的本地实现（无宿主时）。
+ *
+ * 桌面端不再走这里 —— 保留它是为了 Vite dev server 下的纯浏览器预览
+ * （与 capabilities/mock.ts 同源需求），删掉会让预览模式的弹幕直接消失。
+ */
+async function biliDanmakuLocal(cid: string): Promise<ArtDanmu[]> {
   try {
     const res = await biliFetch(
       `${API}/x/v1/dm/list.so?oid=${encodeURIComponent(cid)}`,

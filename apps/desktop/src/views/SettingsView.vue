@@ -23,7 +23,12 @@ import { useLibraryStore } from "@/stores/library";
 import AudioEffectsPanel from "@/components/AudioEffectsPanel.vue";
 import SegmentedTabs from "@/components/SegmentedTabs.vue";
 import SettingRow from "@/components/SettingRow.vue";
-import { capabilities, type MemoryMetrics } from "@/capabilities";
+import {
+  capabilities,
+  type BenchStatus,
+  type BenchSummary,
+  type MemoryMetrics,
+} from "@/capabilities";
 import { formatSize } from "@/utils/format";
 import { activeSkinDoc, skinModeLock, skinSafeMode } from "@/utils/skinRuntime";
 import { SB_CATEGORIES } from "@/utils/sponsorBlock";
@@ -102,6 +107,75 @@ async function refreshMemory() {
     memoryMetrics.value = await capabilities.memoryMetrics();
   } finally {
     memoryLoading.value = false;
+  }
+}
+
+/**
+ * 内存基准测试（P0）：五组固定口径的自动采样 + 标记 + 导出。
+ *
+ * 与上面的「内存诊断」互补——诊断是**单点快照**，基准是**一段操作的曲线**。
+ * 口径定义见 `electron/bench.ts` 文件头；这里只负责驱动与展示。
+ * 标签按口径顺序自动取，用户不必手输。
+ */
+const BENCH_STEP_KEYS = [
+  "settings.benchStep1",
+  "settings.benchStep2",
+  "settings.benchStep3",
+  "settings.benchStep4",
+  "settings.benchStep5",
+] as const;
+
+const benchStatus = ref<BenchStatus>({
+  running: false,
+  intervalMs: 0,
+  sampleCount: 0,
+  markCount: 0,
+  elapsedMs: 0,
+});
+const benchSummary = ref<BenchSummary | null>(null);
+const benchBusy = ref(false);
+const benchExportPath = ref("");
+
+async function benchToggle() {
+  benchBusy.value = true;
+  try {
+    const wasRunning = benchStatus.value.running;
+    benchStatus.value = wasRunning
+      ? await capabilities.benchStop()
+      : await capabilities.benchStart();
+    if (wasRunning) {
+      // 停止后把汇总拉一次，用户不必先导出才能看到增量
+      benchSummary.value = (await capabilities.benchReport()).summary;
+    } else {
+      benchSummary.value = null;
+      benchExportPath.value = "";
+    }
+  } finally {
+    benchBusy.value = false;
+  }
+}
+
+async function benchMark() {
+  const step = benchStatus.value.markCount;
+  const key = BENCH_STEP_KEYS[step];
+  benchBusy.value = true;
+  try {
+    await capabilities.benchMark(key ? t(key) : `#${step + 1}`);
+    benchStatus.value = await capabilities.benchStatus();
+    benchSummary.value = (await capabilities.benchReport()).summary;
+  } finally {
+    benchBusy.value = false;
+  }
+}
+
+async function benchExport() {
+  benchBusy.value = true;
+  try {
+    const r = await capabilities.benchExport();
+    benchExportPath.value = r.path;
+    benchSummary.value = r.summary;
+  } finally {
+    benchBusy.value = false;
   }
 }
 
@@ -2319,6 +2393,51 @@ onBeforeUnmount(() => {
             <span></span>
           </div>
         </div>
+        <!-- 内存基准测试（P0）：五组固定口径的自动采样 + 标记 + 导出 -->
+        <div class="row">
+          <span class="row-label">{{ t("settings.benchTitle") }}</span>
+          <m3e-button variant="outlined" size="small" :disabled="benchBusy" @click="benchToggle">
+            {{ benchStatus.running ? t("settings.benchStop") : t("settings.benchStart") }}
+          </m3e-button>
+          <m3e-button
+            variant="text"
+            size="small"
+            :disabled="benchBusy || benchStatus.sampleCount === 0"
+            @click="benchMark"
+          >
+            {{ t("settings.benchMark") }}
+          </m3e-button>
+          <m3e-button
+            variant="outlined"
+            size="small"
+            :disabled="benchBusy || benchStatus.sampleCount === 0"
+            @click="benchExport"
+          >
+            {{ t("settings.benchExport") }}
+          </m3e-button>
+        </div>
+        <p class="hint">{{ t("settings.benchHint") }}</p>
+        <p v-if="benchStatus.sampleCount" class="hint tabular-nums">
+          {{ t("settings.benchSamples") }}: {{ benchStatus.sampleCount }} ·
+          {{ t("settings.benchMarks") }}: {{ benchStatus.markCount }}
+        </p>
+        <div v-if="benchSummary && benchSummary.markSummary.length" class="mem-table">
+          <div class="mem-row mem-head">
+            <span>{{ t("settings.benchStepLabel") }}</span>
+            <span class="tabular-nums">{{ t("settings.benchAt") }}</span>
+            <span class="tabular-nums">{{ t("settings.memoryWorkingSet") }}</span>
+            <span class="tabular-nums">{{ t("settings.benchDelta") }}</span>
+          </div>
+          <div v-for="(m, i) in benchSummary.markSummary" :key="i" class="mem-row">
+            <span class="mem-name">{{ m.label }}</span>
+            <span class="tabular-nums">{{ (m.t / 1000).toFixed(1) }}s</span>
+            <span class="tabular-nums">{{ m.totalMB }} MB</span>
+            <span class="tabular-nums">{{ m.deltaMB >= 0 ? "+" : "" }}{{ m.deltaMB }} MB</span>
+          </div>
+        </div>
+        <p v-if="benchExportPath" class="hint">
+          {{ t("settings.benchExported") }}: {{ benchExportPath }}
+        </p>
         <SettingRow :label="t('settings.devtools')" setting-key="settings.devtools" clickable>
           <m3e-switch :checked="devtoolsEnabled" @change="toggleDevtools" />
         </SettingRow>

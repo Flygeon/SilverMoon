@@ -10,6 +10,7 @@ import { openPath, openUrl, revealItemInDir } from "@/ipc/opener";
 import { open as dialogOpen, save as dialogSave } from "@/ipc/dialog";
 import { writeFile } from "@/ipc/fs";
 import { clearCoverCache as clearCoverCacheIpc } from "@/ipc/app";
+import type { ArtDanmu } from "@/utils/danmaku";
 
 /** 单个 Electron 进程的内存快照（见 `app.getAppMetrics()`）。 */
 export interface MemoryProcessMetrics {
@@ -27,6 +28,88 @@ export interface MemoryMetrics {
   totalMB: number;
   processes: MemoryProcessMetrics[];
   labels: string[];
+}
+
+/** 内存基准：一次采样（整机 + 各进程）。 */
+export interface BenchSample {
+  /** 相对会话开始的毫秒数 */
+  t: number;
+  totalMB: number;
+  processes: MemoryProcessMetrics[];
+}
+
+/** 内存基准：一个标记。 */
+export interface BenchMark {
+  t: number;
+  label: string;
+  totalMB: number;
+}
+
+/** 内存基准：标记相对基线的增量（五组口径的直接读数）。 */
+export interface BenchMarkSummary {
+  label: string;
+  t: number;
+  totalMB: number;
+  deltaMB: number;
+}
+
+/** 内存基准：某逻辑进程在会话内的峰值。 */
+export interface BenchProcessPeak {
+  key: string;
+  type: string;
+  name: string;
+  peakWorkingSetMB: number;
+  maxWorkingSetMB: number;
+}
+
+/** 内存基准：会话汇总。 */
+export interface BenchSummary {
+  durationMs: number;
+  sampleCount: number;
+  baselineMB: number;
+  finalMB: number;
+  minMB: number;
+  minAtMs: number;
+  maxMB: number;
+  maxAtMs: number;
+  deltaMaxMB: number;
+  deltaFinalMB: number;
+  processPeaks: BenchProcessPeak[];
+  markSummary: BenchMarkSummary[];
+}
+
+/** 内存基准：会话状态。 */
+export interface BenchStatus {
+  running: boolean;
+  intervalMs: number;
+  sampleCount: number;
+  markCount: number;
+  elapsedMs: number;
+}
+
+const EMPTY_BENCH_STATUS: BenchStatus = {
+  running: false,
+  intervalMs: 0,
+  sampleCount: 0,
+  markCount: 0,
+  elapsedMs: 0,
+};
+
+function emptyBenchSummary(): BenchSummary {
+  return {
+    durationMs: 0,
+    sampleCount: 0,
+    baselineMB: 0,
+    finalMB: 0,
+    minMB: 0,
+    minAtMs: 0,
+    maxMB: 0,
+    maxAtMs: 0,
+    deltaMaxMB: 0,
+    deltaFinalMB: 0,
+    processPeaks: [],
+    markSummary: [],
+  };
 }
 import type {
   AppliedOnlineTags,
@@ -480,6 +563,15 @@ export const capabilities = {
   },
   neteaseSongUrl(ids: number[]): Promise<{ id: number; url: string }[]> {
     return safeInvoke("netease_song_url", { ids });
+  },
+  /**
+   * B 站弹幕（Rust 侧拉取 + 解析，见 backend/src/bilibili.rs）。
+   *
+   * 迁移前这段在渲染进程做：拉 XML → 解压 → 正则解析几千条 → 全部进 JS 堆。
+   * 现在只有浏览器预览（无宿主）才走 `src/utils/bilibili.ts` 的本地实现。
+   */
+  biliDanmaku(cid: string): Promise<ArtDanmu[]> {
+    return safeInvoke<ArtDanmu[]>("bili_danmaku", { cid });
   },
   neteaseSongComments(id: number, offset = 0, limit = 20): Promise<NeteaseCommentsPage> {
     return safeInvoke("netease_song_comments", { id, offset, limit });
@@ -1079,6 +1171,68 @@ export const capabilities = {
     const empty: MemoryMetrics = { totalMB: 0, processes: [], labels: [] };
     if (!isDesktop) return Promise.resolve(empty);
     return callBridge<MemoryMetrics>("app", { op: "metrics" }).catch(() => empty);
+  },
+
+  // ---- 内存基准测试（P0，见 electron/bench.ts 的五组口径） ----
+  /**
+   * 开始一次基准会话：按 `intervalMs` 自动采样，直到 {@link benchStop}。
+   *
+   * 重复调用会清空上一轮并从当前时刻重采基线（基准必须从干净状态起跑）。
+   */
+  benchStart(intervalMs?: number): Promise<BenchStatus> {
+    if (!isDesktop) return Promise.resolve(EMPTY_BENCH_STATUS);
+    return callBridge<BenchStatus>("app", { op: "bench", action: "start", intervalMs }).catch(
+      () => EMPTY_BENCH_STATUS,
+    );
+  },
+  /** 停止自动采样（保留已采数据，仍可导出）。 */
+  benchStop(): Promise<BenchStatus> {
+    if (!isDesktop) return Promise.resolve(EMPTY_BENCH_STATUS);
+    return callBridge<BenchStatus>("app", { op: "bench", action: "stop" }).catch(
+      () => EMPTY_BENCH_STATUS,
+    );
+  },
+  /** 打一个标记（对应五组口径里的一步）。 */
+  benchMark(label: string): Promise<BenchMark | null> {
+    if (!isDesktop) return Promise.resolve(null);
+    return callBridge<BenchMark | null>("app", { op: "bench", action: "mark", label }).catch(
+      () => null,
+    );
+  },
+  /** 会话状态（UI 判断按钮可用性 / 显示计数）。 */
+  benchStatus(): Promise<BenchStatus> {
+    if (!isDesktop) return Promise.resolve(EMPTY_BENCH_STATUS);
+    return callBridge<BenchStatus>("app", { op: "bench", action: "status" }).catch(
+      () => EMPTY_BENCH_STATUS,
+    );
+  },
+  /** 当前会话的汇总（不落盘，UI 显示用）。 */
+  benchReport(): Promise<{ summary: BenchSummary }> {
+    if (!isDesktop) return Promise.resolve({ summary: emptyBenchSummary() });
+    return callBridge<{ summary: BenchSummary }>("app", {
+      op: "bench",
+      action: "report",
+      summaryOnly: true,
+    }).catch(() => ({ summary: emptyBenchSummary() }));
+  },
+  /** 清空已采数据（不改变运行状态）。 */
+  benchClear(): Promise<BenchStatus> {
+    if (!isDesktop) return Promise.resolve(EMPTY_BENCH_STATUS);
+    return callBridge<BenchStatus>("app", { op: "bench", action: "clear" }).catch(
+      () => EMPTY_BENCH_STATUS,
+    );
+  },
+  /**
+   * 导出报告到 `<数据目录>/bench/bench-<时间戳>.json`，返回路径与汇总。
+   *
+   * 用 `scripts/bench-memory.mjs` 可对两份报告做前后对比。
+   */
+  benchExport(): Promise<{ path: string; summary: BenchSummary }> {
+    if (!isDesktop) return Promise.resolve({ path: "", summary: emptyBenchSummary() });
+    return callBridge<{ path: string; summary: BenchSummary }>("app", {
+      op: "bench",
+      action: "export",
+    }).catch(() => ({ path: "", summary: emptyBenchSummary() }));
   },
 
   // ---- 自动更新 ----

@@ -803,6 +803,10 @@ export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case "osu_download":
       throw new Error("浏览器预览不支持下载谱面，请在桌面端使用");
 
+    case "bili_danmaku":
+      // 浏览器预览没有宿主；弹幕是可选装饰，返回空数组即可
+      return as([]);
+
     default:
       return as(null);
   }

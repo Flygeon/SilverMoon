@@ -109,6 +109,11 @@ jobs:
           cargo fmt --check --manifest-path backend/crates/silvermoon-ipc/Cargo.toml
           cargo fmt --check --manifest-path backend/crates/silvermoon-ipc-macros/Cargo.toml
 
+      # B 站协议层同理：它是 path 依赖、不属于 workspace，必须显式指定 manifest。
+      # 该 crate 含 WBI 签名 / 弹幕解析 / 归一化的单测，下面 Unit tests 里也会跑。
+      - name: Rustfmt check (bilibili protocol crate)
+        run: cargo fmt --check --manifest-path backend/crates/silvermoon-bili/Cargo.toml
+
       - name: Clippy (backend)
         working-directory: apps/desktop/backend
         run: cargo clippy --all-targets -- -D warnings
@@ -124,6 +129,11 @@ jobs:
       # 对应 src/server.rs 的 `mod guard_tests`。
       - name: Unit tests (ipc request guards)
         run: cargo test --manifest-path backend/crates/silvermoon-ipc/Cargo.toml
+
+      # B 站协议层的单测（WBI 置换表、弹幕模式映射、归一化边界）挂在这个 crate 下，
+      # 同样不是 workspace 成员，必须显式指定 manifest 才会被执行。
+      - name: Unit tests (bilibili protocol)
+        run: cargo test --manifest-path backend/crates/silvermoon-bili/Cargo.toml
 
       # 启动器是 Windows 专用程序，但 fmt/clippy 都能在 Linux 上跑，
       # 因此质量检查留在最快的 lint 作业里，不必等 Windows 构建。

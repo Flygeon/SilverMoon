@@ -27,6 +27,8 @@ crate-type = ["rlib"]
 
 [dependencies]
 silvermoon-ipc = { path = "crates/silvermoon-ipc" }
+# B 站协议层（纯逻辑：WBI 签名 / 弹幕解析 / 模型归一化），命令层见 src/bilibili.rs
+silvermoon-bili = { path = "crates/silvermoon-bili" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

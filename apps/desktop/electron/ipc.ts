@@ -27,6 +27,7 @@ import { clearCoverCache } from "./protocols";
 import { checkForUpdates, getUpdateState, quitAndInstall } from "./updater";
 import { log } from "./log";
 import { callSidecar, callSidecarBatch } from "./main-bridge";
+import { BenchSession, DEFAULT_INTERVAL_MS } from "./bench";
 
 export interface BridgeReply {
   ok: boolean;
@@ -82,6 +83,58 @@ function assertExternalUrl(url: string): string {
     throw new Error(`拒绝打开非 http(s) 链接：${url.slice(0, 80)}`);
   }
   return url;
+}
+
+/**
+ * 内存基准测试（P0）的会话。
+ *
+ * 采样源是 `app.getAppMetrics()`（按进程 workingSet / peak），由 `BenchSession`
+ * 按固定间隔自动采。五组口径见 `electron/bench.ts` 文件头。
+ */
+const benchSession = new BenchSession(() => app.getAppMetrics());
+
+/**
+ * 内存基准的 IPC 分发。
+ *
+ * 动作：start / stop / mark / take / report / clear / status / export。
+ * `export` 把报告写到 `<dataDir>/bench/bench-<时间戳>.json`，供
+ * `scripts/bench-memory.mjs` 做前后对比。
+ */
+async function handleBench(payload: Record<string, unknown>): Promise<unknown> {
+  const action = String(payload.action ?? "");
+  switch (action) {
+    case "start":
+      return benchSession.start(Number(payload.intervalMs ?? DEFAULT_INTERVAL_MS));
+    case "stop":
+      benchSession.stop();
+      return benchSession.status();
+    case "mark":
+      return benchSession.mark(String(payload.label ?? ""));
+    case "take":
+      return benchSession.take();
+    case "report": {
+      const report = benchSession.report();
+      // UI 只关心汇总；整份报告含全部采样（可达数千条），不必每次过桥
+      return payload.summaryOnly ? { summary: report.summary } : report;
+    }
+    case "clear":
+      benchSession.clear();
+      return benchSession.status();
+    case "status":
+      return benchSession.status();
+    case "export": {
+      const report = benchSession.report();
+      const dir = path.join(dataRoot(), "bench");
+      await mkdir(dir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const file = path.join(dir, `bench-${stamp}.json`);
+      await writeFile(file, JSON.stringify(report, null, 2), "utf8");
+      log.info(`内存基准报告已导出：${file}`);
+      return { path: file, summary: report.summary };
+    }
+    default:
+      throw new Error(`未知基准操作：${action}`);
+  }
 }
 
 const handlers: Record<string, Handler> = {
@@ -488,6 +541,14 @@ const handlers: Record<string, Handler> = {
         // 才能判断"隐藏窗口占了一个渲染进程"这类问题。
         return { totalMB, processes, labels: listLabels() };
       }
+      /**
+       * 内存基准测试（P0）。
+       *
+       * 与上面的 `metrics` 的区别：`metrics` 是**某一瞬间**的快照，
+       * `bench` 是**一段操作过程**的自动采样曲线 + 标记 + 可导出报告。
+       */
+      case "bench":
+        return handleBench(payload);
       case "exit":
         quitApp();
         return null;

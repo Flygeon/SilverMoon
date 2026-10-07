@@ -2723,6 +2723,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "silvermoon-bili",
  "silvermoon-ipc",
  "smtc-tokio",
  "thiserror 1.0.69",
@@ -2736,6 +2737,16 @@ dependencies = [
  "x25519-dalek",
  "xxhash-rust",
  "zip",
+]
+
+[[package]]
+name = "silvermoon-bili"
+version = "0.1.0"
+dependencies = [
+ "md-5",
+ "regex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
