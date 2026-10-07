@@ -104,6 +104,12 @@ apps/RNdesktop/
 > 但 [依赖文档](https://microsoft.github.io/react-native-windows/docs/rnw-dependencies) 一度还写着 VS 2022
 > （[#16275](https://github.com/microsoft/react-native-windows/issues/16275)）。**以模板里的 v145 为准。**
 
+> ⚠️ **Windows SDK 版本要显式对齐。** RNW 的 `PropertySheets/Microsoft.ReactNative.WindowsSdk.Default.props`
+> 会把 `WindowsTargetPlatformVersion` 抬到**至少 10.0.22621.0**。CI 镜像上只装了
+> 10.0.26100.0，因此首次 CI 报 `MSB8036: The Windows SDK version 10.0.22621.0 was not found`。
+> 现在 CI 用 `--msbuildprops WindowsTargetPlatformVersion=10.0.26100.0` 指定镜像实际装有的版本；
+> 本地若装了 22621 则无需该参数，装了别的版本就改成那一版。
+
 > ℹ️ **没装 .NET SDK 的机器上，`windows` 平台不会被注册。** RNW CLI 在加载阶段探测
 > .NET / pwsh，失败即抛，于是 `npx react-native bundle --platform windows` 会报
 > `Invalid platform "windows" selected`（可用平台只剩 ios / android / macos）。

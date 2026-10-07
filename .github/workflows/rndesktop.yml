@@ -142,14 +142,18 @@ jobs:
           --no-launch --no-deploy --no-packager
           --msbuildprops WindowsTargetPlatformVersion=10.0.26100.0
 
+      # 只收**应用包本身**（wapproj 产出，名字带项目名），不再把整个 AppPackages
+      # 目录里的运行时依赖（WindowsAppRuntime / VCLibs 的 x86/ARM64 变体，且互相重复）
+      # 一起塞进 artifact：那些 70MB 里的绝大部分是没人会装的架构。
       - name: Collect MSIX
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $found = Get-ChildItem -Path windows -Recurse -Include *.msix,*.msixbundle,*.appx -File -ErrorAction SilentlyContinue
+          $found = Get-ChildItem -Path windows -Recurse -Include *.msix,*.msixbundle,*.appx -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'SilverMoon*' }
           if (-not $found) {
-            Write-Host '::error::没有找到 MSIX 产物，构建可能只产出了 exe'
-            Get-ChildItem -Path windows -Recurse -Include *.exe -File |
+            Write-Host '::error::没有找到 SilverMoon 的 MSIX 产物，构建可能只产出了 exe'
+            Get-ChildItem -Path windows -Recurse -Include *.exe -File -ErrorAction SilentlyContinue |
               Where-Object { $_.FullName -match '\\x64\\Release\\' } |
               Select-Object -First 20 FullName
             exit 1
@@ -160,6 +164,24 @@ jobs:
             Write-Host "collected $($_.Name)"
           }
           Get-ChildItem artifacts | Format-Table Name,Length
+
+      # 产物自检：把 MSIX 当 zip 打开，确认里面真的装着应用 exe 与 JS bundle。
+      # 只断言「文件存在」是不够的 —— 打包配置错了照样能产出空壳安装包。
+      - name: Verify MSIX contents
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+          $msix = Get-ChildItem artifacts -Filter *.msix | Select-Object -First 1
+          if (-not $msix) { Write-Host '::error::artifacts 里没有 msix'; exit 1 }
+          $zip = Join-Path $env:TEMP 'msix-check.zip'
+          Copy-Item $msix.FullName $zip -Force
+          $entries = [System.IO.Compression.ZipFile]::OpenRead($zip).Entries | ForEach-Object { $_.FullName }
+          $entries | Sort-Object | Select-Object -First 30
+          $exe = $entries | Where-Object { $_ -like 'SilverMoon.exe' }
+          $bundle = $entries | Where-Object { $_ -like '*Bundle*' }
+          if (-not $exe) { Write-Host '::error::MSIX 里没有 SilverMoon.exe'; exit 1 }
+          Write-Host "OK: exe=$exe bundle=$($bundle -join ',')"
 
       - name: Upload MSIX
         uses: actions/upload-artifact@v5
