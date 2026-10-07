@@ -80,7 +80,7 @@ mod tests {
             "id": 111,
             "bvid": "BV1xx411c7mD",
             "cid": 222,
-            "title": "<em class="keyword">标题</em>",
+            "title": "<em class=\"keyword\">标题</em>",
             "pic": "//i0.hdslb.com/a.jpg",
             "duration": 125,
             "owner": { "name": "UP", "face": "http://i0.hdslb.com/f.jpg", "mid": 9 },
@@ -146,7 +146,7 @@ mod tests {
         });
         let v = video_from_search(&m);
         assert_eq!(v.aid, "7");
-        assert_eq!(v.duration, 754.0, ""12:34" 应换算成秒");
+        assert_eq!(v.duration, 754.0, "\"12:34\" 应换算成秒");
         assert_eq!(v.owner_name, "作者");
         assert_eq!(v.danmaku, 3.0);
         assert_eq!(v.cid, "");
