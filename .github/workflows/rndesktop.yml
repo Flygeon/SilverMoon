@@ -129,8 +129,18 @@ jobs:
 
       # run-windows 内部会先跑 autolink + codegen 再交给 MSBuild，这里不再单独调
       # codegen-windows —— 多调一次并不会更快，反而多一处与 CLI 版本耦合的地方。
+      #
+      # ⚠️ 必须显式指定 Windows SDK 版本（首次 CI 就是在这里挂的）：
+      # RNW 的 PropertySheets/Microsoft.ReactNative.WindowsSdk.Default.props 会把
+      # WindowsTargetPlatformVersion 抬到**至少 10.0.22621.0**，而 windows-2025-vs2026
+      # 镜像上只装了 10.0.26100.0 —— 于是 MSB8036「The Windows SDK version 10.0.22621.0
+      # was not found」。这里把目标版本抬到镜像实际装有的那一版。
+      # 本地装了 22621 的话可以去掉这个参数（或改成自己装的那一版）。
       - name: Build MSIX (Release)
-        run: npx react-native run-windows --release --arch x64 --logging --no-launch --no-deploy --no-packager
+        run: >-
+          npx react-native run-windows --release --arch x64 --logging
+          --no-launch --no-deploy --no-packager
+          --msbuildprops WindowsTargetPlatformVersion=10.0.26100.0
 
       - name: Collect MSIX
         shell: pwsh
