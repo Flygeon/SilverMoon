@@ -1,0 +1,49 @@
+{
+  "name": "silvermoon-rndesktop",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "description": "银月（SilverMoon）桌面端 —— React Native for Windows / macOS 重构版（框架骨架，功能待填充）",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "react-native start",
+    "windows": "react-native run-windows --logging",
+    "build:windows": "react-native run-windows --no-launch --no-packager --no-deploy --logging",
+    "build:windows:release": "react-native run-windows --release --no-launch --no-packager --no-deploy --logging",
+    "macos": "react-native run-macos",
+    "build:macos": "react-native build-macos --mode Release",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc --noEmit",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"__tests__/**/*.{ts,tsx}\" \"*.{js,ts,tsx,json}\" \"!package-lock.json\"",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\" \"__tests__/**/*.{ts,tsx}\" \"*.{js,ts,tsx,json}\" \"!package-lock.json\"",
+    "test": "jest"
+  },
+  "dependencies": {
+    "react": "19.2.0",
+    "react-native": "0.83.10",
+    "react-native-windows": "0.83.2"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2",
+    "@babel/preset-env": "^7.25.3",
+    "@babel/runtime": "^7.25.0",
+    "@react-native-community/cli": "20.0.0",
+    "@react-native-windows/find-dotnet-tools": "^0.84.0",
+    "@react-native/babel-preset": "0.83.10",
+    "@react-native/eslint-config": "0.83.10",
+    "@react-native/metro-config": "0.83.10",
+    "@react-native/typescript-config": "0.83.10",
+    "@types/jest": "^29.5.13",
+    "@types/react": "^19.2.0",
+    "@types/react-test-renderer": "^19.1.0",
+    "eslint": "^8.19.0",
+    "jest": "^29.6.3",
+    "prettier": "2.8.8",
+    "react-native-macos": "0.83.0",
+    "react-test-renderer": "19.2.0",
+    "typescript": "^5.8.3"
+  }
+}

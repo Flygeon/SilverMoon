@@ -1,0 +1,51 @@
+# 依赖
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Metro
+.metro-health-check*
+*.jsbundle
+
+# 测试
+/coverage
+
+# OSX
+.DS_Store
+
+# ---- Windows (RNW) ----
+# 中间产物与生成物：由 `npx react-native run-windows` / MSBuild 重新生成
+windows/**/Debug/
+windows/**/Release/
+windows/**/ARM64/
+windows/**/x64/
+windows/**/Win32/
+windows/**/Generated Files/
+windows/**/BundleArtifacts/
+windows/**/AppPackages/
+windows/**/*.binlog
+windows/**/project.lock.json
+windows/packages/
+windows/.vs/
+windows/**/*.user
+windows/**/obj/
+
+# ---- macOS ----
+macos/build/
+macos/Pods/
+macos/**/xcuserdata/
+macos/**/DerivedData/
+**/.xcode.env.local
+
+# 打包产物
+/build/
+/artifacts/
+*.app
+*.msix
+*.msixbundle
+*.msi
+
+# 编辑器
+.idea/
+.vscode/*
+!.vscode/extensions.json

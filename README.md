@@ -20,12 +20,17 @@ SilverMoon（中文名**银月**）是一个 **monorepo**：桌面端是 **Elect
 |---|---|---|
 | [`apps/desktop/`](apps/desktop/) | 桌面端应用（Windows / Linux / macOS） | Electron 44 + Vue 3 + TypeScript + Rust sidecar |
 | [`apps/mobile/`](apps/mobile/) | 移动端应用（Android / iOS），音乐播放器为主 | Flutter 3.x（Dart） |
+| [`apps/RNdesktop/`](apps/RNdesktop/) | 桌面端 **React Native 重构版**（Windows / macOS），**目前只有框架骨架** | React Native 0.83 + react-native-windows / react-native-macos |
 | [`archive/electron-desktop/`](archive/electron-desktop/) | 桌面端切换 Flutter 宿主之前的源码快照（该重构已回滚，主线仍是 Electron） | 归档，只读参考 |
 | [`docs/mobile-spec/`](docs/mobile-spec/) | 移动端技术规格（播放 / 歌词 / 桥调用清点） | 文档 |
 | [`tools/`](tools/) | 跨端图标生成器（桌面 + 移动两套图标） | Python + Pillow |
 | [`.github/workflows/`](.github/workflows/) | 桌面端与移动端的 CI（构建、静态检查、发版） | GitHub Actions |
 
 桌面端自带一份更详细的说明：[中文](apps/desktop/README_zh.md) ｜ [English](apps/desktop/README.md)。
+
+> `apps/RNdesktop/` 是桌面端的 **React Native 重构尝试**，当前**只搭了框架**
+> （工程结构 / 主题 / 路由 / 宿主桥契约 / CI），所有页面都是显式标注「功能待填充」的占位屏，
+> 也没有接入任何业务数据。说明见 [`apps/RNdesktop/README.md`](apps/RNdesktop/README.md)。
 
 ---
 
@@ -207,6 +212,7 @@ CI（[`.github/workflows/mobile.yml`](.github/workflows/mobile.yml)，Flutter 3.
 |---|---|---|
 | [`build.yml`](.github/workflows/build.yml) | push `main` / PR / `v*` tag | 桌面端：ESLint + Prettier + 类型检查 + 单测 + Rust fmt/clippy；Windows NSIS 与 Linux AppImage 并行构建；打 tag 时自动创建 Release |
 | [`mobile.yml`](.github/workflows/mobile.yml) | `apps/mobile/**` 变更 / 手动 | 移动端：Android 分 ABI APK 与未签名 iOS IPA，并发布 prerelease |
+| [`rndesktop.yml`](.github/workflows/rndesktop.yml) | `apps/RNdesktop/**` 变更 / 手动 | RN 桌面端：ESLint + Prettier + tsc + Jest；Windows MSIX 构建；macOS 为**手动触发**；`rndesktop-v*` tag 发 prerelease |
 
 ## 🙏 参考项目与许可
 

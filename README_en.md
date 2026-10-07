@@ -21,12 +21,18 @@ SilverMoon (Chinese name **银月**) is a **monorepo**: the desktop app is built
 |---|---|---|
 | [`apps/desktop/`](apps/desktop/) | Desktop app (Windows / Linux / macOS) | Electron 44 + Vue 3 + TypeScript + Rust sidecar |
 | [`apps/mobile/`](apps/mobile/) | Mobile app (Android / iOS), music player first | Flutter 3.x (Dart) |
+| [`apps/RNdesktop/`](apps/RNdesktop/) | Desktop app, **React Native rewrite** (Windows / macOS) — **framework skeleton only** | React Native 0.83 + react-native-windows / react-native-macos |
 | [`archive/electron-desktop/`](archive/electron-desktop/) | Source snapshot from before the desktop moved to a Flutter host (that refactor was later rolled back; mainline is still Electron) | Archived, read-only reference |
 | [`docs/mobile-spec/`](docs/mobile-spec/) | Mobile technical specs (playback / lyrics / bridge inventory) | Docs |
 | [`tools/`](tools/) | Cross-platform icon generator (desktop + mobile asset sets) | Python + Pillow |
 | [`.github/workflows/`](.github/workflows/) | CI for desktop and mobile (build, static checks, release) | GitHub Actions |
 
 The desktop app ships a much more detailed document of its own: [中文](apps/desktop/README_zh.md) ｜ [English](apps/desktop/README.md).
+
+> `apps/RNdesktop/` is a **React Native rewrite** of the desktop app. It is currently
+> **framework only** (project layout, theming, routing, host-bridge contract, CI): every screen is a
+> placeholder explicitly marked "feature pending", and no business data is wired up yet.
+> See [`apps/RNdesktop/README.md`](apps/RNdesktop/README.md).
 
 ---
 
@@ -208,6 +214,7 @@ See also [`apps/mobile/README.md`](apps/mobile/README.md); technical specs and i
 |---|---|---|
 | [`build.yml`](.github/workflows/build.yml) | push to `main` / PR / `v*` tag | Desktop: ESLint + Prettier + typecheck + unit tests + Rust fmt/clippy; Windows NSIS and Linux AppImage built in parallel; tagging creates a GitHub Release |
 | [`mobile.yml`](.github/workflows/mobile.yml) | `apps/mobile/**` changes / manual | Mobile: per-ABI Android APKs and an unsigned iOS IPA, published as a prerelease |
+| [`rndesktop.yml`](.github/workflows/rndesktop.yml) | `apps/RNdesktop/**` changes / manual | RN desktop: ESLint + Prettier + tsc + Jest; Windows MSIX build; macOS is **manual-only**; `rndesktop-v*` tags publish a prerelease |
 
 ## 🙏 Credits & license
 

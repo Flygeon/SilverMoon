@@ -1,0 +1,225 @@
+# React Native 桌面端（apps/RNdesktop）CI
+#
+# 与 apps/desktop 的 build.yml 是**两套独立流水线**：RN 重构版目前只有框架骨架，
+# 产物也只到「能编译、能出安装包」为止，不参与现有 Electron 端的发版。
+#
+# 触发范围刻意收窄到 apps/RNdesktop 与本文件：RN 桌面端的构建代价（VS + NuGet +
+# Hermes 编译）比 lint 高一个量级，不应被仓库其它目录的改动带起来。
+name: RN Desktop Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['rndesktop-v*']
+    paths:
+      - 'apps/RNdesktop/**'
+      - '.github/workflows/rndesktop.yml'
+  pull_request:
+    paths:
+      - 'apps/RNdesktop/**'
+      - '.github/workflows/rndesktop.yml'
+  workflow_dispatch:
+    inputs:
+      build_macos:
+        description: '同时构建 macOS（需在 macOS runner 上跑 pod install）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rndesktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 静态检查：lint / 类型 / 单测。跑在 Linux 上，几十秒出结果，
+  # 刻意**不做 needs 依赖**（与 apps/desktop 的 build 作业同理）：
+  # 让最快的门禁和慢的 Windows 构建并行，总时长由慢的那条决定。
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Lint / Typecheck / Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/RNdesktop
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/RNdesktop/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Prettier check
+        run: npm run format:check
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test -- --ci
+
+  # ---------------------------------------------------------------------------
+  # Windows 构建：MSBuild 编译 C++/WinRT 应用（含 Hermes / Fabric 依赖）并出 MSIX。
+  #
+  # 说明：windows/ 工程目录**随仓库提交**（RN 桌面端的常规做法），CI 只负责编译，
+  # 不在流水线里跑 init-windows —— 那样每轮都会重新生成一遍原生工程，
+  # 而且一旦生成器版本漂移，diff 会悄悄改掉签名 / 清单等关键文件。
+  # ---------------------------------------------------------------------------
+  windows:
+    name: Windows (MSIX)
+    # ⚠️ 必须是带 Visual Studio 2026 的镜像：RNW 0.83 的模板用 **v145** 工具集
+    # （MSVC 14.5x），而 windows-2022 / windows-2025 上只有 VS 2022（v143），
+    # 用它构建会直接报「找不到 v145 工具集」。该镜像自带 VS 2026 Enterprise、
+    # NativeDesktop + Universal 工作负载、Windows SDK 10.0.26100 与 .NET 8/9/10。
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: apps/RNdesktop
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/RNdesktop/package-lock.json
+
+      # RNW 的原生构建链走 dotnet（NuGet 还原 / codegen 工具）。
+      # 镜像里虽然已经装了 8/9/10，但版本随镜像更新漂移，这里钉死 8.0.x，
+      # 保证「本地能编、CI 也能编」这件事不随镜像变化而失效。
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('apps/RNdesktop/windows/**/packages.config', 'apps/RNdesktop/windows/**/*.vcxproj', 'apps/RNdesktop/windows/**/*.csproj') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Cache MSBuild output
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/RNdesktop/windows/SilverMoon/x64
+            apps/RNdesktop/windows/SilverMoon/ARM64
+          key: msbuild-${{ runner.os }}-${{ hashFiles('apps/RNdesktop/windows/**') }}
+          restore-keys: |
+            msbuild-${{ runner.os }}-
+
+      # run-windows 内部会先跑 autolink + codegen 再交给 MSBuild，这里不再单独调
+      # codegen-windows —— 多调一次并不会更快，反而多一处与 CLI 版本耦合的地方。
+      - name: Build MSIX (Release)
+        run: npx react-native run-windows --release --arch x64 --logging --no-launch --no-deploy --no-packager
+
+      - name: Collect MSIX
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $found = Get-ChildItem -Path windows -Recurse -Include *.msix,*.msixbundle,*.appx -File -ErrorAction SilentlyContinue
+          if (-not $found) {
+            Write-Host '::error::没有找到 MSIX 产物，构建可能只产出了 exe'
+            Get-ChildItem -Path windows -Recurse -Include *.exe -File |
+              Where-Object { $_.FullName -match '\\x64\\Release\\' } |
+              Select-Object -First 20 FullName
+            exit 1
+          }
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $found | ForEach-Object {
+            Copy-Item $_.FullName -Destination artifacts -Force
+            Write-Host "collected $($_.Name)"
+          }
+          Get-ChildItem artifacts | Format-Table Name,Length
+
+      - name: Upload MSIX
+        uses: actions/upload-artifact@v5
+        with:
+          name: rndesktop-windows-msix
+          path: apps/RNdesktop/artifacts/*
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # macOS：**默认不跑**（骨架阶段无法在 Windows 上验证，不拿它当门禁）。
+  # 需要时手动触发：Actions → RN Desktop Build → Run workflow → 勾选 macos。
+  # ---------------------------------------------------------------------------
+  macos:
+    name: macOS (骨架，手动触发)
+    # 用 github.event.inputs 而不是裸 inputs：后者在非 workflow_dispatch 事件下
+    # 不是合法的上下文，可能让整个 workflow 解析失败。
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_macos == 'true'
+    runs-on: macos-15
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: apps/RNdesktop
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/RNdesktop/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      # macos/ 工程由脚本从 react-native-macos 的模板生成（生成过程不需要 Xcode，
+      # 但**构建**必须在这里的 macOS runner 上做）。CI 里重新生成一遍而不是依赖仓库里
+      # 那份，是为了让工程与 package.json 里的 react-native-macos 版本始终对得上。
+      - name: Generate macOS project
+        run: node scripts/generate-macos-project.mjs
+
+      - name: Install CocoaPods dependencies
+        run: |
+          cd macos
+          pod install
+
+      - name: Build (Release, unsigned)
+        run: npm run build:macos
+
+  # ---------------------------------------------------------------------------
+  # tag 发布：rndesktop-v* 才走这里，与 Electron 端的 v* 互不干扰。
+  # ---------------------------------------------------------------------------
+  release:
+    if: startsWith(github.ref, 'refs/tags/rndesktop-v')
+    needs: [lint, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List assets
+        run: find release-assets -type f | sort
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          prerelease: true
+          files: release-assets/**/*
