@@ -178,10 +178,14 @@ jobs:
           Copy-Item $msix.FullName $zip -Force
           $entries = [System.IO.Compression.ZipFile]::OpenRead($zip).Entries | ForEach-Object { $_.FullName }
           $entries | Sort-Object | Select-Object -First 30
-          $exe = $entries | Where-Object { $_ -like 'SilverMoon.exe' }
-          $bundle = $entries | Where-Object { $_ -like '*Bundle*' }
-          if (-not $exe) { Write-Host '::error::MSIX 里没有 SilverMoon.exe'; exit 1 }
-          Write-Host "OK: exe=$exe bundle=$($bundle -join ',')"
+          # 路径要按**后缀**匹配：包内布局是 SilverMoon\SilverMoon.exe，
+          # 写死成 'SilverMoon.exe' 会永远匹配不上（第一次自检就栽在这）。
+          $exe = $entries | Where-Object { $_ -like '*SilverMoon.exe' }
+          $bundle = $entries | Where-Object { $_ -like '*index.windows.bundle' }
+          if (-not $exe) { Write-Output '::error::MSIX 里没有 SilverMoon.exe'; exit 1 }
+          if (-not $bundle) { Write-Output '::error::MSIX 里没有 index.windows.bundle（JS 没打进去）'; exit 1 }
+          Write-Output "OK: exe=$exe"
+          Write-Output "OK: bundle=$bundle"
 
       - name: Upload MSIX
         uses: actions/upload-artifact@v5
