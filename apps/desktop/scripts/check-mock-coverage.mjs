@@ -20,9 +20,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** 从 `generate_handler![...]` 里取出命令函数名（末段标识符）。 */
 function readRouteTable() {
-  const source = readFileSync(path.join(root, "backend", "src", "lib.rs"), "utf8");
+  const source = readFileSync(path.join(root, "src-tauri", "src", "lib.rs"), "utf8");
   const start = source.indexOf("generate_handler![");
-  if (start === -1) throw new Error("未在 backend/src/lib.rs 找到 generate_handler![…]");
+  if (start === -1) throw new Error("未在 src-tauri/src/lib.rs 找到 generate_handler![…]");
   const end = source.indexOf("])", start);
   if (end === -1) throw new Error("generate_handler![…] 未能找到结束位置");
   const body = source.slice(start, end);

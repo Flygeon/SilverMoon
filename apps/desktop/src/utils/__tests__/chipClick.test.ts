@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * 单选 chip「单击即切换」的回归测试。
@@ -72,7 +73,10 @@ function vueFiles(dir: string, acc: string[] = []): string[] {
 
 describe("m3e-filter-chip 必须用 @click.prevent", () => {
   it("所有裸 chip 的 @click 都带 .prevent", () => {
-    const root = new URL("../../", import.meta.url).pathname;
+    // 必须用 fileURLToPath 而不是 URL.pathname：Windows 上 pathname 形如
+    // "/C:/blog/..."，拼上盘符会变成 "C:\C:\blog\..." 而 ENOENT（历史上这条用例
+    // 因此在 Windows 本地永远是红的，掩盖了真正的断言）。
+    const root = fileURLToPath(new URL("../../", import.meta.url));
     const bad: string[] = [];
     for (const file of vueFiles(root)) {
       const src = readFileSync(file, "utf8");

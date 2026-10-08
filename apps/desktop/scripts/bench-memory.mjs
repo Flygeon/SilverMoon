@@ -29,7 +29,7 @@ const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 /** 数据目录的标识符取自单一真源，避免与运行时不一致。 */
 function identifier() {
   try {
-    return JSON.parse(readFileSync(path.join(appRoot, "backend/silvermoon.config.json"), "utf8"))
+    return JSON.parse(readFileSync(path.join(appRoot, "src-tauri/silvermoon.config.json"), "utf8"))
       .identifier;
   } catch {
     return "SilverMoon";

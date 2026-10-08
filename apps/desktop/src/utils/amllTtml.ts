@@ -22,6 +22,7 @@
  *   - 也支持 Apple Music 写在 `<head>` 里的整行翻译（`<translation><text for="L1">`），
  *     按 `itunes:key` 关联（真实文件里有约 7% 用这种写法）。
  */
+import { hasBridge } from "@/ipc/bridge";
 import type { LyricLine, WordUnit } from "@shared/types";
 import { TtlCache } from "./ttlCache";
 // lyricMatch 是叶子模块（不 import 任何项目内文件），这里引用不会成环。
@@ -128,7 +129,7 @@ export function amllNormalizeBase(base?: string): string {
 
 /** 桌面端走宿主网络栈（绕 CORS）；浏览器预览退回原生 fetch（jsDelivr 带 CORS，可直连） */
 async function amllFetch(url: string, init: RequestInit = {}): Promise<Response> {
-  if (typeof window !== "undefined" && window.__SILVERMOON__) {
+  if (hasBridge()) {
     const { fetch: hostFetch } = await import("@/ipc/http");
     return hostFetch(url, init);
   }

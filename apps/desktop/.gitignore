@@ -4,17 +4,13 @@ node_modules/
 # front-end build output
 dist/
 
-# electron main/preload build output
-dist-electron/
-
-# electron-builder output (installers, unpacked app)
+# electron-builder output（历史目录，迁回 Tauri 后不再产生）
 release/
 
-# rust
-backend/target/
-splash/target/
-backend/gen/schemas/
-backend/.tauri/
+# rust / tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+src-tauri/.tauri/
 
 # logs
 *.log
@@ -54,9 +50,8 @@ ECHO播放器参考/
 .trae-html-share-packages/
 
 # local reference projects and workspace artifacts
-# Flutter WebView �õ��ƶ��� Web ���WebView ���Ƴ�����Ҫ���ύ��
+# Flutter WebView �õ��ƶ��� Web ���WebView ���Ƴ�����Ҫ���ύ��
 dist-mobile/
 
-# nested path-dependency crates generate their own target/ too
-# (the backend/target/ rule above does not cover subdirectories)
-backend/crates/*/target/
+# 嵌套的 path 依赖 crate 会各自生成 target/（上面的规则不覆盖子目录）
+src-tauri/crates/*/target/

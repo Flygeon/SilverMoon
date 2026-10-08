@@ -10,7 +10,7 @@
  * 这里把这些位置全部对齐校验，任何一处漂移都直接失败。CI 的 lint 作业会跑它。
  * 仓库根的两份 README 不强制写版本号（写了就必须一致）。
  *
- * 单一真源仍是 `backend/silvermoon.config.json`（vite 与主进程都读它），
+ * 单一真源仍是 `src-tauri/silvermoon.config.json`（vite 与 Tauri 都读它），
  * 其余位置都以它为准。
  */
 import { readFileSync } from "node:fs";
@@ -25,24 +25,24 @@ const repoRoot = path.resolve(appRoot, "..", "..");
 /** 各处版本号的读取方式：描述 + 取值函数。 */
 const sources = [
   {
-    label: "backend/silvermoon.config.json（单一真源）",
-    read: () => JSON.parse(read("backend/silvermoon.config.json")).version,
+    label: "src-tauri/silvermoon.config.json（单一真源）",
+    read: () => JSON.parse(read("src-tauri/silvermoon.config.json")).version,
   },
   {
     label: "package.json",
     read: () => JSON.parse(read("package.json")).version,
   },
   {
-    label: "backend/Cargo.toml",
-    read: () => match(read("backend/Cargo.toml"), /^version\s*=\s*"([^"]+)"/m, "Cargo.toml"),
+    label: "src-tauri/Cargo.toml",
+    read: () => match(read("src-tauri/Cargo.toml"), /^version\s*=\s*"([^"]+)"/m, "Cargo.toml"),
   },
   {
-    label: "backend/Cargo.lock（silvermoon 包）",
+    // 可选：Cargo.lock 是 cargo 生成的产物，未构建过的检出里可能不存在
+    label: "src-tauri/Cargo.lock（silvermoon 包，可选）",
     read: () =>
-      match(
-        read("backend/Cargo.lock"),
+      matchOptional(
+        readOptional("src-tauri/Cargo.lock") ?? "",
         /name = "silvermoon"\nversion = "([^"]+)"/,
-        'Cargo.lock 里的 name = "silvermoon" 条目',
       ),
   },
   {
@@ -89,6 +89,15 @@ function matchOptional(text, re) {
   return m ? m[1] : null;
 }
 
+/** 读文件；不存在时返回 null（用于 cargo 生成、未构建则缺失的产物）。 */
+function readOptional(rel) {
+  try {
+    return read(rel);
+  } catch {
+    return null;
+  }
+}
+
 const found = [];
 for (const s of sources) {
   try {
@@ -118,7 +127,9 @@ const drifted = found.filter((f) => f.version !== expect);
 if (drifted.length) {
   console.error(`\n✗ 版本号不一致（期望 ${expect}）：`);
   for (const d of drifted) console.error(`    ${d.version}  ${d.label}`);
-  console.error("\n把这些位置改成同一个版本号后重试。单一真源是 backend/silvermoon.config.json。");
+  console.error(
+    "\n把这些位置改成同一个版本号后重试。单一真源是 src-tauri/silvermoon.config.json。",
+  );
   process.exit(1);
 }
 

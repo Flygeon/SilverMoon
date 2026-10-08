@@ -6,6 +6,7 @@
  * 签名算法（MD5）与请求参数逐字移植；dfid 注册仅歌单接口需要，此处省略。
  * 请求经宿主网络栈（主进程发起，绕开 CORS）；浏览器预览退化为 window.fetch。
  */
+import { hasBridge } from "@/ipc/bridge";
 import { md5 } from "./md5";
 import { krcDecrypt, krcToRawLines, krcLinesToLyricLines } from "./krc";
 import { filterInstrumentalPlaceholder } from "./lyricTimeline";
@@ -15,7 +16,7 @@ import type { LyricLine } from "@shared/types";
 const REQUEST_TIMEOUT_MS = 8000;
 const SIGN_KEY = "LnT6xpN3khm36zse0QzvmgTZ3waWdRSA";
 
-const isDesktop = typeof window !== "undefined" && !!window.__SILVERMOON__;
+const isDesktop = hasBridge();
 
 /** 酷狗搜索到的歌曲信息（对应 kg.py format_songinfos 字段） */
 export interface KgSongInfo {

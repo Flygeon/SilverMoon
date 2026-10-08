@@ -6,6 +6,7 @@
  * 请求走宿主网络栈（主进程 reqwest，绕开 CORS）；浏览器预览退化为
  * window.fetch（会因 CORS 失败而优雅降级，不影响播放）。
  */
+import { hasBridge } from "@/ipc/bridge";
 import { qrcDecrypt, qrcToRawLines, rawLinesToLyricLines, mergeQqLyrics } from "./qrc";
 import { parseLrc, filterInstrumentalPlaceholder } from "./lyricTimeline";
 import { TtlCache } from "./ttlCache";
@@ -15,7 +16,7 @@ const API_URL = "https://u.y.qq.com/cgi-bin/musicu.fcg";
 /** 单次请求超时（毫秒） */
 const REQUEST_TIMEOUT_MS = 8000;
 
-const isDesktop = typeof window !== "undefined" && !!window.__SILVERMOON__;
+const isDesktop = hasBridge();
 
 /** QQ 搜索到的歌曲信息（对应 qm.py format_songinfos 的字段） */
 export interface QqSongInfo {

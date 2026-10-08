@@ -10,10 +10,10 @@ export default [
   {
     ignores: [
       "dist/**",
-      "dist-electron/**",
+      "src-tauri/target/**",
       "release/**",
       "node_modules/**",
-      "backend/**",
+      "src-tauri/**",
       "public/**",
       "*.config.*",
       "coverage/**",

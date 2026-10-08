@@ -10,12 +10,12 @@
 
 产物：
     app-icon.png                   1024  开发期窗口/托盘降级图标
-    backend/icons/icon.png         1024  Linux 打包图标 + 打包后 resources/icon.png
-    backend/icons/icon.ico                Windows 打包图标（16→256 多尺寸）
-    backend/icons/icon.icns               macOS 打包图标（32→1024 多尺寸）
-    backend/icons/{32,64,128,128@2x}.png
-    backend/icons/Square*Logo.png         Windows Store 磁贴（Tauri 模板遗留，一并刷新）
-    backend/icons/android/**              自适应图标（同上）
+    src-tauri/icons/icon.png         1024  Linux 打包图标 + 打包后 resources/icon.png
+    src-tauri/icons/icon.ico                Windows 打包图标（16→256 多尺寸）
+    src-tauri/icons/icon.icns               macOS 打包图标（32→1024 多尺寸）
+    src-tauri/icons/{32,64,128,128@2x}.png
+    src-tauri/icons/Square*Logo.png         Windows Store 磁贴（Tauri 模板遗留，一并刷新）
+    src-tauri/icons/android/**              自适应图标（同上）
 
 构图：**圆角方形 + 保留原图背景**。源图是方形插画，四角被圆角切掉后露出透明，
 任务栏 / Dock 上是一个干净的圆角方块。
@@ -148,21 +148,21 @@ def save_icns(path: Path) -> None:
 # (仓库相对路径, 边长)。直接替换，不做缩放兜底——尺寸写错就该当场看见。
 PNG_TARGETS = [
     ("app-icon.png", 1024),
-    ("backend/icons/icon.png", 1024),
-    ("backend/icons/32x32.png", 32),
-    ("backend/icons/64x64.png", 64),
-    ("backend/icons/128x128.png", 128),
-    ("backend/icons/128x128@2x.png", 256),
-    ("backend/icons/StoreLogo.png", 50),
-    ("backend/icons/Square30x30Logo.png", 30),
-    ("backend/icons/Square44x44Logo.png", 44),
-    ("backend/icons/Square71x71Logo.png", 71),
-    ("backend/icons/Square89x89Logo.png", 89),
-    ("backend/icons/Square107x107Logo.png", 107),
-    ("backend/icons/Square142x142Logo.png", 142),
-    ("backend/icons/Square150x150Logo.png", 150),
-    ("backend/icons/Square284x284Logo.png", 284),
-    ("backend/icons/Square310x310Logo.png", 310),
+    ("src-tauri/icons/icon.png", 1024),
+    ("src-tauri/icons/32x32.png", 32),
+    ("src-tauri/icons/64x64.png", 64),
+    ("src-tauri/icons/128x128.png", 128),
+    ("src-tauri/icons/128x128@2x.png", 256),
+    ("src-tauri/icons/StoreLogo.png", 50),
+    ("src-tauri/icons/Square30x30Logo.png", 30),
+    ("src-tauri/icons/Square44x44Logo.png", 44),
+    ("src-tauri/icons/Square71x71Logo.png", 71),
+    ("src-tauri/icons/Square89x89Logo.png", 89),
+    ("src-tauri/icons/Square107x107Logo.png", 107),
+    ("src-tauri/icons/Square142x142Logo.png", 142),
+    ("src-tauri/icons/Square150x150Logo.png", 150),
+    ("src-tauri/icons/Square284x284Logo.png", 284),
+    ("src-tauri/icons/Square310x310Logo.png", 310),
 ]
 
 # (密度, launcher 边长, 自适应画布边长)

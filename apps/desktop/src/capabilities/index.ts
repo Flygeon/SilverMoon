@@ -4,7 +4,7 @@
  * 前端不直接触碰磁盘/数据库/原生资源。
  */
 import { invoke, invokeBatch, toAssetUrl } from "@/ipc/invoke";
-import { callBridge } from "@/ipc/bridge";
+import { callBridge, hasBridge } from "@/ipc/bridge";
 import { listen, type UnlistenFn } from "@/ipc/events";
 import { openPath, openUrl, revealItemInDir } from "@/ipc/opener";
 import { open as dialogOpen, save as dialogSave } from "@/ipc/dialog";
@@ -194,7 +194,14 @@ import type {
 import { mockInvoke, mockMusicTags } from "./mock";
 
 /** 桌面端（Electron 宿主）为真；纯 Web 预览时为假，所有原生能力降级为 mock。 */
-export const isDesktop = typeof window !== "undefined" && !!window.__SILVERMOON__;
+/**
+ * 是否运行在桌面宿主（Tauri）里。
+ *
+ * 判定放在 `@/ipc/bridge` 的 `hasBridge()`：Tauri 会注入
+ * `window.__TAURI_INTERNALS__`，同时保留对打桩的 `window.__SILVERMOON__` 的识别，
+ * 因此既有的浏览器预览 / 单测 mock 路径不受影响。
+ */
+export const isDesktop = hasBridge();
 
 async function safeInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (!isDesktop) return mockInvoke<T>(cmd, args);

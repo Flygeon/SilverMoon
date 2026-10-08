@@ -1,13 +1,14 @@
-# 这是 apps/desktop/.github/workflows/build.yml 的根目录副本。
+# 桌面端 CI（apps/desktop，Tauri 2）。
 #
-# 原文件随应用目录躺在 apps/desktop/.github/ 下，而 GitHub 只执行仓库根目录下的
-# 工作流，所以 monorepo 重构后它不再被触发。此副本除下列 monorepo 路径差异外，
-# 与原文件逐行一致（作业划分、matrix、缓存策略、tag 发布逻辑均未改动）：
-#   * 两个作业加 defaults.run.working-directory: apps/desktop；
-#   * setup-node 的 npm 缓存指向 apps/desktop/package-lock.json；
-#   * rust-cache 的 workspaces 与两个 Rust 步骤的工作目录补 apps/desktop 前缀；
-#   * 产物路径与 electron 缓存 key 补 apps/desktop 前缀。
-# 原文件保持不动。
+# 与迁移前（Electron）的差异：
+#   * 宿主层从「Electron 主进程 + Rust sidecar 两个进程」变成「Tauri 单进程」，
+#     因此不再需要单独构建 sidecar 与 splash 启动器；
+#   * 打包由 electron-builder 换成 tauri build（Windows NSIS / Linux AppImage / macOS dmg）；
+#   * Rust 工程从 apps/desktop/backend 移到 apps/desktop/src-tauri。
+#
+# 保留原设计的取舍：
+#   * build 作业**刻意不写 needs: lint** —— 构建是最慢的一环，串行等待会让总时长凭空多几分钟；
+#   * rust-cache 与 lint 作业用不同 prefix-key，避免两边 target 互相覆盖缓存。
 name: Build
 
 on:
@@ -32,11 +33,11 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # 静态检查：前端 lint/格式/类型 + Rust fmt/clippy
+  # 静态检查：前端 lint/格式/类型 + Rust fmt/clippy/test
   # ---------------------------------------------------------------------------
   lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     # monorepo：应用在 apps/desktop 下，所有 run 步骤以此为工作目录
     defaults:
       run:
@@ -47,7 +48,6 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          # 与 Electron 44 内置的 Node 对齐（Node 20 已被 actions 标记弃用）
           node-version: 22
           cache: npm
           # monorepo：锁文件在应用目录下，setup-node 需要显式指路
@@ -57,25 +57,29 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          # wasm32 目标用于 npm run verify:rust-pure：把不带依赖的纯逻辑编成 wasm
+          # 真实执行断言（本地没有 MSVC 时也能验证 Rust 行为）。
+          targets: wasm32-unknown-unknown
 
-      # clippy 要编译整棵依赖树；不缓存的话这一步每轮都要从零编一遍（实测 ~124s）
+      # clippy 要编译整棵依赖树；不缓存的话这一步每轮都要从零编一遍
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: apps/desktop/backend -> target
+          workspaces: apps/desktop/src-tauri -> target
           # 与构建作业区分开，避免两边的 target 目录互相覆盖缓存
           prefix-key: clippy
 
-      # 后端只需要 native-tls 的 pkg-config 支持，无需任何桌面框架的开发库。
-      #
-      # 另外装 mingw-w64：用于在 Linux 上**交叉编译启动器**，
-      # 以便校验图标资源真的嵌进了 exe（比等 Windows 作业快得多）。
-      # 同时把 NSIS 自检要用的 nsis 一起装上。
+      # Tauri 在 Linux 上需要 WebKitGTK / libsoup / librsvg 等一系列开发库，
+      # 以及 native-tls 需要的 pkg-config + libssl-dev。
+      # 这份清单取自 Tauri 2 官方文档的 Debian/Ubuntu 前置依赖。
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config libssl-dev mingw-w64 nsis
+            pkg-config libssl-dev \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+            patchelf
 
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
@@ -86,11 +90,13 @@ jobs:
       - name: Prettier check
         run: npm run format:check
 
-      - name: Typecheck (renderer + electron main)
+      - name: Typecheck (renderer)
         run: npm run typecheck
 
+      # --no-file-parallelism：autoMixAlgo 是 CPU 密集的 FFT 用例，CI 上多 worker 抢核
+      # 会偶发超时（本机实测：并行偶发失败 1 条，串行 800/800 全绿）。
       - name: Unit tests
-        run: npm test
+        run: npx vitest run --no-file-parallelism
 
       # mock 与后端路由表的漂移检查。
       # mock 是「纯浏览器预览」的唯一依赖，路由表改名/删除后 mock 会留下永远命中
@@ -98,87 +104,35 @@ jobs:
       - name: Mock / route-table drift check
         run: npm run verify:mock-coverage
 
-      - name: Rustfmt check (backend)
-        working-directory: apps/desktop/backend
-        run: cargo fmt --check
+      # Rust 纯逻辑的真实执行断言（不依赖链接器）：封面 Referer 伪装 / 扩展名推断 / 路径规范化
+      - name: Rust pure-logic tests (executed via wasm)
+        run: npm run verify:rust-pure
 
-      # silvermoon-ipc 两个 crate 是 path 依赖、不属于 workspace 成员，
-      # `cargo fmt` 不会顺带检查它们，因此这里显式各查一次
-      - name: Rustfmt check (ipc layer)
-        run: |
-          cargo fmt --check --manifest-path backend/crates/silvermoon-ipc/Cargo.toml
-          cargo fmt --check --manifest-path backend/crates/silvermoon-ipc-macros/Cargo.toml
+      - name: Rustfmt check
+        run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
 
-      # B 站协议层同理：它是 path 依赖、不属于 workspace，必须显式指定 manifest。
-      # 该 crate 含 WBI 签名 / 弹幕解析 / 归一化的单测，下面 Unit tests 里也会跑。
+      # B 站协议层是 path 依赖、不属于 workspace，必须显式指定 manifest。
       - name: Rustfmt check (bilibili protocol crate)
-        run: cargo fmt --check --manifest-path backend/crates/silvermoon-bili/Cargo.toml
+        run: cargo fmt --check --manifest-path src-tauri/crates/silvermoon-bili/Cargo.toml
 
-      - name: Clippy (backend)
-        working-directory: apps/desktop/backend
-        run: cargo clippy --all-targets -- -D warnings
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
-      # 在此之前 CI 只做「编译 + clippy」，从不执行任何 Rust 测试：
-      # 后端业务与 IPC 层的回归完全靠人工。这里把两侧的单元测试都跑起来。
-      - name: Unit tests (backend lib)
-        working-directory: apps/desktop/backend
-        run: cargo test --lib
-
-      # silvermoon-ipc 不是 workspace 成员（见上面的 fmt 说明），
-      # 请求守卫（Host / Origin / 令牌）的单元测试挂在它下面，必须显式指定 manifest。
-      # 对应 src/server.rs 的 `mod guard_tests`。
-      - name: Unit tests (ipc request guards)
-        run: cargo test --manifest-path backend/crates/silvermoon-ipc/Cargo.toml
+      # 在此之前 CI 只做「编译 + clippy」，从不执行任何 Rust 测试。
+      - name: Unit tests (Rust lib)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 
       # B 站协议层的单测（WBI 置换表、弹幕模式映射、归一化边界）挂在这个 crate 下，
       # 同样不是 workspace 成员，必须显式指定 manifest 才会被执行。
       - name: Unit tests (bilibili protocol)
-        run: cargo test --manifest-path backend/crates/silvermoon-bili/Cargo.toml
-
-      # 启动器是 Windows 专用程序，但 fmt/clippy 都能在 Linux 上跑，
-      # 因此质量检查留在最快的 lint 作业里，不必等 Windows 构建。
-      # 注意：clippy 需要能解析 Windows 目标，故带 --target（构建脚本仍用宿主）。
-
-      - name: Rustfmt check (launcher)
-        working-directory: apps/desktop/splash
-        run: cargo fmt --check
-
-      # 启动器**纯逻辑**（路径解析 / 主题解析 / 动画数学）的单元测试。
-      #
-      # 关键：这些模块被刻意写成无平台依赖（挂在只服务测试的 lib target 上），
-      # 于是能在 Linux 上用 `cargo test --lib` 跑**与发布二进制同一份代码**。
-      # 它们拦的都是「只在发布版暴露」的缺陷：
-      #   * 启动器曾假设与 SilverMoon.exe 同级，而 extraResources 实际放进
-      #     resources/ → 装出来的应用打不开；
-      #   * splash 亮/暗要跟随应用设置，而设置里 theme 与 readerTheme 并存，
-      #     子串匹配会读错键。
-      # 以上两类当时 CI 全绿却带着缺陷发布。
-      - name: Launcher logic tests (path / theme / animation)
-        run: npm run verify:splash-paths
-
-      # 图标资源校验：**必须真的嵌进 exe**，否则快捷方式是空白图标。
-      # 这里用 GNU 目标本地构建一份来验（比 Windows 作业快得多），
-      # 能在 1 分钟内拦下「资源没编出来」这类静默失败。
-      - name: Build launcher for resource check (GNU)
-        run: |
-          rustup target add x86_64-pc-windows-gnu
-          cargo build --release --target x86_64-pc-windows-gnu --manifest-path splash/Cargo.toml
-
-      - name: Verify launcher icon resource (.rsrc)
-        run: npm run verify:splash-resources
-
-      # NSIS 脚本只在 Windows 打包时才被编译；等到那时才发现语法错误就是 ~12 分钟一轮。
-      # makensis 跨平台，这里先把语法与宏展开走一遍。
-      - name: NSIS installer script syntax check
-        run: npm run verify:nsis
+        run: cargo test --manifest-path src-tauri/crates/silvermoon-bili/Cargo.toml
 
   # ---------------------------------------------------------------------------
-  # 安装包：Windows NSIS / Linux AppImage
+  # 安装包：Windows NSIS / Linux AppImage / macOS dmg
   #
-  # **刻意不写 `needs: lint`**：构建是整条流水线里最慢的一环（Windows 侧
-  # Rust release 编译 + 打包约 12 分钟），串行等待 lint 会让总时长凭空多 4 分钟。
-  # 两者并行后，总时长由最慢的 Windows 决定。若 lint 先失败，
-  # concurrency 会在下一次推送时直接取消这一轮，浪费可控。
+  # **刻意不写 `needs: lint`**：构建是整条流水线里最慢的一环（三个平台各自
+  # Rust release 编译），串行等待 lint 会让总时长凭空多几分钟。
+  # 若 lint 先失败，concurrency 会在下一次推送时直接取消这一轮，浪费可控。
   # ---------------------------------------------------------------------------
   build:
     name: build (${{ matrix.label }})
@@ -188,33 +142,25 @@ jobs:
         include:
           - os: windows-latest
             label: windows
-            package-args: --win nsis
+            bundle-args: --bundles nsis
             artifact-name: windows-build
-            # latest*.yml / *.blockmap 是自动更新的元数据（版本判断 + 差分下载），
-            # 必须和安装包一起进 artifact，否则 release job 拿不到、自动更新直接失效。
             artifact-path: |
-              apps/desktop/release/*.exe
-              apps/desktop/release/latest*.yml
-              apps/desktop/release/*.blockmap
-            # @electron/get 的下载缓存与 electron-builder 的 nsis/appimage 工具链缓存
-            # 不在 npm 缓存范围内，单独缓存后打包步骤能省下大量下载时间
-            cache-paths: |
-              ~/AppData/Local/electron/Cache
-              ~/AppData/Local/electron-builder/Cache
+              apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
           - os: ubuntu-latest
             label: linux
-            package-args: --linux AppImage
+            bundle-args: --bundles appimage
             artifact-name: linux-build
             artifact-path: |
-              apps/desktop/release/*.AppImage
-              apps/desktop/release/latest*.yml
-              apps/desktop/release/*.blockmap
-            cache-paths: |
-              ~/.cache/electron
-              ~/.cache/electron-builder
+              apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+          - os: macos-latest
+            label: macos
+            bundle-args: --bundles dmg
+            artifact-name: macos-build
+            artifact-path: |
+              apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
 
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 60
 
     # monorepo：应用在 apps/desktop 下，所有 run 步骤以此为工作目录
     defaults:
@@ -229,89 +175,39 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          # monorepo：锁文件在应用目录下，setup-node 需要显式指路
           cache-dependency-path: apps/desktop/package-lock.json
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 缓存 ~/.cargo 与两个 Rust 工程的 target：命中后 release 编译只重编改动过的 crate。
-      # splash（原生启动器）是独立 crate、target 目录也在自己下面，必须单独列出，
-      # 否则每轮都要重编它的整棵 windows-rs 依赖树。
+      # 缓存 ~/.cargo 与 src-tauri/target：命中后 release 编译只重编改动过的 crate。
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: |
-            apps/desktop/backend -> target
-            apps/desktop/splash -> target
+          workspaces: apps/desktop/src-tauri -> target
           prefix-key: release
-
-      - name: Cache electron / electron-builder downloads
-        uses: actions/cache@v4
-        with:
-          path: ${{ matrix.cache-paths }}
-          key: ${{ runner.os }}-electron-cache-${{ hashFiles('apps/desktop/package-lock.json', 'apps/desktop/electron-builder.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-electron-cache-
 
       - name: Install system dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+            patchelf
 
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
 
-      # 后端必须先生成：electron-builder 会把它作为 extraResources 打进安装包
-      - name: Build Rust backend (release)
-        run: cargo build --release --manifest-path backend/Cargo.toml
-
-      # 原生启动器（MD3 splash）：同样是 extraResources，必须**先于 electron-builder**
-      # 生成，否则打包时会找不到 win.extraResources 里声明的 exe 而失败。
-      # 只跑 Windows：它是 Windows GUI 程序（user32/gdi32），
-      # 且 electron-builder.yml 只在 win 平台引用该产物。
-      - name: Build native launcher (release)
-        if: runner.os == 'Windows'
-        run: cargo build --release --manifest-path splash/Cargo.toml
-
-      # 打包前对启动器做**硬校验**（图标资源 + 体积）。
+      # tauri build 会自己跑 beforeBuildCommand（渲染进程 vite build），
+      # 并把 src-tauri 作为主程序一起编译；无需再单独构建后端 / 启动器。
       #
-      # 为什么必须让 CI 失败而不是只打 warning（真实教训）：
-      # 图标嵌入失败时 build.rs 只打印 cargo:warning，构建照常成功；
-      # 于是 CI 全绿、发布版快捷方式却没有图标 —— 直到用户装上才发现。
-      # 实测就是这样漏过一次（MSVC 下裸 rc 不在 PATH，资源没编出来）。
-      #
-      # 校验脚本用**纯 Node 解析 PE 节表**，不依赖 objdump（仅 Linux 有）
-      # 或 dumpbin（pwsh 里不保证在 PATH），跨平台行为一致。
-      - name: Verify launcher artifact (icon + size)
-        if: runner.os == 'Windows'
-        run: npm run verify:splash-resources
-
-      - name: Build renderer + electron main
-        run: npm run build:renderer && npm run build:main
-
-      - name: Package
-        # ⚠️ 关于 --publish，这里踩过两次坑，结论如下（0.1.0 发版实测）：
-        #
-        # 1) `--publish never` —— electron-builder 会**跳过更新元数据**的生成，
-        #    latest*.yml / *.blockmap 根本不会出现在 release/，自动更新直接失效。
-        # 2) `--publish always` —— 元数据有了，但要求 GH_TOKEN，且会和下面的
-        #    release job 争抢同一个 Release。
-        #
-        # 正确做法：**不传 --publish**，同时把 GITHUB_TOKEN 以 GH_TOKEN 注入 ——
-        # 检出 tag 时 electron-builder 的默认行为就是发布（onTag），没有 token
-        # 会直接报 'GitHub Personal Access Token is not set'。
-        # GITHUB_TOKEN 自带 contents:write，权限足够建 Release 与上传资产。
-        #
-        # 两个平台的打包作业会并发向同一个 Release 上传；electron-builder 复用
-        # 已存在的 Release 只补缺失资产，workflow 顶部的 concurrency 也会串行化，
-        # 两者叠加是安全的。release job 负责补齐另一平台的产物与自动生成的说明。
-        #
-        # 非 tag 构建（main 的普通推送）不会触发发布，此时也无需 token。
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder ${{ matrix.package-args }}
+      # --bundles 显式指定各平台产物，这样 artifact 路径精确、互不干扰
+      # （tauri.conf.json 里 targets = "all"，交给 CLI 参数收窄）。
+      # 非 tag 构建不发布，只产出安装包供上面的 artifact 步骤取走。
+      - name: Build and bundle
+        run: npx tauri build ${{ matrix.bundle-args }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
@@ -334,46 +230,25 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Verify update metadata present
-        # 自动更新（electron-updater）靠 latest*.yml 判断有没有新版、
-        # 靠 *.blockmap 做差分下载。少了这些文件，更新器会直接报
-        # Cannot find latest.yml —— 所以在发版前硬校验，别等用户反馈才发现。
-        # （0.1.0 首次发版就被这条校验拦下过一次：--publish never 时
-        #   electron-builder 根本不生成这两个文件。）
+      - name: List artifacts
         run: |
           set -euo pipefail
           find release-assets -maxdepth 3 -type f | sort
-          echo '--- update metadata ---'
-          find release-assets -type f \( -name 'latest*.yml' -o -name '*.blockmap' \) | sort
-          if ! find release-assets -type f -name 'latest*.yml' | grep -q .; then
-            echo '::error::missing latest*.yml — 自动更新不可用（确认打包用了 --publish always）'
-            exit 1
-          fi
-          if ! find release-assets -type f -name '*.blockmap' | grep -q .; then
-            echo '::error::missing *.blockmap — 差分下载不可用'
-            exit 1
-          fi
-          echo 'update metadata OK'
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          # 打包作业（检出 tag 时）已由 electron-builder 建好 Release 并上传安装包；
-          # 这里补齐另一平台的产物与元数据（softprops 在 Release 已存在时会继续追加资产）。
           files: |
             release-assets/**/*.exe
             release-assets/**/*.AppImage
-            release-assets/**/*.blockmap
-            release-assets/**/latest*.yml
-            release-assets/latest*.yml
+            release-assets/**/*.dmg
+
       - name: Ensure release is published (not draft / not prerelease)
-        # electron-updater 的 GitHub provider 会**跳过** draft 与 prerelease，
+        # tauri-plugin-updater 的 GitHub 源会跳过 draft 与 prerelease，
         # Release 必须以正式状态存在，否则客户端永远看不到更新。
         env:
           GH_TOKEN: ${{ github.token }}
-          # 用环境变量而不是在 run 里内插 ${{ }}：
-          # 表达式直接写进 shell 容易被 PowerShell/引号处理搞坏，
-          # 而一旦展开失败 gh 会拿到空 tag，报「Release 不存在」这种假错误。
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -398,4 +273,3 @@ jobs:
             exit 1
           fi
           echo 'release published OK'
-

@@ -1,0 +1,25 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "pixiv-login",
+  "description": "Pixiv 登录弹窗能力（外部地址 + 最小 IPC，供回调拦截使用）",
+  "windows": [
+    "pixiv-login"
+  ],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:event:allow-listen",
+    "core:event:allow-emit",
+    "core:window:allow-close",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus"
+  ],
+  "remote": {
+    "urls": [
+      "https://app-api.pixiv.net",
+      "https://*.pixiv.net",
+      "https://*.pixiv.me",
+      "https://accounts.pixiv.net"
+    ]
+  }
+}

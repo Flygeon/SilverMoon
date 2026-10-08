@@ -1,24 +1,26 @@
 /**
  * 应用数据存储：应用数据目录下的整文件 JSON 存储。
  *
- * 原来的三个 store（`settings.json` / `audio-effects.json` / `bangumi.json`）
- * 都落在应用数据目录下，位置不变，因此设置、皮肤、扩展数据不会因为这次重构而丢失。
+ * 三份 store（settings.json / audio-effects.json / bangumi.json）都落在应用数据
+ * 目录下，位置不变，因此设置、皮肤、扩展数据不会因为这次重构而丢失。
  *
- * 写盘是**显式**的（`save()`），另外主进程在退出前会做一次兜底落盘，
- * 避免「改了设置但没点保存就直接退出」丢数据。
+ * Tauri 版走 @tauri-apps/plugin-store。与 Electron 版的语义差异只有一处需要留意：
+ * 插件的 `save()` 才落盘，`set()` 只改内存 —— 这与 Electron 版完全一致
+ * （Electron 版同样是显式 `save()` + 退出前兜底落盘）。
+ *
+ * ⚠️ 插件默认把文件放在 `app_data_dir()` 下，与 Rust 侧 `app.path().app_data_dir()`
+ * 同源，故 `resolveStorePath()` 的返回可用于诊断。
  */
-import { callBridge } from "./bridge";
+import { LazyStore } from "@tauri-apps/plugin-store";
 
 /**
- * 把任意值转成结构化克隆 / JSON 安全的纯对象。
+ * 把任意值转成 JSON 安全的纯对象。
  *
  * 渲染进程里的设置值大多是 Vue 响应式 Proxy（`ref().value` 的数组 / 对象）。
- * Tauri 时代 `invoke` 走 serde/JSON 序列化，Proxy 无碍；Electron 的
- * `ipcRenderer.invoke` 走结构化克隆，会直接抛 `DataCloneError: An object could
- * not be cloned`。这里在 IPC 边界统一降级成 JSON 快照——store 落盘本来就是
- * JSON（`electron/store.ts` 的 `persist` 用 `JSON.stringify`），所以语义等价、无损。
+ * Tauri 走 serde/JSON，Proxy 本身无碍，但 `undefined` / `Map` / `Set` 会静默丢数据，
+ * 所以仍在 IPC 边界统一降级成 JSON 快照——store 落盘本来就是 JSON，语义等价、无损。
  */
-function toCloneable(value: unknown): unknown {
+function toJsonSafe(value: unknown): unknown {
   if (value === null || value === undefined) return value;
   try {
     return JSON.parse(JSON.stringify(value)) as unknown;
@@ -28,79 +30,93 @@ function toCloneable(value: unknown): unknown {
   }
 }
 
-/** JSON 存储句柄。构造参数即落盘文件名。 */
+/**
+ * JSON 存储句柄。构造参数即落盘文件名。
+ *
+ * 每个实例持有一个 `LazyStore`（插件会按路径缓存），方法签名与 Electron 版一致。
+ */
 export class JsonStore {
   /** 落盘文件名 */
   readonly path: string;
+  private readonly store: LazyStore;
 
-  constructor(path: string, _options?: unknown) {
+  constructor(path: string, options?: unknown) {
     this.path = path;
+    void options;
+    // autoSave: 关闭显式 save —— 与 Electron 版「显式 save + 退出兜底」一致，
+    // 避免每次 set 都触发一次磁盘写（设置项改动很密集）。
+    this.store = new LazyStore(path, { autoSave: false });
   }
 
   /** 读取一个键。文件或键不存在都返回 `null`。 */
   async get<T>(key: string): Promise<T | null> {
-    const value = await callBridge<T | null>("store", { op: "get", file: this.path, key });
+    const value = await this.store.get<T>(key);
     return value ?? null;
   }
 
   /** 写入一个键（不落盘，需再 `save()`） */
   async set(key: string, value: unknown): Promise<void> {
-    await callBridge("store", { op: "set", file: this.path, key, value: toCloneable(value) });
+    await this.store.set(key, toJsonSafe(value));
   }
 
   /** 删除一个键 */
   async delete(key: string): Promise<boolean> {
-    return callBridge<boolean>("store", { op: "delete", file: this.path, key });
+    const existed = await this.store.has(key);
+    await this.store.delete(key);
+    return existed;
   }
 
   /** 键是否存在 */
   async has(key: string): Promise<boolean> {
-    return callBridge<boolean>("store", { op: "has", file: this.path, key });
+    return this.store.has(key);
   }
 
   /** 全部键 */
   async keys(): Promise<string[]> {
-    return callBridge<string[]>("store", { op: "keys", file: this.path });
+    return this.store.keys();
   }
 
   /** 全部值 */
   async values(): Promise<unknown[]> {
-    return callBridge<unknown[]>("store", { op: "values", file: this.path });
+    return this.store.values();
   }
 
   /** 全部键值对 */
   async entries(): Promise<[string, unknown][]> {
-    return callBridge<[string, unknown][]>("store", { op: "entries", file: this.path });
+    return this.store.entries();
   }
 
   /** 条目数 */
   async length(): Promise<number> {
-    return callBridge<number>("store", { op: "length", file: this.path });
+    const keys = await this.store.keys();
+    return keys.length;
   }
 
   /** 清空（不落盘） */
   async clear(): Promise<void> {
-    await callBridge("store", { op: "clear", file: this.path });
+    await this.store.clear();
   }
 
   /** 清空并立即落盘 */
   async reset(): Promise<void> {
-    await callBridge("store", { op: "reset", file: this.path });
+    await this.store.clear();
+    await this.store.save();
   }
 
   /** 丢弃未保存的改动，从磁盘重读 */
   async reload(): Promise<void> {
-    await callBridge("store", { op: "reload", file: this.path });
+    await this.store.reload();
   }
 
   /** 落盘 */
   async save(): Promise<void> {
-    await callBridge("store", { op: "save", file: this.path });
+    await this.store.save();
   }
 
   /** 落盘并释放句柄 */
   async close(): Promise<void> {
-    await callBridge("store", { op: "close", file: this.path });
+    await this.store.save();
+    await this.store.close();
   }
 }
 
@@ -109,7 +125,13 @@ export function loadStore(path: string, options?: unknown): JsonStore {
   return new JsonStore(path, options);
 }
 
-/** 存储文件在磁盘上的绝对路径。 */
+/**
+ * 存储文件在磁盘上的绝对路径。
+ *
+ * 插件未暴露该能力，这里按 Tauri 的约定（`<app_data_dir>/<file>`）拼出，
+ * 仅用于诊断展示。
+ */
 export async function resolveStorePath(file: string): Promise<string> {
-  return callBridge<string>("store", { op: "path", file });
+  const { appDataDir, join } = await import("./paths");
+  return join(await appDataDir(), file);
 }

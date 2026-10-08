@@ -1,52 +1,28 @@
 /**
  * 几何类型：逻辑坐标与物理像素。
  *
- * `PhysicalPosition`（物理像素）用于与主进程交换窗口几何——它与渲染进程的
+ * 直接复用 Tauri 自己的 `@tauri-apps/api/dpi` 类 —— `setPosition` / `setSize`
+ * 只接受这些类（它们带 `type` 判别字段与 `SERIALIZE_TO_IPC_FN`），自己造一个
+ * 同名 class 传进去会被静默拒绝。因此这里只做**再导出 + 规整**。
+ *
+ * `PhysicalPosition`（物理像素）用于与宿主交换窗口几何——它与渲染进程的
  * `PointerEvent.screenX`（CSS 像素）**不是同一口径**，混算前须按缩放比换算；
  * `LogicalPosition` / `LogicalSize` 供需要逻辑坐标的场景。
  */
-/** 逻辑坐标（CSS 像素）位置 */
-export class LogicalPosition {
-  constructor(
-    public x: number,
-    public y: number,
-  ) {}
-}
+import { LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 
-/** 逻辑尺寸 */
-export class LogicalSize {
-  constructor(
-    public width: number,
-    public height: number,
-  ) {}
-}
+export { LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize };
 
-/** 物理像素位置 */
-export class PhysicalPosition {
-  constructor(
-    public x: number,
-    public y: number,
-  ) {}
-}
-
-/** 物理像素尺寸 */
-export class PhysicalSize {
-  constructor(
-    public width: number,
-    public height: number,
-  ) {}
-}
-
-/** 供主进程区分的坐标类型标记 */
+/** 供宿主区分的坐标类型标记 */
 export type PositionLike =
   { kind: "physical"; x: number; y: number } | { kind: "logical"; x: number; y: number };
 
-/** 供主进程区分的尺寸类型标记 */
+/** 供宿主区分的尺寸类型标记 */
 export type SizeLike =
   | { kind: "physical"; width: number; height: number }
   | { kind: "logical"; width: number; height: number };
 
-/** 把任意位置对象规整成主进程可消费的形式。 */
+/** 把任意位置对象规整成宿主可消费的形式。 */
 export function toPositionLike(value: unknown): PositionLike | null {
   if (value instanceof PhysicalPosition) {
     return { kind: "physical", x: value.x, y: value.y };
@@ -61,7 +37,7 @@ export function toPositionLike(value: unknown): PositionLike | null {
   return null;
 }
 
-/** 把任意尺寸对象规整成主进程可消费的形式。 */
+/** 把任意尺寸对象规整成宿主可消费的形式。 */
 export function toSizeLike(value: unknown): SizeLike | null {
   if (value instanceof PhysicalSize) {
     return { kind: "physical", width: value.width, height: value.height };

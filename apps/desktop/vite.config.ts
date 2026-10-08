@@ -5,11 +5,11 @@ import { readFileSync } from "node:fs";
 
 /**
  * 应用版本号以构建期常量注入（`__APP_VERSION__`）。单一真源是
- * `backend/silvermoon.config.json`（主进程与后端都读它），
+ * `src-tauri/silvermoon.config.json`（主进程与后端都读它），
  * 前端通过同名常量取用，避免又多一处要同步的版本号。
  */
 const appConfig = JSON.parse(
-  readFileSync(fileURLToPath(new URL("./backend/silvermoon.config.json", import.meta.url)), "utf8"),
+  readFileSync(fileURLToPath(new URL("./src-tauri/silvermoon.config.json", import.meta.url)), "utf8"),
 ) as { version: string };
 
 // https://vitejs.dev/config/
@@ -35,15 +35,14 @@ export default defineConfig(async () => ({
       "@shared": fileURLToPath(new URL("./shared", import.meta.url)),
     },
   },
-  // Electron 渲染进程同样走本地 dev server；端口与 electron/config.ts 的
-  // DEV_SERVER_URL 保持一致
+  // 渲染进程走本地 dev server；端口与 tauri.conf.json 的 build.devUrl 保持一致
   clearScreen: false,
   server: {
     port: 1420,
     strictPort: true,
     watch: {
       // 后端与 Electron 主进程都不参与前端热更
-      ignored: ["**/backend/**", "**/electron/**", "**/dist-electron/**"],
+      ignored: ["**/src-tauri/**"],
     },
   },
   build: {
