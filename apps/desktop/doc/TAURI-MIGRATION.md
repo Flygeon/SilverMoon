@@ -230,15 +230,38 @@ Tauri 2 的 capability **按窗口**生效（`windows: [...]`），且插件能�
 3. **`musicTags` 的 12 个 op 没有 Rust 侧单测**：本次只做了 API 签名核对与
    （纯函数层面的）执行验证，没有覆盖写盘 / 备份 / 在线索引这些带 IO 的分支。
 
-### 仍需 CI 验证 ⚠️
+### CI 已全部通过 ✅
 
-本机无法覆盖、必须由 CI 证明的部分：
+推送后 GitHub Actions 运行 **37816278716** 全绿（`completed / success`），
+补齐了本机无法覆盖的部分：
 
-- `cargo check` / `clippy` / `cargo test`：**完整编译**（含带 build script 的传递依赖）
-  与 Rust 单元测试。本机的源码核对能保证「用到的 API 存在且签名匹配」，
-  但不能替代编译器对类型推断 / 借用检查 / trait 解析的完整验证。
-- `npx tauri build` 三平台打包与真实运行。
-- 运行期行为：窗口 / 托盘 / 热键 / SMTC / `asset:` 与 `app-cover:` 协议 / 写标签。
+| 作业 | 内容 | 结果 |
+|---|---|---|
+| `lint` | eslint / prettier / vue-tsc / vitest(800) / mock-coverage / **wasm Rust 纯逻辑** / rustfmt×2 / **clippy -D warnings**（=完整编译） / **cargo test**（lib + bili） | ✅ |
+| `build (windows)` | `tauri build --bundles nsis` → NSIS 安装包 13.1 MB | ✅ |
+| `build (linux)` | `tauri build --bundles appimage` → AppImage 90.0 MB | ✅ |
+| `build (macos)` | `tauri build --bundles dmg` → dmg 17.4 MB | ✅ |
+
+**这一步同时证明了三件本机证不了的事**：
+1. `cargo clippy --all-targets -- -D warnings` 通过 = 全部 Tauri API 用法、类型推断、
+   借用检查、trait 解析与 3 个新模块**真实编译通过且无警告**；
+2. `cargo test` 通过 = Rust 侧单元测试（含 B 站协议层）全绿；
+3. 三平台 `tauri build` 通过 = `tauri.conf.json`、6 份 capabilities 的权限标识、
+   打包目标、图标、`beforeBuildCommand` 全部被**真实构建**验证（错一个标识构建即失败）。
+
+> 首次 CI 跑出的 2 个真实编译错误（unused import、emit 载荷缺 `Clone`）已在
+> 后续提交 `b2e712d` 修复并复跑通过 —— 这正是把 Rust 交给 CI 的价值。
+
+### 仍需人工回归的行为 ⚠️
+
+编译与打包已全绿，但**运行期行为**（自动化测不到的部分）建议按 §3 的差异清单人工过一遍，
+重点四项：
+
+1. **封面显示** —— `app-cover:` 协议 + 防盗链 Referer 伪装 + 磁盘缓存；
+2. **音乐标签写入** —— `lofty` 实际写盘 / 读回（见上节「验证覆盖缺口」第 1 条）；
+3. **桌面歌词窗口** —— 按窗口的 capability + label 判定 + 鼠标穿透；
+4. **文库8 登录** —— 注入脚本走 `__TAURI__` 回宿主机。
+
 
 > 建议：首次 CI 跑通后，按 §3 的差异清单做一次人工回归，重点四项：
 > **封面显示**（`app-cover:` 协议 + Referer 伪装）、**音乐标签写入**（lofty）、
