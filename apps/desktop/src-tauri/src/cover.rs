@@ -30,7 +30,6 @@
 //! 与 Electron 版（`electron/protocols.ts`）的布局、TTL、超时、并发上限
 //! 完全一致，因此**旧缓存可以直接复用**，不需要清空重下。
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};

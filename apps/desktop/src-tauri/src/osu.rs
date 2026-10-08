@@ -83,7 +83,9 @@ pub struct OsuImportResult {
     pub beatmapset_id: String,
 }
 
-#[derive(Serialize)]
+// Tauri 的 `Emitter::emit` 要求 `S: Serialize + Clone`（Electron 时代的兼容层只要求
+// Serialize），因此这里必须一并 derive Clone，否则编译不过。
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct OsuProgress {
     beatmapset_id: String,
