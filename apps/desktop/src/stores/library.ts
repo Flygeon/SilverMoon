@@ -5,6 +5,8 @@ import { capabilities, isDesktop } from "@/capabilities";
 import { useSettingsStore } from "@/stores/settings";
 import { useDesktopStore, WAKE_REASON } from "@/stores/desktop";
 import { markBoot } from "@/utils/bootTiming";
+import { signalAppReady } from "@/utils/appReady";
+import { firstScreenGet, firstScreenSet } from "@/utils/firstScreenCache";
 import type { ListQuery, MediaEntry, ScanProgress } from "@shared/types";
 
 export type SortKey = NonNullable<ListQuery["sortBy"]>;
@@ -120,6 +122,19 @@ export const useLibraryStore = defineStore("library", () => {
    * 否则每次搜索/排序都是"白一下 + 等一次完整往返 + 重新拉缩略图"。
    */
   async function refresh(type: string) {
+    // 冷启动时先用本地首屏缓存补位：网格立刻有真实内容，不再是骨头屏。
+    // 同步读取（localStorage），所以**首帧就用得上**；随后照常走 SWR 原地替换。
+    // 只有该类型当前没有任何数据时才补，避免覆盖刚拿到的新列表。
+    if ((entriesByType.value[type]?.length ?? 0) === 0) {
+      const cached = firstScreenGet(type);
+      if (cached) {
+        entriesByType.value = { ...entriesByType.value, [type]: cached.entries };
+        totals.value = { ...totals.value, [type]: cached.total };
+        // 缓存命中 = 首屏已经可看，可以立刻让宿主显示窗口
+        signalAppReady("首屏缓存命中");
+      }
+    }
+
     const hasCache = (entriesByType.value[type]?.length ?? 0) > 0;
     if (hasCache) pendingRefreshes.value++;
     else loading.value = true;
@@ -148,6 +163,9 @@ export const useLibraryStore = defineStore("library", () => {
       firstPageOk = true;
       // 首页数据到位 = 列表即将渲染出真实内容（首屏可见的关键节点）
       markBoot(`${type} 首屏数据到位`);
+      // 落盘供**下次冷启动**同步补位；只存这一页，不存全库
+      firstScreenSet(type, first, total);
+      signalAppReady("首屏数据到位");
     } catch (e) {
       if (requestSeq[type] !== seq) return;
       error.value = String(e);

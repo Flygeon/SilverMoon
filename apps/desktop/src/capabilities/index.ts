@@ -1162,6 +1162,14 @@ export const capabilities = {
    * 必须能在「后端未就绪」时也记录，否则降级模式下一个数字都拿不到。
    * 失败静默——打点绝不能影响启动。
    */
+  /**
+   * 首屏就绪信号：宿主收到后才显示主窗口（对应 Electron 时代的 READY 握手）。
+   * 幂等由调用方（utils/appReady.ts）保证，这里只负责过桥。
+   */
+  appReady(reason: string): void {
+    void callBridge("app", { op: "appReady", reason }).catch(() => undefined);
+  },
+
   appLogBoot(mark: string, sinceMs: number): void {
     if (!isDesktop) return;
     void callBridge("app", { op: "logBoot", mark, since: sinceMs }).catch(() => undefined);

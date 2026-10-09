@@ -65,7 +65,9 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: apps/desktop/src-tauri -> target
+          workspaces: |
+            apps/desktop/src-tauri -> target
+            apps/desktop/splash -> target
           # 与构建作业区分开，避免两边的 target 目录互相覆盖缓存
           prefix-key: clippy
 
@@ -133,6 +135,14 @@ jobs:
       - name: Unit tests (bilibili protocol)
         run: cargo test --manifest-path src-tauri/crates/silvermoon-bili/Cargo.toml
 
+      # 启动器（apps/desktop/splash）的**纯逻辑**单测：lib 目标只含
+      # animation / prefs，不依赖 Win32，因此能在 Linux runner 上跑。
+      - name: Rustfmt check (splash launcher)
+        run: cargo fmt --check --manifest-path splash/Cargo.toml
+
+      - name: Unit tests (splash pure logic)
+        run: cargo test --manifest-path splash/Cargo.toml --lib
+
   # ---------------------------------------------------------------------------
   # 安装包：Windows NSIS / Linux AppImage / macOS dmg
   #
@@ -190,7 +200,9 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: apps/desktop/src-tauri -> target
+          workspaces: |
+            apps/desktop/src-tauri -> target
+            apps/desktop/splash -> target
           prefix-key: release
 
       - name: Install system dependencies
@@ -205,6 +217,20 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
+
+      # 启动动画是**独立的原生小程序**（Win32 + GDI，release 约 0.3MB），
+      # 由主程序 spawn，用来盖住 Tauri 那 1~2 秒的冷启动空窗。
+      #
+      # 必须在 tauri build 之前编出来并拷到 src-tauri/splash-bin/：
+      # tauri.windows.conf.json 把它声明为 bundle resource，文件不存在打包会直接失败。
+      - name: Build splash launcher
+        if: matrix.label == 'windows'
+        shell: pwsh
+        run: |
+          cargo build --release --manifest-path splash/Cargo.toml
+          New-Item -ItemType Directory -Force -Path src-tauri/splash-bin | Out-Null
+          Copy-Item splash/target/release/silvermoon-splash.exe src-tauri/splash-bin/
+          Get-Item src-tauri/splash-bin/silvermoon-splash.exe | Select-Object Name, Length
 
       # tauri build 会自己跑 beforeBuildCommand（渲染进程 vite build），
       # 并把 src-tauri 作为主程序一起编译；无需再单独构建后端 / 启动器。

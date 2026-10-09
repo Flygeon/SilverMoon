@@ -13,6 +13,7 @@ pub mod novel_auth;
 pub mod novel_bqg;
 pub mod osu;
 pub mod pixiv;
+pub mod splash;
 pub mod tray;
 pub mod webdav;
 
@@ -125,7 +126,15 @@ pub struct Song {
 pub fn run() {
     // 这一段（Builder 构建 + 插件 init + 配置里的窗口创建）在 setup 之前完成，
     // 是「进程启动 → 窗口出现」里最不透明的一段，因此入口处单独打点。
-    boot_log::record("run() 开始（Builder 之前）");
+    // 最早的时刻把启动动画拉起来：它是个独立的原生小程序，毫秒级就能出画面，
+    // 用来盖住 Tauri 那 1~2 秒的冷启动空窗（详见 splash.rs 的说明）。
+    // 失败/缺失都不影响启动 —— 那时窗口就由「首屏就绪」或看门狗直接显示。
+    let splash_started = splash::spawn();
+    boot_log::record(if splash_started {
+        "run() 开始（启动动画已拉起）"
+    } else {
+        "run() 开始（无启动动画）"
+    });
     let app = tauri::Builder::default()
         // 插件顺序无关紧要，但 dialog / fs / store / http 是纯前端能力
         // （渲染进程经 @tauri-apps/plugin-* 直接调用），Rust 侧不引用它们。
@@ -142,46 +151,33 @@ pub fn run() {
         .register_asynchronous_uri_scheme_protocol("app-cover", |ctx, request, responder| {
             cover::handle_request(ctx, request, responder);
         })
-        // 主窗口在 tauri.conf.json 里是 `visible: false` 创建的：
-        // 先隐藏，等页面内容开始加载（= WebView2 的 ContentLoading，此时
-        // index.html 里内联的 #boot-splash 已可绘制）再显示，
-        // 避免冷启动先闪一下空白/黑底。
+        // 主窗口在 tauri.conf.json 里是 `visible: false` 创建的，**显示时机交给
+        // `splash::reveal()` 这一个入口**（见 splash.rs）：
+        //   - 有启动动画 → 前端报就绪后，启动动画淡出，再显示主窗口（两端交叠）；
+        //   - 没有启动动画 → 前端报就绪后直接显示；
+        //   - 10 秒看门狗 → 无论前面发生什么都强制显示。
         //
-        // ⚠️ 这里用**全局** on_page_load（挂在 Builder 上，对所有 webview 生效），
-        // 而不是给主窗口单独建一个 WebviewWindowBuilder —— 配置里的窗口由
+        // 这里只保留打点，**不再负责显示**。历史：更早是先「ContentLoading 即显示」，
+        // 更早是 Electron 的 ready-to-show（archive/electron-host/electron/windows.ts）。
+        // 现在改成「等首屏真的画好再显示」，用户第一眼看到的就是成品而不是中间态。
+        //
+        // ⚠️ 用**全局** on_page_load（挂在 Builder 上，对所有 webview 生效），
+        // 而不是给主窗口单独建 WebviewWindowBuilder —— 配置里的窗口由
         // `WebviewWindowBuilder::from_config` 在 setup 之前统一创建，代码里再建一次
         // 会变成两个窗口。各窗口按自己的 label 过滤即可。
-        //
-        // 历史：换回 Tauri 前，主窗口的显示时机由 Electron 主进程的
-        // `ready-to-show` 负责（archive/electron-host/electron/windows.ts），
-        // 更早则是等原生 splash 启动器淡出。启动器已废弃，这段接手显示。
         .on_page_load(|webview, payload| {
             if webview.label() != "main" {
                 return;
             }
             // 两个事件在 WebView2 上的真实对应（见 wry 的 webview2/mod.rs）：
             //   Started  = ContentLoading      —— 文档内容开始加载（首个脚本执行前）
-            //   Finished = NavigationCompleted —— 整页资源（含 1.29MB bundle）加载完
+            //   Finished = NavigationCompleted —— 整页资源（含 bundle）加载完
             //
-            // ⚠️ 显示时机必须用 **Started**，不能用 Finished。
-            // 实测（main.log）：Finished 比 Started 晚约 0.85 秒，而这段时间窗口
-            // 一直是隐藏的——用户面对的是一片「什么都没发生」。而 index.html 里的
-            // #boot-splash 是内联样式+标记，ContentLoading 时即可绘制，
-            // 所以此刻显示窗口，用户立刻看到启动动画，而不是白等。
-            //
-            // 历史：Electron 用的是 ready-to-show（首帧可绘制），语义上更接近
-            // ContentLoading；换到 Tauri 后我先写成 Finished，等于比 Electron 更晚。
-            let window = webview.window();
+            // 这两个点都**不再**用于显示窗口，只留作耗时对照（见 doc/TAURI-MIGRATION.md
+            // 的启动时间线）。显示统一走 splash::reveal()。
             match payload.event() {
                 tauri::webview::PageLoadEvent::Started => {
                     boot_log::record("页面开始加载(ContentLoading)");
-                    // 注意：`Webview::window()` 返回 `Window<R>`（不是 Option），
-                    // 可见性要问 `Window::is_visible`（`Webview` 自己没这个方法）。
-                    if !window.is_visible().unwrap_or(false) {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                        boot_log::record("主窗口已显示(用户可见)");
-                    }
                 }
                 tauri::webview::PageLoadEvent::Finished => {
                     boot_log::record("页面加载完成(NavigationCompleted)");
@@ -194,6 +190,8 @@ pub fn run() {
             // 所以「run() 开始 → setup 开始」这段就是 Builder + 插件 init + 建窗口。
             boot_log::attach(app.handle());
             boot_log::record("setup 开始");
+            // 登记句柄：之后「首屏就绪」或启动器淡出结束时，要靠它回到主线程显示窗口
+            splash::set_app(app.handle().clone());
 
             // 兜底：万一 on_page_load 没触发（页面加载失败 / 资源挂住），
             // 主窗口会永远停在 hidden 状态 —— 那是「双击图标没反应」的最坏情况。
@@ -205,9 +203,11 @@ pub fn run() {
                     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                     if let Some(window) = handle.get_webview_window("main") {
                         if !window.is_visible().unwrap_or(true) {
-                            eprintln!("[silvermoon] 页面加载超时，强制显示主窗口");
+                            eprintln!("[silvermoon] 首屏就绪信号超时，强制显示主窗口");
                             boot_log::record("看门狗触发：强制显示主窗口");
-                            let _ = window.show();
+                            // 与「首屏就绪」「启动器淡出结束」共用同一个显示入口，
+                            // 避免两条路径各自 show 造成重复或竞争
+                            splash::reveal();
                         }
                     }
                 });

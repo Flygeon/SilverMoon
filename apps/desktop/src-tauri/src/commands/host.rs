@@ -19,6 +19,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::boot_log;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
@@ -278,6 +279,14 @@ fn memory_metrics(app: &AppHandle) -> Value {
 #[tauri::command]
 pub fn host_app(app: AppHandle, op: String, payload: Value) -> Result<Value, String> {
     match op.as_str() {
+        // 首屏就绪：前端画好第一屏后通知宿主，宿主据此显示主窗口
+        // （有启动动画时先做交叠淡出，见 crate::splash）。
+        "appReady" => {
+            let reason = payload.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+            boot_log::record(&format!("前端就绪：{reason}"));
+            crate::splash::on_app_ready();
+            Ok(Value::Null)
+        }
         // 启动打点：写进数据目录的 main.log，便于对齐启动耗时
         "logBoot" => {
             let mark = payload.get("mark").and_then(|v| v.as_str()).unwrap_or("");

@@ -1,0 +1,56 @@
+[package]
+name = "silvermoon-splash"
+version = "0.0.2"
+description = "SilverMoon 启动动画（MD3 自绘 splash）"
+edition = "2021"
+rust-version = "1.82"
+license = "GPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "silvermoon-splash"
+path = "src/main.rs"
+
+# 库目标：仅供宿主（Linux/CI）跑纯逻辑单元测试，不参与发布产物。
+# main.rs 依赖 Win32 编不过宿主，这个 lib 只收无平台依赖的模块。
+[lib]
+name = "silvermoon_splash"
+path = "src/lib.rs"
+
+# 设置文件是 JSON，需要真正解析（不能用子串匹配：theme 与 readerTheme 并存）。
+# 全平台依赖：prefs 属于可在宿主（Linux/CI）上测试的纯逻辑模块。
+[dependencies]
+serde_json = { version = "1", default-features = false, features = ["std"] }
+
+# Win32 绑定只在 Windows 目标需要（main.rs/theme.rs/window.rs 用它）。
+# 用 target 限定后，宿主的 `cargo test` 才能只编纯逻辑模块。
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",         # CreateNamedPipeW 的 feature 门控之一
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",        # 命名管道（CreateNamedPipeW 等）的 feature 门控
+  "Win32_System_LibraryLoader",
+  "Win32_System_Registry",
+  "Win32_System_Pipes",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+# 图标嵌入：MSVC 用 rc.exe、GNU 用 windres，由 winresource 自动选择。
+#
+# 注意必须是**普通** build-dependencies，不能加 target 限定 ——
+# build script 编译运行在**宿主**上（Linux 上也会编），加 cfg(windows) 会导致
+# `winresource` 在宿主不可用（实测报 unresolved crate）。真正的「只在 Windows
+# 目标才嵌入」由 build.rs 里判断 CARGO_CFG_TARGET_OS 完成。
+[build-dependencies]
+winresource = "0.1"
+
+# 体积优先：启动器要在双击瞬间出画面，且不能给安装包增重。
+# 实测 release 约 0.23MB（opt-level="z" + LTO + strip）。
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

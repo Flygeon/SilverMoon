@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "splash-bin/silvermoon-splash.exe": "silvermoon-splash.exe"
+    }
+  }
+}

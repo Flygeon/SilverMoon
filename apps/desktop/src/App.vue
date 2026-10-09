@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useSettingsStore } from "@/stores/settings";
 import { useSkinsStore } from "@/stores/skins";
@@ -18,6 +18,7 @@ import WindowTitleBar from "@/components/WindowTitleBar.vue";
 import { useDesktopChrome } from "@/composables/useDesktopChrome";
 import { activeSkinDoc, skinBgActive, skinSafeMode } from "@/utils/skinRuntime";
 import { markBoot } from "@/utils/bootTiming";
+import { armAppReadyFallback, signalAppReady } from "@/utils/appReady";
 import { translate } from "@shared/i18n";
 import { listen, type Event, type UnlistenFn } from "@/ipc/events";
 import { onDragDropEvent, type DragDropEvent } from "@/ipc/dragdrop";
@@ -165,15 +166,41 @@ onMounted(async () => {
   void desktopEnv.init();
   await settings.load();
   markBoot("设置已加载");
-  // 皮肤加载（含 --safe-mode 检测、内置皮肤播种、激活皮肤解析）须在主题解析前完成
-  await skins.load();
-  markBoot("皮肤已加载");
+
+  // 先用**基础主题**出界面，皮肤稍后再换。
+  //
+  // 原来这里是 `await skins.load()` 再 applyTheme，串行多等约 420ms
+  // （实测：设置 785ms → 皮肤 1204ms）。而 skins.load() 里是三次 IPC + 皮肤文件
+  // 读取解析，全都挡在首屏前面。
+  //
+  // 取舍：皮肤会带来配色切换（默认动态色 → 皮肤色）。这是**有意的**——
+  // 用户明确要求「先出界面再换肤」。若要消除这次切换，就得把皮肤挡回首屏前，
+  // 那 420ms 也就回来了。
   settings.applyTheme(settings.theme);
   markBoot("主题已应用");
+
   void audioEffects.init();
   void library.refreshCounts();
   // 在线歌曲的标签覆盖：启动时一次性灌回内存，切歌时无需再等 IPC
   void useMusicTagsStore().hydrate();
+
+  // 首屏已经画出来了（主题已应用 + 下一帧）就让宿主显示窗口。
+  // 媒体库路由若还要等首屏数据，那段更早由 library.refresh 发信号；
+  // 这里只兜住「非媒体库路由」和「数据迟迟不来」两种情况。
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      signalAppReady("主题已应用");
+      armAppReadyFallback(1500);
+    });
+  });
+
+  // 皮肤延后加载：就绪后再换肤并重解析主题（含 -safe-mode 与内置皮肤播种）
+  void (async () => {
+    await skins.load();
+    markBoot("皮肤已加载");
+    settings.applyTheme(settings.theme);
+    markBoot("主题已应用(含皮肤)");
+  })();
 });
 
 // ---- 皮肤拖拽导入（全窗口任意位置，支持 v1 .json 与 v2 .zip）----
