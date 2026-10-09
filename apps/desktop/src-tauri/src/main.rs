@@ -28,6 +28,11 @@ fn write_panic_log(info: &dyn std::fmt::Display) {
 /// 154 条命令都跑在这里（对照：Electron 版是「主进程 + Rust sidecar 两个进程，
 /// 经本地 HTTP /cmd + SSE /events 通信」）。
 fn main() {
+    // 启动打点的 t0：必须放在最前面，之后的一切都相对它计时。
+    // （严格说进程在进入 main 之前还有 loader 的几毫秒，这里忽略不计。）
+    silvermoon_lib::boot_log::mark_start();
+    silvermoon_lib::boot_log::record("进程启动(main 进入)");
+
     // 捕获 Rust panic：先写日志再走默认行为，
     // 用于定位「点击书籍闪退」这类同步 command 崩溃。
     let default_hook = std::panic::take_hook();

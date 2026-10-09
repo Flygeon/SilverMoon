@@ -1,6 +1,7 @@
 pub mod anime;
 pub mod app_meta;
 pub mod bilibili;
+pub mod boot_log;
 pub mod commands;
 pub mod cover;
 pub mod error;
@@ -122,6 +123,9 @@ pub struct Song {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 这一段（Builder 构建 + 插件 init + 配置里的窗口创建）在 setup 之前完成，
+    // 是「进程启动 → 窗口出现」里最不透明的一段，因此入口处单独打点。
+    boot_log::record("run() 开始（Builder 之前）");
     tauri::Builder::default()
         // 插件顺序无关紧要，但 dialog / fs / store / http 是纯前端能力
         // （渲染进程经 @tauri-apps/plugin-* 直接调用），Rust 侧不引用它们。
@@ -150,22 +154,35 @@ pub fn run() {
         // `ready-to-show` 负责（archive/electron-host/electron/windows.ts），
         // 更早则是等原生 splash 启动器淡出。启动器已废弃，这段接手显示。
         .on_page_load(|webview, payload| {
-            if payload.event() != tauri::webview::PageLoadEvent::Finished {
-                return;
-            }
-            // 只有主窗口需要「渲染完再显示」；子窗口各自由自己的调用方 show()
             if webview.label() != "main" {
                 return;
             }
+            // 导航开始：这个点近似对应渲染侧 t0（bundle 即将开始执行），
+            // 是「宿主时间轴」与「渲染时间轴」的换算基准。
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                boot_log::record("页面开始加载");
+                return;
+            }
+            if payload.event() != tauri::webview::PageLoadEvent::Finished {
+                return;
+            }
+            boot_log::record("页面加载完成(NavigationCompleted)");
             // 注意：`Webview::window()` 返回的是 `Window<R>`（不是 Option），
             // 需要用 `Window::is_visible` 判可见性（`Webview` 自己没这个方法）。
             let window = webview.window();
             if !window.is_visible().unwrap_or(false) {
                 let _ = window.show();
                 let _ = window.set_focus();
+                boot_log::record("主窗口已显示(用户可见)");
             }
         })
         .setup(|app| {
+            // 绑定日志文件（此前攒下的打点会在这里补写），并记下 setup 起点。
+            // 注意：配置里的窗口是在**进入本闭包之前**由 from_config 创建的，
+            // 所以「run() 开始 → setup 开始」这段就是 Builder + 插件 init + 建窗口。
+            boot_log::attach(app.handle());
+            boot_log::record("setup 开始");
+
             // 兜底：万一 on_page_load 没触发（页面加载失败 / 资源挂住），
             // 主窗口会永远停在 hidden 状态 —— 那是「双击图标没反应」的最坏情况。
             // 这里独立起一个看门狗，到点只要还没可见就强制显示，宁可让用户看到
@@ -177,6 +194,7 @@ pub fn run() {
                     if let Some(window) = handle.get_webview_window("main") {
                         if !window.is_visible().unwrap_or(true) {
                             eprintln!("[silvermoon] 页面加载超时，强制显示主窗口");
+                            boot_log::record("看门狗触发：强制显示主窗口");
                             let _ = window.show();
                         }
                     }
@@ -190,6 +208,7 @@ pub fn run() {
                     eprintln!("[silvermoon] 已从旧项目目录迁移数据到 {dir:?}");
                 }
             }
+            boot_log::record("旧数据迁移检查完成");
             // 索引库落盘在 app data 目录，重启后保留扫描结果
             let conn = open_db(app.handle()).map_err(|e| -> Box<dyn std::error::Error> {
                 Box::new(std::io::Error::other(e.to_string()))
@@ -198,20 +217,33 @@ pub fn run() {
             app.manage(commands::JobState(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )));
-            // Windows 系统媒体控件（SMTC）会话
+            boot_log::record("打开数据库 + 建表完成");
+
+            // 以下每一步都在主线程上同步执行，且**早于事件循环启动**，
+            // 因此它们全部计入「窗口出现」之前的时间。逐个打点是为了能看出
+            // 到底是谁贵——排查启动慢时不用再猜。
             commands::smtc::setup(app.handle());
+            boot_log::record("SMTC 初始化完成");
+
             // 扩展框架：发现 extensions/、拉起引擎、注册热键（须在 tray 之前，托盘菜单要读扩展贡献）
             if let Err(error) = commands::extension::setup(app.handle()) {
                 eprintln!("setup extensions failed: {error}");
             }
+            boot_log::record("扩展加载完成");
+
             // 系统托盘（播放控制 / 显示主界面 / 退出）
             if let Err(error) = tray::setup(app.handle()) {
                 eprintln!("setup tray failed: {error}");
             }
+            boot_log::record("托盘创建完成");
+
             // 在线番剧：内置规则种子 + 隐藏取流 webview
             anime::setup(app.handle());
+            boot_log::record("番剧规则同步完成");
+
             // 在线图片（Pixiv）：加载持久化登录态
             pixiv::setup(app.handle());
+            boot_log::record("setup 结束（即将进入事件循环）");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
