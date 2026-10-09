@@ -233,15 +233,19 @@ pub fn on_app_ready() {
 }
 
 /// 尝试拉起启动器（在 run() 最开始调用）。返回是否成功。
+///
+/// 注意这里**必须**拆成两个 cfg 限定的函数，不能写成
+/// `#[cfg(windows)] { imp::spawn() }` 这样的块 —— 块作为语句时值会被丢弃，
+/// 剥离 cfg 后函数体就没有尾表达式了，返回类型对不上（编译不过）。
+#[cfg(windows)]
 pub fn spawn() -> bool {
-    #[cfg(windows)]
-    {
-        imp::spawn()
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
+    imp::spawn()
+}
+
+/// 非 Windows 没有启动器（它是 Win32 + GDI 程序），恒为 false。
+#[cfg(not(windows))]
+pub fn spawn() -> bool {
+    false
 }
 
 #[cfg(test)]
