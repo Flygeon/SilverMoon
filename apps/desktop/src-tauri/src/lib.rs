@@ -126,7 +126,7 @@ pub fn run() {
     // 这一段（Builder 构建 + 插件 init + 配置里的窗口创建）在 setup 之前完成，
     // 是「进程启动 → 窗口出现」里最不透明的一段，因此入口处单独打点。
     boot_log::record("run() 开始（Builder 之前）");
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         // 插件顺序无关紧要，但 dialog / fs / store / http 是纯前端能力
         // （渲染进程经 @tauri-apps/plugin-* 直接调用），Rust 侧不引用它们。
         .plugin(tauri_plugin_dialog::init())
@@ -143,7 +143,9 @@ pub fn run() {
             cover::handle_request(ctx, request, responder);
         })
         // 主窗口在 tauri.conf.json 里是 `visible: false` 创建的：
-        // 先隐藏、等前端首帧渲染完再显示，避免冷启动时先闪一下空白/黑底再出内容。
+        // 先隐藏，等页面内容开始加载（= WebView2 的 ContentLoading，此时
+        // index.html 里内联的 #boot-splash 已可绘制）再显示，
+        // 避免冷启动先闪一下空白/黑底。
         //
         // ⚠️ 这里用**全局** on_page_load（挂在 Builder 上，对所有 webview 生效），
         // 而不是给主窗口单独建一个 WebviewWindowBuilder —— 配置里的窗口由
@@ -157,23 +159,33 @@ pub fn run() {
             if webview.label() != "main" {
                 return;
             }
-            // 导航开始：这个点近似对应渲染侧 t0（bundle 即将开始执行），
-            // 是「宿主时间轴」与「渲染时间轴」的换算基准。
-            if payload.event() == tauri::webview::PageLoadEvent::Started {
-                boot_log::record("页面开始加载");
-                return;
-            }
-            if payload.event() != tauri::webview::PageLoadEvent::Finished {
-                return;
-            }
-            boot_log::record("页面加载完成(NavigationCompleted)");
-            // 注意：`Webview::window()` 返回的是 `Window<R>`（不是 Option），
-            // 需要用 `Window::is_visible` 判可见性（`Webview` 自己没这个方法）。
+            // 两个事件在 WebView2 上的真实对应（见 wry 的 webview2/mod.rs）：
+            //   Started  = ContentLoading      —— 文档内容开始加载（首个脚本执行前）
+            //   Finished = NavigationCompleted —— 整页资源（含 1.29MB bundle）加载完
+            //
+            // ⚠️ 显示时机必须用 **Started**，不能用 Finished。
+            // 实测（main.log）：Finished 比 Started 晚约 0.85 秒，而这段时间窗口
+            // 一直是隐藏的——用户面对的是一片「什么都没发生」。而 index.html 里的
+            // #boot-splash 是内联样式+标记，ContentLoading 时即可绘制，
+            // 所以此刻显示窗口，用户立刻看到启动动画，而不是白等。
+            //
+            // 历史：Electron 用的是 ready-to-show（首帧可绘制），语义上更接近
+            // ContentLoading；换到 Tauri 后我先写成 Finished，等于比 Electron 更晚。
             let window = webview.window();
-            if !window.is_visible().unwrap_or(false) {
-                let _ = window.show();
-                let _ = window.set_focus();
-                boot_log::record("主窗口已显示(用户可见)");
+            match payload.event() {
+                tauri::webview::PageLoadEvent::Started => {
+                    boot_log::record("页面开始加载(ContentLoading)");
+                    // 注意：`Webview::window()` 返回 `Window<R>`（不是 Option），
+                    // 可见性要问 `Window::is_visible`（`Webview` 自己没这个方法）。
+                    if !window.is_visible().unwrap_or(false) {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                        boot_log::record("主窗口已显示(用户可见)");
+                    }
+                }
+                tauri::webview::PageLoadEvent::Finished => {
+                    boot_log::record("页面加载完成(NavigationCompleted)");
+                }
             }
         })
         .setup(|app| {
@@ -438,8 +450,20 @@ pub fn run() {
             commands::extension::ext_invoke,
             commands::extension::ext_open,
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("SilverMoon 后端启动失败");
+    // 这一刀把「run() 开始 → setup 开始」之间那段切开（实测约 1.2 秒，占稳态总耗时的一半以上）：
+    //
+    //   run() 开始 → 本行    : Builder 链 + generate_context + AppManager
+    //                          （7 个插件的 initialize）+ **Runtime::new()**
+    //   本行 → setup 开始    : 启动事件循环 → RuntimeRunEvent::Ready →
+    //                          创建配置里的窗口 → **WebView2 环境创建** + assets
+    //
+    // 拆法是完全行为等价的：`Builder::run` 的实现本身就是
+    // `self.build(context)?.run(|_, _| {})`（tauri 2.12.1 app.rs），
+    // 这里只是把这两步摊开、在中间插一个打点，回调仍为空闭包。
+    boot_log::record("Builder::build 完成（runtime + 插件 init）");
+    app.run(|_, _| {});
 }
 
 /// 打开磁盘数据库；目录不可用时退回内存库，保证应用仍能启动。
