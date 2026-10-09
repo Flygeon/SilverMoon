@@ -17,11 +17,16 @@
   src: url("../assets/fonts/SFProJP_regular.woff2");
   font-family: "SFProJP-Regular";
 }
+/* 图标字体是**子集化**产物（由 scripts/fetch-icon-font.mjs 生成，约 90 KB，
+   原全量 5.2 MB）：只含代码里真正用到的图标，且可变轴收窄到实际取值
+   —— opsz 24 / wght 300..500 / FILL 0..1 / GRAD 0。
+   因此这里的 font-weight 写 300 500 而不是官方全量的 100 700。
+   新增图标后必须重跑该脚本，否则新图标显示不出来（CI 的 --check 会拦住）。 */
 @font-face {
   src: url("../assets/fonts/material-symbols-rounded.woff2") format("woff2");
   font-family: "Material Symbols Rounded";
   font-style: normal;
-  font-weight: 100 700;
+  font-weight: 300 500;
   font-display: swap;
 }
 

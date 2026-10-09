@@ -103,6 +103,12 @@ jobs:
       # 不到的死分支（脚本对此报错）；新增命令未补 mock 则只提示覆盖率。
       - name: Mock / route-table drift check
         run: npm run verify:mock-coverage
+      # 图标字体是子集化产物（272 个图标 / 约 90 KB，原全量 5.2 MB）。
+      # 这条校验是**离线**的：只比对 manifest 与源码扫出来的图标名。
+      # 新增图标却忘了重跑 scripts/fetch-icon-font.mjs 时，这里会失败并列出缺哪些
+      # ——否则表现为「界面上某个图标空白」，很难查。
+      - name: Icon font in sync with source
+        run: npm run check:icon-font
 
       # Rust 纯逻辑的真实执行断言（不依赖链接器）：封面 Referer 伪装 / 扩展名推断 / 路径规范化
       - name: Rust pure-logic tests (executed via wasm)

@@ -30,7 +30,9 @@
     "check:version": "node scripts/check-version.mjs",
     "format": "prettier --write \"src/**/*.{ts,vue,css,json}\" \"shared/**/*.{ts,json}\" \"scripts/**/*.mjs\"",
     "format:check": "prettier --check \"src/**/*.{ts,vue,css,json}\" \"shared/**/*.{ts,json}\" \"scripts/**/*.mjs\"",
-    "verify:rust-pure": "node scripts/verify-rust-pure.mjs"
+    "verify:rust-pure": "node scripts/verify-rust-pure.mjs",
+    "fetch:icon-font": "node scripts/fetch-icon-font.mjs",
+    "check:icon-font": "node scripts/fetch-icon-font.mjs --check"
   },
   "dependencies": {
     "@applemusic-like-lyrics/core": "^0.6.0",

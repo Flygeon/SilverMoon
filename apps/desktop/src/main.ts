@@ -102,13 +102,7 @@ window.addEventListener("unhandledrejection", (e) => {
 app.mount("#app");
 markBoot("Vue 挂载完成");
 
-// 启动加载动画收尾：Vue 挂载后让 index.html 里的 splash 淡出并移除。
-// transitionend 在个别 webview 里可能不触发，加超时兜底强制移除。
-const splash = document.getElementById("boot-splash");
-if (splash) {
-  requestAnimationFrame(() => {
-    splash.classList.add("boot-splash--leaving");
-    splash.addEventListener("transitionend", () => splash.remove(), { once: true });
-    window.setTimeout(() => splash.remove(), 1000);
-  });
-}
+// 说明：这里原本有一段「让 index.html 里的 #boot-splash 淡出并移除」的逻辑。
+// 启动画面已整体去掉（见 doc/TAURI-MIGRATION.md）：它是为遮 Electron 冷启动写的，
+// 而 Tauri 下窗口本身就到得晚（约 2 秒），再盖一层动画只会让「看到真界面」更迟。
+// 现在窗口一出现就直接是应用本体。

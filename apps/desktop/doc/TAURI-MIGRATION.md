@@ -147,6 +147,46 @@ Get-Content "$env:LOCALAPPDATA\cn.cool.silvermoon\logs\main.log" -Tail 30
 > setup 之后才执行，记下的毫秒数偏大。这本身是「主线程被占住」的信号；
 > 判断时以 `setup 结束` 和 `主窗口已显示` 两点为准。
 
+## 2.8 启动画面已移除 + 图标字体子集化
+
+这两件事都是**实测启动耗时之后**才做的（数据见 §2.7 的 `main.log`）。
+
+### 启动画面（#boot-splash）已整体删除
+
+它是为遮 **Electron 冷启动**写的：Electron 主窗口 `show: false`，先让原生启动器
+顶上，等 `ready-to-show` 再切主窗口。Tauri 下没有启动器，而窗口本身要到
+约 2 秒才出现——**再盖一层动画只会让「看见真界面」更迟**。
+
+删除后窗口一出现就是应用本体（Vue 挂载在窗口出现后约 100ms 内完成）。
+
+改动点：`index.html`（删样式与标记）、`src/main.ts`（删淡出逻辑）。
+注意这不是把显示时机推后——显示仍用 `ContentLoading`（见 lib.rs 的 on_page_load）。
+
+### 图标字体从 5.2 MB 降到 90 KB
+
+原先 `material-symbols-rounded.woff2` 是官方**全量**可变字体，**5221.7 KB**。
+图标要等它加载+解析完才显示，表现为「窗口出来了但图标还要等一下才齐」。
+
+现在由 `scripts/fetch-icon-font.mjs` 生成**子集**：272 个图标 / **89.6 KB（省 98.3%）**。
+
+收集图标名用的是「超集 + 过滤」，两条规则取并集再与官方 4301 个图标名取交集：
+
+| 规则 | 覆盖 |
+|---|---|
+| 带引号的字符串字面量 | `icon: "..."`、三元表达式、查表（TYPE_ICONS / themeIconMap） |
+| `<span class="material-symbols-outlined">NAME</span>` 的元素文本 | 静态图标 |
+
+> ⚠️ **第二条规则绝不能省**：实测有 **59 个图标只以元素文本形式出现**
+> （`arrow_back` / `chevron_left` / `sync` / `delete_sweep` / `input` / `logout` …）。
+> 我第一版只认引号，这 59 个会全部漏掉——**漏一个就是界面上缺一个图标**。
+
+可变轴按项目实际取值钉死（全轴子集仍有 196 KB）：
+`opsz 24` / `wght 300..500` / `FILL 0..1` / `GRAD 0`。
+对应的 `@font-face` 里 `font-weight` 也从 `100 700` 收窄为 `300 500`。
+
+**新增或改用图标后必须重跑** `npm run fetch:icon-font`；
+CI 里有 `npm run check:icon-font`（**离线**，只比对 manifest 与源码）会拦住漏跑。
+
 ## 3. 行为差异清单（有意为之）
 
 | 项 | Electron 版 | Tauri 版 | 影响 |
