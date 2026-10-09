@@ -27,9 +27,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
-/// 首屏就绪后最多等启动器多久（毫秒）。超过就自己显示窗口，不等了。
-const HANDSHAKE_TIMEOUT_MS: u64 = 3000;
 /// 启动器可执行文件名。
+///
+/// 留在顶层（而不是 imp 里）是因为 `splash_candidates` 与它的单测都要用；
+/// 单测跑在 Linux 上，放进 `#[cfg(windows)]` 会让它们编不过。
 const SPLASH_EXE: &str = "silvermoon-splash.exe";
 
 /// 主窗口句柄（setup 时登记），供后台线程回到主线程显示窗口用。
@@ -92,6 +93,13 @@ mod imp {
     }
 
     static LINK: Mutex<Option<Link>> = Mutex::new(None);
+
+    /// 首屏就绪后最多等启动器多久（毫秒）。超过就自己显示窗口，不等了。
+    ///
+    /// ⚠️ 必须放在 `imp` 内部：它只被这里用到，而 clippy 在 **Linux** 上跑时
+    /// 会把整个 `#[cfg(windows)] mod imp` 剥掉 —— 留在顶层就会变成
+    /// 「constant is never used」，CI 的 `-D warnings` 直接判失败（真实踩过）。
+    const HANDSHAKE_TIMEOUT_MS: u64 = 3000;
 
     /// 生成管道名（带 pid 与时间戳，避免多实例/快速重启撞名）。
     fn pipe_name() -> String {
