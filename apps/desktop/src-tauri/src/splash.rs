@@ -57,10 +57,11 @@ pub fn splash_candidates(exe_dir: &Path) -> Vec<PathBuf> {
     for up in [2usize, 3] {
         let mut base = exe_dir.to_path_buf();
         for _ in 0..up {
-            match base.parent() {
-                Some(p) => base = p.to_path_buf(),
-                None => return out,
-            }
+            // 用 let-else 而不是 match：等价写法会被 clippy 的 style 组盯上
+            let Some(parent) = base.parent() else {
+                return out;
+            };
+            base = parent.to_path_buf();
         }
         for profile in ["release", "debug"] {
             out.push(
@@ -204,18 +205,26 @@ pub fn set_app(app: AppHandle) {
 /// 这是**唯一**的显示入口：无论走「启动器淡出后」还是「没有启动器直接显示」，
 /// 最后都落到这里，因此不会出现两条路径互相打架。
 pub fn reveal() {
-    let app = match APP.lock().unwrap().clone() {
-        Some(a) => a,
-        None => return,
+    // 先取出句柄再把锁放掉：不要让 MutexGuard 作为 match 的临时值活过整个分支
+    // （clippy 的 significant_drop_in_scrutinee 会盯这种写法）。
+    let app = {
+        let guard = APP.lock().unwrap();
+        guard.as_ref().cloned()
     };
+    // 用 let-else 而不是 match：等价的 match 会被 clippy::manual_let_else 拦下
+    // （style 组，warn by default，CI 里 -D warnings 直接变错误）。
+    let Some(app) = app else { return };
+
     let inner = app.clone();
     let _ = app.run_on_main_thread(move || {
-        if let Some(win) = inner.get_webview_window("main") {
-            if !win.is_visible().unwrap_or(false) {
-                let _ = win.show();
-                let _ = win.set_focus();
-            }
+        let Some(win) = inner.get_webview_window("main") else {
+            return;
+        };
+        if win.is_visible().unwrap_or(false) {
+            return;
         }
+        let _ = win.show();
+        let _ = win.set_focus();
     });
 }
 
