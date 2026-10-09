@@ -9,6 +9,7 @@ import { capabilities } from "@/capabilities";
 import { useSettingsStore } from "@/stores/settings";
 import { clearSongUrlCache } from "@/utils/netease";
 import { TtlCache } from "@/utils/ttlCache";
+import { listCacheClear } from "@/utils/onlineListCache";
 import type { NeteasePlaylist, NeteaseProfile, NeteaseSong } from "@shared/types";
 
 /** 扫码轮询间隔：等待/已扫码 2s，确认中 1s */
@@ -240,6 +241,9 @@ export const useNeteaseStore = defineStore("netease", () => {
     likedSongIds.value = new Set();
     clearSongUrlCache();
     playlistCache.clear();
+    // 磁盘上的歌单缓存同样包含账号私有数据（云盘 / 我的歌单）：
+    // 只清内存的话，换账号登录后会先命中上一个人的缓存。
+    void listCacheClear();
   }
 
   /** 拉取我的歌单；`force` 为 true 时绕过缓存（手动刷新用） */

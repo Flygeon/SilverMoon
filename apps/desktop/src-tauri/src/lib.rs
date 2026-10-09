@@ -138,7 +138,51 @@ pub fn run() {
         .register_asynchronous_uri_scheme_protocol("app-cover", |ctx, request, responder| {
             cover::handle_request(ctx, request, responder);
         })
+        // 主窗口在 tauri.conf.json 里是 `visible: false` 创建的：
+        // 先隐藏、等前端首帧渲染完再显示，避免冷启动时先闪一下空白/黑底再出内容。
+        //
+        // ⚠️ 这里用**全局** on_page_load（挂在 Builder 上，对所有 webview 生效），
+        // 而不是给主窗口单独建一个 WebviewWindowBuilder —— 配置里的窗口由
+        // `WebviewWindowBuilder::from_config` 在 setup 之前统一创建，代码里再建一次
+        // 会变成两个窗口。各窗口按自己的 label 过滤即可。
+        //
+        // 历史：换回 Tauri 前，主窗口的显示时机由 Electron 主进程的
+        // `ready-to-show` 负责（archive/electron-host/electron/windows.ts），
+        // 更早则是等原生 splash 启动器淡出。启动器已废弃，这段接手显示。
+        .on_page_load(|webview, payload| {
+            if payload.event() != tauri::webview::PageLoadEvent::Finished {
+                return;
+            }
+            // 只有主窗口需要「渲染完再显示」；子窗口各自由自己的调用方 show()
+            if webview.label() != "main" {
+                return;
+            }
+            // 注意：`Webview::window()` 返回的是 `Window<R>`（不是 Option），
+            // 需要用 `Window::is_visible` 判可见性（`Webview` 自己没这个方法）。
+            let window = webview.window();
+            if !window.is_visible().unwrap_or(false) {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        })
         .setup(|app| {
+            // 兜底：万一 on_page_load 没触发（页面加载失败 / 资源挂住），
+            // 主窗口会永远停在 hidden 状态 —— 那是「双击图标没反应」的最坏情况。
+            // 这里独立起一个看门狗，到点只要还没可见就强制显示，宁可让用户看到
+            // 一个报错页面，也不要让应用像没启动一样。
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    if let Some(window) = handle.get_webview_window("main") {
+                        if !window.is_visible().unwrap_or(true) {
+                            eprintln!("[silvermoon] 页面加载超时，强制显示主窗口");
+                            let _ = window.show();
+                        }
+                    }
+                });
+            }
+
             // 首个启动：把旧项目 LumiLuna 的数据目录整份复制过来（只读旧目录）。
             // 必须早于 open_db —— 否则新目录会被创建，迁移条件就不再成立。
             if let Ok(dir) = app.path().app_data_dir() {

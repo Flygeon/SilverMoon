@@ -30,6 +30,7 @@ import {
 } from "@/utils/kugou";
 import { translate } from "@shared/i18n";
 import { CURATED_PLAYLISTS, metingPlaylist, metingSearch } from "@/utils/meting";
+import { FRESH_MS, listCacheGet, listCacheSet } from "@/utils/onlineListCache";
 import { TtlCache } from "@/utils/ttlCache";
 import type { MediaEntry, MusicServer, OnlinePlaylistEntry, OnlineSong } from "@shared/types";
 
@@ -129,25 +130,73 @@ const onlineError = ref("");
  * 此前点歌单会先 `await` 请求、期间停在原列表页（无任何反馈）；现在改为马上切详情。
  * `detail.value !== target` 守卫保证：期间用户返回或切到别的详情时丢弃本次结果，
  * 不写已卸载/已切换的页面（避免状态竞争与陈旧覆盖）。
+ *
+ * ## cacheKey：跨重启的缓存
+ *
+ * 传了 `cacheKey` 就走**持久化缓存**（IndexedDB），顺序是：
+ *
+ * 1. IndexedDB 命中且新鲜 → 直接出内容，**完全不走网络**；
+ * 2. 命中但已过新鲜期 → **先用旧数据出内容**，再后台刷新（stale-while-revalidate）；
+ * 3. 未命中 → 走 loader，成功后写缓存。
+ *
+ * 这样重启后第一次点歌单也是秒开。没有稳定 key 的入口（搜索词、云盘分页）
+ * 不传 `cacheKey`，行为与之前完全一致。
  */
 async function openDetailAsync(
   title: string,
   loader: () => Promise<OnlineSong[]>,
-  opts: { type?: "online" | "cloud" } = {},
+  opts: { type?: "online" | "cloud"; cacheKey?: string } = {},
 ): Promise<void> {
   const seeded: ListDetail = { type: opts.type ?? "online", title, songs: [], loading: true };
   detail.value = seeded;
   const target = detail.value as ListDetail;
   onlineError.value = "";
+
+  if (opts.cacheKey) {
+    const cached = await listCacheGet(opts.cacheKey);
+    // 读 IndexedDB 期间用户可能已经离开/切换，先确认还停在这个详情上
+    if (detail.value !== target) return;
+    if (cached) {
+      target.songs = cached.songs;
+      target.loading = false;
+      if (cached.ageMs >= FRESH_MS) {
+        void refreshDetailInBackground(opts.cacheKey, loader, target);
+      }
+      return;
+    }
+  }
+
   try {
     const songs = await loader();
     if (detail.value !== target) return;
     target.songs = songs;
     target.loading = false;
+    if (opts.cacheKey) void listCacheSet(opts.cacheKey, songs);
   } catch (e) {
     if (detail.value !== target) return;
     target.loading = false;
     onlineError.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
+/**
+ * 后台刷新（stale-while-revalidate）。
+ *
+ * 只在「命中了陈旧缓存」时调用：用户已经看到可用的旧列表，这里静默取新数据。
+ * 失败一律吞掉——旧数据仍然可用，只是没变新。
+ */
+async function refreshDetailInBackground(
+  cacheKey: string,
+  loader: () => Promise<OnlineSong[]>,
+  target: ListDetail,
+): Promise<void> {
+  try {
+    const songs = await loader();
+    await listCacheSet(cacheKey, songs);
+    // 只在用户仍停留在这个详情时替换内容，避免覆盖他已经切过去的页面
+    if (detail.value === target) target.songs = songs;
+  } catch {
+    /* 后台刷新失败：保留旧缓存，下次再试 */
   }
 }
 
@@ -302,8 +351,10 @@ async function openPlaylist(card: PlaylistCard) {
   // 网易云我的歌单（立即进详情 + 骨架）
   if (card.key.startsWith("mine:")) {
     const id = Number(card.key.slice("mine:".length));
-    await openDetailAsync(card.name, async () =>
-      toOnlineSongs(await capabilities.neteasePlaylistDetail(id)),
+    await openDetailAsync(
+      card.name,
+      async () => toOnlineSongs(await capabilities.neteasePlaylistDetail(id)),
+      { cacheKey: `netease:playlist:${id}` },
     );
     return;
   }
@@ -320,11 +371,15 @@ async function openPlaylist(card: PlaylistCard) {
     return;
   }
   // 未预取：立即进详情 + 骨架，异步填充（并写入缓存供下次秒开）
-  await openDetailAsync(card.name, async () => {
-    const songs = await metingPlaylist(card.server!, card.id!);
-    playlistCache.set(key, songs);
-    return songs;
-  });
+  await openDetailAsync(
+    card.name,
+    async () => {
+      const songs = await metingPlaylist(card.server!, card.id!);
+      playlistCache.set(key, songs);
+      return songs;
+    },
+    { cacheKey: `meting:${key}` },
+  );
 }
 
 /** 打开云盘：首页 + 批量解析播放 URL（立即进详情，歌曲区骨架占位） */
@@ -332,7 +387,8 @@ async function openCloud() {
   await openDetailAsync(
     t("netease.cloud"),
     async () => toOnlineSongs(await netease.loadCloudPage(0)),
-    { type: "cloud" },
+    // 云盘是账号私有数据：cacheKey 必须带 userId，否则换账号后会看到上一个人的文件
+    { type: "cloud", cacheKey: `netease:cloud:${netease.profile?.userId ?? 0}` },
   );
 }
 
@@ -366,26 +422,33 @@ async function loadKugouRanks() {
 
 /** 酷狗：进入某个榜单（立即进详情，歌曲区骨架占位） */
 async function openKugouRank(card: KugouRankCard) {
-  await openDetailAsync(card.name, async () =>
-    kugouToOnlineSongs(await capabilities.kugouRankSongs(card.id)),
+  await openDetailAsync(
+    card.name,
+    async () => kugouToOnlineSongs(await capabilities.kugouRankSongs(card.id)),
+    { cacheKey: `kugou:rank:${card.id}` },
   );
 }
 
 /** 酷狗：进入每日推荐（立即进详情，歌曲区骨架占位） */
 async function openKugouDaily() {
-  await openDetailAsync(t("homeFeed.dailyRecommend"), async () =>
-    kugouToOnlineSongs(
-      await (kugou.loggedIn
-        ? capabilities.kugouRecommendSongs()
-        : capabilities.kugouEverydayRecommend()),
-    ),
+  await openDetailAsync(
+    t("homeFeed.dailyRecommend"),
+    async () =>
+      kugouToOnlineSongs(
+        await (kugou.loggedIn
+          ? capabilities.kugouRecommendSongs()
+          : capabilities.kugouEverydayRecommend()),
+      ),
+    { cacheKey: "kugou:daily" },
   );
 }
 
 /** 酷狗：进入「我的歌单」（用订阅版 listid 拉歌单内歌曲） */
 async function openKugouPlaylist(listid: string, name: string) {
-  await openDetailAsync(name, async () =>
-    kugouToOnlineSongs(await capabilities.kugouPlaylistTracks(listid)),
+  await openDetailAsync(
+    name,
+    async () => kugouToOnlineSongs(await capabilities.kugouPlaylistTracks(listid)),
+    { cacheKey: `kugou:playlist:${listid}` },
   );
 }
 
@@ -609,8 +672,10 @@ function handleFeedPlaySongs(songs: OnlineSong[], index: number) {
 
 /** 现在就听信息流：打开推荐歌单（立即进详情，歌曲区骨架占位） */
 async function openNeteasePlaylist(id: number, name: string) {
-  await openDetailAsync(name, async () =>
-    toOnlineSongs(await capabilities.neteasePlaylistDetail(id)),
+  await openDetailAsync(
+    name,
+    async () => toOnlineSongs(await capabilities.neteasePlaylistDetail(id)),
+    { cacheKey: `netease:playlist:${id}` },
   );
 }
 

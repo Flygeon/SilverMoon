@@ -16,6 +16,7 @@ import {
   type DesktopLyricsDoubleClick,
 } from "@/stores/settings";
 import type { ObsceneMode } from "@/utils/obscene";
+import { listCacheClear } from "@/utils/onlineListCache";
 import { useSkinsStore } from "@/stores/skins";
 import { useDesktopStore } from "@/stores/desktop";
 import { useBangumiCollectStore } from "@/stores/bangumiCollect";
@@ -613,6 +614,9 @@ async function clearCache() {
     capabilities.clearThumbnailCache(),
     capabilities.clearCoverCache(),
   ]);
+  // 在线歌单/榜单的磁盘缓存（IndexedDB）不占封面缓存的空间，
+  // 但用户点「清空缓存」时的预期是「把在线内容也重新拉一遍」，因此一起清。
+  await listCacheClear();
   const freed = thumbs + covers;
   library.invalidate();
   notify(`${t("settings.cacheCleared")}${freed ? ` · ${formatSize(freed)}` : ""}`);

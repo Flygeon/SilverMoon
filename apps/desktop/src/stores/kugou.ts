@@ -5,6 +5,7 @@
  * Rust 侧持有；浏览器预览由 `capabilities/mock.ts` 提供空态支撑。
  */
 import { defineStore } from "pinia";
+import { listCacheClear } from "@/utils/onlineListCache";
 import { computed, ref } from "vue";
 import QRCode from "qrcode";
 import { capabilities } from "@/capabilities";
@@ -288,6 +289,11 @@ export const useKugouStore = defineStore("kugou", () => {
     signInMessage.value = "";
     needVerify.value = false;
     clearKugouUrlCache();
+    // 与网易云同理：磁盘缓存里有「我的歌单」这类账号私有数据。
+    // 这里整体清空（而不是只删 kugou:* 前缀）：登出是低频操作，
+    // 公开数据（排行榜/每日推荐）下次重新拉一次的成本可以忽略，
+    // 而漏清私有数据的后果是换账号后看到上一个人的歌单。
+    void listCacheClear();
   }
 
   return {
