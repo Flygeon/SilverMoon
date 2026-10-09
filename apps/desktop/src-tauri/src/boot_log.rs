@@ -47,9 +47,17 @@ static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 /// `attach()` 之前攒下的行（先于日志路径可用而发生的打点）。
 static PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-/// 记录进程启动时刻。必须在 `main()` 最早期调用一次，否则 t0 会偏晚。
+/// 记录进程启动时刻，并写一条带墙钟时间的内部分隔头。
+///
+/// 必须在 `main()` 最早期调用一次，否则 t0 会偏晚。
+///
+/// 为什么要分隔头：日志是**追加**的，而宿主与渲染的打点会交错写入。
+/// 没有分隔头时，两次启动的记录会连在一起，看不出上一次到哪里结束
+/// （渲染打点本身也不带时间戳）。加上后可以直接取最后一段分析。
 pub fn mark_start() {
     let _ = T0.set(Instant::now());
+    let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+    record(&format!("===== 本次启动 @ {stamp} ====="));
 }
 
 /// 距进程启动的毫秒数（t0 未设置时返回 0）。
