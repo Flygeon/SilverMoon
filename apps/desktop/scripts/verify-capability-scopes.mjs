@@ -3,15 +3,33 @@
  *
  * ## 为什么需要它
  *
- * Tauri 的 capability 用 \`urlpattern\` 语法，而 \`https://**\` 的 **port 解析为空**
+ * Tauri 的 capability 用 urlpattern 语法，而 https://** 的 **port 解析为空**
  * （不是通配）—— 于是**任何带端口的 URL 都会被 http 插件拒绝**，
- * 报错是 \`url not allowed\`，但用户侧只看到「视频播不了」。
+ * 报错只到 url not allowed，用户侧只看到「视频播不了」。
  *
- * 真实踩过：B 站 PCDN 的取流地址是 \`mcdn.bilivideo.cn:8082\`（实测该稿件的
- * 27 个流地址里 **17 个带端口**，另有备用域 \`:4483\`）。被拒后 DASH 取流直接失败，
- * 播放器时长停在 \`00:00 / 00:00\`。
+ * 真实踩过：B 站 PCDN 的取流地址是 mcdn.bilivideo.cn:8082（实测该稿件的
+ * 27 个流地址里 **17 个带端口**，另有备用域 :4483）。被拒后 DASH 取流直接失败，
+ * 播放器时长停在 00:00 / 00:00。
  *
- * 正确写法是 \`https://**:*\`（port 为 \`*\`，同时匹配有端口与无端口）。
+ * 正确写法是 https://**:*（port 为 *，同时匹配有端口与无端口）。
+ *
+ * ## ⚠️ 为什么不直接用 URLPattern
+ *
+ * URLPattern 是 **Node 24 才默认可用的全局**，CI 用的是 Node 22（官方 v22 的
+ * 全局与 url 模块文档里都没有它）。本机 Node 24 测通过、CI 上却是 undefined
+ * —— 这个坑我踩过一次（第一版脚本就是这么挂的）。
+ *
+ * 因此这里不依赖运行时 API，而是**按插件源码的语义自己实现匹配**
+ * （见 tauri-plugin-http/src/scope.rs 的 parse_url_pattern +
+ * urlpattern crate 的 constructor-string 解析）：
+ *
+ * 1. 解析出 protocol / hostname / port / pathname 四段；
+ * 2. search / hash 为空 → 填 *（插件显式做的）；
+ * 3. pathname 为空或 / → 填 *（同上）；
+ * 4. 逐段按 * 通配（含 **）匹配。
+ *
+ * 本脚本只处理 capability 里实际会写的形态（scheme://host[:port][/path]），
+ * 遇到不认识的写法会**明确报错**而不是静默放过。
  *
  * ## 用法
  *
@@ -38,14 +56,81 @@ const PLAIN = [
   "https://i0.hdslb.com/bfs/archive/x.jpg",
 ];
 
-const failures = [];
-
-/** 复刻插件 scope.rs 的 parse_url_pattern：search/hash/pathname 为空时填 *。 */
-function compile(pattern) {
-  // 用 globalThis 访问：URLPattern 是 Node 20+ 的全局，但 eslint 的
-  // globals.node 白名单里还没有它（会报 no-undef），显式取全局可两全。
-  return new globalThis.URLPattern(pattern);
+/** 把一个 URL 拆成协议 / 主机 / 端口 / 路径四段。 */
+function splitUrl(url) {
+  const m = /^([a-z][a-z0-9+.-]*):\/\/([^/?#]*)([^?#]*)/i.exec(url);
+  if (!m) throw new Error("无法解析 URL：" + url);
+  const protocol = m[1];
+  const authority = m[2];
+  const pathname = m[3];
+  const v6 = /^\[([^\]]+)\](?::(\d+))?$/.exec(authority);
+  if (v6) return { protocol, hostname: v6[1], port: v6[2] || "", pathname: pathname || "/" };
+  const idx = authority.lastIndexOf(":");
+  if (idx >= 0) {
+    return {
+      protocol,
+      hostname: authority.slice(0, idx),
+      port: authority.slice(idx + 1),
+      pathname: pathname || "/",
+    };
+  }
+  return { protocol, hostname: authority, port: "", pathname: pathname || "/" };
 }
+
+/** 把 capability 里的 pattern 拆成同样的四段（缺省段填 *，与插件一致）。 */
+function splitPattern(pattern) {
+  const m = /^([a-z][a-z0-9+.-]*):\/\/([^/?#]*)([^?#]*)/i.exec(pattern);
+  if (!m) {
+    throw new Error(
+      "不认识的 pattern 写法（本脚本只支持 scheme://host[:port][/path]）：" + pattern,
+    );
+  }
+  const protocol = m[1];
+  const authority = m[2];
+  const rawPath = m[3];
+  let hostname = authority;
+  let port = "";
+  const v6 = /^\[([^\]]+)\](?::(\*|\d+))?$/.exec(authority);
+  if (v6) {
+    hostname = v6[1];
+    port = v6[2] || "*";
+  } else {
+    const idx = authority.lastIndexOf(":");
+    if (idx >= 0) {
+      hostname = authority.slice(0, idx);
+      port = authority.slice(idx + 1);
+    } else {
+      // ⚠️ 这就是那个坑：不写端口时 port 是**空**，不是通配
+      port = "";
+    }
+  }
+  const pathname = !rawPath || rawPath === "/" ? "*" : rawPath;
+  return { protocol, hostname, port, pathname };
+}
+
+/** 单段通配匹配：支持 * 与 **。 */
+function segMatch(pattern, value) {
+  if (pattern === "*" || pattern === "**") return true;
+  if (!pattern.includes("*")) return pattern === value;
+  // 把 * 转成正则（** 与 * 在这几段里语义相同：匹配任意字符）
+  const escaped = pattern.replace(/[.+?^$()|[\]\\]/g, "\\$&").replace(/\*+/g, ".*");
+  return new RegExp("^" + escaped + "$").test(value);
+}
+
+/** pattern 是否匹配 url（复刻插件 scope.is_allowed 的单条判定）。 */
+function matches(pattern, url) {
+  const p = splitPattern(pattern);
+  const u = splitUrl(url);
+  return (
+    segMatch(p.protocol, u.protocol) &&
+    segMatch(p.hostname, u.hostname) &&
+    // 端口：空 pattern 段只匹配空端口（这正是 https://** 拒绝 :8082 的原因）
+    (p.port === "" ? u.port === "" : segMatch(p.port, u.port)) &&
+    segMatch(p.pathname, u.pathname)
+  );
+}
+
+const failures = [];
 
 for (const file of await readdir(DIR)) {
   if (!file.endsWith(".json")) continue;
@@ -57,16 +142,15 @@ for (const file of await readdir(DIR)) {
     const patterns = perm.allow
       .map((a) => (typeof a === "object" && typeof a.url === "string" ? a.url : null))
       .filter(Boolean);
-    const compiled = patterns.map(compile);
     for (const url of PORTED) {
-      if (!compiled.some((p) => p.test(url))) {
+      if (!patterns.some((p) => matches(p, url))) {
         failures.push(
-          file + " 的 " + perm.identifier + " 无法匹配带端口的 " + url.slice(0, 60) + "…",
+          file + " 的 " + perm.identifier + " 无法匹配带端口的 " + url.slice(0, 58) + "…",
         );
       }
     }
     for (const url of PLAIN) {
-      if (!compiled.some((p) => p.test(url))) {
+      if (!patterns.some((p) => matches(p, url))) {
         failures.push(file + " 的 " + perm.identifier + " 连不带端口的也匹配不了：" + url);
       }
     }
