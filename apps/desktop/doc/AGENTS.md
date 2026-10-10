@@ -56,6 +56,7 @@ cd src-tauri && cargo clippy --all-targets -- -D warnings   # 需要 MSVC / WebK
   - `src-tauri/src/commands/host.rs` — 宿主能力（路径 / 版本 / 退出 / 封面缓存 / 诊断 / 更新器）。
   - `src-tauri/src/commands/music_tags.rs` — `musicTags` 通道（lofty 读写音频标签 + 在线标签磁盘缓存）。
   - `src-tauri/src/cover.rs` — `app-cover://` 协议（在线封面代理）。
+  - `src-tauri/src/gpu_canvas.rs` — **GPU 画布**（wgpu 直绘到独立原生窗口，绘画用）。见 `doc/GPU-CANVAS.md`。
   - `src-tauri/src/app_meta.rs` — 应用元信息 + 首个启动的旧数据迁移。
   - `src-tauri/silvermoon.config.json` — **single source of truth** for the app version (shared with `tauri.conf.json` and `scripts/check-version.mjs`).
 - `src/ipc/` — **the single bridge between the renderer and the native layer** (`invoke` / `events` / `window` / `dragdrop` / `paths` / `app` / `store` / `dialog` / `fs` / `opener` / `http`). Business code imports from here directly; it must never import `@tauri-apps/*` itself (browser preview would break).

@@ -5,6 +5,7 @@ pub mod boot_log;
 pub mod commands;
 pub mod cover;
 pub mod error;
+pub mod gpu_canvas;
 pub mod kugou;
 pub mod media;
 pub mod netease;
@@ -122,6 +123,62 @@ pub struct Song {
     pub lyrics: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// GPU 画布命令
+//
+// 三个命令都是**薄封装**：真正的逻辑在 gpu_canvas 模块里。放在这里是因为
+// Tauri 的 `generate_handler!` 需要命令在 crate 根部可见。
+//
+// 注意它们是 `async`：Tauri 文档明确写着「在同步命令或事件处理器里建窗会在
+// Windows 上死锁」（wry#583），而这些命令会触发建窗。
+// ---------------------------------------------------------------------------
+
+/// 打开 GPU 画布窗口。参数是画布区域的**逻辑像素**坐标与尺寸。
+#[tauri::command]
+async fn gpu_canvas_open(
+    app: tauri::AppHandle,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    gpu_canvas::open(
+        &app,
+        gpu_canvas::CanvasRect {
+            x,
+            y,
+            width,
+            height,
+        },
+    )
+}
+
+/// 更新 GPU 画布窗口的位置与尺寸（前端布局变化时调用）。
+#[tauri::command]
+async fn gpu_canvas_resize(
+    app: tauri::AppHandle,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    gpu_canvas::resize(
+        &app,
+        gpu_canvas::CanvasRect {
+            x,
+            y,
+            width,
+            height,
+        },
+    )
+}
+
+/// 关闭 GPU 画布窗口并停止渲染线程。
+#[tauri::command]
+async fn gpu_canvas_close(app: tauri::AppHandle) -> Result<(), String> {
+    gpu_canvas::close(&app)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 这一段（Builder 构建 + 插件 init + 配置里的窗口创建）在 setup 之前完成，
@@ -192,6 +249,8 @@ pub fn run() {
             boot_log::record("setup 开始");
             // 登记句柄：之后「首屏就绪」或启动器淡出结束时，要靠它回到主线程显示窗口
             splash::set_app(app.handle().clone());
+            // GPU 画布的会话状态（渲染线程的 running 标志）
+            app.manage(gpu_canvas::CanvasState::default());
 
             // 兜底：万一 on_page_load 没触发（页面加载失败 / 资源挂住），
             // 主窗口会永远停在 hidden 状态 —— 那是「双击图标没反应」的最坏情况。
@@ -449,6 +508,10 @@ pub fn run() {
             commands::extension::ext_set_enabled,
             commands::extension::ext_invoke,
             commands::extension::ext_open,
+            // ---- GPU 画布（绘画）----
+            gpu_canvas_open,
+            gpu_canvas_resize,
+            gpu_canvas_close,
         ])
         .build(tauri::generate_context!())
         .expect("SilverMoon 后端启动失败");

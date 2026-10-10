@@ -47,6 +47,20 @@ tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }
 tauri-plugin-global-shortcut = "2"
 # 自动更新：替代 electron-updater，保留「只提示、不自动重启」的产品行为
 tauri-plugin-updater = "2"
+# ---------------------------------------------------------------------------
+# GPU 画布（wgpu）
+#
+# 用途：绘画的画布改为 **wgpu 直绘**（不再走 WebView 的 Canvas 2D）。
+# 动机见 doc/GPU-CANVAS.md：Canvas 2D 没有合成器，多图层下每次重绘都要
+# 把上千个节点重画一遍；wgpu 走真正的 GPU 合成。
+#
+# 版本取 30 与参考实现（photocraft）一致 —— 它是经过验证的组合。
+# 只开需要的特性：std（桌面必需）+ wgsl（着色器语言）。
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
+# wgpu 的 request_adapter / request_device 是 async；主线程里需要一个最小的
+# 阻塞执行器。pollster 只做这一件事，比引入整个 tokio 运行时轻得多
+# （tokio 已在依赖里，但它是给 reqwest 用的，不该拿来跑渲染初始化）。
+pollster = "0.4"
 
 silvermoon-bili = { path = "crates/silvermoon-bili" }
 

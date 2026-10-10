@@ -20,6 +20,7 @@ import { useFillHeight } from "@/composables/useFillHeight";
 import type { DrawTool, Drawing, ShapeFillMode } from "@/features/drawing/types";
 import { SHAPE_FILL_MODES } from "@/features/drawing/types";
 import { floodFill } from "@/features/drawing/floodFill";
+import { attachGpuCanvas, gpuCanvasAvailable, type GpuCanvasHandle } from "@/utils/gpuCanvas";
 import { translate } from "@shared/i18n";
 
 const props = defineProps<{
@@ -855,6 +856,18 @@ function onKeydown(e: KeyboardEvent) {
 // ---- 生命周期 ----
 let ro: ResizeObserver | null = null;
 
+/**
+ * GPU 画布句柄（见 utils/gpuCanvas.ts）。
+ *
+ * 现状：**并行验证**。传统 DOM 画布（Leafer）照常工作，同时在同一个位置叠一个
+ * wgpu 原生窗口，用来证明「Tauri + wgpu 直绘」这条路在三个平台上成立。
+ *
+ * 为什么并行而不是直接替换：替换掉整个画布意味着工具、笔刷、撤销全要重写，
+ * 而这条路唯一的风险点（原生窗口 + wgpu surface 能否建起来）还没验证过。
+ * 先把它验证了，再谈替换 —— 万一某平台不通，现在的功能一点没损失。
+ */
+let gpuCanvas: GpuCanvasHandle | null = null;
+
 onMounted(async () => {
   try {
     ns = await import("leafer-editor");
@@ -886,6 +899,12 @@ onMounted(async () => {
     fitCanvas();
     ro = new ResizeObserver(fitCanvas);
     ro.observe(host.value);
+
+    // GPU 画布：在同一个位置叠一个 wgpu 原生窗口（可行性验证，见上方说明）。
+    // 浏览器预览下 gpuCanvasAvailable() 为 false，整个分支跳过。
+    if (gpuCanvasAvailable() && host.value) {
+      gpuCanvas = attachGpuCanvas(host.value);
+    }
   } catch {
     failed.value = true;
   }
@@ -894,6 +913,9 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   ro?.disconnect();
   ro = null;
+  // 先收 GPU 画布：它是独立的原生窗口，不关掉会留在屏幕上
+  void gpuCanvas?.dispose();
+  gpuCanvas = null;
   leafer.value?.destroy();
   leafer.value = null;
   ns = null;

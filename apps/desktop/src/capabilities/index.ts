@@ -1175,6 +1175,30 @@ export const capabilities = {
     void callBridge("app", { op: "logBoot", mark, since: sinceMs }).catch(() => undefined);
   },
 
+  // ---- GPU 画布（绘画）----
+  /**
+   * 打开 GPU 画布窗口（wgpu 直绘，见 src-tauri/src/gpu_canvas.rs）。
+   *
+   * 参数是画布区域的**逻辑像素**（CSS 像素）坐标与尺寸——直接来自前端
+   * `getBoundingClientRect()`，两端口径一致，不需要手动换算缩放比。
+   *
+   * 它是**独立于主窗口的原生窗口**：Tauri 的窗口是「原生窗口 + WebView 子窗口」
+   * 两层，子窗口永远在上面，所以 wgpu 不能直接画到主窗口上（会被 webview 盖住）。
+   */
+  gpuCanvasOpen(x: number, y: number, width: number, height: number): Promise<void> {
+    return invoke<void>("gpu_canvas_open", { x, y, width, height });
+  },
+
+  /** 更新 GPU 画布窗口的位置与尺寸（布局变化时调用）。 */
+  gpuCanvasResize(x: number, y: number, width: number, height: number): Promise<void> {
+    return invoke<void>("gpu_canvas_resize", { x, y, width, height });
+  },
+
+  /** 关闭 GPU 画布窗口并停止渲染线程。 */
+  gpuCanvasClose(): Promise<void> {
+    return invoke<void>("gpu_canvas_close");
+  },
+
   // ---- 内存诊断 ----
   /**
    * 按进程内存诊断（见 `electron/ipc.ts` 的 `app.metrics`）。
