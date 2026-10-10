@@ -116,11 +116,20 @@ function pushCmd(c: Cmd) {
   syncHistory();
 }
 
+/**
+ * 撤销/重做后清掉选中态。
+ *
+ * 历史操作可能移除（或重建）被选中的那个节点，而 `selected` 还指着旧引用 ——
+ * 此时按 Del 会去操作一个不在画布上的对象，表现为「按了没反应」或删错东西。
+ * 与其在各处判断引用是否还活着，不如统一在历史变动后清空。
+ */
 function undo() {
   const c = undoStack.pop();
   if (!c) return;
   c.undo();
   redoStack.push(c);
+  selected.value = null;
+  hideMarquee();
   syncHistory();
 }
 
@@ -129,6 +138,8 @@ function redo() {
   if (!c) return;
   c.redo();
   undoStack.push(c);
+  selected.value = null;
+  hideMarquee();
   syncHistory();
 }
 
@@ -634,6 +645,8 @@ function clearAll() {
   const list = nodes();
   if (!list.length) return;
   list.forEach((n) => n.remove());
+  // 必须清掉选中态：否则清空后按 Del 会去操作一个已经不在画布上的节点
+  selected.value = null;
   hideMarquee();
   pushCmd({
     undo: () => list.forEach((n) => leafer.value?.add(n)),
@@ -700,6 +713,13 @@ function onSnackToggle(e: Event) {
 function deleteSelected() {
   const node = selected.value;
   if (!node) return;
+  // 防御：节点可能已被历史操作移除（正常情况下 undo/redo 已清选中态，
+  // 这里再兜一层，避免产生一条「什么都没删」的空历史）
+  if (!nodes().includes(node)) {
+    selected.value = null;
+    hideMarquee();
+    return;
+  }
   node.remove();
   selected.value = null;
   hideMarquee();
