@@ -3,13 +3,13 @@
  * 绘画 —— 图片页签下的「绘画」分段。
  *
  * 两种状态：画作列表（卡片墙 + 新增入口）/ 编辑器。
- * 编辑器经 defineAsyncComponent 按需加载：leafer-editor 压缩后约 305 KB，
- * 只在真正进入编辑器时才拉取，不进图片页的主包。
+ * 编辑器**不在这里**：绘画改为独立最大化窗口打开（utils/drawingWindow.ts）。
+ * leafer-editor（约 305 KB）因此只在绘画窗口里加载，完全不进主窗口的包。
  *
  * 画作存放在 <应用数据目录>/drawings/*.png，磁盘是唯一事实来源，
  * 每次增删改后重列一次目录（见 stores/drawing.ts）。
  */
-import { computed, defineAsyncComponent, onMounted, ref } from "vue";
+import { computed, onMounted, onBeforeUnmount, ref } from "vue";
 import EmptyState from "@/components/EmptyState.vue";
 import { useDrawingStore } from "@/stores/drawing";
 import { useSettingsStore } from "@/stores/settings";
@@ -17,16 +17,19 @@ import { capabilities } from "@/capabilities";
 import { promptText } from "@/composables/useTextPrompt";
 import { formatSize } from "@/utils/format";
 import { CANVAS_PRESETS } from "@/features/drawing/types";
+import { openDrawingWindow, watchDrawingWindowClosed } from "@/utils/drawingWindow";
 import type { Drawing } from "@/features/drawing/types";
 import { translate } from "@shared/i18n";
-
-const DrawingBoard = defineAsyncComponent(() => import("@/components/DrawingBoard.vue"));
 
 const store = useDrawingStore();
 const settings = useSettingsStore();
 
-/** 编辑器会话：null 表示停在列表；drawing 为 null 表示新建 */
-const session = ref<{ drawing: Drawing | null; width: number; height: number } | null>(null);
+/**
+ * 编辑器改为**独立最大化窗口**（见 utils/drawingWindow.ts）。
+ *
+ * 这里不再维护内嵌 session —— 绘画窗口有自己的 webview 与 store，
+ * 本组件只负责「打开它」和「它关掉后刷新列表」。
+ */
 /** 新增画作时的尺寸选择对话框 */
 /** m3e-dialog 的打开 / 关闭方法（它没有 v-model，只能拿实例调） */
 interface M3eDialog extends HTMLElement {
@@ -64,8 +67,19 @@ function urlOf(d: Drawing): string {
 
 const countText = computed(() => store.items.length + " " + t("draw.count"));
 
+let unwatchDrawing: (() => void) | null = null;
+
 onMounted(() => {
   void store.ensure();
+  // 绘画窗口关掉后主窗口会重新显示，此时列表可能已过期（在那边保存/重命名过）
+  unwatchDrawing = watchDrawingWindowClosed(() => {
+    void store.refresh();
+  });
+});
+
+onBeforeUnmount(() => {
+  unwatchDrawing?.();
+  unwatchDrawing = null;
 });
 
 function openPresets() {
@@ -78,20 +92,19 @@ function closePresets() {
 
 function startNew(preset: (typeof CANVAS_PRESETS)[number]) {
   closePresets();
-  session.value = { drawing: null, width: preset.width, height: preset.height };
+  void openDrawingWindow({ id: null, width: preset.width, height: preset.height });
 }
 
 async function openDrawing(d: Drawing) {
   const size = await store.drawingSize(d.id);
-  session.value = {
-    drawing: d,
+  void openDrawingWindow({
+    id: d.id,
     width: size.width || 1024,
     height: size.height || 1024,
-  };
+  });
 }
 
 function closeEditor() {
-  session.value = null;
   void store.refresh();
 }
 
@@ -135,18 +148,12 @@ function cancelDelete() {
 </script>
 
 <template>
-  <!-- 编辑器 -->
-  <DrawingBoard
-    v-if="session"
-    :drawing="session.drawing"
-    :canvas-width="session.width"
-    :canvas-height="session.height"
-    @close="closeEditor"
-    @saved="onSaved"
-  />
-
-  <!-- 画作列表 -->
-  <div v-else class="studio">
+  <!--
+    这里**不再内嵌编辑器**：绘画改为独立最大化窗口打开
+    （见 utils/drawingWindow.ts 与 views/DrawingWindow.vue）。
+    本组件只负责列表：新建 / 打开 / 重命名 / 删除。
+  -->
+  <div class="studio">
     <div class="bar">
       <span class="count">{{ countText }}</span>
       <span class="grow"></span>

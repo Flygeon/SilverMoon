@@ -17,7 +17,23 @@ export interface Drawing {
 }
 
 /** 编辑器工具 */
-export type DrawTool = "select" | "brush" | "eraser" | "rect" | "ellipse" | "line" | "text";
+export type DrawTool =
+  "select" | "brush" | "eraser" | "fill" | "rect" | "ellipse" | "line" | "text";
+
+/**
+ * 形状的填充方式。
+ *
+ * 原来形状**只有描边**，连一个实心矩形都画不出来——这是最刺眼的功能洞。
+ * 三种模式对齐主流绘画软件的习惯（Photoshop 的填充/描边两行开关）。
+ */
+export type ShapeFillMode = "stroke" | "fill" | "both";
+
+/** 形状填充模式的展示顺序（工具栏按此顺序排列） */
+export const SHAPE_FILL_MODES: { value: ShapeFillMode; icon: string; key: string }[] = [
+  { value: "stroke", icon: "check_box_outline_blank", key: "draw.fillModeStroke" },
+  { value: "fill", icon: "check_box", key: "draw.fillModeFill" },
+  { value: "both", icon: "indeterminate_check_box", key: "draw.fillModeBoth" },
+];
 
 /** 新建画布尺寸预设 */
 export const CANVAS_PRESETS = [

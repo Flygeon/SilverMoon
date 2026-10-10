@@ -23,6 +23,8 @@ const router = createRouter({
     { path: "/desktop-lyrics", component: () => import("@/views/DesktopLyrics.vue") },
     { path: "/extensions", component: () => import("@/views/ExtensionsView.vue") },
     { path: "/extension-host", component: () => import("@/views/ExtensionHost.vue") },
+    // 独立绘画窗口（最大化窗口，见 utils/drawingWindow.ts）
+    { path: "/drawing", component: () => import("@/views/DrawingWindow.vue") },
   ],
 });
 

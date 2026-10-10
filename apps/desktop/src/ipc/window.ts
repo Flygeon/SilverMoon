@@ -52,6 +52,8 @@ export interface WindowOptions {
   visible?: boolean;
   focus?: boolean;
   maximizable?: boolean;
+  /** 创建时就最大化 */
+  maximized?: boolean;
   minimizable?: boolean;
   closable?: boolean;
   [key: string]: unknown;
@@ -115,6 +117,11 @@ export class AppWindow {
         maximizable: payload.maximizable,
         minimizable: payload.minimizable,
         closable: payload.closable,
+        // ⚠️ 这两个原先漏了：构造是**逐字段白名单**，没列出的会被静默丢弃。
+        // maximized 用于绘画窗口（一开就是最大化）；
+        // shadow 是桌面歌词窗口在用的（无边框窗口不要阴影）。
+        maximized: payload.maximized,
+        shadow: payload.shadow,
       });
     }
   }

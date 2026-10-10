@@ -134,6 +134,8 @@ function t(key: string) {
 const isPlayerPage = computed(() => route.path === "/music/player");
 const isDesktopLyricsPage = computed(() => route.path === "/desktop-lyrics");
 const isExtensionHostPage = computed(() => route.path === "/extension-host");
+// 独立绘画窗口：它自己就是完整界面，不能套主窗口的导航栏与侧边栏
+const isDrawingPage = computed(() => route.path === "/drawing");
 
 // 扩展窗口（label: extension，由 Rust open_extension_window 创建）加载的是
 // 主 SPA，默认会 redirect 到 /images —— 按 label 重定向到扩展宿主路由。
@@ -258,7 +260,18 @@ router.afterEach((to) => {
 </script>
 
 <template>
+  <!--
+    独立绘画窗口：整块主界面外壳（导航栏 / 标题栏 / 播放条 / 皮肤背景）都不渲染，
+    只留路由出口。绘画窗口有自己的完整布局（见 views/DrawingWindow.vue）。
+
+    为什么在 App.vue 这一层短路，而不是靠 CSS 隐藏：
+    外壳里挂着全局监听（拖放、快捷键、播放器、皮肤），隐藏只是看不见，
+    它们照样在跑；而绘画是吃性能的场景，不该被主界面的监听分走。
+  -->
+  <router-view v-if="isDrawingPage" />
+
   <div
+    v-else
     class="app-shell"
     data-lm-region="shell"
     :class="{
