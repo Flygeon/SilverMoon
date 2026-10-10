@@ -167,6 +167,9 @@ fn run_canvas(app: AppHandle, rect: CanvasRect, running: Arc<Mutex<bool>>) -> Re
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: Some(&surface),
         force_fallback_adapter: false,
+        // wgpu 30 新增字段（旧版没有）。false = 不按适配器能力分桶限制，
+        // 语义是「按 required_limits 精确要」，这里保持默认的宽松行为。
+        apply_limit_buckets: false,
     }))
     .map_err(|e| format!("找不到可用的 GPU 适配器：{e}"))?;
 
@@ -198,6 +201,9 @@ fn run_canvas(app: AppHandle, rect: CanvasRect, running: Arc<Mutex<bool>>) -> Re
     let config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format,
+        // wgpu 30 新增字段（旧版没有）。Auto = 由呈现引擎按格式自行选择色彩空间，
+        // 这正是我们要的（不干预系统的色彩管理）。
+        color_space: wgpu::SurfaceColorSpace::Auto,
         width,
         height,
         present_mode: wgpu::PresentMode::Fifo,
@@ -279,10 +285,18 @@ fn run_canvas(app: AppHandle, rect: CanvasRect, running: Arc<Mutex<bool>>) -> Re
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                // wgpu 30 新增字段（旧版没有）。None = 不用 multiview，
+                // 这是单目标渲染的正确取值。
+                multiview_mask: None,
             });
         }
         queue.submit(std::iter::once(encoder.finish()));
-        frame.present();
+        // ⚠️ wgpu 30 移除了 `SurfaceTexture::present()`：
+        // 现在**呈现发生在 SurfaceTexture 被 drop 时**（见 wgpu 的 surface_texture.rs：
+        // `impl Drop for SurfaceTexture` 里会 texture_present 或 texture_discard）。
+        // 因此这里显式 drop 是必要的 —— 如果不 drop（例如把它留在作用域里循环复用），
+        // 那一帧永远不会被呈现，画面会停在第一帧。
+        drop(frame);
 
         // 约 60fps。后续接入真实画布内容时再改成按需重绘。
         std::thread::sleep(std::time::Duration::from_millis(16));

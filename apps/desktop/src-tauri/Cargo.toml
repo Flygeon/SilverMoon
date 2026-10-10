@@ -22,7 +22,17 @@ tauri-build = { version = "2", features = [] }
 # 是必需的（托盘、托盘图标解码、asset:// 本地文件代理）。
 # devtools 只在 debug 构建里生效，保留它以便开发期打开开发者工具。
 # ---------------------------------------------------------------------------
-tauri = { version = "2", features = ["tray-icon", "image-png", "devtools", "protocol-asset"] }
+# ⚠️ unstable 是**必需的**，不是可选项：
+#   `tauri::window::WindowBuilder` 与 `Manager::get_window` 都被
+#   `unstable_struct!` 宏门控 —— 不开这个 feature 时它们是 `pub(crate)`，
+#   外部 crate 根本用不了（CI 实测报 `struct WindowBuilder is private`）。
+#
+# 它只是一个**可见性门控**（feature 体为空，见 tauri/Cargo.toml 的 `unstable = []`），
+# 不要求 nightly 工具链，也不改变任何运行时行为。
+#
+# 为什么需要它：GPU 画布（gpu_canvas.rs）要建一个**不带 webview 的原生窗口**，
+# 那是唯一能承载 wgpu 输出的载体（WebView 子窗口会盖住父窗口的绘制）。
+tauri = { version = "2", features = ["tray-icon", "image-png", "devtools", "protocol-asset", "unstable"] }
 
 # Tauri 2 官方插件。这些能力在 Electron 版里由主进程手写实现，换回 Tauri 后
 # 直接交给插件（渲染进程侧的调用点见 src/ipc/ 的相应模块）：
