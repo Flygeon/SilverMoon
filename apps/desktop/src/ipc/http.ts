@@ -64,7 +64,7 @@ export async function fetch(
     return globalThis.fetch(input, init);
   }
 
-  const patched = withTimeout(init);
+  const patched = withTimeout(suppressOrigin(init));
   try {
     const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
     const response = await tauriFetch(url, patched);
@@ -72,6 +72,43 @@ export async function fetch(
   } finally {
     clearTimer(patched);
   }
+}
+
+/**
+ * 显式把 `Origin` 置空，让插件把它**移除**。
+ *
+ * ## 为什么必须这么做（实测踩出来的）
+ *
+ * `tauri-plugin-http` 会**自动注入** `Origin`，值是 webview 的来源：
+ * 本应用是 `tauri://localhost`（打包后 `app://...`），开发态是
+ * `http://localhost:1420`。见插件源码 commands.rs:350-361 —— 无条件注入。
+ *
+ * 而 `Origin` **不在**插件的禁头表里，所以光开 `unsafe-headers` 也拦不住它。
+ * 很多第三方接口对 `Origin` 做校验，看到一个不认识的来源直接拒绝。实测 B 站：
+ *
+ *   UA 单独                      → 200 ✓
+ *   UA + Origin=tauri://localhost → 403（返回风控 HTML）
+ *   UA + Origin=null              → 403
+ *   UA + Origin=http://localhost:1420 → 403
+ *
+ * 症状就是「B 站扫码 403、WBI 密钥取不到」。
+ *
+ * ## 为什么是置空而不是删掉
+ *
+ * 插件只在 `unsafe-headers` 开启、且**显式传了空串**时才移除该头
+ * （commands.rs:363-369，注释原文「Some services do not like Origin header」）。
+ * 直接 `delete` 是没用的 —— 那只会让插件重新注入。
+ *
+ * ## 对需要 Origin 的接口怎么办
+ *
+ * 调用方若**显式**传了 `Origin`（如 B 站个人空间接口要
+ * `Origin: https://space.bilibili.com`），这里不覆盖它 —— 那时插件也不会再注入。
+ */
+function suppressOrigin(init: RequestInit): RequestInit {
+  const headers = new Headers(init.headers ?? {});
+  if (headers.has("origin")) return init;
+  headers.set("Origin", "");
+  return { ...init, headers };
 }
 
 /**

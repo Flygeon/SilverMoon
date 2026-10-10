@@ -61,12 +61,24 @@ const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
+/**
+ * 递归收集参与扫描的源文件。
+ *
+ * ⚠️ **必须排除测试文件**：测试里会写 `{ Cookie: "SESSDATA=..." }` 这类字符串，
+ * 而 `cookie` 恰好也是合法的 Material Symbols 图标名 —— 收进来会让字体多烘一个
+ * 永远用不到的图标，更糟的是 `--check` 会误报「不同步」，逼人重跑脚本。
+ * （真实踩过：加了一条 HTTP 头断言，CI 的图标校验就红了。）
+ */
 async function walk(dir) {
   const out = [];
   for (const e of await readdir(dir, { withFileTypes: true })) {
     const p = join(dir, e.name);
-    if (e.isDirectory()) out.push(...(await walk(p)));
-    else if (/\.(vue|ts)$/.test(e.name)) out.push(p);
+    if (e.isDirectory()) {
+      if (e.name === "__tests__" || e.name === "node_modules") continue;
+      out.push(...(await walk(p)));
+    } else if (/\.(vue|ts)$/.test(e.name) && !/\.test\.ts$/.test(e.name)) {
+      out.push(p);
+    }
   }
   return out;
 }

@@ -35,7 +35,14 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-store = "2"
 tauri-plugin-opener = "2"
-tauri-plugin-http = "2"
+# ⚠️ 必须启用 unsafe-headers，否则**所有 Cookie / Referer 会被静默丢弃**：
+# 插件默认按 fetch 规范过滤「禁止的头」（is_unsafe_header 里含 COOKIE / REFERER /
+# ORIGIN / HOST 等），且**只在 debug 构建打警告，release 下完全无声**。
+# 桌面端不是浏览器，没有同源策略可言，这层过滤只会造成功能缺失：
+#   - B 站：Referer 被丢 → 风控 403；Cookie 被丢 → nav 拿不到 wbi_img → WBI 签名失败
+#   - 网易云 / 酷狗 / Pixiv 等同样依赖 Cookie 的接口全部受影响
+# Electron 版用 undici，本来就没有这层过滤，行为以此为准。
+tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }
 # 全局热键：扩展框架注册热键（src/commands/extension.rs 唯一调用点）
 tauri-plugin-global-shortcut = "2"
 # 自动更新：替代 electron-updater，保留「只提示、不自动重启」的产品行为

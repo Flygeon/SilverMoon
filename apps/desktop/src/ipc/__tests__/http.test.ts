@@ -140,3 +140,58 @@ describe("宿主 fetch", () => {
     expect(calls[0].init.signal).toBeInstanceOf(AbortSignal);
   });
 });
+
+/**
+ * \`Origin\` 抑制的回归测试。
+ *
+ * ## 这个坑长什么样
+ *
+ * \`tauri-plugin-http\` 会**自动注入** \`Origin\`，值为 webview 来源
+ * （本应用是 \`tauri://localhost\`）。而很多第三方接口对 \`Origin\` 做校验，
+ * 看到不认识的来源直接拒绝。实测 B 站：
+ *
+ *   UA 单独                          → 200
+ *   UA + Origin=tauri://localhost    → 403（返回风控 HTML）
+ *
+ * 症状是「B 站扫码 403、WBI 密钥取不到」，而**报错信息完全指不到根因**。
+ * 且 \`Origin\` 不在插件的禁头表里，所以开 \`unsafe-headers\` 也拦不住它 ——
+ * 只能由我们显式传空串，插件才肯移除（commands.rs:363-369）。
+ *
+ * 这里钉住三件事，任何一条被改掉都会让 B 站再次 403：
+ * 1. 调用方没传 Origin 时，我们补一个空串（插件据此移除该头）；
+ * 2. 调用方**显式**传了 Origin 时，绝不覆盖（B 站个人空间接口依赖它）；
+ * 3. 原有的 headers 不被丢弃。
+ */
+describe("Origin 抑制（B 站 403 的根因）", () => {
+  it("调用方没传 Origin 时，补空串交给插件移除", async () => {
+    stubTauri();
+    responder = async () => responseWith(JSON_BODY);
+    await hostFetch("https://api.bilibili.com/x/web-interface/nav", {
+      headers: { "User-Agent": "UA" },
+    });
+    const sent = new Headers(calls[0].init.headers);
+    expect(sent.get("origin")).toBe("");
+    expect(sent.get("user-agent")).toBe("UA");
+  });
+
+  it("调用方显式传了 Origin 时绝不覆盖（个人空间接口靠它过白名单）", async () => {
+    stubTauri();
+    responder = async () => responseWith(JSON_BODY);
+    await hostFetch("https://api.bilibili.com/x/space/wbi/acc/info", {
+      headers: { Origin: "https://space.bilibili.com" },
+    });
+    const sent = new Headers(calls[0].init.headers);
+    expect(sent.get("origin")).toBe("https://space.bilibili.com");
+  });
+
+  it("Cookie 等自定义头不被丢弃（unsafe-headers 生效的前提）", async () => {
+    stubTauri();
+    responder = async () => responseWith(JSON_BODY);
+    await hostFetch("https://api.bilibili.com/x/web-interface/nav", {
+      headers: { Cookie: "SESSDATA=abc", Referer: "https://www.bilibili.com" },
+    });
+    const sent = new Headers(calls[0].init.headers);
+    expect(sent.get("cookie")).toBe("SESSDATA=abc");
+    expect(sent.get("referer")).toBe("https://www.bilibili.com");
+  });
+});
