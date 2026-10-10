@@ -111,6 +111,11 @@ jobs:
       # ——否则表现为「界面上某个图标空白」，很难查。
       - name: Icon font in sync with source
         run: npm run check:icon-font
+      # capability 的 URL pattern：https://** 的 port 是**空值**（不是通配），
+      # 会拒绝一切带端口的地址 —— 而 B 站 PCDN 取流正是 :8082。被拒后视频播不了，
+      # 报错只到「url not allowed」，很难定位。这条离线校验把它钉住。
+      - name: Capability HTTP scopes allow ports
+        run: npm run verify:capability-scopes
 
       # Rust 纯逻辑的真实执行断言（不依赖链接器）：封面 Referer 伪装 / 扩展名推断 / 路径规范化
       - name: Rust pure-logic tests (executed via wasm)
