@@ -135,8 +135,23 @@ async function handleInvoke(ext: string, method: string, payload: unknown): Prom
       await setExtSettings(ext, values);
       return { ok: true };
     }
-    case "themes:list":
-      return { themes: await capabilities.extThemes() };
+    case "themes:list": {
+      const all = await capabilities.extThemes();
+      // 修：SDK 文档（指南 8.x）写明 themes:list 支持 extId，但这里一直忽略它。
+      // 于是「按 extId 过滤出自己的」永远返回空 —— 皮肤管理器会显示「共返回 0 套」，
+      // 而实际装了两套皮肤，看着像宿主没读到扩展的 themes。
+      const want = typeof args.extId === "string" && args.extId ? args.extId : null;
+      const themes = want ? all.filter((t) => t.extId === want) : all;
+      return { themes };
+    }
+    // 宿主保留方法：让扩展能主动打开**另一个扩展**的窗口。
+    // 典型场景是「管理器 / 启动器」类扩展（比如皮肤管理器的「注册界面」思路）。
+    case "ui:openWindow": {
+      const target = String(args.extId ?? "");
+      if (!target) throw new Error("ui:openWindow 缺少 extId");
+      await capabilities.extOpenWindow(target);
+      return { ok: true };
+    }
     case "themes:apply": {
       // 皮肤的应用仍由前端皮肤引擎完成（CSS 变量/背景/图标都在渲染层）
       const themeId = String(args.themeId ?? "");

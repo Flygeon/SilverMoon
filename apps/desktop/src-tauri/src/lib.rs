@@ -515,6 +515,7 @@ pub fn run() {
             commands::extension::ext_list,
             commands::extension::ext_get,
             commands::extension::ext_current_nav,
+            commands::extension::ext_ui_surfaces,
             commands::extension::ext_open_window,
             commands::extension::ext_install,
             commands::extension::ext_uninstall,

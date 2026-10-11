@@ -8,7 +8,7 @@ import { useAudioEffectsStore } from "@/stores/audioEffects";
 import { useLibraryStore } from "@/stores/library";
 import { useMusicTagsStore } from "@/stores/musicTags";
 import { useDesktopStore } from "@/stores/desktop";
-import { isDesktop } from "@/capabilities";
+import { capabilities, isDesktop } from "@/capabilities";
 import MiniPlayer from "@/components/MiniPlayer.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import TextPrompt from "@/components/TextPrompt.vue";
@@ -19,6 +19,8 @@ import { useDesktopChrome } from "@/composables/useDesktopChrome";
 import { activeSkinDoc, skinBgActive, skinSafeMode } from "@/utils/skinRuntime";
 import { markBoot } from "@/utils/bootTiming";
 import { armAppReadyFallback, signalAppReady } from "@/utils/appReady";
+import ExtensionEmbed from "@/components/ExtensionEmbed.vue";
+import type { ExtUiSurface } from "@shared/types";
 import { translate } from "@shared/i18n";
 import { listen, type Event, type UnlistenFn } from "@/ipc/events";
 import { onDragDropEvent, type DragDropEvent } from "@/ipc/dragdrop";
@@ -122,10 +124,47 @@ const navItems = computed(() => [
   { key: "books", path: "/books", icon: "menu_book", type: "book" },
   { key: "treasure", path: "/treasure", icon: "inventory_2", type: null },
 ]);
+
+// ---- 扩展注入到主界面的 UI（contributes.nav / contributes.ui）----
+//
+// 扩展通过 manifest 声明注入点，主窗口在这里把它们渲染出来 ——
+// 这是「扩展改主界面」的正规入口，不必另弹一个窗口。
+// 加载失败就当作没有注入：扩展出问题不该让主界面开不出来。
+const extSurfaces = ref<ExtUiSurface[]>([]);
+
+/** 导航栏里的扩展项（合并进主界面导航，位置与内置项一致） */
+const extNavItems = computed(() =>
+  extSurfaces.value
+    .filter((s) => s.surface === "nav")
+    .map((s) => ({
+      key: `ext:${s.extId}:${s.id}`,
+      path: `/extension-page/${encodeURIComponent(s.extId)}/${encodeURIComponent(s.route)}`,
+      icon: s.icon || "extension",
+      label: s.title,
+      ext: true,
+    })),
+);
+
+/** 内容区里的扩展嵌入块：按当前路由筛选 */
+const extMainSurfaces = computed(() => {
+  const here = route.path;
+  return extSurfaces.value.filter((s) => {
+    if (s.surface !== "main") return false;
+    const only = s.showOnRoutes;
+    if (!only || only.length === 0) return true;
+    return only.some((p) => here === p || here.startsWith(p.endsWith("/") ? p : p + "/"));
+  });
+});
 const bottomItems = [
   // 收藏 / 历史 / 回收站 / 扩展 已统一收纳进「百宝箱」，不再单独占底部导航
   { key: "settings", path: "/settings", icon: "settings", label: "" },
 ];
+
+/** 拉取扩展注入点。安装/卸载/启用扩展后由宿主广播 `ext:ui-changed` 触发刷新。 */
+async function refreshExtSurfaces() {
+  if (!isDesktop) return;
+  extSurfaces.value = await capabilities.extUiSurfaces().catch(() => []);
+}
 
 function t(key: string) {
   return translate(settings.lang, key);
@@ -170,6 +209,9 @@ const isExtensionWindow = (() => {
 })();
 
 function isActive(path: string) {
+  // 扩展页面路由带参数（/extension-page/<extId>/<route>），导航项里存的是
+  // 展开后的完整路径，所以这里用前缀匹配，切到别的扩展页时不会残留高亮。
+  if (path.startsWith("/extension-page/")) return route.path.startsWith(path);
   return route.path === path;
 }
 
@@ -263,6 +305,19 @@ onBeforeUnmount(() => {
   unDragDrop = null;
 });
 
+// ---- 扩展主界面注入点 ----
+// 首次加载 + 订阅宿主的变更广播（装/卸/启用扩展后刷新，不必重启应用）。
+let unExtUi: (() => void) | null = null;
+onMounted(async () => {
+  await refreshExtSurfaces();
+  if (!isDesktop) return;
+  unExtUi = await capabilities.onExtUiChanged(() => void refreshExtSurfaces());
+});
+onBeforeUnmount(() => {
+  unExtUi?.();
+  unExtUi = null;
+});
+
 // ---- 滚动位置记忆 ----
 // keep-alive 缓存组件时，离开路由后 main-content 内容高度塌缩，浏览器会把
 // scrollTop 钳制回顶部，返回时位置已丢失。这里在切换前记录、返回后恢复。
@@ -349,6 +404,24 @@ router.afterEach((to) => {
             </span>
             <span class="label">{{ t("nav." + item.key) }}</span>
           </button>
+
+          <!-- 扩展注入的导航项（contributes.nav / contributes.ui surface="nav"）：
+               与内置项同一套样式，点击跳到 /extension-page/<extId>/<route>。 -->
+          <button
+            v-for="item in extNavItems"
+            :key="item.key"
+            class="nav-item"
+            :class="{ active: isActive(item.path) }"
+            :title="item.label"
+            @click="router.push(item.path)"
+          >
+            <span class="indicator">
+              <span class="material-symbols-outlined" :class="{ filled: isActive(item.path) }">{{
+                item.icon
+              }}</span>
+            </span>
+            <span class="label">{{ item.label }}</span>
+          </button>
         </div>
 
         <div class="nav-group bottom">
@@ -372,6 +445,13 @@ router.afterEach((to) => {
       <!-- 内容区 -->
       <div class="content" data-lm-region="content">
         <main ref="mainEl" class="main-content">
+          <!-- 扩展注入到内容区顶部的块（contributes.ui surface="main" position="top"） -->
+          <ExtensionEmbed
+            v-for="s in extMainSurfaces.filter((x) => x.position !== 'bottom')"
+            :key="`${s.extId}:${s.id}`"
+            :surface="s"
+          />
+
           <router-view v-slot="{ Component }">
             <transition :name="isPlayerPage ? 'player' : 'page'" mode="out-in">
               <!--
@@ -408,6 +488,13 @@ router.afterEach((to) => {
               </keep-alive>
             </transition>
           </router-view>
+
+          <!-- 扩展注入到内容区底部的块（position="bottom"） -->
+          <ExtensionEmbed
+            v-for="s in extMainSurfaces.filter((x) => x.position === 'bottom')"
+            :key="`${s.extId}:${s.id}`"
+            :surface="s"
+          />
         </main>
       </div>
     </div>
@@ -660,6 +747,16 @@ router.afterEach((to) => {
 }
 .has-player .main-content {
   padding-bottom: calc(var(--lm-miniplayer-height) + var(--lm-content-pad));
+}
+
+/* 扩展宿主页（专用窗口 label="extension"）：
+   它是**另开的那个窗口**里的页面，主界面的内边距在这里没有意义 ——
+   留着会在扩展 UI 周围套一圈白边（截图里那圈很明显）。
+   滚动条同理：扩展自带 UI 自己管滚动，外边再套一层会出现双滚动条。 */
+.extension-host-page .main-content {
+  padding: 0;
+  overflow: hidden;
+  scrollbar-gutter: auto;
 }
 
 /* 路由切换（屏幕过渡）：位移走带轻微回弹的空间弹簧，透明度走不回弹的

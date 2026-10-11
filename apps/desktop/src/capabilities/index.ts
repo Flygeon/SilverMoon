@@ -185,6 +185,7 @@ import type {
   ExtSource,
   ExtThemeInfo,
   ExtThemePayload,
+  ExtUiSurface,
   OsuSearchResult,
   OsuImportResult,
   OsuProgress,
@@ -1412,6 +1413,10 @@ export const capabilities = {
   extOpen(path: string, ts?: number, reveal?: boolean): Promise<void> {
     return safeInvoke("ext_open", { path, ts: ts ?? null, reveal: !!reveal });
   },
+  /** 主界面注入点（nav / main），供主窗口渲染扩展的嵌入 UI */
+  extUiSurfaces(): Promise<ExtUiSurface[]> {
+    return safeInvoke("ext_ui_surfaces");
+  },
   /** 列出所有已启用扩展声明的皮肤（皮肤功能已改由扩展承载） */
   extThemes(): Promise<ExtThemeInfo[]> {
     return safeInvoke("ext_themes");
@@ -1428,6 +1433,16 @@ export const capabilities = {
   /** 读取一款扩展皮肤：skin.json 原文 + 主题目录文件清单 */
   extThemeLoad(extId: string, themeId: string): Promise<ExtThemePayload> {
     return safeInvoke("ext_theme_load", { extId, themeId });
+  },
+  /**
+   * 订阅「扩展主界面注入点发生变化」。
+   *
+   * Rust 在装 / 卸 / 启用 / 禁用扩展后 emit `ext:ui-changed`，主窗口据此刷新
+   * `ext_ui_surfaces` —— 不必重启应用才能看到新扩展的导航项。
+   */
+  async onExtUiChanged(handler: () => void): Promise<UnlistenFn> {
+    if (!isDesktop) return () => {};
+    return listen("ext:ui-changed", () => handler());
   },
   /** 订阅扩展窗口导航事件（Rust 端 emit_to("extension", "ext:navigate")） */
   async onExtNavigate(

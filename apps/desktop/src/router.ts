@@ -23,6 +23,13 @@ const router = createRouter({
     { path: "/desktop-lyrics", component: () => import("@/views/DesktopLyrics.vue") },
     { path: "/extensions", component: () => import("@/views/ExtensionsView.vue") },
     { path: "/extension-host", component: () => import("@/views/ExtensionHost.vue") },
+    // 扩展页面：承载 contributes.nav / contributions.ui(surface="nav") 注入的导航项。
+    // 走主窗口内容区（而不是另开窗口），这样点导航项就像切页面一样自然。
+    {
+      path: "/extension-page/:extId/:route",
+      component: () => import("@/views/ExtensionPage.vue"),
+      props: true,
+    },
     // 独立绘画窗口（最大化窗口，见 utils/drawingWindow.ts）
     { path: "/drawing", component: () => import("@/views/DrawingWindow.vue") },
   ],

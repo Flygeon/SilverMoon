@@ -1269,6 +1269,27 @@ export interface ExtInfo {
   hasWindow: boolean;
 }
 
+/** 扩展往主界面注入的一块 UI（`ext_ui_surfaces` 的返回项） */
+export interface ExtUiSurface {
+  extId: string;
+  extName: string;
+  /** "nav" = 主界面导航栏一项；"main" = 内容区里的一块 */
+  surface: "nav" | "main";
+  id: string;
+  title: string;
+  /** Material Symbols 图标名（surface === "nav" 时用） */
+  icon?: string | null;
+  route: string;
+  /** "top" | "bottom" */
+  position: string;
+  /** 只在这些宿主路由上显示（仅 main；null = 所有页面） */
+  showOnRoutes?: string[] | null;
+  /** 内容高度 px（仅 main；扩展必须声明，否则 iframe 会是 0 高） */
+  height?: number | null;
+  /** 扩展目录内的相对路径，如 "web/dist/index.html" */
+  relIndex: string;
+}
+
 /** 扩展声明的一款皮肤（对应 Rust `ExtTheme`） */
 export interface ExtTheme {
   id: string;

@@ -710,6 +710,8 @@ export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return as(null);
     case "ext_open_window":
       throw new Error("浏览器预览不支持打开扩展窗口，请在桌面端测试");
+    case "ext_ui_surfaces":
+      return as([]);
     case "ext_themes":
       return as([]);
     case "ext_theme_load":

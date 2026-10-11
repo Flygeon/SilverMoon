@@ -94,12 +94,60 @@ pub struct ExtContributes {
     pub tray: Vec<ExtTrayItem>,
     #[serde(default)]
     pub settings: Option<ExtSettings>,
+    /// 导航栏注入（`contributes.nav[]`）。等价于 `ui[]` 里 `surface: "nav"` 的简写。
+    #[serde(default)]
+    pub nav: Vec<ExtNavEntry>,
+    /// 主界面注入（通用形式）。
+    #[serde(default)]
+    pub ui: Vec<ExtUiContribution>,
     /// 扩展自带的皮肤。
     ///
     /// 皮肤功能已**不再由设置页管理**：用户想装皮肤就装一个封装了皮肤的扩展，
     /// 由扩展声明并自带 skin.json。宿主只负责读取与校验（复用既有 skinSchema）。
     #[serde(default)]
     pub themes: Vec<ExtTheme>,
+}
+
+/// 扩展往**主界面**注入的一块 UI（对应 `contributes.ui[]`）。
+///
+/// 与 `windows` 的区别：`windows` 是另开一个扩展自己的窗口（按热键才弹出来），
+/// 这个是把扩展的内容**嵌进主窗口**——导航栏一项、或内容区的一块。
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtUiContribution {
+    /// `"nav"` | `"main"`
+    pub surface: String,
+    pub id: String,
+    /// 显示名（`main` 也可用它当卡片标题）
+    pub title: String,
+    /// Material Symbols 图标名（`surface == "nav"` 时用）
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// 加载扩展前端的哪条路由；缺省用 `web.defaultRoute`
+    #[serde(default)]
+    pub route: Option<String>,
+    /// 插入位置：`"top"` | `"bottom"`，缺省 `"top"`（`main` 用于决定排在内容区上方还是下方）
+    #[serde(default)]
+    pub position: Option<String>,
+    /// 只在这条宿主路由上显示（`main` 用；缺省 = 所有页面都显示）
+    #[serde(default)]
+    pub show_on_routes: Option<Vec<String>>,
+    /// 内容高度，px。**必需**：iframe 无法按内容自适应，不声明就会是 0 高（不可见）。
+    #[serde(default)]
+    pub height: Option<u32>,
+}
+
+/// 导航栏注入项（`contributes.nav[]`），`contributes.ui` 的简写形式。
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtNavEntry {
+    pub id: String,
+    pub title: String,
+    /// Material Symbols 图标名
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// 加载扩展前端的哪条路由
+    pub route: String,
 }
 
 /// 扩展声明的一款皮肤（对应 `contributes.themes[]`）。
@@ -171,6 +219,34 @@ pub const EXT_API_VERSION: &str = "2.0.0";
 pub const PERM_INVOKE: &str = "ext:invoke";
 /// 由宿主代执行"打开 / 定位文件"所需权限
 pub const PERM_OPEN: &str = "opener:open-path";
+
+/// 把扩展声明的主界面注入点汇总成一张表。
+///
+/// 两个来源合流：
+/// - `contributes.nav[]`（早期只支持导航，字段少，保留兼容）
+/// - `contributes.ui[]`（通用形式，`surface` 区分 nav / main）
+///
+/// 内部只认后者，前端也只认后者 —— 免得两条路各自演化出漂移。
+fn ui_contributions(manifest: &ExtManifest) -> Vec<ExtUiContribution> {
+    let Some(c) = &manifest.contributes else {
+        return Vec::new();
+    };
+    let mut out: Vec<ExtUiContribution> = Vec::new();
+    for n in &c.nav {
+        out.push(ExtUiContribution {
+            surface: "nav".into(),
+            id: n.id.clone(),
+            title: n.title.clone(),
+            icon: n.icon.clone(),
+            route: Some(n.route.clone()),
+            position: Some("top".into()),
+            show_on_routes: None,
+            height: None,
+        });
+    }
+    out.extend(c.ui.iter().cloned());
+    out
+}
 
 /// 校验 manifest.minHostVersion 是否被当前扩展 API 满足。
 /// 缺省 = 不限；显式写 `*` 视为无效（照 VS Code 的做法，逼作者给真实区间）。
@@ -409,6 +485,14 @@ pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
     }
     register_hotkeys(app);
     Ok(())
+}
+
+/// 广播「扩展主界面注入点变了」，让主窗口刷新 `ext_ui_surfaces`。
+///
+/// 装 / 卸 / 启用 / 禁用扩展后都要发一次 —— 否则用户装完扩展得重启应用
+/// 才能看到它注入的导航项。
+fn notify_ui_changed(app: &tauri::AppHandle) {
+    let _ = app.emit("ext:ui-changed", ());
 }
 
 fn load_extensions(app: &tauri::AppHandle) -> Result<(), String> {
@@ -742,6 +826,25 @@ pub async fn ext_install(app: tauri::AppHandle, source: ExtSource) -> Result<Ext
             return Err(format!("扩展要求更高的扩展 API 版本：{reason}"));
         }
 
+        // 主界面注入点要能在跑起来之前就拦掉写错的：surface 只有两种取值，
+        // main 必须给高度（iframe 无法按内容自适应，不给就是 0 高不可见）。
+        for ui in ui_contributions(&manifest) {
+            if ui.surface != "nav" && ui.surface != "main" {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(format!(
+                    "contributes.ui 的 surface 只能是 nav 或 main，收到：{}",
+                    ui.surface
+                ));
+            }
+            if ui.surface == "main" && ui.height.unwrap_or(0) == 0 {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(format!(
+                    "contributes.ui「{}」缺少 height —— iframe 无法按内容自适应，不声明就是 0 高",
+                    ui.id
+                ));
+            }
+        }
+
         // ---- 事务化换入 ----
         //
         // 旧实现是「先删旧目录再 rename」，rename 失败或新包有问题就直接丢数据。
@@ -768,7 +871,10 @@ pub async fn ext_install(app: tauri::AppHandle, source: ExtSource) -> Result<Ext
         let state = app.state::<ExtState>();
         let map = state.map.lock().unwrap();
         let ext = map.get(&manifest.id).ok_or("安装后未找到扩展")?;
-        Ok(ext.info())
+        let info = ext.info();
+        drop(map); // 先放锁再广播：emit 会回调进前端，别把锁带出去
+        notify_ui_changed(&app);
+        Ok(info)
     })
     .await
     .map_err(|e| format!("安装扩展失败：{e}"))
@@ -787,6 +893,7 @@ pub async fn ext_uninstall(app: tauri::AppHandle, id: String) -> Result<(), Stri
         }
         let state = app.state::<ExtState>();
         state.map.lock().unwrap().remove(&id);
+        notify_ui_changed(&app);
         Ok(())
     })
     .await
@@ -818,6 +925,7 @@ pub async fn ext_set_enabled(
         } else {
             stop_engine(&app, &id);
         }
+        notify_ui_changed(&app);
         Ok(())
     })
     .await
@@ -965,6 +1073,10 @@ pub fn open_extension_window(
     .resizable(true)
     .decorations(decorations)
     .always_on_top(always_on_top)
+    // 窗口底色必须与扩展 UI 的底色一致（ExtensionHost.vue 的 .ext-host 是 #1b1d22）。
+    // 默认是**白色**：无边框 + 圆角或加载间隙时四角会露出白边，
+    // 截图里那一圈显眼的白就是这么来的。
+    .background_color(tauri::window::Color(0x1b, 0x1d, 0x22, 0xff))
     .build()?;
     let _ = app.emit_to(
         "extension",
@@ -1110,6 +1222,57 @@ fn find_theme(
         .cloned()
         .ok_or_else(|| format!("扩展 {ext_id} 未声明皮肤 {theme_id}"))?;
     Ok((ext.dir.clone(), theme))
+}
+
+/// 主界面注入点（`nav` / `main`），供主窗口渲染。
+///
+/// 只返回**已启用且与当前扩展 API 兼容**的扩展；每项带 `extId` 与 `absRecordPath`，
+/// 前端据此直接拼 `ext:` 协议的 URL（不自己拼 app_data 目录，见 host.rs 的约定）。
+#[tauri::command]
+pub fn ext_ui_surfaces(app: tauri::AppHandle) -> Vec<Value> {
+    let state = app.state::<ExtState>();
+    let map = state.map.lock().unwrap();
+    let mut out = Vec::new();
+    for e in map.values() {
+        if !e.enabled || e.incompatible.is_some() {
+            continue;
+        }
+        let dist = e
+            .manifest
+            .web
+            .as_ref()
+            .and_then(|w| w.dist.clone())
+            .unwrap_or_else(|| "web/dist".to_string());
+        for ui in ui_contributions(&e.manifest) {
+            let route = ui
+                .route
+                .clone()
+                .or_else(|| {
+                    e.manifest
+                        .web
+                        .as_ref()
+                        .and_then(|w| w.default_route.clone())
+                })
+                .unwrap_or_default();
+            out.push(json!({
+                "extId": e.manifest.id,
+                "extName": e.manifest.name,
+                "surface": ui.surface,
+                "id": ui.id,
+                "title": ui.title,
+                "icon": ui.icon,
+                "route": route,
+                "position": ui.position.unwrap_or_else(|| "top".into()),
+                "showOnRoutes": ui.show_on_routes,
+                "height": ui.height,
+                // 记录根目录下的相对路径（如 "ext/web/dist/index.html"）。
+                // 前端用 convertFileSrc(path, "ext") 拼成 ext: URL —— 绝对路径由那边
+                // 的 appDataDir 拼，这里只给相对段，避免两侧各算一次。
+                "relIndex": format!("{}/index.html", dist.trim_matches('/')),
+            }));
+        }
+    }
+    out
 }
 
 /// 列出所有**已启用**扩展声明为皮肤的条目。

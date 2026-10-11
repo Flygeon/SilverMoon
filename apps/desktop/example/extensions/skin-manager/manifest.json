@@ -45,6 +45,14 @@
         "name": "樱",
         "path": "themes/sakura/skin.json"
       }
+    ],
+    "nav": [
+      {
+        "id": "themes",
+        "title": "皮肤",
+        "icon": "palette",
+        "route": "themes"
+      }
     ]
   },
   "permissions": [

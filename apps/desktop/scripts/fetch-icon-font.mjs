@@ -50,6 +50,17 @@ import { dirname, join, relative } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(ROOT, "src");
+/**
+ * 示例扩展的 manifest 也要扫。
+ *
+ * `contributes.nav[].icon` / `contributes.ui[].icon` 声明的是 Material Symbols 图标名，
+ * 它们会和主界面自己的图标渲染在一起 —— 但扩展的 manifest 在 `example/` 下，
+ * 原来只扫 `src/` 必然漏掉，表现为**导航栏那一项没有图标**（或显示成方框）。
+ *
+ * 只扫 manifest.json，**不扫扩展的 web UI**：扩展 UI 是独立文档，它得自己引字体，
+ * 不能指望主程序的子集去满足它。
+ */
+const EXAMPLE_EXT_DIR = join(ROOT, "example", "extensions");
 const DATA = join(ROOT, "scripts", "data", "material-symbols-codepoints.txt");
 const OUT_FONT = join(SRC, "assets", "fonts", "material-symbols-rounded.woff2");
 const OUT_MANIFEST = join(SRC, "assets", "fonts", "material-symbols-icons.json");
@@ -83,6 +94,36 @@ async function walk(dir) {
   return out;
 }
 
+/**
+ * 取示例扩展 manifest 里**声明用到的图标名**。
+ *
+ * 只认这两个位置（与 Rust 侧 ExtNavEntry / ExtUiContribution 的 `icon` 字段对应）：
+ *   contributes.nav[].icon
+ *   contributes.ui[].icon
+ */
+async function collectExampleManifestIcons() {
+  const out = [];
+  let dirs = [];
+  try {
+    dirs = await readdir(EXAMPLE_EXT_DIR, { withFileTypes: true });
+  } catch {
+    return out; // example/extensions 不存在（精简检出）——不是错误
+  }
+  for (const e of dirs) {
+    if (!e.isDirectory()) continue;
+    try {
+      const text = await readFile(join(EXAMPLE_EXT_DIR, e.name, "manifest.json"), "utf8");
+      const m = JSON.parse(text);
+      const c = m.contributes || {};
+      for (const n of c.nav || []) if (n && n.icon) out.push(n.icon);
+      for (const u of c.ui || []) if (u && u.icon) out.push(u.icon);
+    } catch {
+      // manifest 缺失或不是合法 JSON —— 交给扩展安装时的校验去报，这里跳过
+    }
+  }
+  return out;
+}
+
 /** 官方图标名集合（忽略 # 注释行）。 */
 async function loadOfficial() {
   const text = await readFile(DATA, "utf8");
@@ -110,6 +151,15 @@ async function collectIcons() {
     for (const m of text.matchAll(reSpanText)) {
       if (official.has(m[1])) found.add(m[1]);
     }
+  }
+  // 扩展 manifest 里声明的图标（见 EXAMPLE_EXT_DIR 的注释）。
+  //
+  // ⚠️ 这里**必须解析 JSON 后只取 icon 字段**，不能像上面那样对全文跑「带引号的
+  // 字面量」正则 —— manifest 是 JSON，键名也是带引号的字符串，而
+  // `license` / `route` / `schema` 恰好都是合法的 Material Symbols 图标名，
+  // 一跑正则就会把它们收进来，白烘三个永远用不到的图标，还会让 --check 误报。
+  for (const icon of await collectExampleManifestIcons()) {
+    if (official.has(icon)) found.add(icon);
   }
   return [...found].sort();
 }
