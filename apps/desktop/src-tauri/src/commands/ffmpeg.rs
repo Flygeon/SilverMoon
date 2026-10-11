@@ -307,18 +307,28 @@ pub fn extract_frame(path: &str, size: u32, duration_ms: Option<i64>) -> Option<
 // ---- 命令 ----
 
 /// 查询 ffmpeg 可用状态（设置页展示用）
+///
+/// ⚠️ `async` + `spawn_blocking`：`resolve()` 要 spawn 子进程逐项探测
+/// （实测单次约 183ms，见 doc/IPC-PERFORMANCE.md）。
+/// 同步命令跑在主线程事件循环里，会让界面卡住这么久。
 #[tauri::command]
-pub fn ffmpeg_status() -> FfmpegStatus {
-    resolve()
+pub async fn ffmpeg_status() -> FfmpegStatus {
+    tokio::task::spawn_blocking(resolve)
+        .await
+        .unwrap_or_default()
 }
 
 /// 设置用户手动指定的 ffmpeg 目录；传 None/空串则清除，回落到 PATH 探测。
+///
+/// 同 `ffmpeg_status`：探测要 spawn 子进程，必须挪出主线程。
 #[tauri::command]
-pub fn ffmpeg_set_path(dir: Option<String>) -> FfmpegStatus {
+pub async fn ffmpeg_set_path(dir: Option<String>) -> FfmpegStatus {
     if let Ok(mut guard) = OVERRIDE_DIR.lock() {
         *guard = dir.filter(|d| !d.trim().is_empty());
     }
-    resolve()
+    tokio::task::spawn_blocking(resolve)
+        .await
+        .unwrap_or_default()
 }
 
 /// 官方下载页（前端「获取 FFmpeg」按钮用）

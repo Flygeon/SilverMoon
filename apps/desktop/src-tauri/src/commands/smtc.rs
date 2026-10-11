@@ -39,7 +39,7 @@ pub fn setup(app: &tauri::AppHandle) {
 /// - 在线歌曲：传 cover_url（http(s) 封面直连）。
 #[tauri::command]
 #[allow(unused_variables)]
-pub fn smtc_set_media(
+pub async fn smtc_set_media(
     title: String,
     artist: Option<String>,
     album: Option<String>,
@@ -47,15 +47,38 @@ pub fn smtc_set_media(
     file_path: String,
     cover_url: Option<String>,
 ) -> Result<(), String> {
+    // ⚠️ async + spawn_blocking：`set_media` 内部要提取并归一化**内嵌封面**
+    // （文件 IO + 图片解码，见 `cover_from_file`），那是实打实的阻塞工作。
+    // 同步命令跑在主线程上，换歌时会连带冻住界面。
     #[cfg(windows)]
-    imp::set_media(&title, artist, album, duration_ms, &file_path, cover_url);
+    tokio::task::spawn_blocking(move || {
+        imp::set_media(&title, artist, album, duration_ms, &file_path, cover_url);
+    })
+    .await
+    .map_err(|e| format!("SMTC 元数据任务异常退出：{e}"))?;
     Ok(())
 }
 
 /// 推入播放状态 + 进度（播放/暂停/拖动时调用，也可由前端节流周期调用）。
 #[tauri::command]
 #[allow(unused_variables)]
-pub fn smtc_set_playback(playing: bool, position_ms: u64, duration_ms: u64) -> Result<(), String> {
+pub async fn smtc_set_playback(
+    playing: bool,
+    position_ms: u64,
+    duration_ms: u64,
+) -> Result<(), String> {
+    // ⚠️ 这里声明 `async`（哪怕函数体里没有 await）**是必要的**，不是笔误。
+    //
+    // 同步 `#[tauri::command]` 跑在主线程事件循环里，而这个命令在播放期间
+    // 每 500ms 被前端调一次。实测（`window.__silvermoonIpcStats()`）：
+    //
+    //     176 次调用 / 27368ms / 占全部 IPC 耗时的 48.8% / P95 1246ms / 峰值 3181ms
+    //
+    // 但那**不是**它自己慢 —— `smtc-tokio` 内部只是往专用 STA 线程
+    // `PostThreadMessageW` 投递一个命令（微秒级，见其 `wake_sta_thread`）。
+    // 155ms 的均值全是「等主线程腾出手」的**排队时间**。
+    //
+    // 改成 async 后它跑在异步运行时上，主线程回到事件循环，排队随之消失。
     #[cfg(windows)]
     imp::set_playback(playing, position_ms, duration_ms);
     Ok(())

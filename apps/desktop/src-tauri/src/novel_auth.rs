@@ -583,18 +583,28 @@ pub fn app_log(msg: String) {
 }
 
 /// 在线书架（bookcase.php）。需要登录态，未登录/过期时返回明确的“需登录”错误。
+///
+/// ⚠️ `async` + `spawn_blocking`：内部 `fetch_html` 走阻塞网络。
+/// 同步命令跑在主线程事件循环里，打开在线书架时会把界面冻住整个网络往返
+/// （实测同类命令 3.4~4.6 秒，见 doc/IPC-PERFORMANCE.md）。
+///
+/// 这里只挪 `fetch_html` 这一段：`ensure_loaded` 只做原子置位 + 读一个 JSON
+/// 文件，不涉及 webview，放在阻塞线程池里是安全的。
 #[tauri::command]
-pub fn wenku8_shelf_online(
+pub async fn wenku8_shelf_online(
     app: tauri::AppHandle,
     node: String,
 ) -> Result<Vec<NovelShelfItem>, String> {
-    ensure_loaded(&app);
-    let html = fetch_html(&app, &node, "GBK", "/modules/article/bookcase.php")?;
-    if is_login_required(&html) {
-        return Err("[WENKU8_LOGIN_REQUIRED] 登录态已失效，请重新登录".into());
-    }
-    let items = parse_bookcase(&html);
-    Ok(items)
+    tokio::task::spawn_blocking(move || {
+        ensure_loaded(&app);
+        let html = fetch_html(&app, &node, "GBK", "/modules/article/bookcase.php")?;
+        if is_login_required(&html) {
+            return Err("[WENKU8_LOGIN_REQUIRED] 登录态已失效，请重新登录".into());
+        }
+        Ok(parse_bookcase(&html))
+    })
+    .await
+    .map_err(|e| format!("抓取任务异常退出：{e}"))?
 }
 
 // ---- 内部解析（移植自参考项目 Api.getBookshelf / Parser.getBookshelf）----

@@ -303,6 +303,8 @@ export const usePlayerStore = defineStore("player", () => {
 
   /** Windows SMTC 状态推送节流：上次同步时间戳（毫秒） */
   let lastSmtcSync = 0;
+  /** 上次推送的播放位置（毫秒）。用于「暂停时位置不变就不必重推」的去重 */
+  let lastSmtcPosMs = -1;
 
   /**
    * 全局唯一的 audio 元素，由 store 持有而非某个组件。
@@ -1025,18 +1027,42 @@ export const usePlayerStore = defineStore("player", () => {
     activeLine.value = idx;
   }
 
-  /** 推送播放状态给 Windows 系统媒体控件；默认节流 500ms，关键节点用 force 立即同步 */
+  /**
+   * 推送播放状态给 Windows 系统媒体控件。
+   *
+   * 节流 1000ms（原 500ms），关键节点用 `force` 立即同步。
+   *
+   * ## 为什么放宽到 1 秒，以及为什么加位置去重
+   *
+   * 实测（`window.__silvermoonIpcStats()`）：这个命令在一次 1~2 分钟的使用里被调了
+   * **176 次**，占全部 IPC 耗时的 **48.8%**，P95 达 1.2 秒。
+   *
+   * 但那不是它自己慢 —— `smtc-tokio` 内部只是往专用 STA 线程投递消息（微秒级）。
+   * 那些耗时几乎全是「**等主线程腾出手**」：同步命令跑在主线程事件循环里，
+   * 每 500ms 挤一次队。
+   *
+   * 两个措施：
+   * 1. Rust 侧已把它改成 `async`（跑在异步运行时，不再占主线程）；
+   * 2. 这里再减少调用次数 ——
+   *    - **暂停时位置不变**：反复推同一个位置毫无意义，直接跳过
+   *      （挂机暂停是空转的主要来源）；
+   *    - **播放中 1 秒一次即可**：系统媒体浮层的进度条按秒显示，
+   *      500ms 一次是过量的。
+   */
   function syncSmtc(force = false) {
     if (!isDesktop || !song.value) return;
     const now = Date.now();
-    if (!force && now - lastSmtcSync < 500) return;
+    const positionMs = Math.round(currentTime.value * 1000);
+    const durationMs = Math.round(duration.value * 1000);
+
+    // 暂停且位置没变 → 无事可报。force 仍然放行（暂停/恢复本身就是状态变化）
+    if (!force && !playing.value && positionMs === lastSmtcPosMs) return;
+
+    if (!force && now - lastSmtcSync < 1000) return;
     lastSmtcSync = now;
+    lastSmtcPosMs = positionMs;
     void capabilities
-      .smtcSetPlayback({
-        playing: playing.value,
-        positionMs: Math.round(currentTime.value * 1000),
-        durationMs: Math.round(duration.value * 1000),
-      })
+      .smtcSetPlayback({ playing: playing.value, positionMs, durationMs })
       .catch(() => {});
   }
   /** 推送歌词状态给桌面歌词窗口；默认节流 200ms，切歌等关键节点用 force 立即同步 */

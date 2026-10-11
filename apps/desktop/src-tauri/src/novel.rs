@@ -230,6 +230,38 @@ pub(crate) fn fetch_html(
     Ok(text)
 }
 
+/// `fetch_html` 的**异步包装**：把阻塞网络挪到 tokio 阻塞线程池。
+///
+/// ## 为什么必须这样（这不是优化，是修 bug）
+///
+/// 同步的 `#[tauri::command]` **跑在主线程事件循环里**。
+/// 而 `fetch_html` 走的是 `reqwest` 阻塞 API —— 它会把整条线程占满到响应结束。
+/// 于是在主线程上直接调用它的命令，会在整个网络往返期间**冻结整个界面**。
+///
+/// 实测（`window.__silvermoonIpcStats()`，见 doc/IPC-PERFORMANCE.md）：
+///
+///     novel_recommend   4574ms
+///     novel_rank        3461ms
+///     novel_shelf_list  3464ms
+///
+/// 即每次调用冻结界面 3.4~4.6 秒。对照组是同为 4.2 秒但已 async 的 `bqg_home`
+/// —— 它不冻结界面，差别只在「跑在哪个线程」。
+///
+/// 这与 `anime.rs` / `pixiv.rs` / `netease.rs` 已有的处理是同一套做法：
+/// 阻塞 I/O 一律 `spawn_blocking`，主线程立刻回到事件循环。
+///
+/// 参数全部取**所有权**（`AppHandle` / `String`），因为要 move 进闭包。
+async fn fetch_html_async(
+    app: tauri::AppHandle,
+    node: String,
+    charset: String,
+    path: String,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || fetch_html(&app, &node, &charset, &path))
+        .await
+        .map_err(|e| format!("抓取任务异常退出：{e}"))?
+}
+
 fn normalize_image(src: &str, base: &str) -> String {
     let src = src.trim();
     if src.is_empty() {
@@ -822,7 +854,7 @@ pub fn novel_chapter_cache_put(
 // ---- 抓取命令 ----
 
 #[tauri::command]
-pub fn novel_search(
+pub async fn novel_search(
     app: tauri::AppHandle,
     node: String,
     charset: String,
@@ -834,34 +866,36 @@ pub fn novel_search(
     } else {
         percent_encode_gbk(&query)
     };
-    let html = fetch_html(
-        &app,
-        &node,
-        &charset,
-        &format!("/modules/article/search.php?searchtype=articlename&searchkey={q}&page={page}"),
-    )?;
+    let html = fetch_html_async(
+        app,
+        node.clone(),
+        charset,
+        format!("/modules/article/search.php?searchtype=articlename&searchkey={q}&page={page}"),
+    )
+    .await?;
     Ok(parse_list(&html, node_url(&node)))
 }
 
 #[tauri::command]
-pub fn novel_rank(
+pub async fn novel_rank(
     app: tauri::AppHandle,
     node: String,
     charset: String,
     sort: String,
     page: i64,
 ) -> Result<Vec<NovelCover>, String> {
-    let html = fetch_html(
-        &app,
-        &node,
-        &charset,
-        &format!("/modules/article/toplist.php?sort={sort}&page={page}"),
-    )?;
+    let html = fetch_html_async(
+        app,
+        node.clone(),
+        charset,
+        format!("/modules/article/toplist.php?sort={sort}&page={page}"),
+    )
+    .await?;
     Ok(parse_list(&html, node_url(&node)))
 }
 
 #[tauri::command]
-pub fn novel_category(
+pub async fn novel_category(
     app: tauri::AppHandle,
     node: String,
     charset: String,
@@ -874,38 +908,40 @@ pub fn novel_category(
     } else {
         percent_encode_gbk(&tag)
     };
-    let html = fetch_html(
-        &app,
-        &node,
-        &charset,
-        &format!("/modules/article/tags.php?t={t}&v={sort}&page={page}"),
-    )?;
+    let html = fetch_html_async(
+        app,
+        node.clone(),
+        charset,
+        format!("/modules/article/tags.php?t={t}&v={sort}&page={page}"),
+    )
+    .await?;
     Ok(parse_list(&html, node_url(&node)))
 }
 
 #[tauri::command]
-pub fn novel_recommend(
+pub async fn novel_recommend(
     app: tauri::AppHandle,
     node: String,
     charset: String,
 ) -> Result<Vec<NovelRecommendBlock>, String> {
-    let html = fetch_html(&app, &node, &charset, "/index.php")?;
+    let html = fetch_html_async(app, node.clone(), charset, "/index.php".to_string()).await?;
     Ok(parse_recommend(&html, node_url(&node)))
 }
 
 #[tauri::command]
-pub fn novel_detail(
+pub async fn novel_detail(
     app: tauri::AppHandle,
     node: String,
     charset: String,
     aid: String,
 ) -> Result<NovelDetail, String> {
-    let html = fetch_html(
-        &app,
-        &node,
-        &charset,
-        &format!("/modules/article/articleinfo.php?id={aid}"),
-    )?;
+    let html = fetch_html_async(
+        app,
+        node.clone(),
+        charset,
+        format!("/modules/article/articleinfo.php?id={aid}"),
+    )
+    .await?;
     if crate::novel_auth::is_login_required(&html) {
         return Err("[WENKU8_LOGIN_REQUIRED] 登录态已失效，请重新登录".into());
     }
@@ -913,18 +949,19 @@ pub fn novel_detail(
 }
 
 #[tauri::command]
-pub fn novel_catalogue(
+pub async fn novel_catalogue(
     app: tauri::AppHandle,
     node: String,
     charset: String,
     aid: String,
 ) -> Result<Vec<NovelVolume>, String> {
-    let html = fetch_html(
-        &app,
-        &node,
-        &charset,
-        &format!("/modules/article/reader.php?aid={aid}"),
-    )?;
+    let html = fetch_html_async(
+        app,
+        node.clone(),
+        charset,
+        format!("/modules/article/reader.php?aid={aid}"),
+    )
+    .await?;
     if crate::novel_auth::is_login_required(&html) {
         return Err("[WENKU8_LOGIN_REQUIRED] 登录态已失效，请重新登录".into());
     }
@@ -932,7 +969,7 @@ pub fn novel_catalogue(
 }
 
 #[tauri::command]
-pub fn novel_content(
+pub async fn novel_content(
     state: State<'_, DbState>,
     app: tauri::AppHandle,
     node: String,
@@ -957,12 +994,13 @@ pub fn novel_content(
             return Ok(content);
         }
     }
-    let html = fetch_html(
-        &app,
-        &node,
-        &charset,
-        &format!("/modules/article/reader.php?aid={aid}&cid={cid}"),
-    )?;
+    let html = fetch_html_async(
+        app,
+        node.clone(),
+        charset,
+        format!("/modules/article/reader.php?aid={aid}&cid={cid}"),
+    )
+    .await?;
     if crate::novel_auth::is_login_required(&html) {
         return Err("[WENKU8_LOGIN_REQUIRED] 登录态已失效，请重新登录".into());
     }
