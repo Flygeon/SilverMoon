@@ -2,7 +2,6 @@ package cn.cool.silvermoon.ui.shell
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -139,37 +138,46 @@ private fun AppTitleBar(controls: WindowControls, destination: Destination) {
         modifier = Modifier
             .fillMaxWidth()
             .height(tokens.titleBarHeight)
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-            .pointerInput(Unit) {
-                // 自绘标题栏要自己实现拖动与双击最大化（等价于系统标题栏的行为）
-                detectDragGestures { _, dragAmount ->
-                    controls.dragBy(dragAmount.x, dragAmount.y)
-                }
-            }
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onDoubleTap = {
-                        controls.toggleMaximize()
-                        maximized = controls.isMaximized()
-                    },
-                )
-            },
+            .background(MaterialTheme.colorScheme.surfaceContainer),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Spacer(Modifier.width(16.dp))
-        Text(
-            text = "SilverMoon",
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.width(12.dp))
-        Text(
-            text = destination.label,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.Medium,
-        )
-        Spacer(Modifier.weight(1f))
+        // 拖动交给平台的 WindowDraggableArea（内部走系统原生拖动：多显示器、贴边
+        // 吸附、DPI 都由系统处理）。早先是自己 detectDragGestures + AWT setLocation，
+        // 实测拖两下窗口就被挪出屏幕 —— 自绘拖拽不该重造这个轮子。
+        //
+        // 窗口按钮刻意放在拖动区**外面**：放里面的话点最小化/关闭会被当成拖拽起手。
+        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+            WindowDragArea {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            // 双击最大化：原生标题栏的行为，官方拖动区不代劳
+                            detectTapGestures(
+                                onDoubleTap = {
+                                    controls.toggleMaximize()
+                                    maximized = controls.isMaximized()
+                                },
+                            )
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Spacer(Modifier.width(16.dp))
+                    Text(
+                        text = "SilverMoon",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        text = destination.label,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
+        }
         TitleBarButton(onClick = { controls.minimize() }) {
             Icon(Icons.Filled.Remove, contentDescription = "最小化", modifier = Modifier.size(18.dp))
         }

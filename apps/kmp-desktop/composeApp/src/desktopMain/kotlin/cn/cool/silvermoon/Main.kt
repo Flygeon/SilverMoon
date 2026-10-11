@@ -103,11 +103,5 @@ private fun rememberWindowControls(frame: JFrame): WindowControls = remember(fra
         }
 
         override fun isMaximized(): Boolean = (frame.extendedState and maximizedFlag) != 0
-
-        override fun dragBy(dx: Float, dy: Float) {
-            if (isMaximized()) return
-            val location = frame.location
-            frame.location = java.awt.Point(location.x + dx.toInt(), location.y + dy.toInt())
-        }
     }
 }

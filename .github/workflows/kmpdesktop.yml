@@ -188,6 +188,20 @@ jobs:
       - name: Package app image
         run: ./gradlew :composeApp:createReleaseDistributable --stacktrace
 
+      # 「装好即可用」的前提是后端 exe 真的进了分发目录。只断言 Gradle 任务成功不够：
+      # appResourcesRootDir 配错也不会报错，结果是用户装完双击弹「找不到 silvermoon_bridge.exe」。
+      - name: Verify app image bundles the backend
+        shell: pwsh
+        run: |
+          $app = 'composeApp/build/compose/binaries/main-release/app'
+          Get-ChildItem $app | Select-Object Name, Length
+          $bridge = Get-ChildItem -Recurse -File $app -Filter silvermoon_bridge.exe
+          if (-not $bridge) {
+            Write-Host '::error::分发目录里没有 silvermoon_bridge.exe，安装包装出来也不能用'
+            exit 1
+          }
+          Write-Host "bundled backend: $($bridge.FullName) ($([math]::Round($bridge.Length / 1MB, 1)) MB)"
+
       - name: Upload app image
         uses: actions/upload-artifact@v5
         with:

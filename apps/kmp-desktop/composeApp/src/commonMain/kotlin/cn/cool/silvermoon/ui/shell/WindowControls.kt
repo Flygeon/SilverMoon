@@ -13,7 +13,4 @@ interface WindowControls {
 
     /** 当前是否最大化，用于切换标题栏上的图标。 */
     fun isMaximized(): Boolean
-
-    /** 自绘标题栏拖动：按屏幕坐标增量移动窗口。 */
-    fun dragBy(dx: Float, dy: Float)
 }
