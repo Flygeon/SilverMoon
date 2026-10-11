@@ -76,11 +76,13 @@ compose.desktop {
             copyright = "GPL-3.0-only"
             vendor = "SilverMoon"
 
-            // Rust 后端不放进 jar（几十 MB，且本来就是独立进程），
-            // 而是作为 jpackage 的 app resource 一起落盘；CI 会把编译好的
-            // silvermoon_bridge.exe 拷到 composeApp/backend/ 下。
-            appResourcesRootDir.set(project.layout.projectDirectory.dir("backend"))
-
+            // 后端 exe 走 jar 资源（src/desktopMain/resources/backend/），
+            // 由 Kotlin 侧首次启动释放到 %APPDATA%。
+            //
+            // 不用 appResourcesRootDir：实测它在 createReleaseDistributable 产出的
+            // 分发目录里静默失效（配了也不报错，文件就是不进去），而落盘位置还随
+            // 打包工具版本漂移。打进 jar 则与安装包同生命周期 —— 只要 jar 在，
+            // 后端就一定在，CI 也有一条断言盯着这个 jar 条目。
             // VLCJ 走 AWT/Swing、JNA 走 jdk.unsupported，逐个列模块很容易漏，
             // 漏了就是运行时 NoClassDefFoundError，这里直接带全套模块。
             includeAllModules = true

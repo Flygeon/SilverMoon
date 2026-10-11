@@ -27,7 +27,9 @@ private class DesktopBackendProcess : BackendProcess {
     }
 
     private fun boot() {
-        val executable = locateExecutable() ?: throw BackendException(
+        // 优先用「就地能找到的」那份（环境变量 / jpackage 布局 / 开发机构建），
+        // 找不到就释放 jar 里自带的那份 —— 安装包一定带着它，不赌打包工具的落盘位置。
+        val executable = locateExecutable() ?: extractBundledExecutable() ?: throw BackendException(
             "找不到 silvermoon_bridge.exe。" +
                 "已尝试：" +
                 bridgeExecutableCandidates().take(6).joinToString("；") { it.absolutePath } +
@@ -109,6 +111,39 @@ private fun tail(file: File, lines: Int = 20): String {
 }
 
 private fun locateExecutable(): File? = bridgeExecutableCandidates().firstOrNull { it.isFile }
+
+/** 取资源用的锚点（免得依赖调用点的 this 类型）。 */
+private object ResourceAnchor
+
+/** jar 内后端 exe 的资源路径，与 CI 下载 artifact 的落地目录一一对应。 */
+private const val BUNDLED_BACKEND = "/backend/silvermoon_bridge.exe"
+
+/**
+ * 把打进 jar 的后端 exe 释放到 %APPDATA%\SilverMoon\backend\ 再启动。
+ *
+ * 为什么不用 jpackage 的 appResourcesRootDir 把文件直接放进分发目录：
+ * 实测 createReleaseDistributable 产出的分发目录里**根本没有它**
+ * （appResourcesRootDir 配了也不报错，是静默失效），而且落盘位置随打包工具版本变化。
+ * 打进 jar 就与安装包同生命周期 —— 只要安装包里有那个 jar，后端就一定在。
+ *
+ * 每次启动都覆盖一次（17MB，SSD 上几十毫秒），换取「装什么版本就跑什么版本的后端」；
+ * 覆盖失败（上一次实例还占着文件）时退回已有的那一份。
+ */
+private fun extractBundledExecutable(): File? {
+    val dir = File(appDataDir(), "backend")
+    val target = File(dir, "silvermoon_bridge.exe")
+    val stream = ResourceAnchor.javaClass.getResourceAsStream(BUNDLED_BACKEND)
+    if (stream == null) {
+        return target.takeIf { it.isFile }
+    }
+    stream.use { input ->
+        runCatching {
+            dir.mkdirs()
+            target.outputStream().use { output -> input.copyTo(output) }
+        }
+    }
+    return target.takeIf { it.isFile }
+}
 
 /**
  * 后端 exe 的候选路径。

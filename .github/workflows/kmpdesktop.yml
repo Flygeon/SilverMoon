@@ -172,7 +172,7 @@ jobs:
         uses: actions/download-artifact@v5
         with:
           name: silvermoon-bridge
-          path: apps/kmp-desktop/composeApp/backend
+          path: apps/kmp-desktop/composeApp/src/desktopMain/resources/backend
 
       # 把 compose 插件实际注册的打包任务打出来：任务名随插件版本变过
       # （应用目录是 create*Distributable，安装包是 package*），留在日志里方便对照。
@@ -188,19 +188,33 @@ jobs:
       - name: Package app image
         run: ./gradlew :composeApp:createReleaseDistributable --stacktrace
 
-      # 「装好即可用」的前提是后端 exe 真的进了分发目录。只断言 Gradle 任务成功不够：
-      # appResourcesRootDir 配错也不会报错，结果是用户装完双击弹「找不到 silvermoon_bridge.exe」。
-      - name: Verify app image bundles the backend
+      # 「装好即可用」的真正前提：后端 exe 进了**应用 jar**（运行时由 Kotlin 侧释放到
+      # %APPDATA%\SilverMoon\backend\ 再拉起）。这里断言 jar 而不是分发目录里的裸文件，
+      # 是因为后者的落盘位置随打包工具版本漂移 —— 上一轮就是 appResourcesRootDir
+      # 静默失效：Gradle 任务成功、分发目录里却没有文件，用户装完直接弹「找不到后端」。
+      - name: Verify backend is bundled in the app jar
         shell: pwsh
         run: |
-          $app = 'composeApp/build/compose/binaries/main-release/app'
-          Get-ChildItem $app | Select-Object Name, Length
-          $bridge = Get-ChildItem -Recurse -File $app -Filter silvermoon_bridge.exe
-          if (-not $bridge) {
-            Write-Host '::error::分发目录里没有 silvermoon_bridge.exe，安装包装出来也不能用'
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $jars = Get-ChildItem -Recurse -File composeApp/build/libs -Filter *.jar
+          Write-Host "jars: $($jars.Name -join ', ')"
+          $bundled = $false
+          foreach ($jar in $jars) {
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($jar.FullName)
+            $entry = $zip.Entries | Where-Object { $_.FullName -eq 'backend/silvermoon_bridge.exe' }
+            $zip.Dispose()
+            if ($entry) {
+              Write-Host "backend bundled in $($jar.Name): $([math]::Round($entry.Length / 1MB, 1)) MB"
+              $bundled = $true
+              break
+            }
+          }
+          if (-not $bundled) {
+            Write-Host '::error::应用 jar 里没有 backend/silvermoon_bridge.exe，装出来的包跑不起来'
             exit 1
           }
-          Write-Host "bundled backend: $($bridge.FullName) ($([math]::Round($bridge.Length / 1MB, 1)) MB)"
+          Write-Host '--- app image top level ---'
+          Get-ChildItem 'composeApp/build/compose/binaries/main-release/app' -ErrorAction SilentlyContinue | Select-Object Name
 
       - name: Upload app image
         uses: actions/upload-artifact@v5
