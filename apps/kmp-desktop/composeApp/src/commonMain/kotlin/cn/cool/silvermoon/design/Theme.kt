@@ -38,6 +38,10 @@ val SilverMoonShapes = Shapes(
 )
 
 /** 主题入口。isSystemDark 由平台层注入，方便 Windows 上跟随系统深色设置。 */
+// CMP 1.12 把 ExperimentalMaterial3ExpressiveApi 转成了 internal（M3E API 转正），
+// 于是它既不能被 @OptIn 指名，又仍然被 materialKolor 的包装函数带在元数据里 ——
+// 只能在使用点压制这个 opt-in 诊断。等 materialKolor 发版对齐后再撤掉。
+@Suppress("OPT_IN_USAGE", "OPT_IN_USAGE_ERROR")
 @Composable
 fun SilverMoonTheme(
     mode: ThemeMode = ThemeMode.System,
