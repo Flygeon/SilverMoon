@@ -1,0 +1,86 @@
+{
+  "id": "disk-lens",
+  "name": "磁盘透镜",
+  "version": "1.0.0",
+  "author": "SilverMoon",
+  "license": "MIT",
+  "minHostVersion": ">=2.0.0",
+  "engines": {
+    "cmd": "engine/serve.py",
+    "args": [],
+    "supportEnv": "DISK_LENS_DATA_DIR",
+    "readyLine": "READY <port>"
+  },
+  "web": {
+    "dist": "web/dist",
+    "defaultRoute": "report"
+  },
+  "contributes": {
+    "windows": [
+      {
+        "route": "report",
+        "title": "磁盘透镜",
+        "width": 900,
+        "height": 660,
+        "alwaysOnTop": false,
+        "decorations": false
+      }
+    ],
+    "hotkeys": [
+      {
+        "accelerator": "Ctrl+Alt+D",
+        "route": "report",
+        "action": "toggle"
+      }
+    ],
+    "tray": [
+      {
+        "id": "open",
+        "title": "磁盘透镜",
+        "action": "open:report"
+      },
+      {
+        "id": "rescan",
+        "title": "重新扫描",
+        "action": "invoke:scan"
+      }
+    ],
+    "settings": {
+      "schema": [
+        {
+          "key": "roots",
+          "type": "paths",
+          "label": "扫描目录",
+          "default": []
+        },
+        {
+          "key": "topN",
+          "type": "number",
+          "label": "榜单条数",
+          "default": 30
+        },
+        {
+          "key": "minMB",
+          "type": "number",
+          "label": "只收集大于（MB）",
+          "default": 1
+        },
+        {
+          "key": "followSymlinks",
+          "type": "bool",
+          "label": "跟随符号链接",
+          "default": false
+        }
+      ]
+    }
+  },
+  "permissions": [
+    "ext:invoke",
+    "opener:open-path"
+  ],
+  "activationEvents": [
+    "onHotkey",
+    "onTray",
+    "onInvoke"
+  ]
+}

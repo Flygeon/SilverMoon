@@ -13,6 +13,7 @@
 |------|--------|----------|
 | [`hello-world/`](./hello-world/) | ✅ Python | **最小可用扩展**：`READY <port>` 握手、按路径分发方法的引擎；前端桥读取/写入设置（`settings:get` / `settings:set`）并调用引擎方法（`greet` / `status` / `remember` / `recall`）；`activationEvents` 懒加载与最小权限 |
 | [`skin-manager/`](./skin-manager/) | ❌ | **皮肤扩展**：`contributes.themes` 声明两套自带皮肤（v1 纯令牌 + v2 资产版），UI 调 `themes:list` / `themes:apply` / `themes:clear` 列出、切换、恢复；演示扩展目录内相对路径资源（背景图 + SVG 图标包） |
+| [`disk-lens/`](./disk-lens/) | ✅ Python | **完整形态**：扫描目录做空间排行（按类型 / 按子目录 / 按单文件），带后台进度轮询、`supportEnv` 参数持久化、托盘 `invoke:scan`（payload 为 `null`）、`reveal` 定位文件。窗口 + 热键 + 托盘 + 设置四个贡献点全用上 |
 
 ## 开发扩展
 

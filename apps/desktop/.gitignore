@@ -11,6 +11,10 @@ dist/
 !example/extensions/*/web/dist/
 !example/extensions/*/web/dist/**
 
+# 打包产物不入库：示例扩展的 zip 是本地按指南现场打的，会随源码变更过期。
+# 注意只限 extensions/ 下 —— example/skins/ 的皮肤 zip 是有意入库的分发件。
+example/extensions/*/*.zip
+
 # electron-builder output（历史目录，迁回 Tauri 后不再产生）
 release/
 
