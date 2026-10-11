@@ -3,7 +3,7 @@
  * 插件 UI 注入面板（主界面内嵌）。
  *
  * 把扩展自带的前端以 `ext:` 协议嵌进主窗口，用于 `contributes.ui[]` 里
- * `surface: "main"` 的注入点。与 ExtensionHost.vue 的区别：
+ * `surface: "main"` 的注入点。与 PluginHost.vue 的区别：
  *
  * - ExtensionHost：另开一个**独立窗口**，扩展独占整个界面（适合工具型扩展）；
  * - 本组件：嵌在**主窗口内容区**的一块（适合「在库页面上加一条状态栏 / 一个信息卡」

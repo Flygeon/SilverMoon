@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
  *    `app-cover://` 这种原生 scheme）。只写 scheme 名在 Windows 上会放行失败。
  *    依据：`src-tauri/src/cover.rs`、`src-tauri/src/ext_protocol.rs` 头部注释。
  * 3. **`frame-src` 加 `ext:`**：扩展 UI 跑在独立 origin 的 iframe 里
- *   （`src/views/ExtensionHost.vue`），Electron 时代对应的是 `app:`。
+ *   （`src/views/PluginHost.vue`），Electron 时代对应的是 `app:`。
  * 4. **`connect-src` 加 `ws://localhost:*`**：Electron 的注入逻辑只对 `app://`
  *    生效，dev 模式（Vite dev server）天然没有 CSP；Tauri 的 `csp` 配置连 dev
  *    模式一起注入，没有这条 Vite HMR 的 WebSocket 会被拦掉。
