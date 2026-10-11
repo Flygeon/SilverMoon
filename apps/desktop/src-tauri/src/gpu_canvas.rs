@@ -61,7 +61,16 @@ pub const GPU_CANVAS_LABEL: &str = "gpu-canvas";
 /// 渲染线程每帧检查 `running`；主线程通过命令改它来请求退出。
 #[derive(Default)]
 pub struct CanvasState {
+    /// 渲染线程的退出标志（见渲染循环）。
     running: Arc<Mutex<bool>>,
+    /// 「正在创建中」标志。
+    ///
+    /// 必需：窗口是在**子线程**里建的，从 open() 返回（乃至第一次 get_window
+    /// 查询）到窗口真正出现之间有不小的空窗期。前端会因 ResizeObserver + rAF
+    /// 在同一次布局里调两次 open —— 空窗期内两次都查不到窗口，于是**启动两个
+    /// 渲染线程**（两个线程抢同一个 surface：表现为闪烁或崩溃）。
+    /// 这个标志把并发的创建请求挡住。
+    starting: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// 画布区域（逻辑像素），由前端上报。
@@ -78,12 +87,24 @@ pub struct CanvasRect {
 /// 参数是**逻辑像素**的画布区域，前端从占位 div 的
 /// `getBoundingClientRect()` 拿到屏幕坐标后传进来。
 pub fn open(app: &AppHandle, rect: CanvasRect) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+
     let state = app.state::<CanvasState>();
     let running = Arc::clone(&state.running);
+    let starting = Arc::clone(&state.starting);
 
     // 已经开着：只更新位置与尺寸，不重复建窗（否则会有两个画布窗口）
     if let Some(_existing) = app.get_window(GPU_CANVAS_LABEL) {
         return resize(app, rect);
+    }
+
+    // 有人正在建：不重复发起（原因见 CanvasState::starting 的注释）。
+    // compare_exchange 保证只有一个调用能拿到「创建权」。
+    if starting
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Ok(());
     }
 
     {
@@ -95,11 +116,16 @@ pub fn open(app: &AppHandle, rect: CanvasRect) -> Result<(), String> {
     // 用 Tauri 官方文档给出的「子线程里建窗」模式。
     let handle = app.clone();
     let running_bg = Arc::clone(&running);
+    let starting_bg = Arc::clone(&starting);
     std::thread::spawn(move || {
         // ⚠️ 用 boot_log 而不是 eprintln!：release 构建是
         // `windows_subsystem = "windows"`（**没有控制台**），eprintln 的输出
         // 会直接丢掉 —— 排查闪退时等于没有日志。
-        if let Err(e) = run_canvas(handle, rect, running_bg) {
+        let result = run_canvas(handle, rect, running_bg);
+        // 无论成功失败都要放开「正在创建」标志，否则后续 open 会被永久挡住
+        // （窗口建失败就再也打不开了）。
+        starting_bg.store(false, Ordering::Release);
+        if let Err(e) = result {
             crate::boot_log::record(&format!("[gpu-canvas] 画布线程退出：{e}"));
         }
     });
@@ -123,10 +149,14 @@ pub fn resize(app: &AppHandle, rect: CanvasRect) -> Result<(), String> {
 
 /// 关闭画布窗口并停止渲染线程。
 pub fn close(app: &AppHandle) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+
     let state = app.state::<CanvasState>();
     if let Ok(mut r) = state.running.lock() {
         *r = false;
     }
+    // 同时放开创建标志：下次 open 才能重新建窗
+    state.starting.store(false, Ordering::Release);
     if let Some(win) = app.get_window(GPU_CANVAS_LABEL) {
         win.close().map_err(|e| e.to_string())?;
     }
@@ -266,16 +296,24 @@ fn run_canvas(app: AppHandle, rect: CanvasRect, running: Arc<Mutex<bool>>) -> Re
         //
         // 前端每次布局变化都会调 gpu_canvas_resize（ResizeObserver），
         // 因此这里必须在每帧开头把尺寸对齐回来。
-        if let Ok(now) = window.inner_size() {
-            let (w, h) = (now.width.max(1), now.height.max(1));
-            if w != config.width || h != config.height {
-                crate::boot_log::record(&format!(
-                    "[gpu-canvas] surface 重配 {}x{} → {w}x{h}",
-                    config.width, config.height
-                ));
-                config.width = w;
-                config.height = h;
-                surface.configure(&device, &config);
+        // 顺便用它判断窗口是否还在：读不到尺寸说明窗口已被销毁，
+        // 此时必须退出循环 —— 否则会一直对着一个死 surface 空转。
+        match window.inner_size() {
+            Ok(now) => {
+                let (w, h) = (now.width.max(1), now.height.max(1));
+                if w != config.width || h != config.height {
+                    crate::boot_log::record(&format!(
+                        "[gpu-canvas] surface 重配 {}x{} → {w}x{h}",
+                        config.width, config.height
+                    ));
+                    config.width = w;
+                    config.height = h;
+                    surface.configure(&device, &config);
+                }
+            }
+            Err(_) => {
+                crate::boot_log::record("[gpu-canvas] 窗口已销毁，退出渲染循环");
+                break;
             }
         }
 
