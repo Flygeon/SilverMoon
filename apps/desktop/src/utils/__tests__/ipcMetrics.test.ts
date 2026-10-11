@@ -74,12 +74,32 @@ describe("ipcMetrics", () => {
     const [row] = getIpcStats();
     expect(row.avgArgBytes).toBeGreaterThan(100);
 
-    // 循环引用会让 JSON.stringify 抛；计量必须吞掉异常而不是影响调用
+    // 循环引用：估算器是**有界遍历**，不会抛、也不会无限递归（见 MAX_DEPTH）
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
     expect(() => recordIpcCall("bad", cyclic, performance.now(), false)).not.toThrow();
     const bad = getIpcStats().find((r) => r.cmd === "bad");
-    expect(bad?.avgArgBytes).toBe(0);
+    // 返回的是有限值（深度被截断），而不是曾经的 0 或 NaN
+    expect(Number.isFinite(bad?.avgArgBytes)).toBe(true);
+    expect(bad?.avgArgBytes).toBeGreaterThan(0);
+  });
+
+  it("二进制按 byteLength 计，不去序列化（性能回归）", () => {
+    setIpcMetricsEnabled(true);
+    // 1 MB 的 Uint8Array。
+    // 初版用 JSON.stringify 估算，会先造出上百万项的数字数组字符串（约 4 MB）——
+    // 而 writeFile / saveThumbnail 这类调用恰好都带 Uint8Array，
+    // 等于给它们平白加一倍工作量。这里钉住「直接用 byteLength」这条路径。
+    const bytes = new Uint8Array(1024 * 1024);
+    const t0 = performance.now();
+    recordIpcCall("write_file", { path: "/x", data: bytes }, performance.now(), false);
+    const elapsed = performance.now() - t0;
+
+    const [row] = getIpcStats();
+    // 1 MB 上下（允许其它字段的少量开销）
+    expect(row.avgArgBytes).toBeGreaterThanOrEqual(1024 * 1024);
+    // 关键：必须远快于序列化 1 MB。给足余量（慢机器也不该超过 50ms）
+    expect(elapsed).toBeLessThan(50);
   });
 
   it("环形缓冲有界：超出上限时丢弃最旧的样本", () => {

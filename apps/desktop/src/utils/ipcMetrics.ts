@@ -92,21 +92,69 @@ export function isIpcMetricsEnabled(): boolean {
   return enabled;
 }
 
+/** 递归深度上限：超过就按常量估，避免深对象把计量本身变成开销。 */
+const MAX_DEPTH = 4;
+/** 单个数组/对象最多数多少个元素。 */
+const MAX_ITEMS = 64;
+
 /**
  * 估算过桥参数的大小（字节）。
  *
- * 用 `JSON.stringify` 的长度近似 —— 真实开销是 Rust 侧 serde 的序列化量，
- * 与之同量级。**只用于横向比较哪个命令载荷大**，不作绝对值使用。
+ * ⚠️ **不能用 `JSON.stringify(value).length`** —— 初版就是这么写的，有两个问题：
  *
- * 失败返回 0：参数里若有循环引用（或 BigInt），stringify 会抛，
- * 而计量绝不能因此影响调用。
+ * 1. **二进制会被灾难性放大**：`JSON.stringify(new Uint8Array(1MB))` 会先造出一个
+ *    上百万项的**数字数组字符串**（约 4 MB），既慢又占内存。而 `writeFile` /
+ *    `saveThumbnail` 这类调用恰恰带着 `Uint8Array` —— 等于给它们平白加一倍工作量。
+ * 2. 循环引用会抛（虽有 try/catch，但那样就测不到大小了）。
+ *
+ * 因此改为**有界遍历**：只数到 `MAX_DEPTH` / `MAX_ITEMS`；
+ * 遇到二进制直接用 `byteLength`（O(1) 且精确）。
+ *
+ * 精度取舍：这是**相对指标**，用于比较「哪个命令载荷大」，不作绝对值使用。
  */
-function estimateBytes(value: unknown): number {
-  try {
-    return JSON.stringify(value)?.length ?? 0;
-  } catch {
-    return 0;
+function estimateBytes(value: unknown, depth = 0): number {
+  if (value === null || value === undefined) return 4;
+  switch (typeof value) {
+    case "number":
+      return 8;
+    case "boolean":
+      return 5;
+    case "bigint":
+      return 8;
+    case "string":
+      return value.length;
+    case "function":
+    case "symbol":
+      return 0;
+    default:
+      break;
   }
+
+  // 二进制：byteLength 精确且 O(1) —— 这正是要避开 JSON.stringify 的原因
+  if (value instanceof ArrayBuffer) return value.byteLength;
+  if (ArrayBuffer.isView(value)) return value.byteLength;
+
+  // 到深度上限就按常量估（循环引用也会在此终止）
+  if (depth >= MAX_DEPTH) return 8;
+
+  if (Array.isArray(value)) {
+    let n = 2;
+    const len = Math.min(value.length, MAX_ITEMS);
+    for (let i = 0; i < len; i++) n += estimateBytes(value[i], depth + 1) + 1;
+    return n;
+  }
+  if (value instanceof Map)
+    return 2 + Math.min((value as Map<unknown, unknown>).size, MAX_ITEMS) * 16;
+  if (value instanceof Set) return 2 + Math.min((value as Set<unknown>).size, MAX_ITEMS) * 16;
+  if (value instanceof Date) return 24;
+
+  let n = 2;
+  let counted = 0;
+  for (const key in value as Record<string, unknown>) {
+    if (counted++ >= MAX_ITEMS) break;
+    n += key.length + estimateBytes((value as Record<string, unknown>)[key], depth + 1) + 4;
+  }
+  return n;
 }
 
 /**
@@ -178,6 +226,51 @@ export function getIpcStats(): (IpcStat & { totalShare: number })[] {
 /** 清空统计。 */
 export function resetIpcStats(): void {
   samples.clear();
+}
+
+/** 当前累计的样本总数。用于「有新活动才上报」的判断。 */
+export function totalSampleCount(): number {
+  let n = 0;
+  for (const list of samples.values()) n += list.length;
+  return n;
+}
+
+/**
+ * 生成**纯文本**报告（面向日志文件，不是控制台）。
+ *
+ * 为什么需要它：`console.table` 只能人在 devtools 里看，
+ * 而排查往往是「跑一遍 → 看事后留下的数据」。写进日志文件后，
+ * 事后可以直接读，也能贴给别人看。
+ *
+ * 格式固定为每行一条「cmd | 次数 | 总ms | 占比 | 平均 | P95 | 最大 | 失败 | 平均参数B」，
+ * 便于 grep 与肉眼扫。
+ *
+ * @param topN 只列最贵的前 N 条（默认 15），避免日志被刷爆
+ */
+export function formatIpcReport(topN = 15): string {
+  const rows = getIpcStats();
+  if (!rows.length) return "（无样本）";
+  const grandTotal = rows.reduce((a, r) => a + r.totalMs, 0);
+  const calls = rows.reduce((a, r) => a + r.count, 0);
+  const head =
+    `共 ${calls} 次调用 / ${rows.length} 个命令 / 合计 ${grandTotal.toFixed(0)}ms` +
+    (rows.length > topN ? `（下列前 ${topN} 条）` : "");
+  const lines = rows
+    .slice(0, topN)
+    .map((r) =>
+      [
+        r.cmd,
+        `${r.count}次`,
+        `${r.totalMs.toFixed(0)}ms`,
+        `${(r.totalShare * 100).toFixed(1)}%`,
+        `均${r.avgMs.toFixed(2)}`,
+        `P95 ${r.p95Ms.toFixed(1)}`,
+        `峰${r.maxMs.toFixed(0)}`,
+        r.errors ? `失败${r.errors}` : "失败0",
+        `参${Math.round(r.avgArgBytes)}B`,
+      ].join(" | "),
+    );
+  return [head, ...lines].join("\n");
 }
 
 // 控制台入口：即使没打开计量，也允许直接调用查看（会提示为空）。

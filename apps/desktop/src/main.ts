@@ -54,6 +54,15 @@ void import("@/utils/autoMixConsole").then(({ installAutoMixConsole }) =>
   ),
 );
 
+// IPC 计量的控制台接口（__silvermoonIpcEnable / Dump / Disable）。
+//
+// 同样惰性引入。计量**默认关闭**；开启前每次 invoke 只多一次 performance.now()，
+// 代价可忽略，但没必要把 capabilities 这条链拉进首屏。
+// 打开后每 60 秒（且确实有新活动时）会把报告写进日志文件，便于事后分析。
+void import("@/utils/ipcMetricsReporter").then(({ installIpcMetricsConsole }) =>
+  installIpcMetricsConsole(),
+);
+
 // Vue 渲染/生命周期错误
 app.config.errorHandler = (err, instance, info) => {
   void reportError("vue-err", {
