@@ -1,7 +1,6 @@
 package cn.cool.silvermoon.design
 
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
@@ -39,7 +38,6 @@ val SilverMoonShapes = Shapes(
 )
 
 /** 主题入口。isSystemDark 由平台层注入，方便 Windows 上跟随系统深色设置。 */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun SilverMoonTheme(
     mode: ThemeMode = ThemeMode.System,

@@ -20,6 +20,7 @@ import cn.cool.silvermoon.ui.shell.WindowControls
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.HttpTimeoutConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -69,7 +70,7 @@ private fun bootstrap(): AppContainer {
         install(HttpTimeout) {
             requestTimeoutMillis = 120_000
             // SSE 长连接不能有 socket 超时，否则事件流会被客户端自己掐断
-            socketTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
+            socketTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
         }
     }
     val bridge = BackendBridge(process.handshake, client)
