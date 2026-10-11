@@ -33,6 +33,59 @@ const panX = ref(0);
 const panY = ref(0);
 const loadingImage = ref(true);
 
+/** 幻灯片播放状态与视图旋转角度（纯 CSS transform，不写回文件） */
+const playing = ref(false);
+const rotation = ref(0);
+const playEpoch = ref(0);
+const SLIDE_INTERVAL_MS = 3000;
+let playTimer: number | null = null;
+
+function stopSlideTimer() {
+  if (playTimer !== null) {
+    window.clearInterval(playTimer);
+    playTimer = null;
+  }
+}
+
+/** 幻灯片步进：到末尾循环回第一张 */
+function advanceSlide() {
+  const n = props.items.length;
+  if (n === 0) return;
+  playEpoch.value++;
+  const nextIdx = props.index >= n - 1 ? 0 : props.index + 1;
+  if (nextIdx !== props.index) emit("update:index", nextIdx);
+}
+
+function startSlideTimer() {
+  stopSlideTimer();
+  playTimer = window.setInterval(advanceSlide, SLIDE_INTERVAL_MS);
+}
+
+function setPlaying(v: boolean) {
+  if (v && props.items.length < 2) return;
+  playing.value = v;
+  if (v) {
+    playEpoch.value++;
+    startSlideTimer();
+  } else {
+    stopSlideTimer();
+  }
+}
+
+function togglePlay() {
+  setPlaying(!playing.value);
+}
+
+/** 视图级旋转（左转 / 右转 90°），仅影响 CSS transform */
+function rotateLeft() {
+  if (current.value?.type !== "image") return;
+  rotation.value = (rotation.value - 90 + 360) % 360;
+}
+function rotateRight() {
+  if (current.value?.type !== "image") return;
+  rotation.value = (rotation.value + 90) % 360;
+}
+
 const src = computed(() => {
   const item = current.value;
   if (!item) return "";
@@ -52,6 +105,12 @@ watch(
   () => current.value?.id,
   async (id) => {
     resetView();
+    // 切换图片时旋转角度重置，幻灯片计时重置
+    rotation.value = 0;
+    if (playing.value) {
+      playEpoch.value++;
+      startSlideTimer();
+    }
     meta.value = null;
     if (!id) return;
     try {
@@ -114,13 +173,26 @@ function toggleZoom() {
 function onKey(e: KeyboardEvent) {
   switch (e.key) {
     case "Escape":
-      emit("close");
+      // 幻灯片播放中按 Esc 先停止播放，再按才关闭
+      if (playing.value) setPlaying(false);
+      else emit("close");
       break;
     case "ArrowLeft":
       prev();
       break;
     case "ArrowRight":
       next();
+      break;
+    case " ":
+      // preventDefault 避免空格触发聚焦按钮的二次点击
+      e.preventDefault();
+      togglePlay();
+      break;
+    case "[":
+      rotateLeft();
+      break;
+    case "]":
+      rotateRight();
       break;
     case "i":
     case "I":
@@ -134,7 +206,10 @@ function onKey(e: KeyboardEvent) {
 }
 
 onMounted(() => window.addEventListener("keydown", onKey));
-onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onKey);
+  stopSlideTimer();
+});
 
 function openExternally() {
   const item = current.value;
@@ -190,6 +265,31 @@ const infoRows = computed(() => {
       <div class="tools">
         <button
           class="vbtn"
+          :class="{ live: playing }"
+          :disabled="items.length < 2"
+          :title="playing ? '暂停幻灯片 (空格)' : '幻灯片播放 (空格)'"
+          @click="togglePlay"
+        >
+          <span class="material-symbols-outlined">{{ playing ? "pause" : "play_arrow" }}</span>
+        </button>
+        <button
+          v-if="current?.type === 'image'"
+          class="vbtn"
+          title="向左旋转 ([)"
+          @click="rotateLeft"
+        >
+          <span class="material-symbols-outlined">rotate_left</span>
+        </button>
+        <button
+          v-if="current?.type === 'image'"
+          class="vbtn"
+          title="向右旋转 (])"
+          @click="rotateRight"
+        >
+          <span class="material-symbols-outlined">rotate_right</span>
+        </button>
+        <button
+          class="vbtn"
           :class="{ on: current?.favorite }"
           title="收藏 (F)"
           @click="current && emit('favorite', current)"
@@ -230,9 +330,10 @@ const infoRows = computed(() => {
         :src="src"
         :alt="current.name"
         class="media"
-        :class="{ zoomed: zoom > 1, loading: loadingImage }"
+        :class="{ zoomed: zoom > 1, loading: loadingImage, sideways: rotation % 180 !== 0 }"
         :style="{
-          transform: `translate(${panX}px, ${panY}px) scale(${zoom})`,
+          /* 平移在最外层（屏幕坐标系，拖拽方向恒直观），缩放/旋转在图片自身坐标系 */
+          transform: `translate(${panX}px, ${panY}px) rotate(${rotation}deg) scale(${zoom})`,
           cursor: zoom > 1 ? 'grab' : 'zoom-in',
         }"
         draggable="false"
@@ -262,6 +363,11 @@ const infoRows = computed(() => {
         v-if="loadingImage && current?.type === 'image'"
         class="media-loading"
       />
+    </div>
+
+    <!-- 幻灯片播放进度条：每张 3 秒，:key 变化时重启动画 -->
+    <div v-if="playing" class="play-progress" :key="playEpoch">
+      <div class="fill"></div>
     </div>
 
     <!-- 信息面板 -->
@@ -356,6 +462,18 @@ const infoRows = computed(() => {
 .vbtn.on {
   color: #ff6b81;
 }
+/* 幻灯片播放中的激活态（与收藏的粉色区分） */
+.vbtn.live {
+  color: #a8c7fa;
+  background: rgba(168, 199, 250, 0.16);
+}
+.vbtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.vbtn:disabled:hover {
+  background: transparent;
+}
 
 .stage {
   flex: 1;
@@ -381,6 +499,36 @@ const infoRows = computed(() => {
 }
 .media.loading {
   opacity: 0;
+}
+/* 旋转 90°/270° 时视觉宽高互换，用视口单位约束避免溢出舞台 */
+.media.sideways {
+  max-width: 88vh;
+  max-height: 88vw;
+}
+
+/* 幻灯片播放进度条（底部细线，3 秒走满一切换） */
+.play-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.14);
+  z-index: 4;
+}
+.play-progress .fill {
+  height: 100%;
+  background: #a8c7fa;
+  transform-origin: left center;
+  animation: slidefill 3s linear forwards;
+}
+@keyframes slidefill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
 }
 
 /* 加载指示器：M3 Expressive 形状形变（组件自带动画），这里只定位与配色 */

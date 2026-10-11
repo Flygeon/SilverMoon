@@ -15,6 +15,15 @@ import { capabilities, isDesktop } from "@/capabilities";
 import { bqgCatalogueCached, novelCatalogueCached } from "@/utils/novelCache";
 import { useSettingsStore, type ReaderFontKey, type ReaderThemeKey } from "@/stores/settings";
 import { loadPdfjs, toArrayBuffer } from "@/utils/pdf";
+import {
+  addBookmark,
+  formatBookmarkTime,
+  getBookmarks,
+  hasBookmark,
+  removeBookmark,
+  removeBookmarkAt,
+  type Bookmark,
+} from "@/utils/bookmarks";
 import { isLoginRequiredError } from "@/novel/wenku8Login";
 import { requestRelogin } from "@/novel/wenku8Auth";
 import type { MediaEntry, NovelContent, NovelVolume } from "@shared/types";
@@ -106,6 +115,12 @@ const toc = ref<{ label: string; href: string; depth: number }[]>([]);
 const currentHref = ref("");
 /** 当前 CFI（进度保存用，非响应式） */
 let progressLocation = "";
+/** 当前 CFI（响应式：书签按钮高亮用） */
+const currentCfi = ref("");
+/** 书签面板是否展开 */
+const bookmarkOpen = ref(false);
+/** 当前书的书签列表 */
+const bookmarks = ref<Bookmark[]>([]);
 
 const kind = computed(() => {
   if (props.novelSource) return "text" as const;
@@ -313,6 +328,7 @@ async function openEpub() {
     page.value = (location?.start?.index ?? 0) + 1;
     currentHref.value = location?.start?.href ?? "";
     progressLocation = location?.start?.cfi ?? "";
+    currentCfi.value = progressLocation;
     saveProgress();
   });
 
@@ -389,6 +405,92 @@ async function goToChapter(item: { href: string }) {
     else await r.display(item.href);
   } catch {
     /* 跳转失败忽略（保留原位置） */
+  }
+}
+
+// ---- 书签 ----
+
+/**
+ * 当前书的书签 bookId：本地文件用 path（EPUB/PDF），
+ * 在线文本（novelSource）用小说 aid。
+ */
+const bookmarkBookId = computed(() =>
+  kind.value === "text" ? (props.novelSource?.aid ?? "") : (props.item?.path ?? ""),
+);
+
+/** 当前阅读位置的 locator：EPUB=CFI，PDF=page:N，文本=cid:xxx#pN */
+function currentLocator(): string {
+  if (kind.value === "epub") return currentCfi.value;
+  if (kind.value === "pdf") return `page:${page.value}`;
+  return textCurrentCid.value ? `cid:${textCurrentCid.value}#p${textCurrentPage.value}` : "";
+}
+
+/** 当前位置的书签标题 */
+function currentBookmarkTitle(): string {
+  if (kind.value === "epub") {
+    const item = toc.value.find((t) => isTocActive(t));
+    return item?.label || `第 ${page.value} 节`;
+  }
+  if (kind.value === "pdf") return `第 ${page.value} 页`;
+  return `${textCurrentTitle.value || "正文"} · 第 ${textCurrentPage.value + 1} 页`;
+}
+
+const bookmarkedHere = computed(() => {
+  const id = bookmarkBookId.value;
+  const loc = currentLocator();
+  return !!id && !!loc && hasBookmark(id, loc);
+});
+
+function refreshBookmarks() {
+  const id = bookmarkBookId.value;
+  bookmarks.value = id ? getBookmarks(id) : [];
+}
+
+/** 工具栏书签按钮：未加则添加当前位置，已加则取消 */
+function toggleBookmark() {
+  const bookId = bookmarkBookId.value;
+  const locator = currentLocator();
+  if (!bookId || !locator) return;
+  if (hasBookmark(bookId, locator)) removeBookmarkAt(bookId, locator);
+  else addBookmark(bookId, { locator, title: currentBookmarkTitle() });
+  refreshBookmarks();
+}
+
+function openBookmarks() {
+  refreshBookmarks();
+  bookmarkOpen.value = !bookmarkOpen.value;
+}
+
+function delBookmark(id: string) {
+  removeBookmark(bookmarkBookId.value, id);
+  refreshBookmarks();
+}
+
+/** 点击书签跳转到对应位置 */
+async function goBookmark(b: Bookmark) {
+  bookmarkOpen.value = false;
+  if (kind.value === "epub") {
+    try {
+      await rendition.value?.display(b.locator);
+    } catch {
+      /* CFI 失效时忽略（保留原位置） */
+    }
+  } else if (kind.value === "pdf") {
+    const m = /^page:(\d+)$/.exec(b.locator);
+    const n = m ? parseInt(m[1], 10) : NaN;
+    if (Number.isFinite(n) && n >= 1 && n <= totalPages.value) {
+      page.value = n;
+      await renderPdf();
+    }
+  } else {
+    const m = /^cid:(.*)#p(\d+)$/.exec(b.locator);
+    if (!m) return;
+    const idx = textChapters.value.findIndex((c) => c.cid === m[1]);
+    if (idx >= 0) {
+      // 复用章节内页码恢复机制：loadTextChapter → splitTextIntoPages 消费
+      pendingRestorePage = parseInt(m[2], 10) || 0;
+      await loadTextChapter(idx);
+    }
   }
 }
 
@@ -700,6 +802,7 @@ function onKey(e: KeyboardEvent) {
   if (e.key === "Escape") {
     if (menuOpen.value) menuOpen.value = false;
     else if (sidebarOpen.value) sidebarOpen.value = false;
+    else if (bookmarkOpen.value) bookmarkOpen.value = false;
     else emit("close");
     return;
   }
@@ -870,6 +973,24 @@ const PDF_MODES = [
         >
           <span class="material-symbols-outlined">tune</span>
         </button>
+        <!-- 书签 -->
+        <button
+          class="rbtn"
+          :title="bookmarkedHere ? '取消书签' : '添加书签'"
+          @click="toggleBookmark"
+        >
+          <span class="material-symbols-outlined">{{
+            bookmarkedHere ? "bookmark" : "bookmark_add"
+          }}</span>
+        </button>
+        <button
+          class="rbtn"
+          :class="{ active: bookmarkOpen }"
+          title="书签列表"
+          @click="openBookmarks"
+        >
+          <span class="material-symbols-outlined">bookmarks</span>
+        </button>
         <button v-if="item" class="rbtn" title="用系统应用打开" @click="openExternally">
           <span class="material-symbols-outlined">open_in_new</span>
         </button>
@@ -977,6 +1098,31 @@ const PDF_MODES = [
           </template>
           <p v-if="kind === 'epub' && !toc.length" class="toc-empty">本书无目录</p>
           <p v-if="kind === 'text' && !textChapters.length" class="toc-empty">暂无目录</p>
+        </div>
+      </aside>
+    </transition>
+
+    <!-- 书签面板（右侧滑入）：遮罩 + 面板 -->
+    <transition name="fade">
+      <div v-if="bookmarkOpen" class="toc-backdrop" @click="bookmarkOpen = false"></div>
+    </transition>
+    <transition name="slide-right">
+      <aside v-if="bookmarkOpen" class="bookmark-panel">
+        <div class="toc-head">
+          <span class="material-symbols-outlined">bookmarks</span>
+          <span class="toc-title">书签</span>
+        </div>
+        <div class="toc-list">
+          <div v-for="b in bookmarks" :key="b.id" class="bm-row">
+            <button class="bm-main" @click="goBookmark(b)">
+              <span class="bm-title">{{ b.title }}</span>
+              <span class="bm-time">{{ formatBookmarkTime(b.createdAt) }}</span>
+            </button>
+            <button class="bm-del" title="删除书签" @click="delBookmark(b.id)">
+              <span class="material-symbols-outlined">delete</span>
+            </button>
+          </div>
+          <p v-if="!bookmarks.length" class="toc-empty">还没有书签，点击顶栏书签图标添加</p>
         </div>
       </aside>
     </transition>
@@ -1341,6 +1487,91 @@ const PDF_MODES = [
 .slide-enter-from,
 .slide-leave-to {
   transform: translateX(-100%);
+}
+
+/* 书签面板（右侧滑入）：复用目录面板的质感 */
+.bookmark-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 45;
+  width: 300px;
+  max-width: 80vw;
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--reader-bg) 94%, transparent);
+  backdrop-filter: blur(24px) saturate(1.6);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  border-left: 1px solid color-mix(in srgb, var(--reader-fg) 15%, transparent);
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.4);
+}
+.slide-right-enter-active,
+.slide-right-leave-active {
+  transition: transform 240ms var(--md-sys-motion-spring-spatial);
+}
+.slide-right-enter-from,
+.slide-right-leave-to {
+  transform: translateX(100%);
+}
+.bm-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  transition: background 140ms var(--md-sys-motion-spring-effects-fast);
+}
+.bm-row:hover {
+  background: color-mix(in srgb, var(--reader-fg) 12%, transparent);
+}
+.bm-main {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  color: color-mix(in srgb, var(--reader-fg) 78%, transparent);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.bm-main:hover {
+  color: var(--reader-fg);
+}
+.bm-title {
+  display: block;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bm-time {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  opacity: 0.55;
+}
+.bm-del {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: color-mix(in srgb, var(--reader-fg) 60%, transparent);
+  cursor: pointer;
+}
+.bm-del:hover {
+  color: var(--reader-fg);
+  background: color-mix(in srgb, var(--reader-fg) 14%, transparent);
+}
+.bm-del .material-symbols-outlined {
+  font-size: 18px;
 }
 
 .stage {
