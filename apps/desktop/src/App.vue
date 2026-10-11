@@ -134,8 +134,29 @@ function t(key: string) {
 const isPlayerPage = computed(() => route.path === "/music/player");
 const isDesktopLyricsPage = computed(() => route.path === "/desktop-lyrics");
 const isExtensionHostPage = computed(() => route.path === "/extension-host");
-// 独立绘画窗口：它自己就是完整界面，不能套主窗口的导航栏与侧边栏
-const isDrawingPage = computed(() => route.path === "/drawing");
+/**
+ * 当前窗口是否是**独立绘画窗口**。
+ *
+ * ⚠️ 必须用窗口 **label** 判定，不能只看路由 `route.path === "/drawing"`。
+ * 原因：`useRoute()` 在首次渲染时拿到的还是初始路由（`/` → 重定向 `/images`），
+ * 真正的 hash 路由是**异步**解析的。于是「以路由为条件短路外壳」会在第一帧
+ * 判成 false，把主界面外壳渲染进绘画窗口 —— 表现就是「绘画窗口里显示的是主界面」，
+ * 而路由到位后也不会撤掉（外壳已经挂载）。
+ *
+ * label 是 Tauri 在窗口创建时就注入的（见 ipc/bridge.ts 的 currentLabel），
+ * 同步可读、无竞态 —— 扩展窗口当初也是这么判定的。
+ */
+const isDrawingWindow = (() => {
+  if (!isDesktop) return false;
+  try {
+    return getCurrentWindow().label === "drawing";
+  } catch {
+    return false;
+  }
+})();
+
+/** 是否走「绘画窗口专用渲染」：label 命中，或路由已走到 /drawing。 */
+const isDrawingPage = computed(() => isDrawingWindow || route.path === "/drawing");
 
 // 扩展窗口（label: extension，由 Rust open_extension_window 创建）加载的是
 // 主 SPA，默认会 redirect 到 /images —— 按 label 重定向到扩展宿主路由。
@@ -157,6 +178,11 @@ function countOf(type: string | null): number {
 }
 
 onMounted(async () => {
+  if (isDrawingWindow) {
+    // 兜底：万一 hash 没生效（或被重定向走），强制回到绘画路由
+    if (route.path !== "/drawing") void router.replace({ path: "/drawing", query: route.query });
+    return; // 绘画窗口不跑主界面初始化（皮肤 / 媒体库 / 拖放监听全都不需要）
+  }
   if (isExtensionWindow) {
     void router.replace("/extension-host");
     return; // 扩展宿主窗口不需要主界面初始化（皮肤/媒体库）

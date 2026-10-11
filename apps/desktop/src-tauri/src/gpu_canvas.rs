@@ -190,13 +190,24 @@ fn run_canvas(app: AppHandle, rect: CanvasRect, running: Arc<Mutex<bool>>) -> Re
     let height = size.height.max(1);
 
     let caps = surface.get_capabilities(&adapter);
-    // 优先 sRGB：画布颜色要与 UI 一致，选错会出现整体偏色
+    // ⚠️ 这里**不能**用 `caps.formats[0]` 直接索引：列表为空时索引会 panic，
+    // 而本项目 release profile 是 `panic = "abort"` —— panic 会**直接杀掉整个进程**
+    // （用户看到的就是「点一下就闪退」）。凡是外部数据都返回错误，不 panic。
+    // 优先 sRGB：画布颜色要与 UI 一致，选错会出现整体偏色。
     let format = caps
         .formats
         .iter()
         .copied()
         .find(|f| f.is_srgb())
-        .unwrap_or(caps.formats[0]);
+        .or_else(|| caps.formats.first().copied())
+        .ok_or_else(|| "该 surface 没有可用的纹理格式".to_string())?;
+
+    // 同理：alpha_modes 为空时不能索引
+    let alpha_mode = caps
+        .alpha_modes
+        .first()
+        .copied()
+        .ok_or_else(|| "该 surface 没有可用的 alpha 模式".to_string())?;
 
     let config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -207,7 +218,7 @@ fn run_canvas(app: AppHandle, rect: CanvasRect, running: Arc<Mutex<bool>>) -> Re
         width,
         height,
         present_mode: wgpu::PresentMode::Fifo,
-        alpha_mode: caps.alpha_modes[0],
+        alpha_mode,
         view_formats: vec![],
         desired_maximum_frame_latency: 2,
     };

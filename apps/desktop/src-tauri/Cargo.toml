@@ -66,7 +66,12 @@ tauri-plugin-updater = "2"
 #
 # 版本取 30 与参考实现（photocraft）一致 —— 它是经过验证的组合。
 # 只开需要的特性：std（桌面必需）+ wgsl（着色器语言）。
-wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
+# ⚠️ **不要关 default-features**：default 里含 dx12 / metal / gles / vulkan 四个
+# 后端 feature，把它们关掉会导致 `Instance::new()` 直接 **panic** ——
+# wgpu 源码明确写着「若当前目标平台没有任何已启用的后端 feature，此方法会 panic」
+# （见 wgpu-30.0.1/src/api/instance.rs:65）。
+# 配合本项目的 `panic = "abort"`，表现为**进程瞬间闪退**（实测踩到）。
+wgpu = { version = "30" }
 # wgpu 的 request_adapter / request_device 是 async；主线程里需要一个最小的
 # 阻塞执行器。pollster 只做这一件事，比引入整个 tokio 运行时轻得多
 # （tokio 已在依赖里，但它是给 reqwest 用的，不该拿来跑渲染初始化）。

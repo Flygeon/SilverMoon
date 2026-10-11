@@ -67,6 +67,19 @@ export async function openDrawingWindow(opts: OpenDrawingOptions): Promise<void>
   });
   if (opts.id) q.set("id", opts.id);
 
+  // ⚠️ **先隐藏主窗口，再建绘画窗口** —— 顺序不能反。
+  //
+  // createWindow 是同步的（构造函数里就把窗口建出来），新窗口会立刻抢焦点；
+  // 此时再去 hide 主窗口，会因为焦点已转移而表现不稳定（实测：主窗口没藏住，
+  // 绘画窗口浮在主界面之上）。
+  //
+  // 先 hide 则没有这个竞态：主窗口先消失，新窗口再出现。
+  try {
+    await getCurrentWindow().hide();
+  } catch {
+    /* 隐藏失败不影响绘画窗口可用（最坏情况是多一个窗口） */
+  }
+
   createWindow(DRAWING_WINDOW_LABEL, {
     url: base + "#/drawing?" + q.toString(),
     title: "SilverMoon · 绘画",
@@ -78,13 +91,6 @@ export async function openDrawingWindow(opts: OpenDrawingOptions): Promise<void>
     minHeight: 600,
     visible: true,
   });
-
-  // 先把主窗口藏起来：否则新窗口弹出时背后还露着主界面
-  try {
-    await getCurrentWindow().hide();
-  } catch {
-    /* 隐藏失败不影响绘画窗口可用 */
-  }
 }
 
 /**
