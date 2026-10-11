@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import PageHeader from "@/components/PageHeader.vue";
-import ExtensionSlot from "@/components/ExtensionSlot.vue";
+import PluginSlot from "@/components/PluginSlot.vue";
 import {
   useSettingsStore,
   type PdfReadMode,
@@ -789,7 +789,7 @@ onBeforeUnmount(() => {
           扩展注册的设置入口（contributes.ui surface="slot" slot="settings.sidebar"）。
           扩展想给自己的设置做个页面，就在这里冒一行 —— 不必再自己弹窗，用户也找得到。
         -->
-        <ExtensionSlot slot="settings.sidebar" mode="entry" />
+        <PluginSlot slot="settings.sidebar" mode="entry" />
       </m3e-nav-menu>
     </aside>
     <!-- 外观 -->
@@ -893,7 +893,7 @@ onBeforeUnmount(() => {
 
     <!-- 扩展挂到「外观」分类的卡片（slot="settings.appearance"）。
          扩展要往设置里加自己的配置块，就在这里冒出来，与内置卡片同一版式。 -->
-    <ExtensionSlot
+    <PluginSlot
       v-if="activeSection === 'settings-appearance'"
       slot="settings.appearance"
       mode="panel"
@@ -992,7 +992,7 @@ onBeforeUnmount(() => {
     </m3e-card>
 
     <!-- 阅读 -->
-    <ExtensionSlot
+    <PluginSlot
       v-if="activeSection === 'settings-reading'"
       slot="settings.library"
       mode="panel"
@@ -1011,7 +1011,7 @@ onBeforeUnmount(() => {
     </m3e-card>
 
     <!-- 扩展挂到「系统」分类的卡片 -->
-    <ExtensionSlot v-if="activeSection === 'settings-deps'" slot="settings.system" mode="panel" />
+    <PluginSlot v-if="activeSection === 'settings-deps'" slot="settings.system" mode="panel" />
 
     <!-- FFmpeg -->
     <m3e-card
@@ -1456,7 +1456,7 @@ onBeforeUnmount(() => {
     </m3e-card>
 
     <!-- 播放器 -->
-    <ExtensionSlot
+    <PluginSlot
       v-if="activeSection === 'settings-playback'"
       slot="settings.playback"
       mode="panel"
@@ -1602,7 +1602,7 @@ onBeforeUnmount(() => {
     </m3e-card>
 
     <!-- 扩展挂到「在线源」分类的卡片 -->
-    <ExtensionSlot
+    <PluginSlot
       v-if="activeSection === 'settings-onlinemusic'"
       slot="settings.online"
       mode="panel"

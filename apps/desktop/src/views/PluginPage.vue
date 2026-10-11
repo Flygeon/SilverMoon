@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 扩展页面（主窗口内容区里的一整页）。
+ * 插件页面（主窗口内容区里的一整页）。
  *
  * 由 `contributes.nav[]` / `contributes.ui[]`（`surface: "nav"`）注入的导航项跳进来，
  * 路由形如 `/extension-page/<extId>/<route>`。
@@ -13,7 +13,7 @@
  */
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import ExtensionEmbed from "@/components/ExtensionEmbed.vue";
+import PluginEmbed from "@/components/PluginEmbed.vue";
 import PageHeader from "@/components/PageHeader.vue";
 import { capabilities, isDesktop } from "@/capabilities";
 import type { ExtUiSurface } from "@shared/types";
@@ -70,12 +70,12 @@ watch(() => hostRoute.fullPath, load);
 
 <template>
   <div class="ext-page">
-    <PageHeader :title="title" description="由扩展提供" />
+    <PageHeader :title="title" description="由插件提供" />
     <div v-if="missing" class="missing">
-      这个页面来自扩展「{{ extId }}」，但它现在没有声明该页面 ——
-      可能是扩展被禁用或已卸载。可在「百宝箱 → 扩展」里检查。
+      这个页面来自插件「{{ extId }}」，但它现在没有声明该页面 ——
+      可能是插件被禁用或已卸载。可在「百宝箱 → 插件」里检查。
     </div>
-    <ExtensionEmbed v-else :surface="surface" class="full" />
+    <PluginEmbed v-else :surface="surface" class="full" />
   </div>
 </template>
 

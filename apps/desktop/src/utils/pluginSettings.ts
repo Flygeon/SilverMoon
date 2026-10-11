@@ -1,5 +1,5 @@
 /**
- * 每个扩展自己的设置存储。
+ * 每个插件自己的设置存储。
  *
  * 扩展通过桥方法 `settings:get` / `settings:set` 读写，宿主把它落在
  * `<appData>/ext-settings.json` 的 **一个键**（键名 = 扩展 id）下，

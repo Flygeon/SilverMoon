@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 扩展宿主页面（专用窗口，label: extension）。
+ * 插件宿主页面（专用窗口，label: extension）。
  *
  * 由 Rust 侧 open_extension_window() 创建并 emit `ext:navigate` 导航事件；
  * 本页面按事件里的 ext/route 加载扩展自带的 web UI，路径与默认路由都读扩展
@@ -18,7 +18,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { appDataDir, join } from "@/ipc/paths";
 import { toAssetUrl } from "@/ipc/invoke";
 import { capabilities, isDesktop } from "@/capabilities";
-import { defaultsFrom, getExtSettings, setExtSettings } from "@/utils/extSettings";
+import { defaultsFrom, getExtSettings, setExtSettings } from "@/utils/pluginSettings";
 import { useSkinsStore } from "@/stores/skins";
 import type { ExtManifest } from "@shared/types";
 
@@ -42,7 +42,7 @@ const statusText = ref("");
 
 /** 标题栏：优先显示扩展自己的名字与 manifest 声明的 route */
 const title = computed(() => {
-  if (!current.value) return "扩展";
+  if (!current.value) return "插件";
   const name = manifest.value?.name || current.value.ext;
   return current.value.route ? `${name} · ${current.value.route}` : name;
 });
@@ -54,7 +54,7 @@ async function navigateTo(ext: string, route: string) {
   statusText.value = "";
   if (!isDesktop) {
     current.value = { ext, route };
-    loadError.value = "浏览器预览下无法加载扩展 UI（需要桌面端宿主）";
+    loadError.value = "浏览器预览下无法加载插件 UI（需要桌面端宿主）";
     return;
   }
   try {
@@ -77,7 +77,7 @@ async function navigateTo(ext: string, route: string) {
     iframeSrc.value = `${toAssetUrl(htmlPath, "ext")}?ext=${encodeURIComponent(ext)}&route=${encodeURIComponent(effRoute)}`;
   } catch (e) {
     current.value = { ext, route };
-    loadError.value = `解析扩展 UI 路径失败：${String(e)}`;
+    loadError.value = `解析插件 UI 路径失败：${String(e)}`;
     iframeSrc.value = "";
   }
 }
@@ -217,7 +217,7 @@ onBeforeUnmount(() => {
       :src="iframeSrc"
       allow="clipboard-read; clipboard-write"
     ></iframe>
-    <div v-else class="err">等待导航事件（由扩展自己声明的热键或托盘项触发）…</div>
+    <div v-else class="err">等待导航事件（由插件自己声明的热键或托盘项触发）…</div>
   </div>
 </template>
 

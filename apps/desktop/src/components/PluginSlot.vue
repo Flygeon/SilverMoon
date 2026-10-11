@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 具名插槽容器：把扩展声明的内容渲染到宿主指定的真实位置。
+ * 具名插槽容器：把插件声明的内容渲染到宿主指定的真实位置。
  *
  * 这是「扩展改主界面」的**通用机制** —— 与固定两槽（`nav` / `main`）的区别：
  * 宿主为设置页侧栏、设置卡片栈、播放页底部等**真实位置**各开一个具名插槽，
@@ -17,7 +17,7 @@
  */
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import ExtensionEmbed from "@/components/ExtensionEmbed.vue";
+import PluginEmbed from "@/components/PluginEmbed.vue";
 import { capabilities, isDesktop } from "@/capabilities";
 import type { ExtUiSurface } from "@shared/types";
 
@@ -58,7 +58,7 @@ onMounted(() => {
 
 <template>
   <template v-if="mode === 'panel'">
-    <ExtensionEmbed
+    <PluginEmbed
       v-for="s in items"
       :key="`${s.extId}:${s.id}`"
       :surface="s"

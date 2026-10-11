@@ -2,7 +2,7 @@
 import { useRouter } from "vue-router";
 import { useSettingsStore } from "@/stores/settings";
 import { translate } from "@shared/i18n";
-import ExtensionSlot from "@/components/ExtensionSlot.vue";
+import PluginSlot from "@/components/PluginSlot.vue";
 
 const settings = useSettingsStore();
 const router = useRouter();
@@ -17,7 +17,7 @@ const items = [
   { to: "/favorites", icon: "favorite", title: t("nav.favorites"), sub: t("navDesc.favorites") },
   { to: "/history", icon: "history", title: t("nav.history"), sub: t("navDesc.history") },
   { to: "/trash", icon: "delete", title: t("nav.trash"), sub: t("navDesc.trash") },
-  { to: "/extensions", icon: "extension", title: "扩展", sub: "已安装的扩展" },
+  { to: "/extensions", icon: "extension", title: "插件", sub: "已安装的插件" },
 ];
 
 // 更多工具（文件夹浏览 / WebDAV / 音效预设市场 / 时长统计 / 阅读统计）。
@@ -92,7 +92,7 @@ function open(to: string) {
     <h3 class="section-title">更多工具</h3>
     <!-- 扩展注册的工具入口（contributes.ui surface="slot" slot="treasure.tools"）：
          与内置工具同一列表、同一版式，点进去是扩展自己的页面。 -->
-    <ExtensionSlot slot="treasure.tools" mode="entry" class="ext-tools" />
+    <PluginSlot slot="treasure.tools" mode="entry" class="ext-tools" />
     <m3e-list v-if="tools.length" class="treasure-list" variant="segmented">
       <m3e-list-item v-for="tool in tools" :key="tool.to" class="t-item" @click="open(tool.to)">
         <span slot="leading" class="lead-circle">
