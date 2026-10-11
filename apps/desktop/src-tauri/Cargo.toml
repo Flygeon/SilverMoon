@@ -159,6 +159,31 @@ uda-core = { git = "https://github.com/UniDesktop/SDK", rev = "19453c4fcd87b4af2
 uda-platform-windows = { git = "https://github.com/UniDesktop/SDK", rev = "19453c4fcd87b4af2e424fef2708c08e907c2ab9" }
 
 # ---------------------------------------------------------------------------
+# 依赖修补（仅此一处）
+#
+# **gpu-allocator 0.28.0 与 windows crate 的版本约束冲突**（上游 bug，无修复版）：
+#
+#   smtc-tokio     windows ^0.62.2   → >=0.62.2
+#   wgpu-hal 30    windows 0.62      → >=0.62.0
+#   gpu-allocator  windows <=0.62    → <=0.62.0   ← 上界被挤爆
+#
+# 三者**交集为空**，于是 cargo 只能给 gpu-allocator 选 windows 0.58，
+# 导致同一个 COM 接口出现两个 crate 版本 → wgpu-hal 的 DX12 后端编译失败
+# （E0308 / E0277，canonical 类型不匹配），Windows 构建全挂。
+#
+# 根因是发布时间差：gpu-allocator 0.28 发布于 2025-09-26（当时 0.62.0 是最新），
+# 而 windows 0.62.2 发布于 2025-10-06，晚了 10 天。上游 master 至今未修。
+#
+# 修法：vendor 一份 gpu-allocator，只把那一行上界改成 "<=0.62.2"
+# （0.62.0 → 0.62.2 是补丁级版本，API 兼容，放宽是安全的）。
+# 改动就在 vendor/gpu-allocator/Cargo.toml，有详细注释。
+#
+# 上游修复后即可删除本节与 vendor 目录。
+# ---------------------------------------------------------------------------
+[patch.crates-io]
+gpu-allocator = { path = "vendor/gpu-allocator" }
+
+# ---------------------------------------------------------------------------
 # 发布构建配置
 #
 # 与 Electron 版（sidecar 进程）的关键差异：本 crate 现在是**桌面应用的
