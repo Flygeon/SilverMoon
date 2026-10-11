@@ -46,6 +46,18 @@ async function toggle(ext: ExtInfo) {
   }
 }
 
+/**
+ * 状态文案。
+ *
+ * `hasEngine` 是关键：没有引擎的扩展（纯 UI，只用宿主保留方法）
+ * 永远不会有 `engineReady`，若一律显示"已启用"，用户会以为引擎没起来。
+ */
+function stateText(ext: ExtInfo): string {
+  if (!ext.enabled) return "已禁用";
+  if (!ext.hasEngine) return "已启用";
+  return ext.engineReady ? "运行中" : "已启用（引擎未启动）";
+}
+
 async function openWindow(ext: ExtInfo) {
   try {
     await capabilities.extOpenWindow(ext.id);
@@ -115,9 +127,12 @@ onActivated(load);
           <div class="sub">
             id: {{ ext.id }} · v{{ ext.version || "?" }}
             <span class="state" :class="ext.enabled ? 'on' : 'off'">
-              {{ ext.enabled ? (ext.engineReady ? "运行中" : "已启用") : "已禁用" }}
+              {{ stateText(ext) }}
             </span>
             <span v-if="!ext.compatible" class="state bad">API 不兼容</span>
+            <!-- 纯 UI 扩展（没有引擎）标出来：用户看"已启用"会以为引擎在跑，
+                 但它本来就不需要引擎，光看状态栏分不出来。 -->
+            <span v-if="ext.enabled && !ext.hasEngine" class="state plain">纯界面</span>
           </div>
           <div v-if="!ext.compatible" class="warn">
             该扩展要求更高的扩展 API 版本，已跳过加载：{{ ext.incompatibleReason }}
@@ -215,6 +230,10 @@ onActivated(load);
 .state.bad {
   background: rgba(220, 80, 80, 0.15);
   color: #d05050;
+}
+.state.plain {
+  background: rgba(128, 128, 128, 0.12);
+  color: rgba(128, 128, 128, 0.9);
 }
 .warn {
   margin-top: 6px;

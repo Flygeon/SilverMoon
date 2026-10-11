@@ -624,21 +624,46 @@ fn load_extensions(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 把引擎启动失败写回 ExtEntry（成功则清空）。
+fn record_engine_error(app: &tauri::AppHandle, id: &str, error: Option<String>) {
+    let state = app.state::<ExtState>();
+    // guard 必须先绑到局部变量：写成 `if let Some(..) = state.map.lock()...`
+    // 时那个 MutexGuard 临时量会活到 if-let 结束，比 `state` 更晚 drop（E0597）。
+    let mut map = state.map.lock().unwrap();
+    if let Some(ext) = map.get_mut(id) {
+        ext.engine_error = error;
+    }
+}
+
 /// 拉起扩展引擎，读取 stdout `READY <port>` 行，存入端口。
 ///
 /// 外面这层负责把成功/失败**写回 ExtEntry**，让 `ext_list` 能把真实的启动失败
 /// 原因带回 UI——再往里才是真正的启动逻辑。
+///
+/// ⚠️ **只有真的声明了引擎的扩展才算"失败"**。纯 UI 扩展（只用宿主保留方法、
+/// manifest 里没有 `engines`）走到这里必然拿到「没有引擎声明」——那是**常态不是错误**。
+/// 早先这里无条件记录 err，于是皮肤管理器这类扩展被界面标成
+/// 「引擎启动失败：扩展 skin-manager 没有引擎声明」，看着像坏了，其实一切正常。
 fn spawn_engine(app: &tauri::AppHandle, id: &str) -> Result<u16, String> {
     let result = spawn_engine_inner(app, id);
-    {
-        let state = app.state::<ExtState>();
-        // guard 必须先绑到局部变量：写成 `if let Some(..) = state.map.lock()...`
-        // 时那个 MutexGuard 临时量会活到 if-let 结束，比 `state` 更晚 drop（E0597）。
-        let mut map = state.map.lock().unwrap();
-        if let Some(ext) = map.get_mut(id) {
-            ext.engine_error = result.as_ref().err().cloned();
+    let error = match &result {
+        Ok(_) => None,
+        Err(e) => {
+            let has_engine = {
+                let state = app.state::<ExtState>();
+                let map = state.map.lock().unwrap();
+                map.get(id)
+                    .map(|x| x.manifest.engines.is_some())
+                    .unwrap_or(false)
+            };
+            if has_engine {
+                Some(e.clone())
+            } else {
+                None
+            }
         }
-    }
+    };
+    record_engine_error(app, id, error);
     result
 }
 
@@ -983,8 +1008,19 @@ pub async fn ext_set_enabled(
         en.insert(id.clone(), enabled);
         save_enabled_state(&app, &en)?;
         if enabled {
+            // 没有引擎的扩展（纯 UI）也会走到这里并返回 Err —— 那是常态，别刷日志。
+            // 判断放这里而不是只靠 spawn_engine 内部，是为了让"要不要叫"显式可见。
+            let has_engine = {
+                let state = app.state::<ExtState>();
+                let map = state.map.lock().unwrap();
+                map.get(&id)
+                    .map(|x| x.manifest.engines.is_some())
+                    .unwrap_or(false)
+            };
             if let Err(e) = spawn_engine(&app, &id) {
-                eprintln!("[ext] 启动引擎失败：{e}");
+                if has_engine {
+                    eprintln!("[ext] 启动引擎失败：{e}");
+                }
             }
         } else {
             stop_engine(&app, &id);
@@ -1038,7 +1074,20 @@ pub async fn ext_invoke(
         }
         let port = match port {
             Some(p) => p,
-            None => spawn_engine(&app, &id).map_err(|e| format!("扩展引擎未就绪：{e}"))?,
+            None => spawn_engine(&app, &id).map_err(|e| {
+                // 纯 UI 扩展没有引擎是**设计如此**，它应该只走宿主保留方法
+                // （settings:* / themes:* / ui:openWindow / open / reveal）。
+                // 直接甩「没有引擎声明」会让作者以为宿主坏了，所以把可用的路说清楚。
+                if !manifest.engines.is_some() {
+                    format!(
+                        "扩展 {id} 没有引擎，无法调用 {method}。\
+                         纯 UI 扩展只能调用宿主保留方法：settings:get / settings:set / \
+                         themes:list / themes:apply / themes:clear / open / reveal / ui:openWindow"
+                    )
+                } else {
+                    format!("扩展引擎未就绪：{e}")
+                }
+            })?,
         };
         let url = format!("http://127.0.0.1:{port}/{method}");
         let client = reqwest::blocking::Client::new();
