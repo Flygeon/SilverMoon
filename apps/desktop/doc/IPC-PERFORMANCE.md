@@ -237,6 +237,91 @@ scan_start         1     220.5    7.4%   220.5  220.5   220.5     0        18
 关闭时只有一次 `performance.now()`。样本按命令各自保留最近 **512** 次（环形缓冲），
 内存有界。
 
+## 五、第一次实机测量与修复（2026-10-11）
+
+以下数据来自真实使用约 1~2 分钟（切分区、滚动图库、听歌、开小说），
+经 `window.__silvermoonIpcDump()` 落盘。共 **227 次调用 / 30 个命令 / 56 秒**。
+
+### 数据的正确读法（重要，否则会误判）
+
+计量测的是「invoke 到返回」的全程。而**同步 `#[tauri::command]` 跑在主线程事件
+循环里**（`novel_auth.rs:527`、`commands/host.rs:342` 都写明了这点），
+所以对同步命令而言，这个数字包含**「等主线程腾出手」的排队时间**。
+
+因此它不能读成「IPC 传输慢」，也不能直接读成「Rust 工作慢」——
+但它是**主线程拥堵**的准确指示器。
+
+### 测量结果（前 7 名）
+
+| 命令 | 次数 | 总耗时 | 占比 | P95 | 峰值 | 当时是同步? |
+|---|---|---|---|---|---|---|
+| `smtc_set_playback` | 176 | 27368ms | 48.8% | 1247ms | 3181ms | ⚠️ 同步 |
+| `novel_recommend` | 2 | 6995ms | 12.5% | 4574ms | 4574ms | ⚠️ 同步 |
+| `novel_rank` | 2 | 5878ms | 10.5% | 3461ms | 3461ms | ⚠️ 同步 |
+| `novel_shelf_list` | 2 | 4400ms | 7.8% | 3464ms | 3464ms | ⚠️ 同步 |
+| `bqg_home` | 1 | 4228ms | 7.5% | 4228ms | 4228ms | ✓ async |
+| `anime_fetch` | 2 | 1715ms | 3.1% | 868ms | 869ms | ✓ async |
+| `ffmpeg_status` | 4 | 732ms | 1.3% | 266ms | 266ms | ⚠️ 同步 |
+
+**`bqg_home` 是关键对照**：它同样耗时 4.2 秒，但**它是 async**，界面不冻结。
+差别不在耗时，在跑在哪个线程。
+
+### 最有价值的单个发现：`smtc_set_playback` 并不慢
+
+它占了 48.8% 的总耗时，初看像是「SMTC 调用很慢」。但读 `smtc-tokio` 源码可知，
+它的方法体只有两行：
+
+```rust
+let _ = self.command_tx.send(WindowsMediaCommand::SetPosition(position_ms));
+self.wake_sta_thread();   // PostThreadMessageW 给专用 STA 线程
+```
+
+**微秒级。** 所以那 155ms 均值全是排队 —— 前端每 500ms 推一次播放进度，
+176 次调用持续给主线程施压。这是一个「指标指向了正确的现象，但指向了错误的对象」
+的例子：现象是主线程拥堵，对象却不是被怀疑的那条命令。
+
+### 修复内容（commit 79f5f1f / 1427a35 / 817bb84）
+
+| 改动 | 说明 |
+|---|---|
+| `novel.rs` 8 个命令 | 同步 → `async` + `spawn_blocking`（新增 `fetch_html_async` 包装）|
+| `smtc_set_playback` / `set_media` | 同步 → `async`；`set_media` 另加 `spawn_blocking`（要解码内嵌封面）|
+| `ffmpeg_status` / `ffmpeg_set_path` | 同步 → `async` + `spawn_blocking`（要 spawn 子进程探测）|
+| `wenku8_shelf_online` | 同步 → `async` + `spawn_blocking` |
+| `stores/player.ts` 的 `syncSmtc` | 节流 500ms → 1000ms；**暂停且位置未变时直接返回** |
+
+另做了全仓审计（35 个 .rs 文件的所有 `#[tauri::command]`，找「同步 + 阻塞 I/O」），
+修完后**已无此类组合**。
+
+### 踩到的两个 Rust 异步陷阱（都只有 CI 能发现）
+
+**1. 改成 async 后，Rust 内部的调用者也要跟着改。**
+`wenku8_shelf_online` 在 `novel.rs` 里有一个内部调用者，第一次漏改，CI 报
+`expected future, found Result`。教训：**改命令的线程模型时，必须查「谁在 Rust 里
+调用了它」**，不只是前端 invoke。
+
+**2. `MutexGuard` 是 `!Send`，显式 `drop()` 不足以让编译器接受。**
+Tauri 要求 async 命令的 future 是 `Send`。原代码本来就有 `drop(stmt); drop(conn);`，
+改成 async 后仍报：
+
+```text
+error: future cannot be sent between threads safely
+  has type `MutexGuard<'_, Connection>` which is not `Send`
+  await occurs here, with `conn` maybe used later
+```
+
+正确做法是**把持锁的整段关进独立块作用域**，让守卫在块尾确定性地结束，
+`await` 挪到块之后：
+
+```rust
+let mut out = {
+    let conn = state.0.lock()?;
+    ...            // 查询
+    v
+};                 // ← 守卫在此结束
+if ... { ...await } // ← 之后才 await
+```
+
 ## 五、方法论：先测再改
 
 上面列了 8 项，但**不建议按顺序全做**。理由：
