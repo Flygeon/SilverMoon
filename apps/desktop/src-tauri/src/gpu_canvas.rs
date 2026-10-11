@@ -199,7 +199,27 @@ fn run_canvas(app: AppHandle, rect: CanvasRect, running: Arc<Mutex<bool>>) -> Re
     //   - InstanceDescriptor 用 new_without_display_handle()（旧版是 ..Default::default()）
     //   - request_adapter 返回 Result（旧版是 Option）
     //   - RenderPassColorAttachment 有 depth_slice 字段（旧版没有）
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    // 后端选择：默认让 wgpu 自己挑（Backends::all()），
+    // 但允许用环境变量 SILVERMOON_GPU_BACKEND 强制指定，便于在崩溃环境上逐个试：
+    //   dx12 / vulkan / gl / metal / all
+    // 这是排查「某后端不可用导致原生崩溃」的关键手段。
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    if let Ok(want) = std::env::var("SILVERMOON_GPU_BACKEND") {
+        let b = match want.to_ascii_lowercase().as_str() {
+            "dx12" | "d3d12" => wgpu::Backends::DX12,
+            "vulkan" | "vk" => wgpu::Backends::VULKAN,
+            "gl" | "gles" | "opengl" => wgpu::Backends::GL,
+            "metal" => wgpu::Backends::METAL,
+            _ => wgpu::Backends::all(),
+        };
+        crate::boot_log::record(&format!("[gpu-canvas] 后端被指定为 {b:?}（来自环境变量）"));
+        desc.backends = b;
+    }
+    crate::boot_log::record(&format!(
+        "[gpu-canvas] 准备创建 Instance，后端={:?}",
+        desc.backends
+    ));
+    let instance = wgpu::Instance::new(desc);
 
     // create_surface 接受 impl Into<SurfaceTarget>；
     // tauri::Window 实现了 HasWindowHandle + HasDisplayHandle，

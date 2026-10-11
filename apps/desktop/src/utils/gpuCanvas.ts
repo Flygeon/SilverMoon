@@ -65,13 +65,48 @@ function measure(el: HTMLElement): CanvasRect {
   };
 }
 
-/** 是否应该启用 GPU 画布。
+/**
+ * 是否应该启用 GPU 画布。
  *
- * 浏览器预览（无 Tauri 桥）下没有原生窗口能力，必须退回 DOM 画布，
- * 否则整个绘画界面会是一片空白。
+ * ⚠️ **默认关闭**，原因如下（务必读完再改）：
+ *
+ * GPU 画布目前只是**可行性验证**，它会在绘制区域上叠一个原生 wgpu 窗口。
+ * 但 wgpu 的初始化在部分环境上会**原生崩溃**（不触发 Rust panic hook、无日志）：
+ * 实测在「Intel HD 620 + 2020 年驱动 + GameViewer 虚拟显示适配器」上，
+ * 打开绘画窗口后几秒进程直接消失。
+ *
+ * 由于绘画窗口打开时会先隐藏主窗口，这个崩溃会让**整个应用不可用** ——
+ * 代价远大于验证收益。因此改为 opt-in。
+ *
+ * 开启方式（三选一）：
+ *
+ * 1. 浏览器地址栏（开发期）：在 URL 末尾加 `?gpuCanvas=1`（或 `#/drawing?...&gpuCanvas=1`）
+ * 2. 构建期：构建时设 `VITE_GPU_CANVAS=1`
+ * 3. 调试：在控制台执行 `localStorage.setItem("silvermoon:gpuCanvas", "1")` 后重开画布
+ *
+ * 三个条件满足**任意一个**即启用。这样你的绘画功能立刻恢复正常，
+ * 同时我们仍能在确定支持的环境上单独验证 wgpu 链路。
  */
 export function gpuCanvasAvailable(): boolean {
-  return isDesktop;
+  // 浏览器预览没有原生窗口能力，一律关闭（否则界面空白）
+  if (!isDesktop) return false;
+  try {
+    // 1) localStorage 开关（最方便，重开窗口即生效）
+    if (localStorage.getItem("silvermoon:gpuCanvas") === "1") return true;
+  } catch {
+    /* 隐私模式等场景下 localStorage 可能不可用，忽略 */
+  }
+  // 2) URL 参数（开发期临时开启，不改任何持久状态）
+  if (typeof window !== "undefined") {
+    const sp = new URLSearchParams(window.location.search);
+    const hashQ = window.location.hash.includes("?")
+      ? new URLSearchParams(window.location.hash.slice(window.location.hash.indexOf("?") + 1))
+      : null;
+    if (sp.get("gpuCanvas") === "1" || hashQ?.get("gpuCanvas") === "1") return true;
+  }
+  // 3) 构建期环境变量（给「确定要发布验证版」的构建用）
+  if (import.meta.env.VITE_GPU_CANVAS === "1") return true;
+  return false;
 }
 
 export interface GpuCanvasHandle {
