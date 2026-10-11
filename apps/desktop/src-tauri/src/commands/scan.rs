@@ -546,6 +546,12 @@ pub struct ListQuery {
     pub offset: Option<i64>,
 }
 
+/// 把搜索词转成 FTS5 短语查询：整体包双引号，词内双引号按 FTS5 规则转义为两个双引号。
+/// 短语内其它特殊字符（*、括号、AND/OR/NOT 等）都会被当作字面量处理。
+fn fts_phrase(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
 /// 列表 / 计数共用的 WHERE 子句与参数。
 ///
 /// 两者**必须完全一致**，否则分页的"总数"与实际能翻到的条数对不上。
@@ -563,12 +569,23 @@ fn list_filter(q: &ListQuery) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
         params.push(Box::new(min));
     }
     if let Some(s) = q.search.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        where_sql.push_str(
-            " AND (f.name LIKE ? OR m.title LIKE ? OR m.artist LIKE ? OR m.album LIKE ?)",
-        );
-        let like = format!("%{s}%");
-        for _ in 0..4 {
-            params.push(Box::new(like.clone()));
+        // 混合策略：trigram 分词器查不到 <3 字符的子串（中英文都一样），
+        // 因此 ≥3 个 Unicode 字符走 FTS5 索引，短词回退到原来的 LIKE。
+        if s.chars().count() >= 3 {
+            // 整个词包成双引号短语查询，见 fts_phrase()。
+            let phrase = fts_phrase(s);
+            where_sql.push_str(
+                " AND f.id IN (SELECT file_id FROM files_fts WHERE files_fts MATCH ?)",
+            );
+            params.push(Box::new(phrase));
+        } else {
+            where_sql.push_str(
+                " AND (f.name LIKE ? OR m.title LIKE ? OR m.artist LIKE ? OR m.album LIKE ?)",
+            );
+            let like = format!("%{s}%");
+            for _ in 0..4 {
+                params.push(Box::new(like.clone()));
+            }
         }
     }
 
@@ -801,6 +818,198 @@ mod scope_tests {
                 SKIP_DIRS.iter().any(|s| s.eq_ignore_ascii_case(name)),
                 "{name} 必须在 SKIP_DIRS 里"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod fts_tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    /// 造一个"旧库"：v5 时代的 files / media_metadata 表 + 几行数据，user_version=5。
+    fn v5_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE files (
+              id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE,
+              parent TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '',
+              ext TEXT NOT NULL DEFAULT '', type TEXT NOT NULL,
+              size INTEGER NOT NULL DEFAULT 0, mtime INTEGER NOT NULL DEFAULT 0,
+              scanned_at INTEGER NOT NULL DEFAULT 0, parsed_at INTEGER NOT NULL DEFAULT 0,
+              deleted INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE media_metadata (
+              file_id TEXT PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+              title TEXT, artist TEXT, album TEXT
+            );
+            INSERT INTO files (id, path, name, type)
+              VALUES ('f1', '/m/周杰伦-晴天.mp3', '周杰伦-晴天.mp3', 'audio');
+            INSERT INTO media_metadata (file_id, title, artist, album)
+              VALUES ('f1', '晴天', '周杰伦', '叶惠美');
+            INSERT INTO files (id, path, name, type)
+              VALUES ('f2', '/m/hello.mp3', 'hello.mp3', 'audio');
+            INSERT INTO media_metadata (file_id, title, artist, album)
+              VALUES ('f2', 'Hello', 'Adele', '25');
+            INSERT INTO files (id, path, name, type)
+              VALUES ('f3', '/p/photo.jpg', 'photo.jpg', 'image');
+            "#,
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 5).unwrap();
+        conn
+    }
+
+    fn fts_count(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM files_fts", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// 用 list_filter 拼出 WHERE，按 count_files 的方式执行，返回命中数。
+    fn search_count(conn: &Connection, term: &str) -> i64 {
+        let q = ListQuery {
+            search: Some(term.to_string()),
+            ..Default::default()
+        };
+        let (where_sql, params) = list_filter(&q);
+        let sql = format!(
+            "SELECT COUNT(*) FROM files f LEFT JOIN media_metadata m ON m.file_id = f.id{where_sql}"
+        );
+        let mut stmt = conn.prepare(&sql).unwrap();
+        let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        stmt.query_row(refs.as_slice(), |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn fts_phrase_wraps_and_escapes_quotes() {
+        assert_eq!(fts_phrase("周杰伦"), "\"周杰伦\"");
+        assert_eq!(fts_phrase("a\"b"), "\"a\"\"b\"");
+        // 特殊字符原样保留（短语内按字面量处理）
+        assert_eq!(fts_phrase("a*b (c)"), "\"a*b (c)\"");
+    }
+
+    #[test]
+    fn list_filter_uses_fts_for_long_terms_and_like_for_short() {
+        // ≥3 字符：FTS5
+        let q = ListQuery {
+            search: Some("周杰伦".to_string()),
+            ..Default::default()
+        };
+        let (sql, params) = list_filter(&q);
+        assert!(sql.contains("files_fts MATCH"), "sql={sql}");
+        assert_eq!(params.len(), 1, "FTS 只需要一个绑定参数");
+
+        // <3 字符：回退 LIKE（trigram 查不到短子串）
+        let q = ListQuery {
+            search: Some("杰伦".to_string()),
+            ..Default::default()
+        };
+        let (sql, params) = list_filter(&q);
+        assert!(sql.contains("LIKE"), "sql={sql}");
+        assert!(!sql.contains("files_fts"), "sql={sql}");
+        assert_eq!(params.len(), 4);
+
+        // 空白搜索词：不过滤
+        let q = ListQuery {
+            search: Some("   ".to_string()),
+            ..Default::default()
+        };
+        let (sql, params) = list_filter(&q);
+        assert!(!sql.contains("LIKE") && !sql.contains("files_fts"));
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn migration_v5_to_v6_creates_fts_and_backfills() {
+        let conn = v5_db();
+        crate::commands::init_db(&conn).unwrap();
+
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 6);
+        // 3 个文件全回填（含无元数据的 f3）
+        assert_eq!(fts_count(&conn), 3);
+
+        // 中文子串（≥3 字符）走 FTS 命中
+        assert_eq!(search_count(&conn, "周杰伦"), 1);
+        assert_eq!(search_count(&conn, "晴天"), 1);
+        // 英文子串
+        assert_eq!(search_count(&conn, "hello"), 1);
+        assert_eq!(search_count(&conn, "Adele"), 1);
+        // 文件名子串
+        assert_eq!(search_count(&conn, "photo"), 1);
+        // 不存在的词
+        assert_eq!(search_count(&conn, "不存在的歌"), 0);
+    }
+
+    #[test]
+    fn migration_is_idempotent() {
+        let conn = v5_db();
+        crate::commands::init_db(&conn).unwrap();
+        crate::commands::init_db(&conn).unwrap();
+        // 重复跑不产生重复行
+        assert_eq!(fts_count(&conn), 3);
+        assert_eq!(search_count(&conn, "周杰伦"), 1);
+    }
+
+    #[test]
+    fn triggers_keep_fts_in_sync() {
+        let conn = v5_db();
+        crate::commands::init_db(&conn).unwrap();
+
+        // 新增文件（无元数据）：FTS 行随 files INSERT 创建
+        conn.execute(
+            "INSERT INTO files (id, path, name, type) VALUES ('f4', '/m/new.mp3', 'new-song.mp3', 'audio')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(search_count(&conn, "new-song"), 1);
+
+        // scan 的写入方式：INSERT OR REPLACE（触发 DELETE + INSERT）
+        conn.execute(
+            "INSERT OR REPLACE INTO media_metadata (file_id, title, artist, album)
+             VALUES ('f4', '夜曲', '周杰伦', '十一月的萧邦')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(search_count(&conn, "夜曲"), 1);
+        assert_eq!(search_count(&conn, "萧邦"), 1);
+        // 旧名仍在（文件名没变）
+        assert_eq!(search_count(&conn, "new-song"), 1);
+
+        // 文件改名：UPDATE OF name 触发同步
+        conn.execute("UPDATE files SET name='renamed.mp3' WHERE id='f4'", [])
+            .unwrap();
+        assert_eq!(search_count(&conn, "renamed"), 1);
+        assert_eq!(search_count(&conn, "new-song"), 0);
+        // 元数据不受改名影响
+        assert_eq!(search_count(&conn, "夜曲"), 1);
+
+        // 硬删除文件：FTS 行移除
+        conn.execute("DELETE FROM files WHERE id='f4'", []).unwrap();
+        assert_eq!(search_count(&conn, "夜曲"), 0);
+        assert_eq!(fts_count(&conn), 3);
+    }
+
+    #[test]
+    fn short_terms_fall_back_to_like() {
+        let conn = v5_db();
+        crate::commands::init_db(&conn).unwrap();
+        // 2 字符中文：trigram 查不到，回退 LIKE 能查到
+        assert_eq!(search_count(&conn, "杰伦"), 1);
+        assert_eq!(search_count(&conn, "晴天"), 1);
+    }
+
+    #[test]
+    fn fts_special_chars_do_not_error() {
+        let conn = v5_db();
+        crate::commands::init_db(&conn).unwrap();
+        // FTS5 特殊字符在短语内按字面量处理，不应报 syntax error
+        for term in ["a*b", "(test)", "a AND b", "say \"hi\"", "100%"] {
+            let n = search_count(&conn, term);
+            assert_eq!(n, 0, "term={term}");
         }
     }
 }
