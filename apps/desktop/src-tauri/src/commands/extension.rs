@@ -115,8 +115,23 @@ pub struct ExtContributes {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtUiContribution {
-    /// `"nav"` | `"main"`
+    /// `"nav"` | `"main"` | `"slot"`
+    ///
+    /// `nav` / `main` 是**固定的两个插槽**（导航栏一项、内容区一块），
+    /// `slot` 是**具名插槽**（下面 `slot` 字段指定位置）—— 后者才是通用机制。
     pub surface: String,
+    /// 具名插槽 id（`surface: "slot"` 时必需）。
+    ///
+    /// 见 `SLOT_IDS`：宿主为「设置页侧栏 / 设置卡片栈 / 播放页」等真实位置
+    /// 各开一个具名插槽，扩展声明挂到哪个。
+    #[serde(default)]
+    pub slot: Option<String>,
+    /// 插槽项上的小字说明（设置页侧栏 / 卡片标题下方）
+    #[serde(default)]
+    pub description: Option<String>,
+    /// 同插槽内的排序，小的在前（默认 100）。内置项排在扩展项之前。**
+    #[serde(default)]
+    pub order: Option<i32>,
     pub id: String,
     /// 显示名（`main` 也可用它当卡片标题）
     pub title: String,
@@ -220,6 +235,33 @@ pub const PERM_INVOKE: &str = "ext:invoke";
 /// 由宿主代执行"打开 / 定位文件"所需权限
 pub const PERM_OPEN: &str = "opener:open-path";
 
+/// 宿主开放的**具名插槽**白名单。
+///
+/// ## 为什么要白名单而不是让扩展随便写字符串
+///
+/// 插槽名是宿主与扩展之间的**契约**：写错了不会报错，只会**静默不显示** ——
+/// 那种「装了扩展但什么都没出现」最难排查。所以宿主在**安装时**就校验，
+/// 不在名单里直接拒绝，把静默失败变成显式错误。
+///
+/// 加新插槽时：这里加一项，并在前端对应位置渲染 `<ExtensionSlot slot="...">`。
+pub const SLOT_IDS: &[&str] = &[
+    // 设置页
+    "settings.sidebar",    // 设置页左侧分类栏下方（扩展的独立设置页入口）
+    "settings.appearance", // 「外观」分类里的卡片
+    "settings.playback",   // 「播放」分类里的卡片
+    "settings.library",    // 「媒体库」分类里的卡片
+    "settings.online",     // 「在线源」分类里的卡片
+    "settings.system",     // 「系统」分类（同步 / 依赖 / 关于）里的卡片
+    // 其它真实位置
+    "treasure.tools", // 百宝箱「更多工具」列表里的一项
+];
+
+// ⚠️ 往这个白名单加插槽时，**必须同时在宿主里真的渲染它**
+// （前端 `<ExtensionSlot slot="..." />`）。不渲染就成了「声明了但没人读」——
+// 这个仓库已经踩过两次同类：`settings.schema` 至今没有消费方、
+// `extension-host-page` 那个 class 绑了却从没写过 CSS 规则。
+// 所以白名单里只放**真有渲染点**的插槽；写进来却不渲染比不写更坏。
+
 /// 把扩展声明的主界面注入点汇总成一张表。
 ///
 /// 两个来源合流：
@@ -235,6 +277,9 @@ fn ui_contributions(manifest: &ExtManifest) -> Vec<ExtUiContribution> {
     for n in &c.nav {
         out.push(ExtUiContribution {
             surface: "nav".into(),
+            slot: None,
+            description: None,
+            order: None,
             id: n.id.clone(),
             title: n.title.clone(),
             icon: n.icon.clone(),
@@ -826,15 +871,34 @@ pub async fn ext_install(app: tauri::AppHandle, source: ExtSource) -> Result<Ext
             return Err(format!("扩展要求更高的扩展 API 版本：{reason}"));
         }
 
-        // 主界面注入点要能在跑起来之前就拦掉写错的：surface 只有两种取值，
-        // main 必须给高度（iframe 无法按内容自适应，不给就是 0 高不可见）。
+        // 主界面注入点要能在跑起来之前就拦掉写错的：
+        // surface 三选一、slot 必须在白名单、main 必须给高度
+        // （iframe 无法按内容自适应，不给就是 0 高不可见）。
         for ui in ui_contributions(&manifest) {
-            if ui.surface != "nav" && ui.surface != "main" {
+            if !matches!(ui.surface.as_str(), "nav" | "main" | "slot") {
                 let _ = std::fs::remove_dir_all(&staging);
                 return Err(format!(
-                    "contributes.ui 的 surface 只能是 nav 或 main，收到：{}",
+                    "contributes.ui 的 surface 只能是 nav / main / slot，收到：{}",
                     ui.surface
                 ));
+            }
+            if ui.surface == "slot" {
+                let Some(slot) = ui.slot.as_deref().filter(|s| !s.is_empty()) else {
+                    let _ = std::fs::remove_dir_all(&staging);
+                    return Err(format!(
+                        "contributes.ui「{}」声明了 surface=slot 却没有 slot 字段",
+                        ui.id
+                    ));
+                };
+                // 插槽名写错不会报错、只会静默不显示 —— 那种最难查，
+                // 所以在安装时就拦下，把静默失败变成显式错误。
+                if !SLOT_IDS.contains(&slot) {
+                    let _ = std::fs::remove_dir_all(&staging);
+                    return Err(format!(
+                        "未知插槽「{slot}」。可用插槽：{}",
+                        SLOT_IDS.join(" / ")
+                    ));
+                }
             }
             if ui.surface == "main" && ui.height.unwrap_or(0) == 0 {
                 let _ = std::fs::remove_dir_all(&staging);
@@ -1258,6 +1322,9 @@ pub fn ext_ui_surfaces(app: tauri::AppHandle) -> Vec<Value> {
                 "extId": e.manifest.id,
                 "extName": e.manifest.name,
                 "surface": ui.surface,
+                "slot": ui.slot,
+                "description": ui.description,
+                "order": ui.order.unwrap_or(100),
                 "id": ui.id,
                 "title": ui.title,
                 "icon": ui.icon,

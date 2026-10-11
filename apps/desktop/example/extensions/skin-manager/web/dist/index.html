@@ -185,7 +185,12 @@
            * 所以下面 everyThemes() 与 ownThemes() 各取所需。
            */
           listAll: function () {
-            return invoke("themes:list", {});
+            // ⚠️ 宿主返回的是 { themes: [...] }（与 SDK 的 theme.list() 一致），
+            // **不是裸数组**。这里解一次包，下面所有消费处拿到的就都是数组。
+            // 本仓库曾因指南/SDK/示例三处形状写得不一样，一直显示「共返回 0 套」。
+            return invoke("themes:list", {}).then(function (res) {
+              return res && Array.isArray(res.themes) ? res.themes : [];
+            });
           },
           /** 只留本扩展声明的那些（正常管理界面用这个） */
           listMine: function () {

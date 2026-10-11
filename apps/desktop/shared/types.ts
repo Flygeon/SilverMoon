@@ -1273,8 +1273,14 @@ export interface ExtInfo {
 export interface ExtUiSurface {
   extId: string;
   extName: string;
-  /** "nav" = 主界面导航栏一项；"main" = 内容区里的一块 */
-  surface: "nav" | "main";
+  /** "nav" = 导航栏一项；"main" = 内容区一块；"slot" = 具名插槽（见 slot 字段） */
+  surface: "nav" | "main" | "slot";
+  /** 具名插槽 id（surface === "slot" 时必有）。可用插槽见宿主 SLOT_IDS 白名单 */
+  slot?: string | null;
+  /** 插槽项的小字说明 */
+  description?: string | null;
+  /** 同插槽内排序，小在前（默认 100；内置项排在扩展项之前） */
+  order: number;
   id: string;
   title: string;
   /** Material Symbols 图标名（surface === "nav" 时用） */
