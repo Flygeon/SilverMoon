@@ -328,6 +328,17 @@ export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       if (!f) return as(null);
       return as(placeholderCover(LABELS[f.type] ?? "?", HUES[f.type] ?? 0));
     }
+    // 批量版：返回值与 fileIds 按下标一一对应（与 Rust 侧的契约一致）
+    case "get_thumbnails": {
+      const ids = (args?.fileIds as string[]) ?? [];
+      return as(
+        ids.map((id) => {
+          const f = DEMO.find((x) => x.id === id);
+          if (!f) return null;
+          return placeholderCover(LABELS[f.type] ?? "?", HUES[f.type] ?? 0);
+        }),
+      );
+    }
     case "get_song": {
       const id = String(args?.fileId ?? "");
       const f = DEMO.find((x) => x.id === id) ?? DEMO[0];

@@ -20,6 +20,7 @@
  * 一律经 `@/ipc/`，否则浏览器预览（无 Tauri）下会直接抛错。
  */
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { recordIpcCall } from "@/utils/ipcMetrics";
 
 /** 宿主回复格式（保持与 Electron 版一致的宽松形状）。 */
 export interface BridgeReply {
@@ -120,18 +121,29 @@ function bridge(): SilverMoonBridge {
  * （与 Electron 版一致：上层靠字符串前缀判定，例如 `[WENKU8_LOGIN_CANCELLED]`）。
  */
 export async function invokeRaw<T>(cmd: string, args?: unknown): Promise<T> {
+  // 计量起点。`performance.now()` 是单调时钟，不受系统时间调整影响。
+  // 计量默认关闭（见 utils/ipcMetrics.ts），关闭时 recordIpcCall 会立刻返回，
+  // 因此这行只在开关打开时有意义。
+  const t0 = performance.now();
   // 打桩桥优先（单测 / 浏览器预览）
   if (window.__SILVERMOON__ && !window.__TAURI_INTERNALS__) {
     const reply = await window.__SILVERMOON__.invoke(cmd, toCloneablePayload(args ?? {}));
-    if (!reply.ok) return Promise.reject(reply.error ?? `命令 ${cmd} 失败`);
+    if (!reply.ok) {
+      recordIpcCall(cmd, args, t0, true);
+      return Promise.reject(reply.error ?? `命令 ${cmd} 失败`);
+    }
+    recordIpcCall(cmd, args, t0, false);
     return reply.data as T;
   }
   try {
-    return (await tauriInvoke<T>(
+    const result = (await tauriInvoke<T>(
       cmd,
       (toCloneablePayload(args ?? {}) ?? {}) as Record<string, unknown>,
     )) as T;
+    recordIpcCall(cmd, args, t0, false);
+    return result;
   } catch (error) {
+    recordIpcCall(cmd, args, t0, true);
     // Tauri 把命令返回的 Err(String) 原样作为 reject 值抛出；
     // 只有非字符串（框架层错误）才包装，保证上层字符串前缀判定不失效。
     if (typeof error === "string") return Promise.reject(error);

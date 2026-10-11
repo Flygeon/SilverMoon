@@ -3,7 +3,7 @@
  * 所有原生能力经 invoke（请求/响应）+ listen（事件推送）调用 Rust Command。
  * 前端不直接触碰磁盘/数据库/原生资源。
  */
-import { invoke, invokeBatch, toAssetUrl } from "@/ipc/invoke";
+import { invoke, toAssetUrl } from "@/ipc/invoke";
 import { callBridge, hasBridge } from "@/ipc/bridge";
 import { listen, type UnlistenFn } from "@/ipc/events";
 import { openPath, openUrl, revealItemInDir } from "@/ipc/opener";
@@ -343,14 +343,17 @@ export const capabilities = {
       );
       return paths.map((p) => p ?? null);
     }
-    const results = await invokeBatch<string | null>(
-      fileIds.map((fileId) => ({ cmd: "get_thumbnail", args: { fileId, size } })),
-    );
-    return results.map((r) => {
-      const path = r.ok ? r.data : null;
-      if (!path) return null;
-      return isDesktop ? toAssetUrl(path) : path;
-    });
+    // ⚠️ 这里**必须**调批量命令 get_thumbnails（复数），不是 invokeBatch。
+    //
+    // invokeBatch 的实现（ipc/bridge.ts）是 Promise.all 包 N 次**独立** invoke ——
+    // 它只是「前端并发发起」，往返次数一次没少。30 张卡片仍是 30 次往返。
+    // 而 get_thumbnails 是 Rust 侧真正的批量命令，一次往返吃下整批。
+    //
+    // 单张失败降级为 null（Rust 侧保证返回与 fileIds 按下标一一对应）。
+    // 注意泛型要写成 (string | null)[]：写成 `string | null[]` 会被解析为
+    // 「string 或 null 数组」，TS 随后就在 .map 上报错。
+    const paths = await invoke<(string | null)[]>("get_thumbnails", { fileIds, size });
+    return paths.map((path) => (path && isDesktop ? toAssetUrl(path) : path));
   },
   /** 后端带出的缩略图磁盘路径 → 可直接给 <img> 用的 URL（非桌面环境下原样返回）。 */
   thumbUrl(path: string): string {

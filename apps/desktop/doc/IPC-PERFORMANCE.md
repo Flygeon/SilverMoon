@@ -89,8 +89,11 @@ return Promise.all(
 
 ### P0 —— 明确、低风险
 
-**1. 修掉上面的批量缩略图 bug。**
-收益最直接（30 次往返 → 2 次），改动局限在一个函数。
+**1. 修掉上面的批量缩略图 bug。** ✅ **已完成**
+
+`capabilities.getThumbnails()` 已改为直接调 `get_thumbnails`（复数）。
+回归测试 `src/capabilities/__tests__/thumbnailBatch.test.ts` 钉住「只发生一次调用、
+命令名是复数形」—— 已验证：改回老实现时该测试会失败。
 
 **2. 返回二进制的命令改用 `tauri::ipc::Response`。**
 
@@ -133,10 +136,10 @@ pub fn extract_frame(...) -> tauri::ipc::Response {
 
 ### P1 —— 有收益，但需要先测量
 
-**4. 给 IPC 加计量，用数据而不是直觉决定后续优化。**
+**4. 给 IPC 加计量，用数据而不是直觉决定后续优化。** ✅ **已完成**
 
-项目已有 `src/utils/bootTiming.ts`（`markBoot`），而 `bridge.ts` 是唯一的收口，
-所以在 `invokeRaw` 里加计时几乎零成本，可直接量出：
+`src/utils/ipcMetrics.ts` + `bridge.ts` 的 `invokeRaw`（唯一收口）已接入。
+可直接量出：
 
 - 每次调用的往返耗时；
 - 载荷大小；
@@ -197,7 +200,44 @@ pub fn extract_frame(...) -> tauri::ipc::Response {
 **`Map` / `Set` 显式降级**并有单测覆盖
 （`bridgeClone.test.ts` / `localTagIpcClone.test.ts`）。
 
-## 四、方法论：先测再改
+## 四、怎么用这套计量（已实现）
+
+**默认关闭**（不给普通用户加每调用一次的开销）。需要时在控制台打开：
+
+```js
+// 1) 打开计量（写入 localStorage，重开窗口仍生效）
+localStorage.setItem("silvermoon:ipcMetrics", "1")
+
+// 2) 操作一会儿（滚动图库、切页、扫描…）
+
+// 3) 看结果（按总耗时降序，带占比）
+window.__silvermoonIpcStats()
+
+// 4) 清空重来
+window.__silvermoonIpcReset()
+```
+
+输出形如：
+
+```text
+命令            次数  总耗时ms  占比    平均ms  P95ms  最大ms  失败  平均参数B
+list_files        12    1840.2   62.1%   153.4  402.1   512.3     0      8421
+get_thumbnails    30     612.7   20.7%    20.4   45.2    88.1     0       412
+scan_start         1     220.5    7.4%   220.5  220.5   220.5     0        18
+```
+
+**怎么读它**：
+
+- **看占比**：优化应当从占比最高的那项开始，而不是凭感觉；
+- **看 P95 与最大值的差距**：平均值小但 P95 大，说明「偶尔卡一下」，
+  通常来自缓存未命中或磁盘抖动；
+- **看平均参数B**：载荷大且占比高的命令，才值得考虑瘦身或改二进制。
+
+计量本身的成本：`performance.now()` 两次 + 一次 `JSON.stringify`（估算参数大小）。
+关闭时只有一次 `performance.now()`。样本按命令各自保留最近 **512** 次（环形缓冲），
+内存有界。
+
+## 五、方法论：先测再改
 
 上面列了 8 项，但**不建议按顺序全做**。理由：
 
