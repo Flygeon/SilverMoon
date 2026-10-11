@@ -454,7 +454,10 @@ fn spawn_engine(app: &tauri::AppHandle, id: &str) -> Result<u16, String> {
     let result = spawn_engine_inner(app, id);
     {
         let state = app.state::<ExtState>();
-        if let Some(ext) = state.map.lock().unwrap().get_mut(id) {
+        // guard 必须先绑到局部变量：写成 `if let Some(..) = state.map.lock()...`
+        // 时那个 MutexGuard 临时量会活到 if-let 结束，比 `state` 更晚 drop（E0597）。
+        let mut map = state.map.lock().unwrap();
+        if let Some(ext) = map.get_mut(id) {
             ext.engine_error = result.as_ref().err().cloned();
         }
     }
@@ -1324,7 +1327,7 @@ fn unzip_to(src: &Path, dst: &Path) -> Result<(), String> {
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
         // `enclosed_name` 已屏蔽 `..` 与绝对路径（防 zip-slip）
-        let Some(rel) = entry.enclosed_name().map(Some).unwrap_or(None) else {
+        let Some(rel) = entry.enclosed_name() else {
             return Err(format!("扩展包含非法路径：{}", entry.name()));
         };
         let size = entry.size();

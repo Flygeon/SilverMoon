@@ -171,8 +171,16 @@ pub extern "C" fn servable(root_ptr: *const u8, root_len: usize,
       check("  扩展目录内的大小写不同", call(ROOT, `${D}/MiaoHui/web/dist/index.html`), true);
       check("  反斜杠路径", call(ROOT, `${D}\\\\miaohui\\\\web\\\\dist\\\\index.html`), true);
       check("  .. 逐段逃逸", call(ROOT, `${D}/miaohui/../../../Windows/win.ini`), false);
-      check("  .. 后仍回到根内（也拒绝）", call(ROOT, `${D}/miaohui/../miaohui/web/dist/a.js`), false);
-      check("  完全在根的兄弟目录", call(ROOT, "C:/Users/x/AppData/Roaming/cn.cool.silvermoon/skins/x/skin.json"), false);
+      check(
+        "  .. 后仍回到根内（也拒绝）",
+        call(ROOT, `${D}/miaohui/../miaohui/web/dist/a.js`),
+        false,
+      );
+      check(
+        "  完全在根的兄弟目录",
+        call(ROOT, "C:/Users/x/AppData/Roaming/cn.cool.silvermoon/skins/x/skin.json"),
+        false,
+      );
       check("  前缀相同的兄弟目录（extensions-evil）", call(ROOT, `${D}-evil/x/a.js`), false);
       check("  绝对路径直指系统文件", call(ROOT, "C:/Windows/win.ini"), false);
       check("  空路径", call(ROOT, ""), false);
@@ -367,9 +375,7 @@ const body = TARGETS.map((t) => {
   // 目标函数依赖的**同文件辅助函数**也要一起抽（同样取源码原文）。
   // 少了它们会编译失败，报 cannot find function —— 这反而是好事：
   // 辅助函数改名时会在这里立刻暴露，而不是悄悄跳过验证。
-  const extra = (t.extraFns ?? [])
-    .map((name) => extractFn(t.file, name))
-    .join("\n\n");
+  const extra = (t.extraFns ?? []).map((name) => extractFn(t.file, name)).join("\n\n");
   const uses = t.uses.map((u) => `use ${u};`).join("\n");
   return `// ---- 取自 ${t.file} 的 ${t.fn} ----\n${uses}\n${fnText}\n${extra}\n${t.wrapper}`;
 }).join("\n\n");

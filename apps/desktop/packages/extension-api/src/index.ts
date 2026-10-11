@@ -1,5 +1,8 @@
-/// <reference path="./env.d.ts" />
 /**
+ * 注：`__EXT_ID__` / `__EXT_API_VERSION__` 两个编译期常量声明在 `./env.d.ts`，
+ * 由 tsconfig 的 `include: ["src"]` 纳入编译。这里刻意**不用**
+ * `/// <reference path="..." />` —— 仓库 ESLint 禁止 triple-slash，改用 tsconfig 覆盖。
+ *
  * 银月（SilverMoon）扩展作者 SDK。
  *
  * 三条入口，按需引入：

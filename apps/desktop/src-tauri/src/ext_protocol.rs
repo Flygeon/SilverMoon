@@ -30,6 +30,9 @@
 use std::path::{Path, PathBuf};
 
 use tauri::http::{Request, Response, StatusCode};
+// `path()` 来自 `Manager`，不导入会报 "no method named path found"，
+// 并连带把 `Some(root)` 的绑定推成未知大小类型（E0277 是它的级联错误）。
+use tauri::Manager;
 
 /// 把请求路径做百分号解码。
 ///
