@@ -17,6 +17,10 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main]
+  # 手动重跑入口。加它的直接原因：连推两次时（同名 concurrency group +
+  # cancel-in-progress）新 commit 的 run 有可能**根本没被创建** ——
+  # 实测遇到过一次，当时除了再空推一个提交别无他法。
+  workflow_dispatch:
 
 permissions:
   contents: write
