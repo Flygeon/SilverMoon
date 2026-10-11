@@ -1,0 +1,41 @@
+[versions]
+# Kotlin / Compose / 关键 KMP 库的版本对齐关系见 docs/ARCHITECTURE.md。
+# 注意：这里只列**真正被引用**的依赖，避免版本目录变成愿望清单。
+kotlin = "2.4.21"
+compose = "1.12.1"
+
+coroutines = "1.11.0"
+serialization = "1.11.0"
+
+ktor = "3.6.0"
+coil = "3.6.3"
+materialKolor = "5.0.1"
+
+jna = "5.19.1"
+vlcj = "4.12.1"
+
+[libraries]
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+
+ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
+
+coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
+coil-network-ktor = { module = "io.coil-kt.coil3:coil-network-ktor3", version.ref = "coil" }
+
+# Monet 动态取色 + Material 3 Expressive 主题（material-color-utilities 的 KMP 移植）
+material-kolor = { module = "com.materialkolor:material-kolor", version.ref = "materialKolor" }
+
+# Win32 / DWM / 系统强调色 / 托盘
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+jna-platform = { module = "net.java.dev.jna:jna-platform", version.ref = "jna" }
+# 播放内核（libvlc）
+vlcj = { module = "uk.co.caprica:vlcj", version.ref = "vlcj" }
+
+[plugins]
+kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlinSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+composeMultiplatform = { id = "org.jetbrains.compose", version.ref = "compose" }
+composeCompiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

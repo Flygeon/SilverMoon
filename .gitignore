@@ -7,3 +7,11 @@
 _diag/
 _pyerr.txt
 _pyout.txt
+
+# KMP 桌面端（apps/kmp-desktop）
+apps/kmp-desktop/.gradle/
+apps/kmp-desktop/build/
+apps/kmp-desktop/*/build/
+apps/kmp-desktop/local.properties
+# CI 会把编译好的 Rust 后端 exe 放到这里，不入库（几十 MB 的二进制）
+apps/kmp-desktop/composeApp/backend/
