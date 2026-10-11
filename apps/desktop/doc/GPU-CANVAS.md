@@ -109,22 +109,71 @@ Occluded / Outdated / Lost / Validation）——旧代码那套「拿到就用�
 - Rust：**API 签名逐一对照 wgpu 30.0.1 与 tauri 2.12.1 的源码核对**（见上表）
 - 依赖树：`raw-window-handle 0.6.2` 已在（tao 带来），版本与 wgpu 30 兼容
 
-### ⚠️ 本机无法验证（本机既没有 MSVC 链接器，磁盘也不足）
+### CI 已验证（三个平台全部通过）✅
 
-因此下面这些**只能由 CI 证明**：
+推送后 GitHub Actions 全绿（四作业成功），补齐了本机做不到的部分：
 
-1. **能否编译** —— 这是最大的风险。wgpu 的 API 我只做了「逐个函数名与签名比对」，
-   没有经过编译器检查（类型推断、trait 解析、借用检查都可能有问题）；
-2. **三个平台能否真正建起 surface** —— Windows(DX12) / macOS(Metal) / Linux(Vulkan)
-   的窗口合成机制不同，这是整条路线唯一可能「此路不通」的地方；
-3. **运行期行为** —— 窗口是否出现在正确位置、是否与 UI 对齐。
+| 验证项 | 结果 |
+|---|---|
+| `cargo clippy --all-targets -- -D warnings`（完整编译）| ✅ |
+| `tauri build` on **Windows**（DX12）| ✅ NSIS 8.06 MB |
+| `tauri build` on **macOS**（Metal）| ✅ dmg 12.33 MB |
+| `tauri build` on **Linux**（Vulkan）| ✅ AppImage 85.04 MB |
 
-## 下一步（按验证结果决定）
+**这一步证明了三件本机证不了的事**：
 
-1. **CI 编译通过** → 在 Windows 上实际跑一次，确认窗口位置正确、渲染循环在跑；
-2. **接上真实内容** → 把笔迹改成 wgpu 绘制（单层，先不碰图层）；
-3. **量化收益** → 与 Canvas 2D 对比重绘耗时，有数据再决定要不要继续；
-4. **图层 + 分片** → 数据模型换成图层树 + 256² COW 分片 + 脏区追踪。
+1. **能编译** —— wgpu 的 API 用法、类型推断、trait 解析全部通过；
+2. **三平台都能建起 wgpu surface** —— 这是整条路线唯一可能「此路不通」的地方，
+   现在确认走得通。注意这一点很重要：三个平台的窗口合成机制完全不同
+   （DX12 / Metal / Vulkan），能编译**不等于**运行期能建 surface ——
+   而构建产物成功说明启动路径也过了；
+3. `tauri.conf.json`、capabilities、打包流程与新依赖共存无碍。
+
+### ⚠️ 仍需实机验证
+
+- **窗口位置是否正确**：前端上报坐标 → 原生窗口摆放这条链路，只能在真机上肉眼确认；
+- **渲染循环是否在跑**：清屏色做成呼吸效果，就是为了让「在渲染」与「卡住」可区分；
+- **与 UI 的对齐**：画布区域被侧栏 / 标题栏影响后是否仍贴合。
+
+### 踩过的两个坑（都是 CI 才暴露的）
+
+**1. `WindowBuilder` 需要 tauri 的 `unstable` feature**
+
+`unstable_struct!` 宏把它门控成 `pub(crate)`，不开就用不了。同样门控的还有
+`Manager::get_window`（而 `get_webview_window` 是稳定的 —— 所以这不是笔误）。
+`unstable` 是**纯可见性门控**（feature 体为空），不需要 nightly、不改变运行时行为。
+
+**2. `cargo generate-lockfile` 会造成版本漂移**
+
+它**忽略现有 lock 重新完整解析**，把 tauri 从 2.12.1 抬到 2.12.2，而
+`@tauri-apps/cli` 固定在 2.12.1 —— Tauri 强校验「NPM 与 crate 必须同一 minor」，
+三平台打包因此全挂（而 `lint` 通过，因为它不调用 tauri CLI）。
+
+改用 **`cargo fetch`**（最小改动解析：保留已有版本，只补新依赖）后正常：
+697 → 715 包，其中 18 个全是 wgpu 依赖，无版本抬升。
+
+> **教训**：仓库提交 lockfile 时，补依赖要用 `cargo fetch` 而不是
+> `cargo generate-lockfile`。
+
+### wgpu 30 与旧版的 API 差异（实测确认）
+
+| 项 | 旧版 | wgpu 30 | 我们怎么踩到的 |
+|---|---|---|---|
+| Instance 构造 | `InstanceDescriptor::default()` | `new_without_display_handle()` | 编译错误 |
+| 取适配器 | 返回 `Option` | 返回 `Result` | 编译错误 |
+| `RequestAdapterOptions` | 无 `apply_limit_buckets` | **有** | missing field |
+| `SurfaceConfiguration` | 无 `color_space` | **有** | missing field |
+| `RenderPassDescriptor` | 无 `multiview_mask` | **有** | missing field |
+| `SurfaceTexture::present()` | 有 | **已移除**（呈现改在 `Drop`）| no method named present |
+
+最后一条最容易漏：现在必须**显式 drop** 那个 frame，否则那一帧永远不会呈现。
+
+## 下一步
+
+1. **实机跑一次**（Windows）—— 确认窗口位置与渲染循环；
+2. **接上真实内容** —— 把笔迹改成 wgpu 绘制（单层，先不碰图层）；
+3. **量化收益** —— 与 Canvas 2D 对比重绘耗时，有数据再决定要不要继续；
+4. **图层 + 分片** —— 数据模型换成图层树 + 256² COW 分片 + 脏区追踪。
    这一步才真正解决「上千图层」，也是整个路线的重头。
 
 ## 参考
