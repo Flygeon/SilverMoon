@@ -174,10 +174,19 @@ jobs:
           name: silvermoon-bridge
           path: apps/kmp-desktop/composeApp/backend
 
+      # 把 compose 插件实际注册的打包任务打出来：任务名随插件版本变过
+      # （应用目录是 create*Distributable，安装包是 package*），留在日志里方便对照。
+      - name: List distribution tasks
+        shell: pwsh
+        run: |
+          ./gradlew :composeApp:tasks --all --console=plain |
+            Select-String -Pattern 'istributable|ackage' |
+            Select-Object -First 40
+
       # 先出「免安装应用目录」并立刻上传：它不依赖 WiX，永远能产出。
       # 后面 MSI / EXE 万一挂掉（WiX 版本、jpackage 参数），至少还有一个能跑的产物。
       - name: Package app image
-        run: ./gradlew :composeApp:packageReleaseDistributable --stacktrace
+        run: ./gradlew :composeApp:createReleaseDistributable --stacktrace
 
       - name: Upload app image
         uses: actions/upload-artifact@v5
