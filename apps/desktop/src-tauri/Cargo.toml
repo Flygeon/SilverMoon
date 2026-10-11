@@ -203,3 +203,7 @@ lto = true
 opt-level = "s"
 strip = true
 panic = "abort"
+
+[dev-dependencies]
+# music_tags 本地标签读写单测用：临时目录夹具
+tempfile = "3"

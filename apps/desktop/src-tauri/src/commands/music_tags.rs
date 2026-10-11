@@ -361,10 +361,12 @@ fn write_local_tags(
         tag.set_comment(fields.comment.clone());
     }
 
-    // Accessor 未覆盖的组合字段走 ItemKey
-    let extras: [(ItemKey, &str); 4] = [
+    // Accessor 未覆盖的组合字段走 ItemKey。
+    //
+    // 注意：`ItemKey::Year` 在 lofty 0.20 的 ID3v2 实现里没有映射，
+    // `insert_text` / `get_string` 会静默丢失，因此年份走 Accessor。
+    let extras: [(ItemKey, &str); 3] = [
         (ItemKey::AlbumArtist, fields.album_artist.as_str()),
-        (ItemKey::Year, fields.year.as_str()),
         (ItemKey::TrackNumber, fields.track.as_str()),
         (ItemKey::Lyrics, fields.lyrics.as_str()),
     ];
@@ -374,6 +376,16 @@ fn write_local_tags(
         } else {
             tag.insert_text(key, value.to_string());
         }
+    }
+
+    // 年份：空串清空；非数字字符串无法写入 u32 年份，也按清空处理
+    // （与旧 taglib 版 `setYear(unsigned)` 的语义一致）。
+    if fields.year.is_empty() {
+        tag.remove_year();
+    } else if let Ok(y) = fields.year.trim().parse::<u32>() {
+        tag.set_year(y);
+    } else {
+        tag.remove_year();
     }
 
     // 封面：remove 删掉 / set 覆写 / keep 不动
@@ -414,10 +426,7 @@ fn read_local_tags(path: &str) -> Value {
                 .get_string(&ItemKey::AlbumArtist)
                 .unwrap_or_default()
                 .to_string();
-            fields.year = tag
-                .get_string(&ItemKey::Year)
-                .unwrap_or_default()
-                .to_string();
+            fields.year = tag.year().map(|y| y.to_string()).unwrap_or_default();
             fields.track = tag
                 .get_string(&ItemKey::TrackNumber)
                 .unwrap_or_default()
@@ -606,5 +615,211 @@ pub fn music_tags_op(app: AppHandle, op: String, payload: Value) -> Result<Value
         }
 
         other => Err(format!("未知的音乐标签操作：{other}")),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 单元测试：本地标签读写（lofty 生产路径）
+//
+// 覆盖 doc/TAURI-MIGRATION.md「已知的验证覆盖缺口」第 1 条：
+// 用 Rust 单测覆盖 write_local_tags / read_local_tags 的
+// 「写标签 → 重新解析 → 断言」链路（旧验证脚本走的是 taglib-wasm，
+// 不覆盖生产路径的 lofty）。
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    /// 1x1 红色 JPEG（225 字节，ffmpeg 生成），用于封面 set/remove 测试。
+    const TINY_JPEG: &[u8] = &[
+        0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x02, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00, 0x00, 0xff, 0xfe, 0x00, 0x10, 0x4c, 0x61, 0x76, 0x63, 0x36, 0x32,
+        0x2e, 0x32, 0x38, 0x2e, 0x31, 0x30, 0x32, 0x00, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x08, 0x04,
+        0x04, 0x04, 0x04, 0x04, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x06, 0x06, 0x06, 0x06, 0x06,
+        0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x07, 0x07, 0x07, 0x08, 0x08, 0x08, 0x07,
+        0x07, 0x07, 0x06, 0x06, 0x07, 0x07, 0x08, 0x08, 0x08, 0x08, 0x09, 0x09, 0x09, 0x08, 0x08,
+        0x08, 0x08, 0x09, 0x09, 0x0a, 0x0a, 0x0a, 0x0c, 0x0c, 0x0b, 0x0b, 0x0e, 0x0e, 0x0e, 0x11,
+        0x11, 0x14, 0xff, 0xc4, 0x00, 0x4c, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x01, 0x01, 0x01, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x07, 0x10,
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x11, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01, 0x03,
+        0x01, 0x22, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xff, 0xda, 0x00, 0x0c, 0x03, 0x01,
+        0x00, 0x02, 0x11, 0x03, 0x11, 0x00, 0x3f, 0x00, 0x8b, 0x00, 0x4d, 0x7f, 0x7f, 0xff, 0xd9,
+    ];
+
+    /// 用 ffmpeg 生成 2 秒静音 MP3 作为测试夹具。
+    fn fixture_mp3(dir: &std::path::Path, name: &str) -> PathBuf {
+        let out = dir.join(name);
+        let status = Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=44100:cl=stereo",
+                "-t",
+                "2",
+                "-q:a",
+                "9",
+            ])
+            .arg(&out)
+            .status()
+            .expect("测试需要 ffmpeg（PATH 里找不到）");
+        assert!(status.success(), "ffmpeg 生成 MP3 夹具失败");
+        assert!(out.exists(), "MP3 夹具未生成");
+        out
+    }
+
+    fn full_fields() -> MusicTagFields {
+        MusicTagFields {
+            title: "测试标题 Title".to_string(),
+            artist: "测试歌手 Artist".to_string(),
+            album: "测试专辑 Album".to_string(),
+            album_artist: "专辑歌手".to_string(),
+            year: "2024".to_string(),
+            track: "7".to_string(),
+            genre: "Test Genre".to_string(),
+            lyrics: "第一行歌词\n第二行歌词".to_string(),
+            comment: "备注 comment".to_string(),
+        }
+    }
+
+    fn assert_all_empty(f: &MusicTagFields) {
+        assert!(f.title.is_empty(), "title");
+        assert!(f.artist.is_empty(), "artist");
+        assert!(f.album.is_empty(), "album");
+        assert!(f.album_artist.is_empty(), "album_artist");
+        assert!(f.year.is_empty(), "year");
+        assert!(f.track.is_empty(), "track");
+        assert!(f.genre.is_empty(), "genre");
+        assert!(f.lyrics.is_empty(), "lyrics");
+        assert!(f.comment.is_empty(), "comment");
+    }
+
+    /// 读回 (fields, has_cover)。
+    fn read_back(path: &std::path::Path) -> (MusicTagFields, bool) {
+        let v = read_local_tags(path.to_str().unwrap());
+        let fields: MusicTagFields =
+            serde_json::from_value(v["fields"].clone()).expect("fields 反序列化失败");
+        let has_cover = v["hasCover"].as_bool().unwrap_or(false);
+        (fields, has_cover)
+    }
+
+    #[test]
+    fn write_then_read_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = fixture_mp3(dir.path(), "full.mp3");
+        let p = mp3.to_str().unwrap();
+
+        let want = full_fields();
+        write_local_tags(p, &want, "keep", None).expect("写入标签失败");
+
+        let (got, has_cover) = read_back(&mp3);
+        assert!(!has_cover, "不应有封面");
+        assert_eq!(got.title, want.title);
+        assert_eq!(got.artist, want.artist);
+        assert_eq!(got.album, want.album);
+        assert_eq!(got.album_artist, want.album_artist);
+        assert_eq!(got.year, want.year);
+        assert_eq!(got.track, want.track);
+        assert_eq!(got.genre, want.genre);
+        assert_eq!(got.lyrics, want.lyrics);
+        assert_eq!(got.comment, want.comment);
+    }
+
+    #[test]
+    fn empty_string_clears_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = fixture_mp3(dir.path(), "clear.mp3");
+        let p = mp3.to_str().unwrap();
+
+        // 先写入有值字段
+        write_local_tags(p, &full_fields(), "keep", None).expect("写入标签失败");
+        let (got, _) = read_back(&mp3);
+        assert_eq!(got.title, "测试标题 Title", "前置条件：字段应已写入");
+
+        // 再写入空串：按契约应清空全部字段
+        write_local_tags(p, &MusicTagFields::default(), "keep", None).expect("清空写入失败");
+        let (got, _) = read_back(&mp3);
+        assert_all_empty(&got);
+    }
+
+    #[test]
+    fn year_non_numeric_is_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = fixture_mp3(dir.path(), "year.mp3");
+        let p = mp3.to_str().unwrap();
+
+        // 非数字年份无法写入 u32，按清空处理（不残留旧值、不抛错）
+        let mut f = full_fields();
+        f.year = "not-a-year".to_string();
+        write_local_tags(p, &f, "keep", None).expect("写入失败");
+        let (got, _) = read_back(&mp3);
+        assert!(
+            got.year.is_empty(),
+            "非数字年份应被清空，实际：{}",
+            got.year
+        );
+
+        // 数字年份正常 round-trip
+        let mut f = full_fields();
+        f.year = "1999".to_string();
+        write_local_tags(p, &f, "keep", None).expect("写入失败");
+        let (got, _) = read_back(&mp3);
+        assert_eq!(got.year, "1999");
+    }
+
+    #[test]
+    fn read_missing_file_falls_back_to_empty() {
+        // 读不存在的文件：不抛错，回退空字段
+        let v = read_local_tags("/nonexistent-dir-xyz/nope.mp3");
+        let fields: MusicTagFields =
+            serde_json::from_value(v["fields"].clone()).expect("fields 反序列化失败");
+        assert_all_empty(&fields);
+        assert_eq!(v["hasCover"], false);
+
+        // 写不存在的文件：应返回 Err 而不是 panic
+        let err = write_local_tags(
+            "/nonexistent-dir-xyz/nope.mp3",
+            &full_fields(),
+            "keep",
+            None,
+        )
+        .expect_err("写不存在的文件应返回 Err");
+        assert!(
+            err.contains("文件不存在"),
+            "错误信息应提示文件不存在，实际：{err}"
+        );
+    }
+
+    #[test]
+    fn cover_set_keep_remove() {
+        use base64::Engine as _;
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = fixture_mp3(dir.path(), "cover.mp3");
+        let p = mp3.to_str().unwrap();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(TINY_JPEG);
+
+        // set：写入封面
+        write_local_tags(p, &MusicTagFields::default(), "set", Some(&b64)).expect("封面写入失败");
+        let (_, has_cover) = read_back(&mp3);
+        assert!(has_cover, "set 后应有封面");
+
+        // keep：封面不动（同时验证字段写入不影响封面）
+        write_local_tags(p, &full_fields(), "keep", None).expect("keep 写入失败");
+        let (got, has_cover) = read_back(&mp3);
+        assert!(has_cover, "keep 后封面应保留");
+        assert_eq!(got.title, "测试标题 Title");
+
+        // remove：删掉封面
+        write_local_tags(p, &full_fields(), "remove", None).expect("remove 写入失败");
+        let (_, has_cover) = read_back(&mp3);
+        assert!(!has_cover, "remove 后封面应消失");
     }
 }
