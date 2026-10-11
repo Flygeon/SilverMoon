@@ -192,7 +192,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: silvermoon-kmp-windows-appimage
-          path: apps/kmp-desktop/composeApp/build/compose/binaries/main/app/**
+          path: apps/kmp-desktop/composeApp/build/compose/binaries/main-release/app/**
           if-no-files-found: warn
 
       # MSI / EXE 依赖 WiX（windows 镜像自带 WiX 3.14）。与 app image 分成两步，
@@ -203,7 +203,7 @@ jobs:
       - name: Collect checksums
         shell: pwsh
         run: |
-          Get-ChildItem -Recurse -File composeApp/build/compose/binaries/main |
+          Get-ChildItem -Recurse -File composeApp/build/compose/binaries/main-release |
             Where-Object { $_.Extension -in '.exe', '.msi' } |
             ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)  $($_.Name)" } |
             Tee-Object -FilePath SHA256SUMS.txt
@@ -213,8 +213,8 @@ jobs:
         with:
           name: silvermoon-kmp-windows
           path: |
-            apps/kmp-desktop/composeApp/build/compose/binaries/main/*/*.exe
-            apps/kmp-desktop/composeApp/build/compose/binaries/main/*/*.msi
+            apps/kmp-desktop/composeApp/build/compose/binaries/main-release/*/*.exe
+            apps/kmp-desktop/composeApp/build/compose/binaries/main-release/*/*.msi
           if-no-files-found: error
 
       - name: Upload checksums
