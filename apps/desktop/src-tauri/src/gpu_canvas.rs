@@ -96,8 +96,11 @@ pub fn open(app: &AppHandle, rect: CanvasRect) -> Result<(), String> {
     let handle = app.clone();
     let running_bg = Arc::clone(&running);
     std::thread::spawn(move || {
+        // ⚠️ 用 boot_log 而不是 eprintln!：release 构建是
+        // `windows_subsystem = "windows"`（**没有控制台**），eprintln 的输出
+        // 会直接丢掉 —— 排查闪退时等于没有日志。
         if let Err(e) = run_canvas(handle, rect, running_bg) {
-            eprintln!("[gpu-canvas] 画布线程退出：{e}");
+            crate::boot_log::record(&format!("[gpu-canvas] 画布线程退出：{e}"));
         }
     });
 
@@ -209,7 +212,8 @@ fn run_canvas(app: AppHandle, rect: CanvasRect, running: Arc<Mutex<bool>>) -> Re
         .copied()
         .ok_or_else(|| "该 surface 没有可用的 alpha 模式".to_string())?;
 
-    let config = wgpu::SurfaceConfiguration {
+    // ⚠️ 必须是 mut：窗口尺寸变化时要就地更新宽高并重新 configure（见渲染循环）。
+    let mut config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format,
         // wgpu 30 新增字段（旧版没有）。Auto = 由呈现引擎按格式自行选择色彩空间，
@@ -225,35 +229,75 @@ fn run_canvas(app: AppHandle, rect: CanvasRect, running: Arc<Mutex<bool>>) -> Re
     surface.configure(&device, &config);
 
     let info = adapter.get_info();
-    eprintln!(
+    crate::boot_log::record(&format!(
         "[gpu-canvas] 就绪 {width}x{height} {format:?} backend={:?} adapter={}",
         info.backend, info.name
-    );
+    ));
 
     // ---- 4) 渲染循环 ----
     //
     // 目前只清屏成随时间变化的颜色，用来验证「窗口 + surface + 每帧呈现」整条链路；
     // 一眼能看出循环在跑（静态画面无法区分「在渲染」和「卡住了」）。
     let start = std::time::Instant::now();
+    // 帧计数：仅用于打点节流（每 300 帧写一次，避免日志被刷爆）
+    let mut frame_no: u64 = 0;
+    crate::boot_log::record("[gpu-canvas] 渲染循环开始");
     loop {
         // 窗口被用户关掉时，Tauri 会把窗口销毁；这里靠 running 标志退出
         if !*running.lock().map_err(|e| e.to_string())? {
             break;
         }
 
+        // 打点：前 3 帧 + 之后每 300 帧一次。
+        // 目的是定位「跑几秒后闪退」发生在哪一步 —— 若日志停在
+        // 「开始第 N 帧」而后面没有「第 N 帧完成」，就说明崩在中间。
+        if frame_no < 3 || frame_no % 300 == 0 {
+            crate::boot_log::record(&format!("[gpu-canvas] 第 {frame_no} 帧开始"));
+        }
+
+        // ---- 尺寸同步：窗口变了就重配 surface ----
+        //
+        // ⚠️ 这一步是**必需的**，不是优化。
+        //
+        // 窗口被改尺寸后，surface 仍按**旧尺寸**配置着。此时继续 present 一张不匹配
+        // 的缓冲是**未定义行为**（DXGI 的 ResizeBuffers 从未被调用）：轻则画面拉伸，
+        // 重则驱动访问违例 —— 而且是**原生崩溃**，不触发 Rust 的 panic hook，
+        // 所以日志里什么都看不到，表现就是「跑几秒突然没了」。
+        //
+        // 前端每次布局变化都会调 gpu_canvas_resize（ResizeObserver），
+        // 因此这里必须在每帧开头把尺寸对齐回来。
+        if let Ok(now) = window.inner_size() {
+            let (w, h) = (now.width.max(1), now.height.max(1));
+            if w != config.width || h != config.height {
+                crate::boot_log::record(&format!(
+                    "[gpu-canvas] surface 重配 {}x{} → {w}x{h}",
+                    config.width, config.height
+                ));
+                config.width = w;
+                config.height = h;
+                surface.configure(&device, &config);
+            }
+        }
+
         let frame = match surface.get_current_texture() {
-            // Suboptimal 也能用：只是提示「建议重新配置」，当前尺寸未变，可照常呈现
+            // 可正常用的两种：Suboptimal 只是提示「建议重配」，当前尺寸未变，照常呈现
             wgpu::CurrentSurfaceTexture::Success(f)
             | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-            // 超时 / 被遮挡 / 需要重配：跳过这一帧即可，不是错误
-            wgpu::CurrentSurfaceTexture::Timeout
-            | wgpu::CurrentSurfaceTexture::Occluded
-            | wgpu::CurrentSurfaceTexture::Outdated => {
+            // 超时 / 被遮挡：跳过这一帧即可，不是错误
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
                 std::thread::sleep(std::time::Duration::from_millis(16));
                 continue;
             }
-            // surface 丢失：重配后重试
+            // Outdated：surface 与窗口已不兼容，**必须重配**才能恢复。
+            // （不能像上面那样单纯跳过 —— 那样会一直拿到 Outdated 空转。）
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                crate::boot_log::record("[gpu-canvas] surface 已过期，重新配置");
+                surface.configure(&device, &config);
+                continue;
+            }
+            // Lost：surface 丢失，重配后重试
             wgpu::CurrentSurfaceTexture::Lost => {
+                crate::boot_log::record("[gpu-canvas] surface 丢失，重新配置");
                 surface.configure(&device, &config);
                 continue;
             }
@@ -309,11 +353,16 @@ fn run_canvas(app: AppHandle, rect: CanvasRect, running: Arc<Mutex<bool>>) -> Re
         // 那一帧永远不会被呈现，画面会停在第一帧。
         drop(frame);
 
+        if frame_no < 3 || frame_no % 300 == 0 {
+            crate::boot_log::record(&format!("[gpu-canvas] 第 {frame_no} 帧完成"));
+        }
+        frame_no += 1;
+
         // 约 60fps。后续接入真实画布内容时再改成按需重绘。
         std::thread::sleep(std::time::Duration::from_millis(16));
     }
 
-    eprintln!("[gpu-canvas] 渲染循环已停止");
+    crate::boot_log::record(&format!("[gpu-canvas] 渲染循环已停止（共 {frame_no} 帧）"));
     // 窗口对象在这里 drop；实际窗口已由 close() 销毁，重复销毁是安全的。
     Ok(())
 }
