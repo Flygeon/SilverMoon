@@ -229,6 +229,62 @@ pub fn new(desc: InstanceDescriptor) -> Self {
 真正的 hash 路由是**异步**解析的 —— 第一帧判成 false，把外壳渲染进了绘画窗口，
 路由到位后也不会撤。改为用**窗口 label** 判定（同步、无竞态），并加路由兜底。
 
+### 第四个坑：原生崩溃 —— Intel Vulkan 驱动（igvk64.dll）
+
+**这是最难查的一个，因为它是原生崩溃**：不经过 Rust 的 panic hook，
+`boot_log` 也留不下任何记录（日志停在崩溃前最后一条）。
+
+定位靠的是 **Windows 事件日志**（不是我们的应用日志）：
+
+```text
+错误应用程序名称: silvermoon.exe
+错误模块名称:     igvk64.dll          ← Intel 的 Vulkan 驱动
+错误模块版本:     27.20.100.8682
+异常代码:         0xc0000005          ← 访问违例
+```
+
+完整崩溃史把因果链说得很清楚：
+
+| 时间 | 故障模块 | 异常代码 | 含义 |
+|---|---|---|---|
+| 09:14:03/22/34 | silvermoon.exe | 0xc0000409 | Rust panic + abort（后端 feature 问题）|
+| 09:55:56 起 | **igvk64.dll** | 0xc0000005 | Intel Vulkan 驱动访问违例 |
+| 10:21:42 | **igvk64.dll** | 0xc0000005 | 同上 |
+
+前一批是 `0xc0000409`（Rust `panic = "abort"` 在 Windows 上的标志）；
+修掉之后崩溃**全部换成 igvk64.dll 的 0xc0000005**。
+
+**根因**：`wgpu::Backends::all()` = Vulkan | Metal | DX12 | GL，**包含 Vulkan**，
+wgpu 会去初始化它 → 该驱动立刻访问违例 → 整个进程被带走。
+
+**修法**：Windows 上默认用 `DX12 | GL`（排除 Vulkan）。
+覆盖面不受影响 —— DX12 是 Windows 主路径，GL 是老机器兜底。
+非 Windows 保持 `all()`。可用 `SILVERMOON_GPU_BACKEND` 显式覆盖。
+
+> **经验**：原生崩溃查我们的日志是**没有用**的（留不下记录）。
+> Windows 上应当直接查事件日志：
+> `Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='Application Error'}`
+> —— 它会给出故障模块名与异常代码，这两项基本就能定位。
+> 异常代码 `0xc0000409` = Rust abort（panic），`0xc0000005` = 访问违例（多为驱动）。
+
+### 为什么 GPU 画布默认关闭（opt-in）
+
+尽管找到了 Vulkan 这个元凶，GPU 画布**仍保持默认关闭**，理由是代价不对称：
+
+绘画窗口打开时**会先隐藏主窗口**（为了视觉上像切换进独立应用）。
+所以一旦 wgpu 初始化把进程带走，**主界面也回不来** —— 整个应用卡死。
+为一个可行性验证付这个代价不值得。
+
+开启方式（任一）：
+
+```js
+// 控制台执行后重开画布
+localStorage.setItem("silvermoon:gpuCanvas", "1")
+```
+
+- URL 加 `?gpuCanvas=1`（或 `#/drawing?...&gpuCanvas=1`）
+- 构建时设 `VITE_GPU_CANVAS=1`
+
 ### wgpu 30 与旧版的 API 差异（实测确认）
 
 | 项 | 旧版 | wgpu 30 | 我们怎么踩到的 |
