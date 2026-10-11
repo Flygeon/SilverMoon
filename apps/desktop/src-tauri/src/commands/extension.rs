@@ -255,6 +255,8 @@ pub struct ExtInfo {
     /// 最近一次引擎启动失败的原因；None = 引擎正常或该扩展没有引擎。
     /// 此前失败只 `eprintln!`，UI 仍显示"已启用"，用户无从得知。
     pub engine_error: Option<String>,
+    /// 是否声明了窗口贡献点（扩展管理页据此决定要不要给「打开」按钮）
+    pub has_window: bool,
 }
 
 // ---- 运行时状态 ----
@@ -290,13 +292,60 @@ impl ExtEntry {
                 .as_ref()
                 .and_then(|w| w.default_route.clone()),
             engine_error: self.engine_error.clone(),
+            has_window: self
+                .manifest
+                .contributes
+                .as_ref()
+                .map(|c| !c.windows.is_empty())
+                .unwrap_or(false),
         }
     }
+}
+
+/// 打开某个扩展的窗口（扩展管理页的「打开」按钮）。
+///
+/// 路由优先取 manifest 的 `web.defaultRoute`，否则退到第一个窗口贡献点。
+/// 存在的意义：不必先知道扩展声明了什么热键，也能确定性地把它打开来验证。
+#[tauri::command]
+pub async fn ext_open_window(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let route = {
+            let state = app.state::<ExtState>();
+            let map = state.map.lock().unwrap();
+            let ext = map.get(&id).ok_or_else(|| format!("扩展不存在：{id}"))?;
+            let c = ext.manifest.contributes.as_ref();
+            if c.map(|c| c.windows.is_empty()).unwrap_or(true) {
+                return Err(format!("扩展 {id} 没有声明窗口贡献点"));
+            }
+            ext.manifest
+                .web
+                .as_ref()
+                .and_then(|w| w.default_route.clone())
+                .or_else(|| c.and_then(|c| c.windows.first().map(|w| w.route.clone())))
+                .unwrap_or_default()
+        };
+        open_extension_window(&app, &id, &route).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("打开扩展窗口失败：{e}"))
+    .and_then(|r| r)
 }
 
 #[derive(Default)]
 struct ExtState {
     map: Mutex<HashMap<String, ExtEntry>>,
+    /// 最近一次的扩展导航目标 `(ext_id, route)`。
+    ///
+    /// ## 为什么要有它
+    ///
+    /// 新建扩展窗口时，`WebviewWindowBuilder::build()` 一返回就 `emit`，
+    /// 而窗口里的前端**还没来得及 `listen`** —— Tauri 的事件不缓存，直接就丢了。
+    /// 表现就是：窗口打开了，却停在「等待导航事件」的空白页，再按一次热键才好
+    /// （第二次走的是「窗口已存在」分支，那时前端早就挂载完了）。
+    ///
+    /// 所以把目标记在这里，前端挂载时**主动拉一次**（`ext_current_nav`），
+    /// 不再依赖「推的时机刚好赶得上」。
+    last_nav: Mutex<Option<(String, String)>>,
 }
 
 // ---- 路径工具 ----
@@ -618,6 +667,17 @@ pub fn ext_list(app: tauri::AppHandle) -> Vec<ExtInfo> {
     map.values().map(ExtEntry::info).collect()
 }
 
+/// 最近一次的扩展导航目标（扩展窗口前端**挂载时主动拉取**）。
+///
+/// 见 `ExtState::last_nav` 的注释：新建窗口时 `emit` 早于前端 `listen`，
+/// 事件会丢；靠这一拉把「窗口已打开但停空白页」这个竞态彻底消掉。
+#[tauri::command]
+pub fn ext_current_nav(app: tauri::AppHandle) -> Option<Value> {
+    let state = app.state::<ExtState>();
+    let nav = state.last_nav.lock().unwrap().clone();
+    nav.map(|(ext, route)| json!({ "ext": ext, "route": route }))
+}
+
 /// 读取某个扩展的完整 manifest。
 /// 前端用它取 `web.defaultRoute`（默认路由）、`permissions`（权限展示）、
 /// `contributes.settings.schema`（设置面板），不必把这些再复制进 ExtInfo。
@@ -826,24 +886,6 @@ pub async fn ext_invoke(
 
 // ---- 窗口 / 热键 / 托盘（主机代注册）----
 
-/// 若该扩展声明了引擎且还没起来，就地懒启动（首次被热键/托盘触达时）。
-/// 失败只记录到 `engine_error`，不阻塞窗口打开 —— UI 打不开比引擎没起来更糟。
-fn ensure_engine(app: &tauri::AppHandle, ext_id: &str) {
-    let (has_engine, running) = {
-        let state = app.state::<ExtState>();
-        let map = state.map.lock().unwrap();
-        match map.get(ext_id) {
-            Some(e) => (e.manifest.engines.is_some(), e.port.is_some()),
-            None => (false, false),
-        }
-    };
-    if has_engine && !running {
-        if let Err(e) = spawn_engine(app, ext_id) {
-            eprintln!("[ext] 懒启动引擎 {ext_id} 失败：{e}");
-        }
-    }
-}
-
 /// 打开（或聚焦）扩展窗口。扩展窗口为单一共享窗口 label="extension"，
 /// 由前端 ExtensionHost 监听 `ext:navigate` 事件按 ext/route 渲染。
 /// 注意：窗口创建必须经 spawn_blocking 脱离主线程，否则与 novel_auth.rs
@@ -853,8 +895,18 @@ pub fn open_extension_window(
     ext_id: &str,
     route: &str,
 ) -> tauri::Result<()> {
-    // 窗口要显示了，说明扩展被用上了：把懒启动的引擎拉起来（幂等）
-    ensure_engine(app, ext_id);
+    // 先把导航目标记下来，再动窗口。
+    // 顺序很重要：必须早于 emit，否则前端拉到的还是上一次的目标。
+    {
+        let state = app.state::<ExtState>();
+        *state.last_nav.lock().unwrap() = Some((ext_id.to_string(), route.to_string()));
+    }
+
+    // 这里**刻意不预热引擎**。原先调过 `ensure_engine`，两个问题：
+    //   1) 它要等 `READY <port>` 握手（最长 20 秒），按热键到窗口出现会卡住十几秒；
+    //   2) 它与前端挂载后的首次 `ext_invoke` 并发，两者都会看到 `port == None`
+    //      而各拉起一个引擎 —— 后一个 `Child` 覆盖前一个，前一个**不会被 kill**，泄漏进程。
+    // 懒启动交给唯一一条路径：`ext_invoke` 发现没有端口就先 `spawn_engine` 再转发。
 
     // 先取 manifest 快照再动窗口：持锁做窗口操作极易与主线程互等（见文件头注释）。
     let (pref, ext_name) = {

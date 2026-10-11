@@ -1384,6 +1384,10 @@ export const capabilities = {
   extList(): Promise<ExtInfo[]> {
     return safeInvoke("ext_list");
   },
+  /** 打开某个扩展的窗口（路由取 manifest 的 web.defaultRoute 或其首个窗口贡献点） */
+  extOpenWindow(id: string): Promise<void> {
+    return safeInvoke("ext_open_window", { id });
+  },
   /** 读取扩展完整 manifest（web.defaultRoute / permissions / 设置 schema） */
   extGet(id: string): Promise<ExtManifest | null> {
     return safeInvoke("ext_get", { id });
@@ -1411,6 +1415,15 @@ export const capabilities = {
   /** 列出所有已启用扩展声明的皮肤（皮肤功能已改由扩展承载） */
   extThemes(): Promise<ExtThemeInfo[]> {
     return safeInvoke("ext_themes");
+  },
+  /**
+   * 最近一次的扩展导航目标。
+   *
+   * 扩展窗口前端**挂载时主动拉一次**用：新建窗口时宿主的 emit 早于前端 listen，
+   * 事件会丢，窗口会停在「等待导航事件」的空白页（见 Rust 侧 ExtState::last_nav）。
+   */
+  extCurrentNav(): Promise<{ ext: string; route: string } | null> {
+    return safeInvoke("ext_current_nav");
   },
   /** 读取一款扩展皮肤：skin.json 原文 + 主题目录文件清单 */
   extThemeLoad(extId: string, themeId: string): Promise<ExtThemePayload> {

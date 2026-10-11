@@ -46,6 +46,14 @@ async function toggle(ext: ExtInfo) {
   }
 }
 
+async function openWindow(ext: ExtInfo) {
+  try {
+    await capabilities.extOpenWindow(ext.id);
+  } catch (e) {
+    notify(`打开失败：${String(e)}`);
+  }
+}
+
 async function uninstall(ext: ExtInfo) {
   if (!window.confirm(`卸载扩展「${ext.name}」？数据目录（索引/模型）将一并删除。`)) return;
   busy.value = ext.id;
@@ -123,6 +131,9 @@ onActivated(load);
           </div>
         </div>
         <div class="ops">
+          <button v-if="ext.hasWindow" :disabled="busy === ext.id" @click="openWindow(ext)">
+            打开
+          </button>
           <button :disabled="busy === ext.id" @click="toggle(ext)">
             {{ ext.enabled ? "禁用" : "启用" }}
           </button>

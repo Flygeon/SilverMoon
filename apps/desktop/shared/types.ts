@@ -1265,6 +1265,8 @@ export interface ExtInfo {
   defaultRoute: string | null;
   /** 最近一次引擎启动失败的原因；引擎正常或该扩展没有引擎时为 null */
   engineError: string | null;
+  /** 是否声明了窗口贡献点（据此决定要不要显示「打开」按钮） */
+  hasWindow: boolean;
 }
 
 /** 扩展声明的一款皮肤（对应 Rust `ExtTheme`） */

@@ -168,8 +168,17 @@ onMounted(async () => {
   window.addEventListener("message", onMessage);
   if (!isDesktop) return;
   unNav = await capabilities.onExtNavigate(({ ext, route }) => {
-    void navigateTo(ext, route || "search");
+    // route 为空时交给 manifest 的 web.defaultRoute 决定，宿主不写死默认值
+    void navigateTo(ext, route || "");
   });
+  // ⚠️ 挂载后**主动拉一次**目标。
+  //
+  // 新建扩展窗口时，宿主 `build()` 一返回就 emit，而这里的 listen 还没注册上 ——
+  // Tauri 事件不缓存，那一发就丢了，窗口会停在下面的「等待导航事件」空白页，
+  // 用户得再按一次热键才正常（第二次走「窗口已存在」分支，那时监听早就在了）。
+  // 拉取把「推的时机」这个竞态彻底去掉。
+  const nav = await capabilities.extCurrentNav().catch(() => null);
+  if (nav) void navigateTo(nav.ext, nav.route || "");
 });
 
 onBeforeUnmount(() => {

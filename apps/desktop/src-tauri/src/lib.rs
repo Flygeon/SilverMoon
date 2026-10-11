@@ -514,6 +514,8 @@ pub fn run() {
             // ---- 扩展框架 ----
             commands::extension::ext_list,
             commands::extension::ext_get,
+            commands::extension::ext_current_nav,
+            commands::extension::ext_open_window,
             commands::extension::ext_install,
             commands::extension::ext_uninstall,
             commands::extension::ext_set_enabled,
