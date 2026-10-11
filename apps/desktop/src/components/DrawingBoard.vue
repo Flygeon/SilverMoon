@@ -60,18 +60,25 @@ type AppInstance = InstanceType<LeaferNS["App"]>;
  */
 const app = shallowRef<AppInstance | null>(null);
 let ns: LeaferNS | null = null;
-/** 用户图层的一项 */
+/** 用户图层的一项。leafer 用结构化类型（只声明实际用到的成员），
+ * 避开 leafer-editor 多包之间 Leafer 类定义不一致导致的类型打架。 */
 interface LayerState {
   id: number;
   name: string;
   visible: boolean;
-  leafer: LeaferInstance;
+  leafer: {
+    add(node: unknown): void;
+    remove(): void;
+    set(props: Record<string, unknown>): void;
+    readonly children?: unknown[];
+    export?(type: string, opts?: unknown): unknown;
+  };
 }
 const layers = ref<LayerState[]>([]);
 const activeLayerId = ref(0);
 let layerSeq = 0;
-/** 选中框所在的顶层覆盖引擎 */
-let overlay: LeaferInstance | null = null;
+/** 选中框所在的顶层覆盖引擎（结构化类型，同 LayerState.leafer） */
+let overlay: LayerState["leafer"] | null = null;
 /** 已有画作载入的底图（无 sidecar 时的兼容模式）：不参与选中、清空，也不进历史 */
 let backdrop: LeafNode | null = null;
 /** 选中框：仅作视觉反馈，导出前会隐藏 */
@@ -193,10 +200,13 @@ function syncLayerOrder() {
   const a = app.value;
   if (!a) return;
   for (const l of layers.value) l.leafer.remove();
-  layers.value.forEach((l, i) => a.addAt(l.leafer, i));
+  // App.addAt/add 要的是 leafer-editor 自己的 ILeafer 类型，这里做一次桥接断言
+  type LeaferArg = Parameters<NonNullable<typeof a>["addAt"]>[0];
+  layers.value.forEach((l, i) => a.addAt(l.leafer as unknown as LeaferArg, i));
   if (overlay) {
     overlay.remove();
-    a.add(overlay);
+    type AddArg = Parameters<NonNullable<typeof a>["add"]>[0];
+    a.add(overlay as unknown as AddArg);
   }
 }
 
