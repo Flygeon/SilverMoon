@@ -53,8 +53,10 @@ SilverMoon（中文名**银月**）基于 **Tauri 2 + Vue 3 + TypeScript + Mater
 ### 🎨 外观与扩展
 
 - **Material Design 3** 设计系统：Monet 动态取色、浅色 / 深色 / 跟随系统
-- **皮肤系统**：外部皮肤包（ZIP 资产 + 背景图 + 图标包 + CSS 注入）导入与固化，内置多款皮肤，示例见 `example/`
-- **扩展框架（Extension Host）**：扩展以独立子进程运行，主项目零体积增加；首个参考扩展 **MiaoHui（妙绘）** 提供图片 / 视频索引 + OCR + ASR + 向量检索
+- **扩展框架（Extension Host）**：用户可自行开发与安装扩展。扩展自带引擎（子进程 + localhost HTTP）与前端（独立 `ext:` 协议加载），主项目零体积增加；声明式贡献点覆盖窗口 / 热键 / 托盘 / 设置 / **皮肤**，支持懒加载、权限模型与版本区间校验
+  - 皮肤已**改由扩展承载**：装皮肤 = 装一个声明 `contributes.themes` 的扩展
+  - 作者 SDK `packages/extension-api`；开发指南 `doc/扩展开发指南.md`；示例 `example/extensions/`
+  - 首个参考扩展 **MiaoHui（妙绘）** 提供图片 / 视频索引 + OCR + ASR + 向量检索
 - 音效预设市场：在线拉取社区预设，一键导入
 - 🌍 中 / 英双语 i18n
 

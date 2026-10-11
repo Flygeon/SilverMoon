@@ -4,6 +4,13 @@ node_modules/
 # front-end build output
 dist/
 
+# ⚠️ 例外：示例扩展的 web/dist 是**交付物**，不是构建产物。
+# 扩展以成品分发（安装即用，用户侧不构建），所以它的预构建前端必须入库；
+# 少了它示例就是坏的。注意必须先放行目录本身再放行内容 ——
+# git 的规则是「父目录被排除时，无法用 ! 重新包含其中的文件」。
+!example/extensions/*/web/dist/
+!example/extensions/*/web/dist/**
+
 # electron-builder output（历史目录，迁回 Tauri 后不再产生）
 release/
 

@@ -131,6 +131,135 @@ pub extern "C" fn referer_kind(ptr: *const u8, len: usize) -> u32 {
       for (const [host, want] of cases) check(`  ${host}`, call(host), want);
     },
   },
+  // ---- ext: 协议：路径逃逸防护（扩展 UI 的安全边界）----
+  //
+  // 这是扩展框架里**安全性最关键**的一段：`ext:` 协议给扩展自带 UI 提供文件服务，
+  // 一旦判断写漏，扩展就能读到扩展目录以外的任意文件。
+  // 因此这里真的把 is_servable 编出来，喂各种逃逸尝试跑断言。
+  {
+    file: "ext_protocol.rs",
+    fn: "is_servable",
+    extraFns: ["starts_with_ci"],
+    uses: ["std::path::{Component, Path, PathBuf}"],
+    wrapper: `
+#[no_mangle]
+pub extern "C" fn servable(root_ptr: *const u8, root_len: usize,
+                           path_ptr: *const u8, path_len: usize) -> u32 {
+    let root = unsafe { std::slice::from_raw_parts(root_ptr, root_len) };
+    let p = unsafe { std::slice::from_raw_parts(path_ptr, path_len) };
+    let root = PathBuf::from(String::from_utf8_lossy(root).into_owned());
+    let p = String::from_utf8_lossy(p);
+    match is_servable(&root, &p) {
+        Some(_) => 1,
+        None => 0,
+    }
+}`,
+    run: (ex) => {
+      const call = (root, p) => {
+        const rb = enc.encode(root);
+        const pb = enc.encode(p);
+        const rp = base(ex) + 20000;
+        const pp = base(ex) + 22000;
+        mem(ex).set(rb, rp);
+        mem(ex).set(pb, pp);
+        return ex.servable(rp, rb.length, pp, pb.length) === 1;
+      };
+      const ROOT = "C:/Users/x/AppData/Roaming/cn.cool.silvermoon/extensions";
+      const D = "C:/Users/x/AppData/Roaming/cn.cool.silvermoon/extensions";
+      console.log("\n[is_servable] ext: 协议路径逃逸防护（1=放行，0=拒绝）");
+      check("  扩展目录内的正常产物", call(ROOT, `${D}/miaohui/web/dist/index.html`), true);
+      check("  扩展目录内的大小写不同", call(ROOT, `${D}/MiaoHui/web/dist/index.html`), true);
+      check("  反斜杠路径", call(ROOT, `${D}\\\\miaohui\\\\web\\\\dist\\\\index.html`), true);
+      check("  .. 逐段逃逸", call(ROOT, `${D}/miaohui/../../../Windows/win.ini`), false);
+      check("  .. 后仍回到根内（也拒绝）", call(ROOT, `${D}/miaohui/../miaohui/web/dist/a.js`), false);
+      check("  完全在根的兄弟目录", call(ROOT, "C:/Users/x/AppData/Roaming/cn.cool.silvermoon/skins/x/skin.json"), false);
+      check("  前缀相同的兄弟目录（extensions-evil）", call(ROOT, `${D}-evil/x/a.js`), false);
+      check("  绝对路径直指系统文件", call(ROOT, "C:/Windows/win.ini"), false);
+      check("  空路径", call(ROOT, ""), false);
+      check("  仅斜杠", call(ROOT, "/"), false);
+      check("  相对路径（非绝对）", call(ROOT, "miaohui/web/dist/a.js"), false);
+      check("  编码过的 ..（解码后的形态）", call(ROOT, D + "/miaohui/../Windows/win.ini"), false);
+    },
+  },
+  // ---- activationEvents：启动时是否该拉起引擎 ----
+  //
+  // 这条决定"装了 10 个扩展会不会开机全拉起"。旧包（不声明该字段）必须
+  // 保持"启动即拉起"，否则升级宿主后它们会集体失效。
+  {
+    file: path.join("commands", "extension.rs"),
+    fn: "wants_startup",
+    uses: [],
+    wrapper: `
+fn wants_startup_cs(flags: &[&str]) -> u32 {
+    let owned: Vec<String> = flags.iter().map(|s| s.to_string()).collect();
+    if wants_startup(&owned) { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub extern "C" fn wants_startup_0() -> u32 { wants_startup_cs(&[]) }
+#[no_mangle]
+pub extern "C" fn wants_startup_startup() -> u32 { wants_startup_cs(&["onStartup"]) }
+#[no_mangle]
+pub extern "C" fn wants_startup_lower() -> u32 { wants_startup_cs(&["onstartup"]) }
+#[no_mangle]
+pub extern "C" fn wants_startup_lazy() -> u32 { wants_startup_cs(&["onHotkey", "onTray"]) }
+#[no_mangle]
+pub extern "C" fn wants_startup_mixed() -> u32 { wants_startup_cs(&["onInvoke", "onStartup"]) }
+`,
+    run: (ex) => {
+      console.log("\n[wants_startup] activationEvents 决定启动是否拉起引擎（1=拉起 0=懒加载）");
+      check("  未声明（旧包）→ 启动即拉起", ex.wants_startup_0(), 1);
+      check("  显式 onStartup", ex.wants_startup_startup(), 1);
+      check("  大小写不敏感 onstartup", ex.wants_startup_lower(), 1);
+      check("  onHotkey/onTray → 懒加载", ex.wants_startup_lazy(), 0);
+      check("  混合且含 onStartup", ex.wants_startup_mixed(), 1);
+    },
+  },
+  // ---- engines.readyLine：引擎就绪行解析 ----
+  //
+  // 该字段此前"声明了没人读"，miaohui 能跑只是因为它恰好等于默认值。
+  // 现在它真的参与匹配，因此必须有用例钉住默认行为不回归。
+  {
+    file: path.join("commands", "extension.rs"),
+    fn: "parse_ready_line",
+    uses: [],
+    wrapper: `
+#[no_mangle]
+pub extern "C" fn ready_default(ptr: *const u8, len: usize) -> u32 {
+    let s = unsafe { std::slice::from_raw_parts(ptr, len) };
+    parse_ready_line(&String::from_utf8_lossy(s), None).unwrap_or(0) as u32
+}
+#[no_mangle]
+pub extern "C" fn ready_custom(ptr: *const u8, len: usize, pp: *const u8, pl: usize) -> u32 {
+    let s = unsafe { std::slice::from_raw_parts(ptr, len) };
+    let p = unsafe { std::slice::from_raw_parts(pp, pl) };
+    let pat = String::from_utf8_lossy(p).into_owned();
+    parse_ready_line(&String::from_utf8_lossy(s), Some(&pat)).unwrap_or(0) as u32
+}
+`,
+    run: (ex) => {
+      const call = (line, pattern) => {
+        const lb = enc.encode(line);
+        const lp = base(ex) + 24000;
+        mem(ex).set(lb, lp);
+        if (pattern === undefined) return ex.ready_default(lp, lb.length);
+        const pb = enc.encode(pattern);
+        const pp = base(ex) + 26000;
+        mem(ex).set(pb, pp);
+        return ex.ready_custom(lp, lb.length, pp, pb.length);
+      };
+      console.log("\n[parse_ready_line] 引擎就绪行 → 端口（0=未匹配）");
+      check("  默认 READY 12345", call("READY 12345"), 12345);
+      check("  默认带前后空白", call("  READY 5000  "), 5000);
+      check("  默认模式下非就绪行", call("booting up"), 0);
+      check("  默认模式下 READY 缺端口", call("READY"), 0);
+      check("  默认模式下端口非法", call("READY abc"), 0);
+      check("  自定义模式命中", call("listening on 8080", "listening on <port>"), 8080);
+      check("  自定义模式不匹配", call("READY 12345", "listening on <port>"), 0);
+      check("  段数不同不匹配", call("READY 12345 extra", "READY <port>"), 0);
+      check("  端口超 u16 上限", call("READY 70000"), 0);
+    },
+  },
   {
     file: path.join("commands", "host.rs"),
     fn: "normalize_str",
@@ -235,8 +364,14 @@ writeFileSync(
 
 const body = TARGETS.map((t) => {
   const fnText = extractFn(t.file, t.fn);
+  // 目标函数依赖的**同文件辅助函数**也要一起抽（同样取源码原文）。
+  // 少了它们会编译失败，报 cannot find function —— 这反而是好事：
+  // 辅助函数改名时会在这里立刻暴露，而不是悄悄跳过验证。
+  const extra = (t.extraFns ?? [])
+    .map((name) => extractFn(t.file, name))
+    .join("\n\n");
   const uses = t.uses.map((u) => `use ${u};`).join("\n");
-  return `// ---- 取自 ${t.file} 的 ${t.fn} ----\n${uses}\n${fnText}\n${t.wrapper}`;
+  return `// ---- 取自 ${t.file} 的 ${t.fn} ----\n${uses}\n${fnText}\n${extra}\n${t.wrapper}`;
 }).join("\n\n");
 
 writeFileSync(

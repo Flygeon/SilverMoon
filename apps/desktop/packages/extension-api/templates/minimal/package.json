@@ -1,0 +1,17 @@
+{
+  "name": "hello-silvermoon",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "银月扩展最小模板：纯前端扩展（无引擎）",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@silvermoon/extension-api": "^2.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3"
+  }
+}

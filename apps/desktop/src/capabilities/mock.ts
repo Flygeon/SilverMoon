@@ -5,6 +5,7 @@
 import type {
   AnimeHistoryItem,
   AppliedOnlineTags,
+  ExtInfo,
   MusicTagFields,
   AnimeRuleEntry,
   FfmpegStatus,
@@ -699,6 +700,22 @@ export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       });
     case "pixiv_image":
       return as(new Uint8Array(0));
+
+    // ---- 扩展框架：浏览器预览只有空态（无扩展目录/无引擎子进程）----
+    case "ext_list":
+      return as([] as ExtInfo[]);
+    case "ext_get":
+      return as(null);
+    case "ext_themes":
+      return as([]);
+    case "ext_theme_load":
+      return as({ json: null, dir: null, absDir: null, files: [] });
+    case "ext_install":
+    case "ext_uninstall":
+    case "ext_set_enabled":
+    case "ext_invoke":
+    case "ext_open":
+      throw new Error("浏览器预览不支持扩展安装与引擎调用，请在桌面端测试");
 
     // ---- 皮肤系统（内存 Map 模拟皮肤库；浏览器预览不支持 ZIP 导入）----
     case "is_safe_mode":

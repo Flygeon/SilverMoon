@@ -97,7 +97,7 @@ onActivated(load);
 
     <div v-if="!list.length && !loading" class="empty">
       尚未安装任何扩展。<br />
-      把扩展 zip（如 miaohui-extension-*.zip）放进来即可启用离线内容检索。
+      扩展自带引擎与前端、不随主程序分发，安装扩展 zip 或文件夹即可。
     </div>
 
     <div v-for="ext in list" :key="ext.id" class="ext-card">
@@ -109,6 +109,17 @@ onActivated(load);
             <span class="state" :class="ext.enabled ? 'on' : 'off'">
               {{ ext.enabled ? (ext.engineReady ? "运行中" : "已启用") : "已禁用" }}
             </span>
+            <span v-if="!ext.compatible" class="state bad">API 不兼容</span>
+          </div>
+          <div v-if="!ext.compatible" class="warn">
+            该扩展要求更高的扩展 API 版本，已跳过加载：{{ ext.incompatibleReason }}
+          </div>
+          <div v-else-if="ext.engineError" class="warn">引擎启动失败：{{ ext.engineError }}</div>
+          <div class="perms">
+            <template v-if="ext.permissions.length">
+              权限：<span v-for="p in ext.permissions" :key="p" class="perm">{{ p }}</span>
+            </template>
+            <span v-else class="legacy">未声明权限（旧版扩展包，宿主按兼容模式放行）</span>
           </div>
         </div>
         <div class="ops">
@@ -189,6 +200,31 @@ onActivated(load);
 .state.off {
   background: rgba(128, 128, 128, 0.15);
   color: rgba(128, 128, 128, 0.9);
+}
+.state.bad {
+  background: rgba(220, 80, 80, 0.15);
+  color: #d05050;
+}
+.warn {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #d05050;
+}
+.perms {
+  margin-top: 6px;
+  font-size: 12px;
+  color: rgba(128, 128, 128, 0.95);
+}
+.perm {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: rgba(128, 128, 128, 0.15);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.legacy {
+  color: rgba(180, 140, 60, 0.95);
 }
 .ops {
   display: flex;

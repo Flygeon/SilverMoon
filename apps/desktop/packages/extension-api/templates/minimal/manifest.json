@@ -1,0 +1,26 @@
+{
+  "id": "hello-silvermoon",
+  "name": "Hello SilverMoon",
+  "version": "0.1.0",
+  "author": "your-name",
+  "license": "MIT",
+  "minHostVersion": ">=2.0.0",
+  "web": {
+    "dist": "web/dist",
+    "defaultRoute": "main"
+  },
+  "permissions": ["ext:invoke"],
+  "activationEvents": ["onStartup"],
+  "contributes": {
+    "windows": [
+      {
+        "route": "main",
+        "title": "Hello",
+        "width": 720,
+        "height": 480,
+        "alwaysOnTop": false,
+        "decorations": true
+      }
+    ]
+  }
+}

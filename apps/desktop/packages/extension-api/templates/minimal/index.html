@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hello SilverMoon</title>
+    <!-- 提醒：宿主加载扩展 UI 走独立自定义协议 ext://（convertFileSrc(path, "ext")），
+         不是 asset://。所以 vite 的 base 必须是 "./"（插件已代为设置），
+         绝对路径 /assets/… 在扩展窗口里会 404。 -->
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        font-family: system-ui, "Microsoft YaHei", sans-serif;
+        background: #1b1d22;
+        color: rgba(255, 255, 255, 0.86);
+      }
+      #app {
+        padding: 20px 24px;
+        line-height: 1.7;
+      }
+      code {
+        background: rgba(255, 255, 255, 0.08);
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">加载中…</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

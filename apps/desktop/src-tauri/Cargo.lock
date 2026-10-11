@@ -5115,6 +5115,7 @@ dependencies = [
  "rsa",
  "rusqlite",
  "scraper",
+ "semver",
  "serde",
  "serde_json",
  "sha1",

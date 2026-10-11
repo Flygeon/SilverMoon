@@ -181,7 +181,10 @@ import type {
   PixivTrendTag,
   PixivUgoiraFrames,
   ExtInfo,
+  ExtManifest,
   ExtSource,
+  ExtThemeInfo,
+  ExtThemePayload,
   OsuSearchResult,
   OsuImportResult,
   OsuProgress,
@@ -1381,6 +1384,10 @@ export const capabilities = {
   extList(): Promise<ExtInfo[]> {
     return safeInvoke("ext_list");
   },
+  /** 读取扩展完整 manifest（web.defaultRoute / permissions / 设置 schema） */
+  extGet(id: string): Promise<ExtManifest | null> {
+    return safeInvoke("ext_get", { id });
+  },
   /** 安装扩展（folder / zip / url） */
   extInstall(source: ExtSource): Promise<ExtInfo> {
     return safeInvoke("ext_install", { source });
@@ -1400,6 +1407,14 @@ export const capabilities = {
   /** 打开文件 / 视频跳秒（主机代执行；扩展经 ext_invoke("open") 同效） */
   extOpen(path: string, ts?: number, reveal?: boolean): Promise<void> {
     return safeInvoke("ext_open", { path, ts: ts ?? null, reveal: !!reveal });
+  },
+  /** 列出所有已启用扩展声明的皮肤（皮肤功能已改由扩展承载） */
+  extThemes(): Promise<ExtThemeInfo[]> {
+    return safeInvoke("ext_themes");
+  },
+  /** 读取一款扩展皮肤：skin.json 原文 + 主题目录文件清单 */
+  extThemeLoad(extId: string, themeId: string): Promise<ExtThemePayload> {
+    return safeInvoke("ext_theme_load", { extId, themeId });
   },
   /** 订阅扩展窗口导航事件（Rust 端 emit_to("extension", "ext:navigate")） */
   async onExtNavigate(

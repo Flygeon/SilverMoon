@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hello World</title>
+    <!--
+      Hello World —— SilverMoon 扩展框架的最小扩展示例。
+
+      这个页面是「预构建产物」：它不依赖任何构建工具、不依赖任何 npm 包，
+      双击也能在浏览器里打开（只是那时没有宿主，invoke 会超时 —— 这是预期行为，
+      页面底部的连接状态会如实告诉你）。
+
+      页面结构（读的时候按这个顺序）：
+        1. 桥：postMessage ↔ 宿主（核心，注释最密）
+        2. UI 交互：读设置 / 调引擎 / 记住笔记
+        3. 样式：无边框窗口下的自绘标题栏
+    -->
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #1b1d22;
+        --panel: #23262c;
+        --fg: #e6e6ea;
+        --dim: rgba(230, 230, 234, 0.55);
+        --line: rgba(255, 255, 255, 0.09);
+        --accent: #7aa2f7;
+        --bad: #f7768e;
+        --ok: #9ece6a;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        background: var(--bg);
+        color: var(--fg);
+        font: 13px/1.6 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+        overflow: hidden;
+      }
+
+      /* ---- 自绘标题栏 ----
+         manifest 里 decorations: false（无系统标题栏），
+         所以整条顶栏设为拖拽区；里面可点的元素必须显式 no-drag，否则点不动。 */
+      .bar {
+        flex-shrink: 0;
+        height: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 10px;
+        background: rgba(255, 255, 255, 0.04);
+        border-bottom: 1px solid var(--line);
+        -webkit-app-region: drag;
+        user-select: none;
+      }
+      .bar .title { font-size: 12px; color: var(--dim); }
+      .bar button { -webkit-app-region: no-drag; }
+
+      main { flex: 1; overflow: auto; padding: 16px; }
+      section { margin-bottom: 18px; }
+      h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--dim); }
+
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      input, button, select {
+        font: inherit;
+        color: var(--fg);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 5px 10px;
+      }
+      input { min-width: 160px; }
+      button { cursor: pointer; }
+      button:hover { border-color: var(--accent); }
+      button:disabled { opacity: 0.5; cursor: default; }
+
+      pre {
+        margin: 8px 0 0;
+        padding: 10px;
+        background: #15171b;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        font: 12px/1.5 ui-monospace, Consolas, monospace;
+        white-space: pre-wrap;
+        word-break: break-all;
+        max-height: 180px;
+        overflow: auto;
+      }
+      .state { font-size: 12px; }
+      .state.ok { color: var(--ok); }
+      .state.bad { color: var(--bad); }
+      .hint { color: var(--dim); font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="bar">
+      <span class="title">Hello World · 扩展示例</span>
+      <!-- 关闭扩展窗口。window.close() 在 Tauri 窗口里有效。 -->
+      <button id="close" title="关闭">✕</button>
+    </div>
+
+    <main>
+      <section>
+        <h2>1. 与宿主通信</h2>
+        <div class="row">
+          <span class="state" id="conn">尚未连接</span>
+          <span class="hint">调 settings:get 探活</span>
+        </div>
+      </section>
+
+      <section>
+        <h2>2. 宿主持有的设置（settings:get / settings:set）</h2>
+        <div class="row">
+          <input id="greeting" placeholder="问候语" />
+          <input id="count" type="number" placeholder="计数器" style="min-width: 90px" />
+          <button id="loadSettings">读取</button>
+          <button id="saveSettings">保存</button>
+        </div>
+        <p class="hint">
+          这些值由宿主按扩展 id 分开存储，schema 在 manifest.contributes.settings 里声明。
+        </p>
+      </section>
+
+      <section>
+        <h2>3. 调用扩展引擎（转发方法）</h2>
+        <div class="row">
+          <input id="who" placeholder="名字" value="SilverMoon" />
+          <button id="greet">greet</button>
+          <button id="status">status</button>
+        </div>
+        <div class="row" style="margin-top: 8px">
+          <input id="note" placeholder="随手记一条（写进 data/）" />
+          <button id="remember">remember</button>
+          <button id="recall">recall</button>
+        </div>
+        <pre id="out">调用结果会显示在这里。</pre>
+      </section>
+
+      <section>
+        <h2>4. 调用记录</h2>
+        <pre id="log">（每次 invoke 的收发都会记在这里）</pre>
+      </section>
+    </main>
+
+    <script>
+      (function () {
+        "use strict";
+
+        /* =====================================================================
+         * 1. 桥：扩展 UI ↔ 宿主
+         *
+         * 扩展 UI 跑在 iframe 里，**没有 Tauri IPC**：没有 invoke、没有文件系统。
+         * 唯一的通道是 postMessage 到宿主页（window.parent），由宿主页代为执行。
+         *
+         * 请求（本页 → 宿主）：
+         *   { source: "ext:<扩展 id>", type: "invoke", reqId, method, payload }
+         * 应答（宿主 → 本页）：
+         *   { source: "lumiluna-host", type: "invoke-result", reqId, ok, data, error }
+         *
+         * 两个 source 都是硬契约：
+         *   - "ext:<id>" 必须与 manifest.id 一致，写错 = 宿主静默丢弃，永远收不到回复；
+         *   - "lumiluna-host" 是宿主固定标识，与扩展是谁无关，永远不要改。
+         * ===================================================================== */
+
+        /** ← 改扩展 id 时只改这一行（必须与 manifest.id 完全相同） */
+        const EXT_ID = "hello-world";
+        const HOST_SOURCE = "lumiluna-host";
+        const EXT_SOURCE = "ext:" + EXT_ID;
+
+        /** 与宿主侧 30s 超时对齐；再加一点余量，让宿主的错误先回来。 */
+        const INVOKE_TIMEOUT_MS = 31000;
+
+        let seq = 0;
+        /** reqId → { resolve, reject, timer } */
+        const pending = new Map();
+
+        window.addEventListener("message", function (ev) {
+          const m = ev.data;
+          // 只认宿主的应答；其余 postMessage（同页其它库、开发工具）一律忽略。
+          if (!m || m.source !== HOST_SOURCE || m.type !== "invoke-result") return;
+          const p = pending.get(m.reqId);
+          if (!p) return; // 超时后才到的迟到应答，丢弃
+          pending.delete(m.reqId);
+          clearTimeout(p.timer);
+          m.ok ? p.resolve(m.data) : p.reject(new Error(m.error || "调用失败"));
+        });
+
+        /**
+         * 调用宿主 / 引擎方法。
+         * @param {string} method 方法名（宿主保留方法形如 "settings:get"，其余转发给引擎）
+         * @param {object} payload 任意 JSON；没有就省略
+         */
+        function invoke(method, payload) {
+          return new Promise(function (resolve, reject) {
+            const reqId = EXT_ID + "-" + (++seq);
+            const timer = setTimeout(function () {
+              if (pending.delete(reqId)) {
+                reject(new Error("调用超时：" + method + "（宿主未应答）"));
+              }
+            }, INVOKE_TIMEOUT_MS);
+            pending.set(reqId, { resolve: resolve, reject: reject, timer: timer });
+
+            // 宿主页与扩展 UI 是**不同 origin**（扩展走 ext: 协议），
+            // 所以 targetOrigin 只能是 "*"，不能写具体 origin。
+            window.parent.postMessage(
+              {
+                source: EXT_SOURCE,
+                type: "invoke",
+                reqId: reqId,
+                method: method,
+                payload: payload === undefined ? {} : payload,
+              },
+              "*"
+            );
+          });
+        }
+
+        /* ---- 宿主保留方法的便捷封装（不转发引擎，由宿主自己处理）---- */
+        const host = {
+          /** 读本扩展的设置 → { greeting, count } */
+          getSettings: function () {
+            return invoke("settings:get").then(function (r) {
+              return (r && r.values) || {};
+            });
+          },
+          /** 写本扩展的设置；只传想改的键 */
+          setSettings: function (values) {
+            return invoke("settings:set", { values: values });
+          },
+          /** 让宿主代开一个文件（需要 opener:open-path 权限；本示例没用到） */
+          openPath: function (path, ts) {
+            return invoke("open", { path: path, ts: ts });
+          },
+        };
+
+        /* =====================================================================
+         * 2. UI 交互
+         * ===================================================================== */
+
+        const $ = function (id) { return document.getElementById(id); };
+
+        const logEl = $("log");
+        const outEl = $("out");
+        const connEl = $("conn");
+        const logLines = [];
+        function log(line) {
+          logLines.push(new Date().toLocaleTimeString() + "  " + line);
+          if (logLines.length > 60) logLines.shift();
+          logEl.textContent = logLines.join("\n");
+        }
+        function show(data) {
+          outEl.textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+        }
+        function setConn(ok, text) {
+          connEl.textContent = text;
+          connEl.className = "state " + (ok ? "ok" : "bad");
+        }
+
+        /** 包一层：调用 + 记日志 + 统一错误展示 */
+        function call(method, payload) {
+          log("→ " + method + " " + JSON.stringify(payload === undefined ? {} : payload));
+          return invoke(method, payload).then(
+            function (data) {
+              log("← " + method + " ok: " + JSON.stringify(data));
+              return data;
+            },
+            function (err) {
+              log("← " + method + " 失败: " + err.message);
+              throw err;
+            }
+          );
+        }
+
+        document.getElementById("close").onclick = function () { window.close(); };
+
+        // -- 探活：settings:get 能回来就说明桥通了 --
+        call("settings:get").then(
+          function () { setConn(true, "已连接宿主"); },
+          function (err) { setConn(false, "未连接宿主：" + err.message); }
+        );
+
+        // -- 设置读写 --
+        $("loadSettings").onclick = function () {
+          host.getSettings().then(
+            function (values) {
+              $("greeting").value = values.greeting == null ? "" : values.greeting;
+              $("count").value = values.count == null ? "" : String(values.count);
+              show(values);
+            },
+            function (err) { show("读取设置失败：" + err.message); }
+          );
+        };
+
+        $("saveSettings").onclick = function () {
+          // 只提交这两个键；宿主按扩展 id 合并保存。
+          host.setSettings({
+            greeting: $("greeting").value,
+            count: Number($("count").value) || 0,
+          }).then(
+            function () { show("设置已保存"); },
+            function (err) { show("保存设置失败：" + err.message); }
+          );
+        };
+
+        // -- 引擎方法（会被转发到 engine/serve.py）--
+        $("greet").onclick = function () {
+          call("greet", { name: $("who").value }).then(show, function (e) { show(String(e.message)); });
+        };
+        $("status").onclick = function () {
+          call("status", {}).then(show, function (e) { show(String(e.message)); });
+        };
+        $("remember").onclick = function () {
+          call("remember", { text: $("note").value }).then(
+            function (d) { show(d); $("note").value = ""; },
+            function (e) { show(String(e.message)); }
+          );
+        };
+        $("recall").onclick = function () {
+          call("recall", {}).then(show, function (e) { show(String(e.message)); });
+        };
+
+        // 首屏顺便拉一次设置，省得用户先点一下
+        host.getSettings().then(
+          function (values) {
+            $("greeting").value = values.greeting == null ? "" : values.greeting;
+            $("count").value = values.count == null ? "" : String(values.count);
+          },
+          function () { /* 探活失败时上面已经提示过了，这里静默 */ }
+        );
+      })();
+    </script>
+  </body>
+</html>

@@ -17,7 +17,6 @@ import {
 } from "@/stores/settings";
 import type { ObsceneMode } from "@/utils/obscene";
 import { listCacheClear } from "@/utils/onlineListCache";
-import { useSkinsStore } from "@/stores/skins";
 import { useDesktopStore } from "@/stores/desktop";
 import { useBangumiCollectStore } from "@/stores/bangumiCollect";
 import { useLibraryStore } from "@/stores/library";
@@ -36,7 +35,7 @@ import { SB_CATEGORIES } from "@/utils/sponsorBlock";
 import { translate } from "@shared/i18n";
 import { SETTINGS_INDEX } from "@/views/settingsIndex.generated";
 import { matchSettings, type SettingsHit } from "@/views/settingsSearch";
-import type { FfmpegStatus, SkinEntry } from "@shared/types";
+import type { FfmpegStatus } from "@shared/types";
 import { listen } from "@/ipc/events";
 
 const settings = useSettingsStore();
@@ -349,8 +348,11 @@ function onCustomSeed(event: Event) {
 }
 
 // ---- 皮肤（方案书 §9）----
-
-const skins = useSkinsStore();
+//
+// 皮肤功能已改由扩展承载：设置页不再有皮肤库的浏览/导入/删除入口，
+// 用户装皮肤 = 装一个声明 contributes.themes 的扩展（应用经 ExtensionHost 的
+// themes:apply / themes:clear 桥方法驱动 skins store 的引擎）。
+// 这里保留的只有「当前皮肤是否门控设置项」这类**引擎状态到 UI 的投影**。
 
 /** 皮肤未适配种子色（且非安全模式）时，配色方案行置灰 */
 const seedLocked = computed(
@@ -366,45 +368,6 @@ const themeLockHint = computed(() =>
       )
     : "",
 );
-
-function modeIcon(modes: string[]): string {
-  if (modes.length === 1) return modes[0] === "dark" ? "dark_mode" : "light_mode";
-  return "contrast";
-}
-
-function skinCardTitle(s: SkinEntry): string {
-  if (s.status === "broken") return `${s.id}：${s.error ?? t("settings.skinBroken")}`;
-  const m = s.meta!;
-  return `${m.name} · ${m.author} · v${m.version}${m.description ? `\n${m.description}` : ""}`;
-}
-
-function onSkinCard(s: SkinEntry) {
-  if (s.status === "broken") {
-    notify(`${t("settings.skinBroken")}：${s.error ?? s.id}`);
-    return;
-  }
-  void skins.activate(s.id);
-}
-
-async function importSkin() {
-  const path = await capabilities.pickSkinFile();
-  if (path) await skins.importFromFile(path);
-}
-
-/** 两步删除：第一次点击进入确认态（3 秒超时回退），第二次执行 */
-const confirmDeleteSkin = ref<string | null>(null);
-let deleteTimer: number | undefined;
-function onDeleteSkin(id: string) {
-  if (confirmDeleteSkin.value === id) {
-    confirmDeleteSkin.value = null;
-    if (deleteTimer) window.clearTimeout(deleteTimer);
-    void skins.remove(id);
-  } else {
-    confirmDeleteSkin.value = id;
-    if (deleteTimer) window.clearTimeout(deleteTimer);
-    deleteTimer = window.setTimeout(() => (confirmDeleteSkin.value = null), 3000);
-  }
-}
 
 // ---- WebDAV ----
 
@@ -845,96 +808,6 @@ onBeforeUnmount(() => {
           />
         </div>
         <p v-if="themeLockHint" class="hint">{{ themeLockHint }}</p>
-
-        <!-- 皮肤 -->
-        <div class="row column">
-          <div class="row-label">
-            <span>{{ t("settings.skins") }}</span>
-          </div>
-          <div class="skin-list">
-            <div
-              class="skin-card"
-              :class="{ active: !settings.activeSkin }"
-              @click="skins.activate('')"
-            >
-              <span class="skin-dot" :style="{ '--sw': settings.seedColor }"></span>
-              <span class="skin-name">{{ t("settings.skinDefault") }}</span>
-            </div>
-            <div
-              v-for="s in skins.list"
-              :key="s.id"
-              class="skin-card"
-              :class="{
-                active: settings.activeSkin === s.id,
-                broken: s.status === 'broken',
-              }"
-              :title="skinCardTitle(s)"
-              @click="onSkinCard(s)"
-            >
-              <span
-                class="skin-dot"
-                :style="{ '--sw': s.meta?.accent || 'var(--md-sys-color-primary)' }"
-              ></span>
-              <span class="skin-name">{{ s.meta?.name ?? s.id }}</span>
-              <span v-if="s.meta" class="skin-badges">
-                <span
-                  class="fmt"
-                  :class="`v${s.meta.formatVersion}`"
-                  :title="t('settings.skinFmtTitle').replace('{v}', String(s.meta.formatVersion))"
-                  >v{{ s.meta.formatVersion }}</span
-                >
-                <span
-                  v-if="s.meta.hasBackground"
-                  class="material-symbols-outlined mode"
-                  :title="t('settings.skinHasBackground')"
-                  >wallpaper</span
-                >
-                <span
-                  v-if="s.meta.hasIcons"
-                  class="material-symbols-outlined mode"
-                  :title="t('settings.skinHasIcons')"
-                  >interests</span
-                >
-                <span class="material-symbols-outlined mode" :title="s.meta.modes.join(' / ')">{{
-                  modeIcon(s.meta.modes)
-                }}</span>
-                <span
-                  v-if="s.meta.seedColor"
-                  class="material-symbols-outlined seed"
-                  :title="t('settings.skinSeedAdapted')"
-                  >colorize</span
-                >
-                <span class="ver tabular-nums">{{ s.meta.version }}</span>
-              </span>
-              <m3e-icon-button
-                class="lm-icon-btn-sm danger skin-del"
-                size="small"
-                :class="{ confirming: confirmDeleteSkin === s.id }"
-                :title="
-                  confirmDeleteSkin === s.id
-                    ? t('settings.skinDeleteConfirm')
-                    : t('settings.skinDelete')
-                "
-                @click.stop="onDeleteSkin(s.id)"
-              >
-                <span class="material-symbols-outlined">
-                  {{ confirmDeleteSkin === s.id ? "check" : "close" }}
-                </span>
-              </m3e-icon-button>
-            </div>
-            <button class="skin-card import" @click="importSkin">
-              <span class="material-symbols-outlined">add</span>
-              <span class="skin-name">{{ t("settings.skinImport") }}</span>
-            </button>
-          </div>
-          <div v-if="settings.activeSkin" class="actions skin-actions">
-            <m3e-button variant="text" size="small" @click="skins.activate('')">
-              <span slot="icon" class="material-symbols-outlined">restart_alt</span>
-              {{ t("settings.skinRestoreDefault") }}
-            </m3e-button>
-          </div>
-        </div>
-        <p class="hint">{{ t("settings.skinsHint") }}</p>
 
         <div class="row">
           <div class="row-label">
@@ -2824,122 +2697,6 @@ onBeforeUnmount(() => {
 .swatches.disabled {
   opacity: 0.4;
   pointer-events: none;
-}
-
-/* ---- 皮肤卡片列表 ---- */
-.row.column {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 10px;
-}
-.skin-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-.skin-card {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 128px;
-  max-width: 210px;
-  padding: 10px 12px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-medium);
-  background: var(--md-sys-color-surface-container);
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  cursor: pointer;
-  transition:
-    background var(--md-sys-motion-duration-short) var(--md-sys-motion-spring-effects-fast),
-    transform 160ms var(--md-sys-motion-spring),
-    box-shadow 160ms var(--md-sys-motion-spring-effects-fast);
-}
-.skin-card:hover {
-  background: var(--md-sys-color-surface-container-high);
-  transform: translateY(-1px);
-}
-.skin-card.active {
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
-  box-shadow: 0 0 0 2px var(--md-sys-color-primary);
-}
-.skin-card.broken {
-  opacity: 0.55;
-  cursor: not-allowed;
-  border: 1px dashed var(--md-sys-color-outline);
-}
-.skin-card.import {
-  border: 1px dashed var(--md-sys-color-outline-variant);
-  background: transparent;
-  color: var(--md-sys-color-on-surface-variant);
-}
-.skin-card.import:hover {
-  color: var(--md-sys-color-primary);
-  border-color: var(--md-sys-color-primary);
-  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
-}
-.skin-card.import .material-symbols-outlined {
-  font-size: 20px;
-}
-.skin-dot {
-  flex: none;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--sw, var(--md-sys-color-primary));
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
-}
-.skin-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--md-sys-typescale-body-medium-size);
-  font-weight: 500;
-}
-.skin-badges {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  margin-left: auto;
-  opacity: 0.75;
-}
-.skin-badges .material-symbols-outlined {
-  font-size: 14px;
-}
-.skin-badges .fmt {
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1.4;
-  letter-spacing: 0.3px;
-}
-.skin-badges .fmt.v2 {
-  background: var(--md-sys-color-primary);
-  color: var(--md-sys-color-on-primary);
-}
-.skin-badges .fmt.v1 {
-  background: var(--md-sys-color-surface-container-highest);
-  color: var(--md-sys-color-on-surface-variant);
-}
-.skin-badges .ver {
-  font-size: 10px;
-  color: var(--md-sys-color-on-surface-variant);
-}
-.skin-del {
-  opacity: 0;
-}
-.skin-card:hover .skin-del {
-  opacity: 1;
-}
-.skin-del.confirming {
-  opacity: 1;
-  --m3e-standard-icon-button-icon-color: var(--md-sys-color-error);
-}
-.skin-actions {
-  margin-top: 0;
 }
 
 .dir-list {

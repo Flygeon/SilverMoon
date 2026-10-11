@@ -51,8 +51,10 @@ The music player follows an **Apple Music–style** design — fluid animated ba
 ### 🎨 Appearance and extensions
 
 - **Material Design 3**: Monet dynamic color, light / dark / follow-system
-- **Skin system**: import and pin external skin packages (ZIP assets + background images + icon packs + CSS injection); several built-in skins, examples under `example/`
-- **Extension framework (Extension Host)**: extensions run as separate child processes so the main project stays slim; the first reference extension **MiaoHui** provides image/video indexing + OCR + ASR + vector search
+- **Extension framework (Extension Host)**: users can author and install their own extensions. Each ships its own engine (child process + localhost HTTP) and frontend (served over a dedicated `ext:` protocol), so the main project stays slim; declarative contributions cover windows / hotkeys / tray / settings / **skins**, with lazy activation, a permission model and API version gating
+  - Skins are now **packaged as extensions**: installing a skin means installing an extension that declares `contributes.themes`; the settings page no longer hosts a skin library
+  - Author SDK: `packages/extension-api`; guide: `doc/扩展开发指南.md`; examples: `example/extensions/`
+  - First reference extension **MiaoHui** provides image/video indexing + OCR + ASR + vector search
 - Audio preset marketplace: pull community presets online and import them in one click
 - 🌍 Chinese / English i18n
 

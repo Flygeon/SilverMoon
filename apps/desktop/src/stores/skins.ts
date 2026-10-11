@@ -1,6 +1,17 @@
 /**
- * 皮肤系统 store：皮肤库列表、导入（v1 JSON 直存 / v2 ZIP 两阶段 staging）、
- * 激活、删除与安全模式。设计见 doc/皮肤系统开发方案书.md 与 v2 方案书。
+ * 皮肤系统 store：**主题应用引擎** + 内置皮肤库的管理动作。
+ * 设计见 doc/皮肤系统开发方案书.md 与 v2 方案书。
+ *
+ * ## 皮肤功能已改由扩展承载（2026-10）
+ *
+ * 设置页的皮肤库浏览 UI 已移除，用户「装皮肤」= 装一个声明 `contributes.themes` 的扩展。
+ * 因此本 store 现在有两种被驱动的入口，但**共用同一套引擎**（prepareSkin → activeSkinDoc →
+ * settings.resolveTheme → applySkin），扩展皮肤不另起一条落地路径：
+ *   - `activate(id)`      —— 内置皮肤库（导入/删除等管理动作保留给旧数据与测试）；
+ *   - `applyExtTheme(...)` —— 扩展皮肤（由 ExtensionHost 的 themes:apply 桥方法调用）。
+ *
+ * 二者在 `settings.activeSkin` 里用命名空间区分：扩展皮肤 id 形如 `ext:<extId>:<themeId>`，
+ * 内置皮肤 id 受 ID_RE 限制不可能含冒号，故无需额外状态位即可分流。
  * 示例皮肤不再内置播种——统一放仓库 example/ 目录由用户自行下载导入。
  */
 import { defineStore } from "pinia";
@@ -10,6 +21,12 @@ import { useSettingsStore } from "./settings";
 import { validateSkin, type SkinDocument } from "@/utils/skinSchema";
 import { prepareSkin } from "@/utils/skinLoader";
 import { activePrepared, activeSkinDoc, skinSafeMode } from "@/utils/skinRuntime";
+import {
+  extPrepareContext,
+  extThemeKey,
+  loadExtThemeSkin,
+  parseExtThemeKey,
+} from "@/utils/extThemes";
 import { translate } from "@shared/i18n";
 import type { SkinEntry } from "@shared/types";
 
@@ -41,6 +58,14 @@ export const useSkinsStore = defineStore("skins", () => {
     staging?: string;
   } | null>(null);
 
+  /**
+   * 最近一次挂载失败的可读原因。
+   *
+   * 挂载函数不直接弹 toast —— 否则调用方接手的通用提示会**立刻盖掉**具体原因
+   * （notify 是单值覆盖），用户就看不到「哪一条校验没过」了。
+   */
+  const lastError = ref<string | null>(null);
+
   let noticeTimer: number | undefined;
   function notify(msg: string) {
     notice.value = msg;
@@ -56,8 +81,35 @@ export const useSkinsStore = defineStore("skins", () => {
     list.value = await capabilities.skinList();
   }
 
+  /**
+   * 解析并挂载一款**扩展皮肤**。
+   *
+   * 与内置皮肤共用同一套引擎：校验器（loadExtThemeSkin 内部走 validateSkin）、
+   * prepareSkin、activeSkinDoc / activePrepared 全部一致，差别只在来源与基准目录。
+   */
+  async function mountExtActive(extId: string, themeId: string): Promise<boolean> {
+    const load = await loadExtThemeSkin(extId, themeId);
+    if (!load.ok || !load.skin) {
+      lastError.value = load.errors[0] ?? extId;
+      return false;
+    }
+    const ctx = extPrepareContext(load);
+    if (!ctx) {
+      lastError.value = `${extId} / ${themeId}：皮肤目录不可用`;
+      return false;
+    }
+    activeSkinDoc.value = load.skin;
+    activePrepared.value = prepareSkin(load.skin, ctx);
+    return true;
+  }
+
   /** 解析并挂载激活皮肤（启动 load 与 activate 共用）；失败返回 false */
   async function mountActive(id: string): Promise<boolean> {
+    lastError.value = null;
+    // 扩展皮肤按命名空间分流：内置皮肤 id 受 ID_RE 限制不会含冒号，两条路互斥
+    const ext = parseExtThemeKey(id);
+    if (ext) return mountExtActive(ext.extId, ext.themeId);
+
     if (!skinsRoot.value) {
       skinsRoot.value = await capabilities.skinDir().catch(() => null);
     }
@@ -116,6 +168,32 @@ export const useSkinsStore = defineStore("skins", () => {
     } else {
       notify(tr("settings.skinBroken"));
     }
+  }
+
+  /**
+   * 应用一款扩展皮肤（ExtensionHost 的 themes:apply 桥方法调用）。
+   *
+   * 失败不改变当前皮肤、只提示；成功则把 `ext:<extId>:<themeId>` 落进
+   * `settings.activeSkin`，重启后 load() 按同一命名空间还原。
+   */
+  async function applyExtTheme(extId: string, themeId: string): Promise<void> {
+    const key = extThemeKey(extId, themeId);
+    const ok = await mountActive(key);
+    if (ok) {
+      settings.activeSkin = key;
+      settings.resolveTheme();
+    } else {
+      notify(`${tr("settings.skinBroken")}：${lastError.value ?? key}`);
+    }
+  }
+
+  /** 从扩展皮肤回到默认皮肤（动态配色） */
+  async function clearExtTheme(): Promise<void> {
+    if (!parseExtThemeKey(settings.activeSkin)) return;
+    settings.activeSkin = "";
+    activeSkinDoc.value = null;
+    activePrepared.value = null;
+    settings.resolveTheme();
   }
 
   async function remove(id: string) {
@@ -237,8 +315,11 @@ export const useSkinsStore = defineStore("skins", () => {
     notice,
     pendingRemote,
     load,
+    lastError,
     refresh,
     activate,
+    applyExtTheme,
+    clearExtTheme,
     remove,
     importFromFile,
     confirmRemoteImport,

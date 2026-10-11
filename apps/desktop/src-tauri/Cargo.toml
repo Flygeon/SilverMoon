@@ -55,6 +55,10 @@ tauri-plugin-opener = "2"
 tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }
 # 全局热键：扩展框架注册热键（src/commands/extension.rs 唯一调用点）
 tauri-plugin-global-shortcut = "2"
+# 扩展框架的 minHostVersion 校验（语义化版本区间），唯一调用点同样是
+# src/commands/extension.rs。注意它比较的是**扩展 API 版本**（EXT_API_VERSION），
+# 不是产品版本号 —— 与 VS Code 的 engines.vscode 是同一套思路。
+semver = "1"
 # 自动更新：替代 electron-updater，保留「只提示、不自动重启」的产品行为
 tauri-plugin-updater = "2"
 # ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@ pub mod boot_log;
 pub mod commands;
 pub mod cover;
 pub mod error;
+pub mod ext_protocol;
 pub mod gpu_canvas;
 pub mod kugou;
 pub mod media;
@@ -207,6 +208,15 @@ pub fn run() {
         // AppHandle 没有这个能力；且要早于任何窗口开始加载。
         .register_asynchronous_uri_scheme_protocol("app-cover", |ctx, request, responder| {
             cover::handle_request(ctx, request, responder);
+        })
+        // ext:// 是**扩展自带 web UI** 的专用协议（服务 extensions/<id>/ 下的文件）。
+        //
+        // 为什么不复用 asset://：扩展 UI 若站在 asset 源上，就与**任意** asset URL
+        // 同源（assetProtocol.scope 是 **），能直接 fetch 本机任意文件，绕过
+        // capabilities/extension.json 里那条限 extensions/** 的 fs:read。换到
+        // 独立 origin 后，跨源读取会被 asset 协议的「ACAO=窗口 origin」判据挡下。
+        .register_asynchronous_uri_scheme_protocol("ext", |ctx, request, responder| {
+            ext_protocol::handle_request(ctx, request, responder);
         })
         // 主窗口在 tauri.conf.json 里是 `visible: false` 创建的，**显示时机交给
         // `splash::reveal()` 这一个入口**（见 splash.rs）：
@@ -503,11 +513,14 @@ pub fn run() {
             pixiv::pixiv_frame_bytes,
             // ---- 扩展框架 ----
             commands::extension::ext_list,
+            commands::extension::ext_get,
             commands::extension::ext_install,
             commands::extension::ext_uninstall,
             commands::extension::ext_set_enabled,
             commands::extension::ext_invoke,
             commands::extension::ext_open,
+            commands::extension::ext_themes,
+            commands::extension::ext_theme_load,
             // ---- GPU 画布（绘画）----
             gpu_canvas_open,
             gpu_canvas_resize,

@@ -1,0 +1,68 @@
+{
+  "id": "hello-world",
+  "name": "Hello World",
+  "version": "1.0.0",
+  "author": "SilverMoon",
+  "license": "MIT",
+  "minHostVersion": ">=2.0.0",
+  "engines": {
+    "cmd": "engine/serve.py",
+    "args": [],
+    "supportEnv": "HELLO_WORLD_DATA_DIR",
+    "readyLine": "READY <port>"
+  },
+  "web": {
+    "dist": "web/dist",
+    "defaultRoute": "home"
+  },
+  "contributes": {
+    "windows": [
+      {
+        "route": "home",
+        "title": "Hello World",
+        "width": 680,
+        "height": 480,
+        "alwaysOnTop": false,
+        "decorations": false
+      }
+    ],
+    "hotkeys": [
+      {
+        "accelerator": "Ctrl+Alt+H",
+        "route": "home",
+        "action": "toggle"
+      }
+    ],
+    "tray": [
+      {
+        "id": "open",
+        "title": "打开 Hello World",
+        "action": "open:home"
+      }
+    ],
+    "settings": {
+      "schema": [
+        {
+          "key": "greeting",
+          "type": "text",
+          "label": "问候语",
+          "default": "你好"
+        },
+        {
+          "key": "count",
+          "type": "number",
+          "label": "计数器",
+          "default": 0
+        }
+      ]
+    }
+  },
+  "permissions": [
+    "ext:invoke"
+  ],
+  "activationEvents": [
+    "onHotkey",
+    "onTray",
+    "onInvoke"
+  ]
+}

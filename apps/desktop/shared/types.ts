@@ -1255,6 +1255,129 @@ export interface ExtInfo {
   enabled: boolean;
   hasEngine: boolean;
   engineReady: boolean;
+  /** 宿主扩展 API 版本是否满足 manifest.minHostVersion */
+  compatible: boolean;
+  /** compatible = false 时的原因（可直接展示给用户） */
+  incompatibleReason: string | null;
+  /** 声明的权限清单；空数组 = 未声明（迁移期的旧扩展包，宿主放行但 UI 应提示） */
+  permissions: string[];
+  /** manifest.web.defaultRoute */
+  defaultRoute: string | null;
+  /** 最近一次引擎启动失败的原因；引擎正常或该扩展没有引擎时为 null */
+  engineError: string | null;
+}
+
+/** 扩展声明的一款皮肤（对应 Rust `ExtTheme`） */
+export interface ExtTheme {
+  id: string;
+  name: string;
+  /** 扩展目录内 skin.json 的相对路径 */
+  path: string;
+}
+
+/** `ext_themes` 的返回项：扩展皮肤 + 定位信息 */
+export interface ExtThemeInfo extends ExtTheme {
+  extId: string;
+  /** skin.json 所在目录（扩展根目录相对路径） */
+  dir: string;
+  /** 同一目录的**绝对路径**（由宿主给出，前端不要自行拼接 appData 目录） */
+  absDir: string;
+}
+
+/** `ext_theme_load` 的返回：skin.json 原文 + 主题目录下的文件清单 */
+export interface ExtThemePayload {
+  json: string | null;
+  /** 主题目录（扩展根目录相对路径） */
+  dir: string | null;
+  /** 主题目录的**绝对路径**，即皮肤引擎的基准目录 */
+  absDir: string | null;
+  /**
+   * 主题目录内的文件清单，路径**相对主题目录**（与 `skin_load` 的 files 同口径）。
+   * 直接喂给 `validateSkin(json, { files })` 即可——该校验器假定基准 =
+   * skin.json 所在目录，基准不一致会导致 v2 皮肤全部校验失败。
+   */
+  files: string[];
+}
+
+/** 扩展引擎声明（对应 Rust `ExtEngine`） */
+export interface ExtEngine {
+  cmd: string;
+  args: string[];
+  supportEnv?: string | null;
+  readyLine?: string | null;
+}
+
+/** 扩展自带 web UI 的声明（对应 Rust `ExtWeb`） */
+export interface ExtWeb {
+  /** 相对扩展目录的前端产物目录，缺省 web/dist */
+  dist?: string | null;
+  /** 未显式指定 route 时的默认路由 */
+  defaultRoute?: string | null;
+}
+
+/** 窗口贡献点（对应 Rust `ExtWindowContrib`） */
+export interface ExtWindowContrib {
+  route: string;
+  title: string;
+  width?: number | null;
+  height?: number | null;
+  alwaysOnTop: boolean;
+  decorations: boolean;
+}
+
+/** 全局热键贡献点（对应 Rust `ExtHotkey`） */
+export interface ExtHotkey {
+  accelerator: string;
+  route: string;
+  /** toggle | open:<route> | invoke:<method> */
+  action: string;
+}
+
+/** 托盘贡献点（对应 Rust `ExtTrayItem`） */
+export interface ExtTrayItem {
+  id: string;
+  title: string;
+  /** open:<route> | invoke:<method> */
+  action: string;
+}
+
+/** 扩展设置项 schema（对应 Rust `ExtSettings`；schema 是扩展自解释的开放 JSON） */
+export interface ExtSettings {
+  schema: unknown[];
+}
+
+/** 贡献点集合（对应 Rust `ExtContributes`） */
+export interface ExtContributes {
+  windows: ExtWindowContrib[];
+  hotkeys: ExtHotkey[];
+  tray: ExtTrayItem[];
+  settings?: ExtSettings | null;
+}
+
+/**
+ * 扩展清单（对应 Rust `ExtManifest`）。
+ *
+ * `minHostVersion` 比较的是**扩展 API 版本**（Rust 侧 `EXT_API_VERSION`），
+ * 不是应用的产品版本号 —— 与 VS Code 的 `engines.vscode` 是同一套思路。
+ */
+export interface ExtManifest {
+  id: string;
+  name: string;
+  version?: string | null;
+  author?: string | null;
+  license?: string | null;
+  minHostVersion?: string | null;
+  engines?: ExtEngine | null;
+  web?: ExtWeb | null;
+  contributes?: ExtContributes | null;
+  /** 声明的权限；整个字段省略 = 旧包（宿主按 legacy 放行） */
+  permissions?: string[] | null;
+  /**
+   * 激活时机："onStartup" | "onHotkey" | "onTray" | "onInvoke"。
+   * 省略 = 等同 ["onStartup"]（旧包行为）。不含 onStartup 的扩展启动时不拉起引擎，
+   * 首次被热键/托盘/调用触达时才懒启动。
+   */
+  activationEvents?: string[] | null;
 }
 
 /** 扩展安装来源（对应 Rust `ExtSource`） */

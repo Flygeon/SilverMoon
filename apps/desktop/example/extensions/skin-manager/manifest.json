@@ -1,0 +1,58 @@
+{
+  "id": "skin-manager",
+  "name": "皮肤管理器",
+  "version": "1.0.0",
+  "author": "SilverMoon",
+  "license": "MIT",
+  "minHostVersion": ">=2.0.0",
+  "web": {
+    "dist": "web/dist",
+    "defaultRoute": "themes"
+  },
+  "contributes": {
+    "windows": [
+      {
+        "route": "themes",
+        "title": "皮肤管理",
+        "width": 720,
+        "height": 540,
+        "alwaysOnTop": false,
+        "decorations": false
+      }
+    ],
+    "hotkeys": [
+      {
+        "accelerator": "Ctrl+Alt+S",
+        "route": "themes",
+        "action": "toggle"
+      }
+    ],
+    "tray": [
+      {
+        "id": "open",
+        "title": "皮肤管理",
+        "action": "open:themes"
+      }
+    ],
+    "themes": [
+      {
+        "id": "aurora",
+        "name": "极光",
+        "path": "themes/aurora/skin.json"
+      },
+      {
+        "id": "sakura",
+        "name": "樱",
+        "path": "themes/sakura/skin.json"
+      }
+    ]
+  },
+  "permissions": [
+    "ext:invoke"
+  ],
+  "activationEvents": [
+    "onHotkey",
+    "onTray",
+    "onInvoke"
+  ]
+}
