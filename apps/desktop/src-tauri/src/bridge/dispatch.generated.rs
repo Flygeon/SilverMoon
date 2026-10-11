@@ -55,7 +55,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             app.clone(),
             arg(args, "op")?,
             arg(args, "payload")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -97,7 +97,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::commands::host::host_updater_check(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -105,7 +105,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::commands::host::host_updater_install(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -130,14 +130,14 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::bilibili::bili_danmaku(
             arg(args, "cid")?,
-        )
+        ).await
         });
             res_json(__out)
         }
         "desktop_capabilities" => {
             let __out = tauri::async_runtime::block_on(async {
             crate::commands::desktop::desktop_capabilities(
-            )
+            ).await
         });
             ok_json(__out)
         }
@@ -147,21 +147,21 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             arg(args, "path")?,
             arg(args, "mode")?,
             arg(args, "dark")?,
-        )
+        ).await
         });
             res_json(__out)
         }
         "desktop_get_wallpaper" => {
             let __out = tauri::async_runtime::block_on(async {
             crate::commands::desktop::desktop_get_wallpaper(
-            )
+            ).await
         });
             res_json(__out)
         }
         "desktop_accent_color" => {
             let __out = tauri::async_runtime::block_on(async {
             crate::commands::desktop::desktop_accent_color(
-            )
+            ).await
         });
             res_json(__out)
         }
@@ -172,7 +172,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             arg(args, "body")?,
             arg(args, "icon")?,
             arg(args, "urgency")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -181,7 +181,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::commands::desktop::desktop_wakelock_acquire(
             arg(args, "reason")?,
             arg(args, "kind")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -522,7 +522,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::netease::netease_login_qr_key(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -531,7 +531,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::netease::netease_login_qr_check(
             app.clone(),
             arg(args, "key")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -541,7 +541,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             app.clone(),
             arg(args, "phone")?,
             arg(args, "ctcode")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -552,7 +552,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             arg(args, "phone")?,
             arg(args, "captcha")?,
             arg(args, "ctcode")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -560,7 +560,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::netease::netease_account(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -570,7 +570,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             app.clone(),
             arg(args, "offset")?,
             arg(args, "limit")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -579,7 +579,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::netease::netease_playlist_detail(
             app.clone(),
             arg(args, "id")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -589,7 +589,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             app.clone(),
             arg(args, "offset")?,
             arg(args, "limit")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -598,7 +598,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::netease::netease_song_url(
             app.clone(),
             arg(args, "ids")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -609,7 +609,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             arg(args, "id")?,
             arg(args, "offset")?,
             arg(args, "limit")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -619,7 +619,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             app.clone(),
             arg(args, "id")?,
             arg(args, "like")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -628,7 +628,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::netease::netease_likelist(
             app.clone(),
             arg(args, "uid")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -637,7 +637,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::netease::netease_recommend_playlists(
             app.clone(),
             arg(args, "limit")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -645,7 +645,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::netease::netease_daily_recommend_songs(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -653,7 +653,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::netease::netease_personal_fm(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -661,7 +661,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::netease::netease_logout(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -675,7 +675,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::kugou::kugou_login_qr_key(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -684,7 +684,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::kugou::kugou_login_qr_check(
             app.clone(),
             arg(args, "key")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -693,7 +693,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::kugou::kugou_captcha_sent(
             app.clone(),
             arg(args, "mobile")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -703,7 +703,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             app.clone(),
             arg(args, "mobile")?,
             arg(args, "code")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -711,7 +711,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::kugou::kugou_account(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -725,7 +725,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::kugou::kugou_sign_in(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -737,7 +737,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             arg(args, "albumAudioId")?,
             arg(args, "albumId")?,
             arg(args, "quality")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -745,7 +745,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::kugou::kugou_cover(
             arg(args, "url")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -756,7 +756,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             arg(args, "keyword")?,
             arg(args, "page")?,
             arg(args, "pagesize")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -765,7 +765,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::kugou::kugou_playlist_detail(
             app.clone(),
             arg(args, "ids")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -774,7 +774,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::kugou::kugou_rank_list(
             app.clone(),
             arg(args, "zone")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -785,7 +785,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             arg(args, "rankCid")?,
             arg(args, "page")?,
             arg(args, "pagesize")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -793,7 +793,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::kugou::kugou_everyday_recommend(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -801,7 +801,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::kugou::kugou_recommend_songs(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -811,7 +811,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             app.clone(),
             arg(args, "page")?,
             arg(args, "pagesize")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -822,7 +822,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             arg(args, "listid")?,
             arg(args, "page")?,
             arg(args, "pagesize")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -831,7 +831,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::osu::osu_search(
             arg(args, "query")?,
             arg(args, "limit")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -842,7 +842,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             arg(args, "beatmapsetId")?,
             arg(args, "mirror")?,
             arg(args, "outDir")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -852,7 +852,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             app.clone(),
             arg(args, "archivePath")?,
             arg(args, "outDir")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1034,7 +1034,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
         "bqg_home" => {
             let __out = tauri::async_runtime::block_on(async {
             crate::novel_bqg::bqg_home(
-            )
+            ).await
         });
             res_json(__out)
         }
@@ -1042,7 +1042,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::novel_bqg::bqg_detail(
             arg(args, "aid")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1050,7 +1050,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::novel_bqg::bqg_search(
             arg(args, "query")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1058,7 +1058,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::novel_bqg::bqg_catalogue(
             arg(args, "aid")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1067,7 +1067,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::novel_bqg::bqg_content(
             arg(args, "aid")?,
             arg(args, "cid")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1076,7 +1076,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::novel_auth::wenku8_login_submit(
             app.clone(),
             arg(args, "cookie")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1109,7 +1109,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::novel_auth::wenku8_login_open(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1123,7 +1123,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::novel_auth::wenku8_login_poll(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1138,7 +1138,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::anime::anime_fetch(
             arg(args, "ruleName")?,
             arg(args, "spec")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1157,7 +1157,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             arg(args, "ruleName")?,
             arg(args, "pageUrl")?,
             arg(args, "baseUrl")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1193,7 +1193,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
         "anime_rules_index" => {
             let __out = tauri::async_runtime::block_on(async {
             crate::anime::anime_rules_index(
-            )
+            ).await
         });
             res_json(__out)
         }
@@ -1251,7 +1251,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::pixiv::pixiv_login_open(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1260,7 +1260,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::pixiv::pixiv_login_submit(
             app.clone(),
             arg(args, "code")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1268,7 +1268,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::pixiv::pixiv_logout(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1277,7 +1277,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::pixiv::pixiv_set_refresh_token(
             app.clone(),
             arg(args, "token")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1285,7 +1285,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::pixiv::pixiv_refresh_session(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1293,7 +1293,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::pixiv::pixiv_recommended(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1303,7 +1303,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             app.clone(),
             arg(args, "mode")?,
             arg(args, "date")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1313,7 +1313,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             app.clone(),
             arg(args, "word")?,
             arg(args, "opts")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1322,7 +1322,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::pixiv::pixiv_illust_detail(
             app.clone(),
             arg(args, "id")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1332,7 +1332,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             app.clone(),
             arg(args, "illustId")?,
             arg(args, "offset")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1341,7 +1341,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::pixiv::pixiv_image(
             app.clone(),
             arg(args, "url")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1350,7 +1350,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::pixiv::pixiv_follow(
             app.clone(),
             arg(args, "restrict")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1359,7 +1359,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::pixiv::pixiv_next(
             app.clone(),
             arg(args, "nextUrl")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1369,7 +1369,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             app.clone(),
             arg(args, "illustId")?,
             arg(args, "restrict")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1378,7 +1378,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::pixiv::pixiv_bookmark_delete(
             app.clone(),
             arg(args, "illustId")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1387,7 +1387,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::pixiv::pixiv_bookmark_detail(
             app.clone(),
             arg(args, "illustId")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1397,7 +1397,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             app.clone(),
             arg(args, "userId")?,
             arg(args, "restrict")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1406,7 +1406,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::pixiv::pixiv_user_detail(
             app.clone(),
             arg(args, "userId")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1415,7 +1415,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::pixiv::pixiv_user_illusts(
             app.clone(),
             arg(args, "userId")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1425,7 +1425,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             app.clone(),
             arg(args, "userId")?,
             arg(args, "unfollow")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1433,7 +1433,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::pixiv::pixiv_trending_tags(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1442,7 +1442,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::pixiv::pixiv_search_suggest(
             app.clone(),
             arg(args, "term")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1451,7 +1451,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::pixiv::pixiv_ugoira_frames(
             app.clone(),
             arg(args, "illustId")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1460,7 +1460,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::pixiv::pixiv_frame_bytes(
             app.clone(),
             arg(args, "path")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1475,7 +1475,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::commands::extension::ext_install(
             app.clone(),
             arg(args, "source")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1484,7 +1484,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             crate::commands::extension::ext_uninstall(
             app.clone(),
             arg(args, "id")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1494,7 +1494,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             app.clone(),
             arg(args, "id")?,
             arg(args, "enabled")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1505,7 +1505,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             arg(args, "id")?,
             arg(args, "method")?,
             arg(args, "payload")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1516,7 +1516,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             arg(args, "path")?,
             arg(args, "ts")?,
             arg(args, "reveal")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1528,7 +1528,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             arg(args, "y")?,
             arg(args, "width")?,
             arg(args, "height")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1540,7 +1540,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             arg(args, "y")?,
             arg(args, "width")?,
             arg(args, "height")?,
-        )
+        ).await
         });
             res_json(__out)
         }
@@ -1548,7 +1548,7 @@ pub fn dispatch(app: &tauri::AppHandle, cmd: &str, args: &serde_json::Map<String
             let __out = tauri::async_runtime::block_on(async {
             crate::gpu_canvas_close(
             app.clone(),
-        )
+        ).await
         });
             res_json(__out)
         }

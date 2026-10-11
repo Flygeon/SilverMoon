@@ -5,6 +5,12 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// --check 模式只输出结论：CI 日志里不需要整张命令清单。
+const QUIET = process.argv.includes("--check");
+function report(...args) {
+  if (!QUIET) process.stdout.write(args.join(" ") + "\n");
+}
+
 const here = dirname(fileURLToPath(import.meta.url));
 const desktopDir = resolve(here, "..");
 const tauriDir = join(desktopDir, "src-tauri");
@@ -168,27 +174,27 @@ for (const entry of entries) {
 }
 
 if (process.argv.includes("--json")) {
-  console.log(JSON.stringify({ commands: commands, problems: problems }, null, 2));
+  report(JSON.stringify({ commands: commands, problems: problems }, null, 2));
   process.exit(0);
 }
 
-console.log("命令总数: " + commands.length + "   问题: " + problems.length);
-for (const p of problems) console.log("  !! " + p);
+report("命令总数: " + commands.length + "   问题: " + problems.length);
+for (const p of problems) report("  !! " + p);
 const unsupported = commands.filter((c) => c.params.some((p) => p.kind === "unsupported"));
-console.log("含不支持参数(窗口/Webview)的命令: " + unsupported.length);
-for (const c of unsupported) console.log("  ~~ " + c.entry + "  " + c.params.filter((p) => p.kind === "unsupported").map((p) => p.ty).join(","));
-console.log("async 命令: " + commands.filter((c) => c.isAsync).length);
+report("含不支持参数(窗口/Webview)的命令: " + unsupported.length);
+for (const c of unsupported) report("  ~~ " + c.entry + "  " + c.params.filter((p) => p.kind === "unsupported").map((p) => p.ty).join(","));
+report("async 命令: " + commands.filter((c) => c.isAsync).length);
 const nonPub = commands.filter((c) => !c.isPub);
-console.log("非 pub 命令（子模块仍可访问，仅供确认）: " + nonPub.length + " " + nonPub.map((c) => c.entry).join(", "));
+report("非 pub 命令（子模块仍可访问，仅供确认）: " + nonPub.length + " " + nonPub.map((c) => c.entry).join(", "));
 const stateTys = new Set();
 for (const c of commands) for (const p of c.params) if (p.kind === "state") stateTys.add(p.stateTy);
-console.log("state 类型: " + Array.from(stateTys).join(" | "));
+report("state 类型: " + Array.from(stateTys).join(" | "));
 const rets = Array.from(new Set(commands.map((c) => c.ret)));
-console.log("返回值种类: " + rets.length);
-for (const r of rets.slice(0, 40)) console.log("   ret: " + r);
+report("返回值种类: " + rets.length);
+for (const r of rets.slice(0, 40)) report("   ret: " + r);
 const argTys = Array.from(new Set(commands.flatMap((c) => c.params.filter((p) => p.kind === "arg").map((p) => p.ty))));
-console.log("arg 类型种类: " + argTys.length);
-for (const a of argTys.slice(0, 60)) console.log("   arg: " + a);
+report("arg 类型种类: " + argTys.length);
+for (const a of argTys.slice(0, 60)) report("   arg: " + a);
 
 // ---------------------------------------------------------------------------
 // 代码生成：src/bridge/dispatch.generated.rs
@@ -209,8 +215,10 @@ function argExpr(param) {
 function arm(c) {
   const call =
     c.rustPath + "(\n            " + c.params.map(argExpr).join(",\n            ") + (c.params.length ? ",\n        " : "") + ")";
-  const body = c.isAsync ? "tauri::async_runtime::block_on(async {\n            " + call + "\n        })" : call;
-  const wrapper = c.ret.startsWith("Result<") ? "res_json" : "ok_json";
+  // ⚠️ 必须 .await：命令本身是 async fn，漏掉 await 时 block_on 收到的是
+  // impl Future 而不是结果（首轮 CI 就栽在这里：202 个编译错误全由它派生）。
+  const body = c.isAsync ? "tauri::async_runtime::block_on(async {\n            " + call + ".await\n        })" : call;
+  const wrapper = c.ret.trim().startsWith("Result<") ? "res_json" : "ok_json";
   return [
     "        \"" + c.fn + "\" => {",
     "            let __out = " + body + ";",
@@ -274,13 +282,13 @@ if (process.argv.includes("--check")) {
     console.error("dispatch.generated.rs 与源码不一致，请运行 node scripts/gen-bridge-dispatch.mjs 重新生成。");
     process.exit(1);
   }
-  console.log("dispatch.generated.rs 一致（" + commands.length + " 条命令）");
+  process.stdout.write("dispatch.generated.rs 一致（" + commands.length + " 条命令）\n");
   process.exit(0);
 }
 
 mkdirSync(join(srcDir, "bridge"), { recursive: true });
 writeFileSync(outFile, out, "utf8");
-console.log("已写出 " + outFile + "（" + commands.length + " 条命令，async " + commands.filter((c) => c.isAsync).length + " 条）");
+report("已写出 " + outFile + "（" + commands.length + " 条命令，async " + commands.filter((c) => c.isAsync).length + " 条）");
 
 
 

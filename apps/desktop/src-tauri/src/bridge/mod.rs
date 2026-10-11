@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::json;
-use tauri::{Listener, Manager};
+use tauri::Listener;
 
 #[path = "dispatch.generated.rs"]
 mod generated;
