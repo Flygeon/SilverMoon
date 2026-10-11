@@ -686,7 +686,7 @@ fn epoch_ms_to_day(ms: i64) -> String {
 // ---- 书架 / 进度 / 缓存 命令 ----
 
 #[tauri::command]
-pub fn novel_shelf_list(
+pub async fn novel_shelf_list(
     state: State<'_, DbState>,
     app: tauri::AppHandle,
 ) -> Result<Vec<NovelShelfItem>, String> {
@@ -716,7 +716,11 @@ pub fn novel_shelf_list(
     drop(conn);
     if let Some(cookie) = crate::novel_auth::current_cookie(&app) {
         if !cookie.is_empty() {
-            if let Ok(online) = crate::novel_auth::wenku8_shelf_online(app, "net".to_string()) {
+            // ⚠️ `.await` 是必需的：`wenku8_shelf_online` 已改为 async（内部是阻塞网络）。
+            // 它现在是独立命令、跑在异步运行时上；本函数跟着改成 async 才能 await。
+            // 上方已显式 `drop(stmt); drop(conn);` 释放数据库锁，不存在跨 await 持锁。
+            if let Ok(online) = crate::novel_auth::wenku8_shelf_online(app, "net".to_string()).await
+            {
                 // 在线项去重：本地已存在的 aid 不再重复
                 let local_ids: std::collections::HashSet<String> =
                     out.iter().map(|i| i.aid.clone()).collect();
