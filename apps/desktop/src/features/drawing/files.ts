@@ -10,6 +10,7 @@
  */
 import { appDataDir, join } from "@/ipc/paths";
 import { mkdir, readDir, readFile, remove, rename, stat, writeFile } from "@/ipc/fs";
+import { removeLayers, renameLayers } from "./layers";
 import type { Drawing } from "./types";
 
 /** 画作目录名（位于应用数据目录下） */
@@ -74,9 +75,10 @@ export async function writeDrawing(id: string, png: Uint8Array): Promise<Drawing
   return { id, path, name: id, size: info.size, mtime: info.mtime ?? Date.now() };
 }
 
-/** 删除一张画作 */
+/** 删除一张画作（连同图层 sidecar 一起删） */
 export async function deleteDrawing(id: string): Promise<void> {
   await remove(await drawingPath(id));
+  await removeLayers(id);
 }
 
 /**
@@ -98,8 +100,9 @@ export async function readDrawingSize(id: string): Promise<{ width: number; heig
   return { width: view.getUint32(16, false), height: view.getUint32(20, false) };
 }
 
-/** 重命名（改文件名，扩展名不变） */
+/** 重命名（改文件名，扩展名不变；图层 sidecar 跟着改名） */
 export async function renameDrawing(from: string, to: string): Promise<void> {
   const dir = await drawingsDir();
   await rename(await join(dir, from + ".png"), await join(dir, to + ".png"));
+  await renameLayers(from, to);
 }
