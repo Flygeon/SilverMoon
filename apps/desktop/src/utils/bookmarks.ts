@@ -28,8 +28,7 @@ function loadAll(): Record<string, Bookmark[]> {
     for (const [k, v] of Object.entries(data)) {
       if (Array.isArray(v)) {
         out[k] = (v as Bookmark[]).filter(
-          (b) =>
-            b && typeof b.id === "string" && typeof b.locator === "string",
+          (b) => b && typeof b.id === "string" && typeof b.locator === "string",
         );
       }
     }
@@ -57,10 +56,7 @@ export function getBookmarks(bookId: string): Bookmark[] {
  * 添加书签。同一 locator 只保留一条（重复添加时刷新到顶部），
  * 避免同一章节/位置堆出多条重复书签。
  */
-export function addBookmark(
-  bookId: string,
-  data: { locator: string; title: string },
-): Bookmark {
+export function addBookmark(bookId: string, data: { locator: string; title: string }): Bookmark {
   const all = loadAll();
   const list = all[bookId] ?? [];
   const now = Date.now();

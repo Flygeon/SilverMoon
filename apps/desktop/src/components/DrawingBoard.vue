@@ -40,7 +40,6 @@ const emit = defineEmits<{
 
 /** 只取类型（不产生运行时 import）；运行时要等动态 import 回来 */
 type LeaferNS = typeof import("leafer-editor");
-type LeaferInstance = InstanceType<LeaferNS["Leafer"]>;
 type LeafNode = InstanceType<LeaferNS["Path"]>;
 type Bounds = { x: number; y: number; width: number; height: number };
 
@@ -424,8 +423,7 @@ function pick(p: { x: number; y: number }): LeafNode | null {
       const n = list[i];
       if (n === backdrop) continue;
       const b = boundsOf(n);
-      if (b && p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height)
-        return n;
+      if (b && p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height) return n;
     }
   }
   return null;
@@ -1184,9 +1182,7 @@ onMounted(async () => {
         }
       } else {
         // 兼容模式：老画作没有 sidecar，整张 PNG 当底图放在第一层
-        const first = createLayerInternal(
-          layerText(settings.lang, "draw.layer") + " 1",
-        );
+        const first = createLayerInternal(layerText(settings.lang, "draw.layer") + " 1");
         const bg = new ns.Image({
           x: 0,
           y: 0,

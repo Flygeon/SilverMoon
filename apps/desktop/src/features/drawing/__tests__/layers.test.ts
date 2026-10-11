@@ -34,12 +34,13 @@ describe("parseLayersFile", () => {
     expect(
       parseLayersFile({
         version: 1,
-        layers: [{ name: "图层 1", visible: true, data: {} }, { name: 42, visible: true }],
+        layers: [
+          { name: "图层 1", visible: true, data: {} },
+          { name: 42, visible: true },
+        ],
       }),
     ).toBeNull();
-    expect(
-      parseLayersFile({ version: 1, layers: [{ name: "x", visible: "yes" }] }),
-    ).toBeNull();
+    expect(parseLayersFile({ version: 1, layers: [{ name: "x", visible: "yes" }] })).toBeNull();
   });
 
   it("非对象输入 → null", () => {

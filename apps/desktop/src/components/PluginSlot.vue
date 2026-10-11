@@ -58,12 +58,7 @@ onMounted(() => {
 
 <template>
   <template v-if="mode === 'panel'">
-    <PluginEmbed
-      v-for="s in items"
-      :key="`${s.extId}:${s.id}`"
-      :surface="s"
-      class="slot-panel"
-    />
+    <PluginEmbed v-for="s in items" :key="`${s.extId}:${s.id}`" :surface="s" class="slot-panel" />
   </template>
 
   <template v-else>

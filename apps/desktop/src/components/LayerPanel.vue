@@ -81,17 +81,19 @@ function cancelRename() {
         @click="emit('select', item.id)"
         @dblclick="startRename(item)"
       >
-        <span slot="leading" class="layer-eye">
-          <m3e-icon-button
-            size="small"
-            :title="t('draw.toggleLayer')"
-            @click.stop="emit('toggle', item.id)"
-          >
-            <span class="material-symbols-outlined">{{
-              item.visible ? "visibility" : "visibility_off"
-            }}</span>
-          </m3e-icon-button>
-        </span>
+        <template #leading
+          ><span class="layer-eye">
+            <m3e-icon-button
+              size="small"
+              :title="t('draw.toggleLayer')"
+              @click.stop="emit('toggle', item.id)"
+            >
+              <span class="material-symbols-outlined">{{
+                item.visible ? "visibility" : "visibility_off"
+              }}</span>
+            </m3e-icon-button>
+          </span></template
+        >
         <input
           v-if="editingId === item.id"
           ref="editInput"
@@ -105,32 +107,34 @@ function cancelRename() {
           @blur="commitRename(item)"
         />
         <span v-else class="layer-name" :title="t('draw.renameLayer')">{{ item.name }}</span>
-        <span slot="trailing" class="layer-actions">
-          <m3e-icon-button
-            size="small"
-            :title="t('draw.moveLayerUp')"
-            :disabled="i === 0"
-            @click.stop="emit('up', item.id)"
-          >
-            <span class="material-symbols-outlined">arrow_upward</span>
-          </m3e-icon-button>
-          <m3e-icon-button
-            size="small"
-            :title="t('draw.moveLayerDown')"
-            :disabled="i === ordered.length - 1"
-            @click.stop="emit('down', item.id)"
-          >
-            <span class="material-symbols-outlined">arrow_downward</span>
-          </m3e-icon-button>
-          <m3e-icon-button
-            size="small"
-            :title="t('draw.deleteLayer')"
-            :disabled="!canDelete"
-            @click.stop="emit('delete', item.id)"
-          >
-            <span class="material-symbols-outlined">delete</span>
-          </m3e-icon-button>
-        </span>
+        <template #trailing
+          ><span class="layer-actions">
+            <m3e-icon-button
+              size="small"
+              :title="t('draw.moveLayerUp')"
+              :disabled="i === 0"
+              @click.stop="emit('up', item.id)"
+            >
+              <span class="material-symbols-outlined">arrow_upward</span>
+            </m3e-icon-button>
+            <m3e-icon-button
+              size="small"
+              :title="t('draw.moveLayerDown')"
+              :disabled="i === ordered.length - 1"
+              @click.stop="emit('down', item.id)"
+            >
+              <span class="material-symbols-outlined">arrow_downward</span>
+            </m3e-icon-button>
+            <m3e-icon-button
+              size="small"
+              :title="t('draw.deleteLayer')"
+              :disabled="!canDelete"
+              @click.stop="emit('delete', item.id)"
+            >
+              <span class="material-symbols-outlined">delete</span>
+            </m3e-icon-button>
+          </span></template
+        >
       </m3e-list-item>
     </m3e-list>
   </div>

@@ -40,16 +40,12 @@ import { fileURLToPath } from "node:url";
  * 2. 补到策略里，并同步更新本文件的断言。
  */
 
-const CONF_PATH = fileURLToPath(
-  new URL("../../src-tauri/tauri.conf.json", import.meta.url),
-);
+const CONF_PATH = fileURLToPath(new URL("../../src-tauri/tauri.conf.json", import.meta.url));
 
 function loadCsp(): string {
   const conf = JSON.parse(readFileSync(CONF_PATH, "utf8"));
   const csp: unknown = conf?.app?.security?.csp;
-  expect(typeof csp, "tauri.conf.json 里 app.security.csp 必须是字符串").toBe(
-    "string",
-  );
+  expect(typeof csp, "tauri.conf.json 里 app.security.csp 必须是字符串").toBe("string");
   return csp as string;
 }
 
