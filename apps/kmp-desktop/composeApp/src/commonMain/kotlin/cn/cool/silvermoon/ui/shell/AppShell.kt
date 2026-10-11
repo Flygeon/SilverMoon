@@ -147,7 +147,7 @@ private fun AppTitleBar(controls: WindowControls, destination: Destination) {
         //
         // 窗口按钮刻意放在拖动区**外面**：放里面的话点最小化/关闭会被当成拖拽起手。
         Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-            WindowDragArea {
+            controls.DragRegion {
                 Row(
                     modifier = Modifier
                         .fillMaxSize()

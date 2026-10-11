@@ -6,7 +6,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.window.WindowDraggableArea
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.window.WindowScope
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
@@ -53,11 +56,15 @@ fun main() = application {
         undecorated = true,
         title = "SilverMoon",
     ) {
+        // Window 内容 lambda 的接收者是 FrameWindowScope，它本身就是一个 WindowScope；
+        // 官方的 WindowDraggableArea 是 WindowScope 的扩展函数，只有这个上下文调得到，
+        // 所以在这里把它抓下来交给窗口控制器。
+        val windowScope: WindowScope = this
         val ready = container
         if (ready == null) {
             StartupScreen(failure)
         } else {
-            SilverMoonApp(ready, rememberWindowControls(window))
+            SilverMoonApp(ready, rememberWindowControls(window, windowScope))
         }
     }
 }
@@ -80,28 +87,36 @@ private fun bootstrap(): AppContainer {
 
 /** 把 AWT 窗口能力包装成 commonMain 认识的接口。 */
 @Composable
-private fun rememberWindowControls(frame: JFrame): WindowControls = remember(frame) {
-    object : WindowControls {
-        private val maximizedFlag = JFrame.MAXIMIZED_BOTH
+private fun rememberWindowControls(frame: JFrame, windowScope: WindowScope): WindowControls =
+    remember(frame, windowScope) {
+        object : WindowControls {
+            private val maximizedFlag = JFrame.MAXIMIZED_BOTH
 
-        override fun minimize() {
-            frame.extendedState = frame.extendedState or JFrame.ICONIFIED
-        }
+            override fun minimize() {
+                frame.extendedState = frame.extendedState or JFrame.ICONIFIED
+            }
 
-        override fun toggleMaximize() {
-            frame.extendedState = if (isMaximized()) {
-                JFrame.NORMAL
-            } else {
-                JFrame.MAXIMIZED_BOTH
+            override fun toggleMaximize() {
+                frame.extendedState = if (isMaximized()) {
+                    JFrame.NORMAL
+                } else {
+                    JFrame.MAXIMIZED_BOTH
+                }
+            }
+
+            override fun close() {
+                frame.dispatchEvent(
+                    java.awt.event.WindowEvent(frame, java.awt.event.WindowEvent.WINDOW_CLOSING),
+                )
+            }
+
+            override fun isMaximized(): Boolean = (frame.extendedState and maximizedFlag) != 0
+
+            @Composable
+            override fun DragRegion(content: @Composable () -> Unit) {
+                with(windowScope) {
+                    WindowDraggableArea(Modifier, content)
+                }
             }
         }
-
-        override fun close() {
-            frame.dispatchEvent(
-                java.awt.event.WindowEvent(frame, java.awt.event.WindowEvent.WINDOW_CLOSING),
-            )
-        }
-
-        override fun isMaximized(): Boolean = (frame.extendedState and maximizedFlag) != 0
     }
-}

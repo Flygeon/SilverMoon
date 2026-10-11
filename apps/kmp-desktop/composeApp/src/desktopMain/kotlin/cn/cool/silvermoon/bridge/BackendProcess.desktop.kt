@@ -121,7 +121,7 @@ private fun locateExecutable(): File? = bridgeExecutableCandidates().firstOrNull
  * 依次尝试：
  *   1. 环境变量 SILVERMOON_BRIDGE_EXE —— 排查时最省事的一条路；
  *   2. jpackage 传入的 jpackage.app-path（启动器自身路径）-> 其父目录即应用目录；
- *   3. classpath 反推：应用镜像里是 <app>/app/*.jar，取其上两级；
+ *   3. classpath 反推：镜像里是「应用目录/app」下的 jar，取其上两级；
  *   4. 运行中的 java 可执行文件：<app>/runtime/bin/java.exe，取其上三级；
  *   5. compose.application.resources.dir（Gradle run 场景）；
  *   6. 开发态：从工作目录往上找 cargo 的 target 产物。

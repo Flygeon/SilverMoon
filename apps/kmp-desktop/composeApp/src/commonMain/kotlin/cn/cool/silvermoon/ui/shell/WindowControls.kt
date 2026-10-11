@@ -1,5 +1,7 @@
 package cn.cool.silvermoon.ui.shell
 
+import androidx.compose.runtime.Composable
+
 /**
  * 无边框窗口的控制能力。
  *
@@ -13,4 +15,17 @@ interface WindowControls {
 
     /** 当前是否最大化，用于切换标题栏上的图标。 */
     fun isMaximized(): Boolean
+
+    /**
+     * 把一段内容包成「按住可拖动窗口」的区域。
+     *
+     * 由平台层实现：桌面端是 Compose 官方的 WindowDraggableArea
+     * （androidx.compose.foundation.window），内部走系统原生拖动 ——
+     * 拖动、贴边吸附、多显示器都由系统处理。
+     *
+     * 它是 WindowScope 的扩展函数，只有窗口内容的直接上下文才调得到，
+     * 所以由桌面层持有 WindowScope 并把能力透出来，UI 层不碰这个平台细节。
+     */
+    @Composable
+    fun DragRegion(content: @Composable () -> Unit)
 }
