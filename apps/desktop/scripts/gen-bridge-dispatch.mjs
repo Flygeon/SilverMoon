@@ -2,7 +2,7 @@
 // 生成 Rust 桥（bridge）的命令分发表。
 // 用法：node scripts/gen-bridge-dispatch.mjs [--check] [--json]
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -142,7 +142,9 @@ for (const entry of entries) {
   const parts = entry.split("::");
   const fnName = parts[parts.length - 1];
   const modPath = parts.slice(0, -1);
-  const candidate = modPath.length === 0 ? join(srcDir, "lib.rs") : join(srcDir, modPath.join("\\\\")) + ".rs";
+  // 用 ...modPath 展开而不是自己拼分隔符：脚本要在 Linux 的 CI runner 上跑，
+  // 手写反斜杠会让 commands::x::y 这类两级路径在非 Windows 上全部找不到。
+  const candidate = modPath.length === 0 ? join(srcDir, "lib.rs") : join(srcDir, ...modPath) + ".rs";
   if (!existsSync(candidate)) {
     problems.push(entry + " → 找不到源文件 " + candidate);
     continue;
@@ -156,7 +158,7 @@ for (const entry of entries) {
     entry: entry,
     fn: fnName,
     rustPath: "crate::" + parts.join("::"),
-    file: candidate.slice(tauriDir.length + 1).replace(/\\\\/g, "/"),
+    file: relative(tauriDir, candidate).split(sep).join("/"),
     isAsync: info.isAsync,
     isPub: info.isPub,
     ret: info.ret.replace(/\s+/g, " "),
