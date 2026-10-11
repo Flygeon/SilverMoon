@@ -155,6 +155,80 @@ Occluded / Outdated / Lost / Validation）——旧代码那套「拿到就用�
 > **教训**：仓库提交 lockfile 时，补依赖要用 `cargo fetch` 而不是
 > `cargo generate-lockfile`。
 
+### 第三个坑：gpu-allocator 与 windows crate 的版本约束冲突
+
+修完前两个坑后 Windows 构建又挂了，这次在 `wgpu-hal` 的 DX12 后端，
+10 个 E0308/E0277 错误，特征是「expected ID3D12Device, found a **different** ID3D12Device」
+—— 同一个 COM 接口出现在两个 `windows` crate 版本里。
+
+**三个约束的交集是空集**：
+
+| crate | 要求 | 实际含义 |
+|---|---|---|
+| `smtc-tokio` | `^0.62.2` | >=0.62.2 |
+| `wgpu-hal 30` | `0.62` | >=0.62.0 |
+| `gpu-allocator 0.28` | `>=0.53, <=0.62` | **<=0.62.0** |
+
+容易看错的地方：`<=0.62` 被 Cargo 解析成 `<=0.62.0`（缺省位补 0），
+所以 **0.62.2 不满足它**。于是 cargo 只能给 gpu-allocator 选 `windows 0.58.0`。
+
+**根因是发布时间差**（不是谁写错了）：
+
+- `gpu-allocator 0.28.0` 发布 2025-09-26 —— 当时 `windows 0.62.0` 是最新，上界正确
+- `windows 0.62.2` 发布 2025-10-06 —— 晚 10 天，把上界挤爆
+
+上游 `master` 分支**至今未修**，gpu-allocator 也没有更新版本。所以只能在本地修补：
+
+```toml
+# src-tauri/Cargo.toml
+[patch.crates-io]
+gpu-allocator = { path = "vendor/gpu-allocator" }
+```
+
+vendor 的那份（219 KB）**只改了一行**：上界 `<=0.62` → `<=0.62.2`。
+放宽是安全的 —— 0.62.0 → 0.62.2 是补丁级版本，API 兼容。
+
+修补后 gpu-allocator 与 wgpu-hal 都用 `windows 0.62.2`，类型统一，DX12 编译通过。
+（残留的 `windows 0.58.0` 只被 `uda-platform-windows` 使用，与 wgpu 无关。）
+
+> **上游修复后**可以删掉 `vendor/` 与 `[patch.crates-io]` 这一段。
+> 判断方法：看 gpu-allocator 新版本里 `windows` 的上界是否 >= 0.62.2。
+
+### 闪退：wgpu 后端 feature 被关掉
+
+用户实测「点击后瞬间闪退」。panic 日志指向 `wgpu-30.0.1/src/api/instance.rs:65`：
+
+```rust
+pub fn new(desc: InstanceDescriptor) -> Self {
+    if Self::enabled_backend_features().is_empty() {
+        panic!("No wgpu backend feature that is implemented for the target platform was enabled.")
+```
+
+原因是我把 wgpu 写成 `default-features = false, features = ["std","wgsl"]` ——
+把 default 里的 **dx12 / metal / gles / vulkan 四个后端全关了**，`Instance::new` 必然 panic。
+
+关键在于本项目 `[profile.release]` 有 **`panic = "abort"`** —— panic 会**直接杀掉整个进程**，
+表现就是闪退（而不是报错或黑屏）。
+
+**修法**：`wgpu = { version = "30" }`（保留 default）。
+
+⚠️ 参考项目 photocraft 用的正是 `default-features = false`，但那是因为它走 **eframe**
+（eframe 会带着 wgpu 的 default features 合流）。**直接依赖 wgpu 时不能照抄。**
+
+同时借这次机会消除另外两处 panic 风险：`caps.formats[0]` / `caps.alpha_modes[0]`
+在列表为空时会索引 panic —— 在 `panic = "abort"` 下同样是「整个应用死掉」。
+改为 `first()` + 显式错误返回。
+
+### 另外两个前端问题
+
+**主窗口没隐藏**：`createWindow` 是**同步**的（构造函数里就建出窗口），新窗口立刻抢焦点，
+之后 `hide()` 主窗口会因焦点已转移而不稳定。改为**先隐藏主窗口、再建绘画窗口**。
+
+**绘画窗口里显示主界面**：我原先用 `route.path === "/drawing"` 短路主界面外壳，
+但 `useRoute()` 首次渲染时拿到的还是初始路由（`/` → 重定向 `/images`），
+真正的 hash 路由是**异步**解析的 —— 第一帧判成 false，把外壳渲染进了绘画窗口，
+路由到位后也不会撤。改为用**窗口 label** 判定（同步、无竞态），并加路由兜底。
+
 ### wgpu 30 与旧版的 API 差异（实测确认）
 
 | 项 | 旧版 | wgpu 30 | 我们怎么踩到的 |
