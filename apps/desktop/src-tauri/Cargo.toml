@@ -199,19 +199,3 @@ lto = true
 opt-level = "s"
 strip = true
 panic = "abort"
-
-# ---------------------------------------------------------------------------
-# KMP 桌面端的**无窗口后端**（src/bin/silvermoon_bridge.rs）专用 profile。
-#
-# 上面那份 profile 是给「与窗口同命运的应用进程」调优的：fat LTO + 单 codegen
-# unit 换来的启动/体积收益值得，代价是**一次 release 全量构建要近 10 分钟**
-# （CI 实测 570 秒，且只编了 9 个 crate —— 时间全花在 LTO 与链接上）。
-#
-# 桥进程只是个本机回环 HTTP 服务，没有启动延迟与体积的硬要求，
-# 因此这里放弃 LTO、放开 codegen-units，只继承体积/panic 策略。
-# 用法：cargo build --profile bridge --bin silvermoon_bridge
-# ---------------------------------------------------------------------------
-[profile.bridge]
-inherits = "release"
-lto = false
-codegen-units = 16

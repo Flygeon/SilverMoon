@@ -2,7 +2,6 @@ pub mod anime;
 pub mod app_meta;
 pub mod bilibili;
 pub mod boot_log;
-pub mod bridge;
 pub mod commands;
 pub mod cover;
 pub mod error;
@@ -550,69 +549,3 @@ fn open_db_inner(app: &tauri::AppHandle) -> anyhow::Result<rusqlite::Connection>
     commands::init_db(&conn).context("init db schema")?;
     Ok(conn)
 }
-
-// ---------------------------------------------------------------------------
-// KMP（Compose Multiplatform）桌面端的**无窗口**后端入口
-// ---------------------------------------------------------------------------
-
-/// 以「纯后端」方式启动：不创建任何窗口，只把命令面经本机回环桥暴露给 Kotlin 侧。
-///
-/// 与 run() 的差别只有两点：
-///   1. 建 App 之前清空配置里的窗口列表 —— 不创建 WebView2，进程只当后端；
-///   2. setup 末尾启动 bridge 模块，把 186 条命令 + Tauri 事件流暴露到 127.0.0.1。
-///
-/// 其余全部复用：数据目录迁移、SQLite 索引库、SMTC、扩展框架、Pixiv 登录态、番剧规则。
-/// 也就是说 KMP 桌面端与 Tauri 桌面端**共用同一份业务后端**，只是换了 UI 壳。
-pub fn run_bridge() {
-    boot_log::record("bridge: run_bridge 开始");
-    let mut context = tauri::generate_context!();
-    // 清空窗口：tauri.conf.json 里的 main 窗口在这里不会被创建。
-    context.config_mut().app.windows.clear();
-
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_store::Builder::new().build())
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_http::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(|app| {
-            boot_log::attach(app.handle());
-            if let Ok(dir) = app.path().app_data_dir() {
-                if app_meta::migrate_legacy_data(&dir) {
-                    eprintln!("[bridge] 已从旧项目目录迁移数据到 {dir:?}");
-                }
-            }
-            let conn = open_db(app.handle()).map_err(|e| -> Box<dyn std::error::Error> {
-                Box::new(std::io::Error::other(e.to_string()))
-            })?;
-            app.manage(commands::DbState(std::sync::Mutex::new(conn)));
-            app.manage(commands::JobState(std::sync::Mutex::new(
-                std::collections::HashMap::new(),
-            )));
-            app.manage(gpu_canvas::CanvasState::default());
-
-            // 与桌面端保持一致的子系统初始化；任何一个失败都只降级，不阻断后端启动。
-            commands::smtc::setup(app.handle());
-            if let Err(error) = commands::extension::setup(app.handle()) {
-                eprintln!("[bridge] 扩展加载失败: {error}");
-            }
-            pixiv::setup(app.handle());
-            anime::setup(app.handle());
-
-            let info = bridge::start(app.handle().clone()).map_err(|e| -> Box<dyn std::error::Error> {
-                Box::new(std::io::Error::other(e))
-            })?;
-            eprintln!(
-                "[bridge] 就绪: http://127.0.0.1:{} （{} 条命令，协议 v{}）",
-                info.port, info.commands, info.protocol
-            );
-            boot_log::record("bridge: 桥服务就绪");
-            Ok(())
-        })
-        .build(context)
-        .expect("SilverMoon 后端启动失败");
-    app.run(|_, _| {});
-}
-
