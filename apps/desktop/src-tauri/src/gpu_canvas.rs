@@ -93,8 +93,17 @@ pub fn open(app: &AppHandle, rect: CanvasRect) -> Result<(), String> {
     let running = Arc::clone(&state.running);
     let starting = Arc::clone(&state.starting);
 
+    // 入口打点：这条是**最先**该出现的日志。它的有无能区分两种完全不同的故障：
+    //   有 → 命令确实进来了，问题在后端；
+    //   无 → 前端根本没调到（capability 未放行 / 命令名拼错 / 前端异常）。
+    crate::boot_log::record(&format!(
+        "[gpu-canvas] open 请求 x={:.0} y={:.0} {}x{}",
+        rect.x, rect.y, rect.width, rect.height
+    ));
+
     // 已经开着：只更新位置与尺寸，不重复建窗（否则会有两个画布窗口）
     if let Some(_existing) = app.get_window(GPU_CANVAS_LABEL) {
+        crate::boot_log::record("[gpu-canvas] 窗口已存在，仅更新位置尺寸");
         return resize(app, rect);
     }
 
@@ -169,6 +178,7 @@ fn run_canvas(app: AppHandle, rect: CanvasRect, running: Arc<Mutex<bool>>) -> Re
     //
     // 为什么是 WindowBuilder 而不是 WebviewWindowBuilder：后者会再套一个
     // WebView2 子窗口，那正是我们要避开的（它会盖住 wgpu 的输出）。
+    crate::boot_log::record("[gpu-canvas] 开始建窗");
     let window = tauri::window::WindowBuilder::new(&app, GPU_CANVAS_LABEL)
         .title("SilverMoon GPU Canvas")
         .inner_size(rect.width, rect.height)
@@ -181,6 +191,8 @@ fn run_canvas(app: AppHandle, rect: CanvasRect, running: Arc<Mutex<bool>>) -> Re
         .build()
         .map_err(|e| format!("创建 GPU 画布窗口失败：{e}"))?;
 
+    crate::boot_log::record("[gpu-canvas] 窗口已建，开始 wgpu 初始化");
+
     // ---- 2) wgpu 初始化 ----
     //
     // 这一串在 wgpu 30 与旧版有差异（已对照 30.0.1 源码逐一核对）：
@@ -192,9 +204,11 @@ fn run_canvas(app: AppHandle, rect: CanvasRect, running: Arc<Mutex<bool>>) -> Re
     // create_surface 接受 impl Into<SurfaceTarget>；
     // tauri::Window 实现了 HasWindowHandle + HasDisplayHandle，
     // 因此可直接传入，无需平台分支。
+    crate::boot_log::record("[gpu-canvas] Instance 已建，创建 surface");
     let surface = instance
         .create_surface(window.clone())
         .map_err(|e| format!("创建 wgpu surface 失败：{e}"))?;
+    crate::boot_log::record("[gpu-canvas] surface 已建，请求 adapter");
 
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
@@ -206,6 +220,7 @@ fn run_canvas(app: AppHandle, rect: CanvasRect, running: Arc<Mutex<bool>>) -> Re
     }))
     .map_err(|e| format!("找不到可用的 GPU 适配器：{e}"))?;
 
+    crate::boot_log::record("[gpu-canvas] adapter 已取得，请求 device");
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("silvermoon-gpu-canvas"),
         required_features: wgpu::Features::empty(),
@@ -214,6 +229,8 @@ fn run_canvas(app: AppHandle, rect: CanvasRect, running: Arc<Mutex<bool>>) -> Re
         ..Default::default()
     }))
     .map_err(|e| format!("请求 GPU 设备失败：{e}"))?;
+
+    crate::boot_log::record("[gpu-canvas] device 已取得，配置 surface");
 
     // ---- 3) surface 配置 ----
     let size = window
@@ -257,6 +274,7 @@ fn run_canvas(app: AppHandle, rect: CanvasRect, running: Arc<Mutex<bool>>) -> Re
         desired_maximum_frame_latency: 2,
     };
     surface.configure(&device, &config);
+    crate::boot_log::record("[gpu-canvas] surface 已配置，即将进入渲染循环");
 
     let info = adapter.get_info();
     crate::boot_log::record(&format!(

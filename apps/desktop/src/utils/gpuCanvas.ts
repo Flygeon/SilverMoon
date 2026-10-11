@@ -91,16 +91,31 @@ export function attachGpuCanvas(el: HTMLElement): GpuCanvasHandle {
   let closed = false;
   let observer: ResizeObserver | null = null;
 
+  /**
+   * 记录一次失败。
+   *
+   * ⚠️ 这里原本是 `.catch(() => undefined)` —— **把错误全吞了**。
+   * 结果是「画布没出现」时前端一声不吭，用户和开发者都无从判断是没调用、
+   * 被拒绝、还是后端崩了。现在把错误写进宿主日志（与 Rust 侧同一个文件），
+   * 排查时能看到完整因果。
+   */
+  const report = (where: string, e: unknown) => {
+    capabilities.appLogBoot(`[gpu-canvas] ${where} 失败：${String(e)}`, 0);
+    // 控制台也留一份：devtools 打开时能直接看到
+    console.error(`[gpu-canvas] ${where}`, e);
+  };
+
   const sync = () => {
     if (closed) return;
     const rect = measure(el);
     // 尺寸为 0 时不要开窗：布局尚未完成（或元素被隐藏）时开出来会是个怪窗口。
     if (rect.width < 1 || rect.height < 1) return;
     void capabilities.gpuCanvasResize(rect.x, rect.y, rect.width, rect.height).catch(() => {
-      // 还没开窗（resize 会报「未打开」）：这里先开一个
+      // 还没开窗（resize 会报「未打开」）：这里先开一个。
+      // 这个 catch 是**预期路径**（首次必然走到这里），因此不报错。
       void capabilities
         .gpuCanvasOpen(rect.x, rect.y, rect.width, rect.height)
-        .catch(() => undefined);
+        .catch((e) => report("open", e));
     });
   };
 
@@ -108,7 +123,9 @@ export function attachGpuCanvas(el: HTMLElement): GpuCanvasHandle {
   requestAnimationFrame(() => {
     if (closed) return;
     const rect = measure(el);
-    void capabilities.gpuCanvasOpen(rect.x, rect.y, rect.width, rect.height).catch(() => undefined);
+    void capabilities
+      .gpuCanvasOpen(rect.x, rect.y, rect.width, rect.height)
+      .catch((e) => report("首帧 open", e));
   });
 
   observer = new ResizeObserver(sync);
@@ -125,7 +142,7 @@ export function attachGpuCanvas(el: HTMLElement): GpuCanvasHandle {
       observer = null;
       window.removeEventListener("resize", sync);
       // 关闭失败不影响界面：窗口会随应用一起退出（它是本进程的子窗口）
-      await capabilities.gpuCanvasClose().catch(() => undefined);
+      await capabilities.gpuCanvasClose().catch((e) => report("close", e));
     },
   };
 }
