@@ -29,7 +29,10 @@ private class DesktopBackendProcess : BackendProcess {
     private fun boot() {
         val executable = locateExecutable() ?: throw BackendException(
             "找不到 silvermoon_bridge.exe。" +
-                "开发机上请先在 apps/desktop/src-tauri 执行 cargo build --release --bin silvermoon_bridge，" +
+                "已尝试：" +
+                bridgeExecutableCandidates().take(6).joinToString("；") { it.absolutePath } +
+                " …。开发机上请先在 apps/desktop/src-tauri 执行 " +
+                "cargo build --release --bin silvermoon_bridge，" +
                 "或用环境变量 SILVERMOON_BRIDGE_EXE 指定可执行文件路径。"
         )
 
@@ -105,18 +108,56 @@ private fun tail(file: File, lines: Int = 20): String {
     }.getOrDefault("（日志读取失败）").let { "\n---- bridge.log 末尾 ----\n" + it }
 }
 
+private fun locateExecutable(): File? = bridgeExecutableCandidates().firstOrNull { it.isFile }
+
 /**
- * 依次尝试：显式环境变量 -> jpackage 资源目录 -> 工程内的 cargo 产物。
+ * 后端 exe 的候选路径。
+ *
+ * jpackage 应用镜像、Gradle 的 run / runDistributable、以及开发机这三者的目录布局
+ * **互不相同**，而且 compose.application.resources.dir 只在 Gradle 拉起时才注入；
+ * 少一条就是「双击没反应 / 报找不到 exe」那类问题（首轮实测就栽在 jpackage 镜像上：
+ * bridge exe 位于应用目录根，而我当时只找了 ./resources 和 ./backend）。
+ *
+ * 依次尝试：
+ *   1. 环境变量 SILVERMOON_BRIDGE_EXE —— 排查时最省事的一条路；
+ *   2. jpackage 传入的 jpackage.app-path（启动器自身路径）-> 其父目录即应用目录；
+ *   3. classpath 反推：应用镜像里是 <app>/app/*.jar，取其上两级；
+ *   4. 运行中的 java 可执行文件：<app>/runtime/bin/java.exe，取其上三级；
+ *   5. compose.application.resources.dir（Gradle run 场景）；
+ *   6. 开发态：从工作目录往上找 cargo 的 target 产物。
  */
-private fun locateExecutable(): File? {
+private fun bridgeExecutableCandidates(): List<File> {
     val candidates = mutableListOf<File>()
+
+    fun addFrom(dir: File?) {
+        if (dir == null) return
+        candidates += File(dir, "silvermoon_bridge.exe")
+        candidates += File(dir, "backend/silvermoon_bridge.exe")
+        candidates += File(dir, "resources/silvermoon_bridge.exe")
+        candidates += File(dir, "resources/backend/silvermoon_bridge.exe")
+    }
+
     System.getenv("SILVERMOON_BRIDGE_EXE")
         ?.takeIf { it.isNotBlank() }
         ?.let { candidates += File(it) }
-    System.getProperty("compose.application.resources.dir")?.let { resources ->
-        candidates += File(resources, "backend/silvermoon_bridge.exe")
-        candidates += File(resources, "silvermoon_bridge.exe")
+
+    System.getProperty("jpackage.app-path")?.let { addFrom(File(it).parentFile) }
+
+    System.getProperty("java.class.path")
+        ?.split(File.pathSeparator)
+        ?.forEach { entry ->
+            val jar = File(entry)
+            if (jar.name.endsWith(".jar") && jar.parentFile?.name == "app") {
+                addFrom(jar.parentFile?.parentFile)
+            }
+        }
+
+    ProcessHandle.current().info().command().orElse(null)?.let { command ->
+        addFrom(File(command).parentFile?.parentFile?.parentFile)
     }
+
+    System.getProperty("compose.application.resources.dir")?.let { addFrom(File(it)) }
+
     var dir = File(System.getProperty("user.dir")).absoluteFile
     var depth = 0
     while (depth < 5) {
@@ -129,5 +170,5 @@ private fun locateExecutable(): File? {
         dir = parent
         depth++
     }
-    return candidates.firstOrNull { it.isFile }
+    return candidates
 }
