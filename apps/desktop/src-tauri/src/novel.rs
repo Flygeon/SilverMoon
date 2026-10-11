@@ -690,35 +690,49 @@ pub async fn novel_shelf_list(
     state: State<'_, DbState>,
     app: tauri::AppHandle,
 ) -> Result<Vec<NovelShelfItem>, String> {
-    let conn = state.0.lock().map_err(|_| "db lock".to_string())?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT aid, title, author, cover, added_at FROM novel_shelf ORDER BY added_at DESC",
-        )
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok(NovelShelfItem {
-                aid: row.get(0)?,
-                title: row.get(1)?,
-                author: row.get(2)?,
-                cover: row.get(3)?,
-                added_at: row.get(4)?,
-                online: false,
+    // ⚠️ 数据库这一段必须关进**独立作用域**，不能只靠 `drop(conn)`。
+    //
+    // `MutexGuard` 是 `!Send`，而 Tauri 要求 async 命令返回的 future 是 `Send`。
+    // CI 实测：即使写成显式的 `drop(stmt); drop(conn);`，编译器的「跨 await 存活」
+    // 分析仍然保守地认为该守卫可能在 await 之后才结束，于是报
+    //
+    //     error: future cannot be sent between threads safely
+    //     693 | let conn = state.0.lock()...
+    //         |     ---- has type `MutexGuard<'_, Connection>` which is not `Send`
+    //     722 |     ... .await
+    //         |     await occurs here, with `conn` maybe used later
+    //
+    // 用块作用域让守卫在块尾**确定性地**结束，分析即可通过。
+    let mut out = {
+        let conn = state.0.lock().map_err(|_| "db lock".to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT aid, title, author, cover, added_at FROM novel_shelf ORDER BY added_at DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(NovelShelfItem {
+                    aid: row.get(0)?,
+                    title: row.get(1)?,
+                    author: row.get(2)?,
+                    cover: row.get(3)?,
+                    added_at: row.get(4)?,
+                    online: false,
+                })
             })
-        })
-        .map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
-    for row in rows {
-        out.push(row.map_err(|e| e.to_string())?);
-    }
-    drop(stmt);
-    drop(conn);
+            .map_err(|e| e.to_string())?;
+        let mut v = Vec::new();
+        for row in rows {
+            v.push(row.map_err(|e| e.to_string())?);
+        }
+        v
+    };
     if let Some(cookie) = crate::novel_auth::current_cookie(&app) {
         if !cookie.is_empty() {
             // ⚠️ `.await` 是必需的：`wenku8_shelf_online` 已改为 async（内部是阻塞网络）。
             // 它现在是独立命令、跑在异步运行时上；本函数跟着改成 async 才能 await。
-            // 上方已显式 `drop(stmt); drop(conn);` 释放数据库锁，不存在跨 await 持锁。
+            // 数据库守卫已在上方块作用域内结束，此处不跨 await 持锁。
             if let Ok(online) = crate::novel_auth::wenku8_shelf_online(app, "net".to_string()).await
             {
                 // 在线项去重：本地已存在的 aid 不再重复
