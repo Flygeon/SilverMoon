@@ -199,11 +199,33 @@ fn run_canvas(app: AppHandle, rect: CanvasRect, running: Arc<Mutex<bool>>) -> Re
     //   - InstanceDescriptor 用 new_without_display_handle()（旧版是 ..Default::default()）
     //   - request_adapter 返回 Result（旧版是 Option）
     //   - RenderPassColorAttachment 有 depth_slice 字段（旧版没有）
-    // 后端选择：默认让 wgpu 自己挑（Backends::all()），
-    // 但允许用环境变量 SILVERMOON_GPU_BACKEND 强制指定，便于在崩溃环境上逐个试：
+    // ---- 后端选择 ----
+    //
+    // ⚠️ 默认**排除 Vulkan**，理由是有实测证据的崩溃：
+    //
+    //   Windows 事件日志（Application Error）：
+    //     错误模块: igvk64.dll        （Intel 的 Vulkan 驱动）
+    //     驱动版本: 27.20.100.8682
+    //     异常代码: 0xc0000005        （访问违例）
+    //
+    // 也就是说：wgpu 默认的 `Backends::all()`（Vulkan | Metal | DX12 | GL）会去试
+    // Vulkan，而该驱动在初始化时就访问违例，**直接把进程带走** ——
+    // 这是原生崩溃，不经过 Rust 的 panic hook，因此日志里什么都没有。
+    //
+    // 这类问题非常常见于：Intel 集显 + 2020 年前后的驱动 + 远程/虚拟显示环境。
+    // 排除 Vulkan 后仍有 DX12（Windows 主路径）与 GL（老机器兜底）可用，
+    // 覆盖面不受影响。
+    //
+    // 可用 `SILVERMOON_GPU_BACKEND` 覆盖，便于逐个验证：
     //   dx12 / vulkan / gl / metal / all
-    // 这是排查「某后端不可用导致原生崩溃」的关键手段。
     let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    let default_backends = if cfg!(windows) {
+        wgpu::Backends::DX12 | wgpu::Backends::GL
+    } else {
+        // 非 Windows 不受此驱动问题影响，保持全部
+        wgpu::Backends::all()
+    };
+    desc.backends = default_backends;
     if let Ok(want) = std::env::var("SILVERMOON_GPU_BACKEND") {
         let b = match want.to_ascii_lowercase().as_str() {
             "dx12" | "d3d12" => wgpu::Backends::DX12,
@@ -212,7 +234,7 @@ fn run_canvas(app: AppHandle, rect: CanvasRect, running: Arc<Mutex<bool>>) -> Re
             "metal" => wgpu::Backends::METAL,
             _ => wgpu::Backends::all(),
         };
-        crate::boot_log::record(&format!("[gpu-canvas] 后端被指定为 {b:?}（来自环境变量）"));
+        crate::boot_log::record(&format!("[gpu-canvas] 后端被显式指定为 {b:?}（环境变量）"));
         desc.backends = b;
     }
     crate::boot_log::record(&format!(
