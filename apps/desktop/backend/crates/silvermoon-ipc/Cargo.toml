@@ -1,0 +1,22 @@
+[package]
+name = "silvermoon-ipc"
+version = "1.0.0"
+description = "SilverMoon 的 IPC 层：命令注册、托管状态、事件、窗口与托盘，宿主为 Electron 主进程"
+license = "GPL-3.0-only"
+edition = "2021"
+rust-version = "1.82"
+publish = false
+
+[lib]
+name = "silvermoon_ipc"
+path = "src/lib.rs"
+
+[dependencies]
+silvermoon-ipc-macros = { path = "../silvermoon-ipc-macros" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+axum = "0.7"
+tokio-stream = { version = "0.1", features = ["sync"] }
+url = "2"

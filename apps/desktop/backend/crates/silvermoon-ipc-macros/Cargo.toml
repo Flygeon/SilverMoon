@@ -1,0 +1,16 @@
+[package]
+name = "silvermoon-ipc-macros"
+version = "1.0.0"
+description = "silvermoon-ipc 的宏：命令注册、路由表汇总与应用元信息烘焙"
+license = "GPL-3.0-only"
+edition = "2021"
+rust-version = "1.82"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+serde_json = "1"
