@@ -6,34 +6,34 @@
   "type": "module",
   "description": "银月（SilverMoon）—— 本地优先全媒体库应用（Tauri 2 + Vue 3 + Rust）",
   "scripts": {
-    "dev": "tauri dev",
+    "dev": "node scripts/dev.mjs",
     "dev:renderer": "vite",
-    "start": "tauri dev",
-    "tauri": "tauri",
-    "build": "npm run typecheck && npm run build:renderer && tauri build",
+    "start": "electron .",
+    "build": "npm run typecheck && npm run build:renderer && npm run build:main",
     "build:renderer": "vite build",
     "verify:word-lyrics": "node scripts/verify-word-lyrics.mjs",
     "verify:tag-sources": "node scripts/verify-music-tag-sources.mjs",
     "verify:mock-coverage": "node scripts/check-mock-coverage.mjs",
     "gen:settings-index": "node scripts/gen-settings-index.mjs",
     "verify:settings-index": "node scripts/gen-settings-index.mjs --check",
-    "build:backend": "cargo build --manifest-path src-tauri/Cargo.toml",
-    "build:backend:release": "cargo build --release --manifest-path src-tauri/Cargo.toml",
-    "typecheck": "vue-tsc --noEmit",
-    "dist": "tauri build",
-    "dist:dir": "tauri build --no-bundle",
+    "build:backend": "cargo build --manifest-path backend/Cargo.toml",
+    "build:backend:release": "cargo build --release --manifest-path backend/Cargo.toml",
+    "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.electron.json",
+    "dist": "npm run build && electron-builder",
+    "dist:dir": "npm run build && electron-builder --dir",
     "test": "vitest run",
     "bench:memory": "node scripts/bench-memory.mjs",
     "pack:skins": "node scripts/pack-example-skins.mjs",
     "lint": "node scripts/check-version.mjs && eslint .",
     "lint:fix": "eslint . --fix",
     "check:version": "node scripts/check-version.mjs",
-    "format": "prettier --write \"src/**/*.{ts,vue,css,json}\" \"shared/**/*.{ts,json}\" \"scripts/**/*.mjs\"",
-    "format:check": "prettier --check \"src/**/*.{ts,vue,css,json}\" \"shared/**/*.{ts,json}\" \"scripts/**/*.mjs\"",
+    "format": "prettier --write \"src/**/*.{ts,vue,css,json}\" \"shared/**/*.{ts,json}\" \"scripts/**/*.mjs\" \"electron/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.{ts,vue,css,json}\" \"shared/**/*.{ts,json}\" \"scripts/**/*.mjs\" \"electron/**/*.ts\"",
     "verify:rust-pure": "node scripts/verify-rust-pure.mjs",
     "fetch:icon-font": "node scripts/fetch-icon-font.mjs",
     "check:icon-font": "node scripts/fetch-icon-font.mjs --check",
-    "verify:capability-scopes": "node scripts/verify-capability-scopes.mjs"
+    "dev:main": "node scripts/build-electron.mjs --watch",
+    "build:main": "node scripts/build-electron.mjs"
   },
   "dependencies": {
     "@applemusic-like-lyrics/core": "^0.6.0",
@@ -60,7 +60,8 @@
     "@tauri-apps/plugin-http": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-store": "^2",
-    "@tauri-apps/plugin-updater": "^2"
+    "@tauri-apps/plugin-updater": "^2",
+    "pako": "^1.0.11"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
@@ -79,6 +80,11 @@
     "vite": "^6.0.3",
     "vitest": "^4.1.11",
     "vue-tsc": "^2.1.10",
-    "@tauri-apps/cli": "^2"
+    "@tauri-apps/cli": "^2",
+    "@types/pako": "^2.0.3",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "fflate": "^0.8.3"
   }
 }

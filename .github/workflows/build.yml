@@ -1,14 +1,3 @@
-# 桌面端 CI（apps/desktop，Tauri 2）。
-#
-# 与迁移前（Electron）的差异：
-#   * 宿主层从「Electron 主进程 + Rust sidecar 两个进程」变成「Tauri 单进程」，
-#     因此不再需要单独构建 sidecar 与 splash 启动器；
-#   * 打包由 electron-builder 换成 tauri build（Windows NSIS / Linux AppImage / macOS dmg）；
-#   * Rust 工程从 apps/desktop/backend 移到 apps/desktop/src-tauri。
-#
-# 保留原设计的取舍：
-#   * build 作业**刻意不写 needs: lint** —— 构建是最慢的一环，串行等待会让总时长凭空多几分钟；
-#   * rust-cache 与 lint 作业用不同 prefix-key，避免两边 target 互相覆盖缓存。
 name: Build
 
 on:
@@ -17,9 +6,7 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main]
-  # 手动重跑入口。加它的直接原因：连推两次时（同名 concurrency group +
-  # cancel-in-progress）新 commit 的 run 有可能**根本没被创建** ——
-  # 实测遇到过一次，当时除了再空推一个提交别无他法。
+  # 手动重跑入口（把 CI 当「验证工具」时不必为了重跑而空提交）
   workflow_dispatch:
 
 permissions:
@@ -32,20 +19,18 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # 让 cargo 在 Actions 上输出更紧凑的日志，减少 I/O
   CARGO_TERM_COLOR: always
 
 jobs:
   # ---------------------------------------------------------------------------
-  # 静态检查：前端 lint/格式/类型 + Rust fmt/clippy/test
+  # 静态检查：前端 lint/格式/类型 + Rust fmt/clippy
+  #
+  # ⚠️ 这些是**顺序步骤**：前面任一失败会 skip 后面的 Rust 验证。
+  # 所以「lint 红了」不等于「Rust 已验证」—— 定位时要看清停在哪一步。
   # ---------------------------------------------------------------------------
   lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    # monorepo：应用在 apps/desktop 下，所有 run 步骤以此为工作目录
-    defaults:
-      run:
-        working-directory: apps/desktop
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -54,110 +39,82 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          # monorepo：锁文件在应用目录下，setup-node 需要显式指路
           cache-dependency-path: apps/desktop/package-lock.json
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-          # wasm32 目标用于 npm run verify:rust-pure：把不带依赖的纯逻辑编成 wasm
-          # 真实执行断言（本地没有 MSVC 时也能验证 Rust 行为）。
-          targets: wasm32-unknown-unknown
 
-      # clippy 要编译整棵依赖树；不缓存的话这一步每轮都要从零编一遍
+      # 后端只需要 native-tls 的 pkg-config 支持；Electron 侧无桌面框架开发库需求
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci --no-audit --no-fund
+
+      - name: ESLint
+        working-directory: apps/desktop
+        run: npm run lint
+
+      - name: Prettier check
+        working-directory: apps/desktop
+        run: npm run format:check
+
+      - name: Typecheck (renderer + electron main)
+        working-directory: apps/desktop
+        run: npm run typecheck
+
+      - name: Unit tests
+        working-directory: apps/desktop
+        run: npx vitest run --no-file-parallelism
+
+      - name: Mock / route-table drift check
+        working-directory: apps/desktop
+        run: npm run verify:mock-coverage
+
+      - name: Icon font in sync with source
+        working-directory: apps/desktop
+        run: npm run check:icon-font
+
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: |
-            apps/desktop/src-tauri -> target
+            apps/desktop/backend -> target
             apps/desktop/splash -> target
-          # 与构建作业区分开，避免两边的 target 目录互相覆盖缓存
           prefix-key: clippy
 
-      # Tauri 在 Linux 上需要 WebKitGTK / libsoup / librsvg 等一系列开发库，
-      # 以及 native-tls 需要的 pkg-config + libssl-dev。
-      # 这份清单取自 Tauri 2 官方文档的 Debian/Ubuntu 前置依赖。
-      - name: Install system dependencies
+      - name: Rustfmt check (backend)
+        run: cargo fmt --check --manifest-path apps/desktop/backend/Cargo.toml
+
+      # silvermoon-ipc 两个 crate 是 path 依赖、不属于 workspace 成员，
+      # `cargo fmt` 不会顺带检查它们，因此这里显式各查一次
+      - name: Rustfmt check (ipc layer)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libssl-dev \
-            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
-            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
-            patchelf
+          cargo fmt --check --manifest-path apps/desktop/backend/crates/silvermoon-ipc/Cargo.toml
+          cargo fmt --check --manifest-path apps/desktop/backend/crates/silvermoon-ipc-macros/Cargo.toml
 
-      - name: Install frontend dependencies
-        run: npm ci --no-audit --no-fund
+      - name: Clippy (backend)
+        run: cargo clippy --manifest-path apps/desktop/backend/Cargo.toml --all-targets -- -D warnings
 
-      - name: ESLint
-        run: npm run lint
+      - name: Unit tests (backend pure logic)
+        run: cargo test --manifest-path apps/desktop/backend/Cargo.toml --lib
 
-      - name: Prettier check
-        run: npm run format:check
-
-      - name: Typecheck (renderer)
-        run: npm run typecheck
-
-      # --no-file-parallelism：autoMixAlgo 是 CPU 密集的 FFT 用例，CI 上多 worker 抢核
-      # 会偶发超时（本机实测：并行偶发失败 1 条，串行 800/800 全绿）。
-      - name: Unit tests
-        run: npx vitest run --no-file-parallelism
-
-      # mock 与后端路由表的漂移检查。
-      # mock 是「纯浏览器预览」的唯一依赖，路由表改名/删除后 mock 会留下永远命中
-      # 不到的死分支（脚本对此报错）；新增命令未补 mock 则只提示覆盖率。
-      - name: Mock / route-table drift check
-        run: npm run verify:mock-coverage
-      # 图标字体是子集化产物（272 个图标 / 约 90 KB，原全量 5.2 MB）。
-      # 这条校验是**离线**的：只比对 manifest 与源码扫出来的图标名。
-      # 新增图标却忘了重跑 scripts/fetch-icon-font.mjs 时，这里会失败并列出缺哪些
-      # ——否则表现为「界面上某个图标空白」，很难查。
-      - name: Icon font in sync with source
-        run: npm run check:icon-font
-      # capability 的 URL pattern：https://** 的 port 是**空值**（不是通配），
-      # 会拒绝一切带端口的地址 —— 而 B 站 PCDN 取流正是 :8082。被拒后视频播不了，
-      # 报错只到「url not allowed」，很难定位。这条离线校验把它钉住。
-      - name: Capability HTTP scopes allow ports
-        run: npm run verify:capability-scopes
-
-      # Rust 纯逻辑的真实执行断言（不依赖链接器）：封面 Referer 伪装 / 扩展名推断 / 路径规范化
-      - name: Rust pure-logic tests (executed via wasm)
-        run: npm run verify:rust-pure
-
-      - name: Rustfmt check
-        run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
-
-      # B 站协议层是 path 依赖、不属于 workspace，必须显式指定 manifest。
-      - name: Rustfmt check (bilibili protocol crate)
-        run: cargo fmt --check --manifest-path src-tauri/crates/silvermoon-bili/Cargo.toml
-
-      - name: Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-
-      # 在此之前 CI 只做「编译 + clippy」，从不执行任何 Rust 测试。
-      - name: Unit tests (Rust lib)
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
-
-      # B 站协议层的单测（WBI 置换表、弹幕模式映射、归一化边界）挂在这个 crate 下，
-      # 同样不是 workspace 成员，必须显式指定 manifest 才会被执行。
-      - name: Unit tests (bilibili protocol)
-        run: cargo test --manifest-path src-tauri/crates/silvermoon-bili/Cargo.toml
-
-      # 启动器（apps/desktop/splash）的**纯逻辑**单测：lib 目标只含
-      # animation / prefs，不依赖 Win32，因此能在 Linux runner 上跑。
       - name: Rustfmt check (splash launcher)
-        run: cargo fmt --check --manifest-path splash/Cargo.toml
+        run: cargo fmt --check --manifest-path apps/desktop/splash/Cargo.toml
 
       - name: Unit tests (splash pure logic)
-        run: cargo test --manifest-path splash/Cargo.toml --lib
+        run: cargo test --manifest-path apps/desktop/splash/Cargo.toml --lib
 
   # ---------------------------------------------------------------------------
   # 安装包：Windows NSIS / Linux AppImage / macOS dmg
   #
-  # **刻意不写 `needs: lint`**：构建是整条流水线里最慢的一环（三个平台各自
-  # Rust release 编译），串行等待 lint 会让总时长凭空多几分钟。
-  # 若 lint 先失败，concurrency 会在下一次推送时直接取消这一轮，浪费可控。
+  # **刻意不写 `needs: lint`**：构建是整条流水线里最慢的一环，
+  # 串行等待 lint 会让总时长凭空多几分钟。两者并行后由最慢的平台决定。
   # ---------------------------------------------------------------------------
   build:
     name: build (${{ matrix.label }})
@@ -167,30 +124,31 @@ jobs:
         include:
           - os: windows-latest
             label: windows
-            bundle-args: --bundles nsis
+            package-args: --win nsis
             artifact-name: windows-build
-            artifact-path: |
-              apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
+            artifact-path: apps/desktop/release/*.exe
+            cache-paths: |
+              ~/AppData/Local/electron/Cache
+              ~/AppData/Local/electron-builder/Cache
           - os: ubuntu-latest
             label: linux
-            bundle-args: --bundles appimage
+            package-args: --linux AppImage
             artifact-name: linux-build
-            artifact-path: |
-              apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            artifact-path: apps/desktop/release/*.AppImage
+            cache-paths: |
+              ~/.cache/electron
+              ~/.cache/electron-builder
           - os: macos-latest
             label: macos
-            bundle-args: --bundles dmg
+            package-args: --mac dmg
             artifact-name: macos-build
-            artifact-path: |
-              apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            artifact-path: apps/desktop/release/*.dmg
+            cache-paths: |
+              ~/Library/Caches/electron
+              ~/Library/Caches/electron-builder
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-
-    # monorepo：应用在 apps/desktop 下，所有 run 步骤以此为工作目录
-    defaults:
-      run:
-        working-directory: apps/desktop
 
     steps:
       - uses: actions/checkout@v5
@@ -205,50 +163,50 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 缓存 ~/.cargo 与 src-tauri/target：命中后 release 编译只重编改动过的 crate。
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: |
-            apps/desktop/src-tauri -> target
+            apps/desktop/backend -> target
             apps/desktop/splash -> target
           prefix-key: release
+
+      # @electron/get 与 electron-builder 的工具链下载不在 npm 缓存范围内，
+      # 单独缓存后打包步骤能省下大量下载时间
+      - name: Cache electron / electron-builder downloads
+        uses: actions/cache@v4
+        with:
+          path: ${{ matrix.cache-paths }}
+          key: ${{ runner.os }}-electron-cache-${{ hashFiles('apps/desktop/package-lock.json', 'apps/desktop/electron-builder.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-cache-
 
       - name: Install system dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libssl-dev \
-            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
-            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
-            patchelf
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
 
       - name: Install frontend dependencies
+        working-directory: apps/desktop
         run: npm ci --no-audit --no-fund
 
-      # 启动动画是**独立的原生小程序**（Win32 + GDI，release 约 0.3MB），
-      # 由主程序 spawn，用来盖住 Tauri 那 1~2 秒的冷启动空窗。
-      #
-      # 必须在 tauri build 之前编出来并拷到 src-tauri/splash-bin/：
-      # tauri.windows.conf.json 把它声明为 bundle resource，文件不存在打包会直接失败。
-      - name: Build splash launcher
-        if: matrix.label == 'windows'
-        shell: pwsh
-        run: |
-          cargo build --release --manifest-path splash/Cargo.toml
-          New-Item -ItemType Directory -Force -Path src-tauri/splash-bin | Out-Null
-          Copy-Item splash/target/release/silvermoon-splash.exe src-tauri/splash-bin/
-          Get-Item src-tauri/splash-bin/silvermoon-splash.exe | Select-Object Name, Length
+      # 后端必须先生成：electron-builder 把它作为 extraResources 打进安装包
+      - name: Build Rust backend (release)
+        run: cargo build --release --manifest-path apps/desktop/backend/Cargo.toml
 
-      # tauri build 会自己跑 beforeBuildCommand（渲染进程 vite build），
-      # 并把 src-tauri 作为主程序一起编译；无需再单独构建后端 / 启动器。
-      #
-      # --bundles 显式指定各平台产物，这样 artifact 路径精确、互不干扰
-      # （tauri.conf.json 里 targets = "all"，交给 CLI 参数收窄）。
-      # 非 tag 构建不发布，只产出安装包供上面的 artifact 步骤取走。
-      - name: Build and bundle
-        run: npx tauri build ${{ matrix.bundle-args }}
+      # 原生启动器（仅 Windows）：它是**入口**，NSIS 快捷方式指向它
+      - name: Build splash launcher
+        if: runner.os == 'Windows'
+        run: cargo build --release --manifest-path apps/desktop/splash/Cargo.toml
+
+      - name: Build renderer + electron main
+        working-directory: apps/desktop
+        run: npm run build:renderer && npm run build:main
+
+      - name: Package
+        working-directory: apps/desktop
+        run: npx electron-builder ${{ matrix.package-args }} --publish never
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
@@ -271,46 +229,8 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: List artifacts
-        run: |
-          set -euo pipefail
-          find release-assets -maxdepth 3 -type f | sort
-
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: |
-            release-assets/**/*.exe
-            release-assets/**/*.AppImage
-            release-assets/**/*.dmg
-
-      - name: Ensure release is published (not draft / not prerelease)
-        # tauri-plugin-updater 的 GitHub 源会跳过 draft 与 prerelease，
-        # Release 必须以正式状态存在，否则客户端永远看不到更新。
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          echo "tag=$TAG"
-          json=''
-          for i in $(seq 1 10); do
-            json=$(gh release view "$TAG" --json isDraft,isPrerelease 2>/dev/null || true)
-            [ -n "$json" ] && break
-            sleep 6
-          done
-          echo "$json"
-          if [ -z "$json" ]; then
-            echo '::error::Release 不存在'
-            exit 1
-          fi
-          if echo "$json" | grep -q '"isDraft":true'; then
-            echo '::error::Release 仍是 draft，自动更新看不到'
-            exit 1
-          fi
-          if echo "$json" | grep -q '"isPrerelease":true'; then
-            echo '::error::Release 是 prerelease，自动更新看不到'
-            exit 1
-          fi
-          echo 'release published OK'
+          files: release-assets/**/*
