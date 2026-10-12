@@ -10,7 +10,7 @@
  * 这里把这些位置全部对齐校验，任何一处漂移都直接失败。CI 的 lint 作业会跑它。
  * 仓库根的两份 README 不强制写版本号（写了就必须一致）。
  *
- * 单一真源仍是 `src-tauri/silvermoon.config.json`（vite 与 Tauri 都读它），
+ * 单一真源仍是 `backend/silvermoon.config.json`（vite 与 Tauri 都读它），
  * 其余位置都以它为准。
  */
 import { readFileSync } from "node:fs";
@@ -25,23 +25,23 @@ const repoRoot = path.resolve(appRoot, "..", "..");
 /** 各处版本号的读取方式：描述 + 取值函数。 */
 const sources = [
   {
-    label: "src-tauri/silvermoon.config.json（单一真源）",
-    read: () => JSON.parse(read("src-tauri/silvermoon.config.json")).version,
+    label: "backend/silvermoon.config.json（单一真源）",
+    read: () => JSON.parse(read("backend/silvermoon.config.json")).version,
   },
   {
     label: "package.json",
     read: () => JSON.parse(read("package.json")).version,
   },
   {
-    label: "src-tauri/Cargo.toml",
-    read: () => match(read("src-tauri/Cargo.toml"), /^version\s*=\s*"([^"]+)"/m, "Cargo.toml"),
+    label: "backend/Cargo.toml",
+    read: () => match(read("backend/Cargo.toml"), /^version\s*=\s*"([^"]+)"/m, "Cargo.toml"),
   },
   {
     // 可选：Cargo.lock 是 cargo 生成的产物，未构建过的检出里可能不存在
-    label: "src-tauri/Cargo.lock（silvermoon 包，可选）",
+    label: "backend/Cargo.lock（silvermoon 包，可选）",
     read: () =>
       matchOptional(
-        readOptional("src-tauri/Cargo.lock") ?? "",
+        readOptional("backend/Cargo.lock") ?? "",
         /name = "silvermoon"\nversion = "([^"]+)"/,
       ),
   },
@@ -127,9 +127,7 @@ const drifted = found.filter((f) => f.version !== expect);
 if (drifted.length) {
   console.error(`\n✗ 版本号不一致（期望 ${expect}）：`);
   for (const d of drifted) console.error(`    ${d.version}  ${d.label}`);
-  console.error(
-    "\n把这些位置改成同一个版本号后重试。单一真源是 src-tauri/silvermoon.config.json。",
-  );
+  console.error("\n把这些位置改成同一个版本号后重试。单一真源是 backend/silvermoon.config.json。");
   process.exit(1);
 }
 

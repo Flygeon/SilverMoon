@@ -35,7 +35,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const srcRoot = path.join(appRoot, "src-tauri", "src");
+const srcRoot = path.join(appRoot, "backend", "src");
 
 /** 断言计数 */
 let passed = 0;
@@ -450,4 +450,4 @@ if (failures.length) {
   for (const f of failures) console.error("   - " + f);
   process.exit(1);
 }
-console.log(`\n✓ Rust 纯逻辑验证通过：${passed}/${total} 条断言（源码抽自 src-tauri，真实执行）`);
+console.log(`\n✓ Rust 纯逻辑验证通过：${passed}/${total} 条断言（源码抽自 backend，真实执行）`);

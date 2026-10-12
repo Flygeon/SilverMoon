@@ -1567,10 +1567,11 @@ fn ext_open_impl(
         return Err("缺少 path".into());
     }
     use silvermoon_ipc::plugins::OpenerExt;
-    // 脱壳后 `Host` 直接实现 `OpenerExt`，不再需要 `app.opener()` 取句柄；
-    // 下面统一用 `app.` 调用（OpenerExt 的方法签名保持不变）。
+    // `OpenerExt` 只提供 `opener()` 取句柄；`reveal_item_in_dir` / `open_path`
+    // 是 `Opener` 上的方法，所以必须先 `app.opener()`。
+    let opener = app.opener();
     if reveal {
-        return app
+        return opener
             .reveal_item_in_dir(path)
             .map_err(|e| format!("定位文件失败：{e}"));
     }
@@ -1601,7 +1602,8 @@ fn ext_open_impl(
             }
         }
     }
-    app.open_path(path, None::<&str>)
+    opener
+        .open_path(path, None::<&str>)
         .map_err(|e| format!("打开文件失败：{e}"))
 }
 

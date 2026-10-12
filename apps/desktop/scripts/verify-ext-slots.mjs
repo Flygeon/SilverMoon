@@ -23,7 +23,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Rust 侧：从 SLOT_IDS 常量里抠出字符串字面量 */
 function readRustSlots() {
-  const src = readFileSync(join(ROOT, "src-tauri", "src", "commands", "extension.rs"), "utf8");
+  const src = readFileSync(join(ROOT, "backend", "src", "commands", "extension.rs"), "utf8");
   const start = src.indexOf("pub const SLOT_IDS");
   if (start === -1) throw new Error("extension.rs 里找不到 SLOT_IDS");
   const end = src.indexOf("];", start);

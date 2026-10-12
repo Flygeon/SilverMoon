@@ -7,7 +7,6 @@
  * 已经接管封面缓存，那份 dataURL 副本没有上限、只会让磁盘单向增长。
  * 详见下方 `resolveCover` 的注释。
  */
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { capabilities } from "@/capabilities";
 
 const DB_NAME = "lumiluna-online";
@@ -70,10 +69,10 @@ async function kvSet(key: string, value: unknown): Promise<void> {
 export function toCoverProxyUrl(url: string): string {
   if (!url) return url;
   if (!/^https?:\/\//i.test(url)) return url;
-  // Tauri 的 convertFileSrc 会把自定义协议转成平台可用形态：
-  //   Windows → http://app-cover.localhost/<编码>，其它平台 → app-cover://localhost/<编码>
-  // Rust 侧 cover.rs 从 URI 里解码取回原始 URL。
-  return convertFileSrc(url, "app-cover");
+  // 直接拼协议 URL：Electron 侧用 protocol.handle 注册 `app-cover://`，
+  // 形如 `app-cover://img/<encodeURIComponent(原始URL)>`，host 段固定 `img`
+  // 以免被 URL 规范化剥掉（见 electron/protocols.ts 的 COVER_SCHEME 处理）。
+  return `app-cover://img/${encodeURIComponent(url)}`;
 }
 
 /** 失败占位图：灰色圆角块 + 音符（内联 SVG，随主题缩放，永不加载失败）。 */

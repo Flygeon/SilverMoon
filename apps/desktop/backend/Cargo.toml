@@ -48,6 +48,10 @@ regex = "1"
 tokio = { version = "1", features = ["full"] }
 rayon = "1"
 base64 = "0.22"
+# 扩展框架：解析/比较扩展声明的引擎版本区间（contributes.engines）
+semver = "1"
+# 本地音乐标签指纹（music_tags 的 sha1 摘要）
+sha1 = "0.10"
 getrandom = "0.2"
 chrono = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "stream", "native-tls", "charset", "gzip", "json"] }
