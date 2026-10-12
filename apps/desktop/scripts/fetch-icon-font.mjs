@@ -46,7 +46,7 @@
  */
 import { readFile, writeFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(ROOT, "src");
@@ -144,6 +144,11 @@ async function collectIcons() {
   // 规则 2：元素文本形式的图标名（见文件头——这条漏了会缺 59 个图标）
   const reSpanText = /material-symbols-outlined[^>]*>\s*([a-z][a-z0-9_]*)\s*</g;
   for (const file of await walk(SRC)) {
+    // `src/ipc/` 是纯桥接层，不含任何 UI —— 但它满是 IPC 的 channel / op 名，
+    // 而其中若干恰好是合法的图标名（window / create / store / join / remove / http …）。
+    // 不排除它们会白烘十来个用不到的图标，且让 --check 长期误报。
+    // （实测：该目录贡献的 15 个「图标」全部是 API 名，无一是真图标。）
+    if (relative(SRC, file).startsWith(`ipc${sep}`)) continue;
     const text = await readFile(file, "utf8");
     for (const m of text.matchAll(reQuoted)) {
       if (official.has(m[1])) found.add(m[1]);

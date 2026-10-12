@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "license": "GPL-3.0-only",
   "type": "module",
-  "description": "银月（SilverMoon）—— 本地优先全媒体库应用（Tauri 2 + Vue 3 + Rust）",
+  "description": "银月（SilverMoon）—— 本地优先全媒体库应用（Electron + Vue 3 + Rust 后端）",
+  "main": "dist-electron/main.cjs",
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:renderer": "vite",
