@@ -34,8 +34,18 @@ beforeEach(() => {
   // 就会执行 bulkImages()，其中读 location.search。缺了它整个 import 就抛
   // `ReferenceError: location is not defined`（这个报错与被测逻辑无关，
   // 但会掩盖真正的断言失败）。
+  // 迁回 Electron 后 `hasBridge()` 检查的是 preload 注入的 `window.__SILVERMOON__`
+  // （不再是 Tauri 的 `window.__TAURI_INTERNALS__`）—— 桥的存在性判定在模块加载时
+  // 求值一次，所以必须在 import 之前铺好。这里给一份最小可用的桥。
   (globalThis as unknown as { window: unknown }).window = {
-    __TAURI_INTERNALS__: {},
+    __SILVERMOON__: {
+      label: "main",
+      platform: "win32",
+      invoke: async () => ({ ok: true, data: null }),
+      invokeBatch: async () => ({ ok: true, data: [] }),
+      call: async () => ({ ok: true, data: null }),
+      emitTo: async () => {},
+    },
     location: { search: "", hash: "" },
   };
   (globalThis as unknown as { location: unknown }).location = { search: "", hash: "" };
