@@ -27,7 +27,7 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; img-src 'self' https: data: blob: asset: http://asset.localhost app-cover: http://app-cover.localhost; media-src 'self' https: data: blob: asset: http://asset.localhost app-cover: http://app-cover.localhost http://127.0.0.1:*; font-src 'self' data: https:; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:* https: data: blob: asset: http://asset.localhost app-cover: http://app-cover.localhost; frame-src 'self' asset: http://asset.localhost ext: http://ext.localhost https:; child-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'self'",
       "assetProtocol": {
         "enable": true,
         "scope": {

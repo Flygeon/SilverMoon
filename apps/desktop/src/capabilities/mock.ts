@@ -709,7 +709,7 @@ export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case "ext_current_nav":
       return as(null);
     case "ext_open_window":
-      throw new Error("浏览器预览不支持打开扩展窗口，请在桌面端测试");
+      throw new Error("浏览器预览不支持打开插件窗口，请在桌面端测试");
     case "ext_ui_surfaces":
       return as([]);
     case "ext_themes":
@@ -721,7 +721,7 @@ export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case "ext_set_enabled":
     case "ext_invoke":
     case "ext_open":
-      throw new Error("浏览器预览不支持扩展安装与引擎调用，请在桌面端测试");
+      throw new Error("浏览器预览不支持插件安装与引擎调用，请在桌面端测试");
 
     // ---- 皮肤系统（内存 Map 模拟皮肤库；浏览器预览不支持 ZIP 导入）----
     case "is_safe_mode":

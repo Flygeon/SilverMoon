@@ -19,7 +19,7 @@ import { useDesktopChrome } from "@/composables/useDesktopChrome";
 import { activeSkinDoc, skinBgActive, skinSafeMode } from "@/utils/skinRuntime";
 import { markBoot } from "@/utils/bootTiming";
 import { armAppReadyFallback, signalAppReady } from "@/utils/appReady";
-import ExtensionEmbed from "@/components/ExtensionEmbed.vue";
+import PluginEmbed from "@/components/PluginEmbed.vue";
 import type { ExtUiSurface } from "@shared/types";
 import { translate } from "@shared/i18n";
 import { listen, type Event, type UnlistenFn } from "@/ipc/events";
@@ -446,7 +446,7 @@ router.afterEach((to) => {
       <div class="content" data-lm-region="content">
         <main ref="mainEl" class="main-content">
           <!-- 扩展注入到内容区顶部的块（contributes.ui surface="main" position="top"） -->
-          <ExtensionEmbed
+          <PluginEmbed
             v-for="s in extMainSurfaces.filter((x) => x.position !== 'bottom')"
             :key="`${s.extId}:${s.id}`"
             :surface="s"
@@ -477,10 +477,10 @@ router.afterEach((to) => {
                   'PlayerView',
                   'PresetMarket',
                   'OsuView',
-                  'ExtensionsView',
+                  'PluginsView',
                   'NovelStatsView',
                   'DesktopLyrics',
-                  'ExtensionHost',
+                  'PluginHost',
                 ]"
                 :max="8"
               >
@@ -490,7 +490,7 @@ router.afterEach((to) => {
           </router-view>
 
           <!-- 扩展注入到内容区底部的块（position="bottom"） -->
-          <ExtensionEmbed
+          <PluginEmbed
             v-for="s in extMainSurfaces.filter((x) => x.position === 'bottom')"
             :key="`${s.extId}:${s.id}`"
             :surface="s"

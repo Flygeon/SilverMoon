@@ -26,7 +26,7 @@ import {
   extThemeKey,
   loadExtThemeSkin,
   parseExtThemeKey,
-} from "@/utils/extThemes";
+} from "@/utils/pluginThemes";
 import { translate } from "@shared/i18n";
 import type { SkinEntry } from "@shared/types";
 

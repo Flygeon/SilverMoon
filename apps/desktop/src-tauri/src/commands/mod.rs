@@ -66,7 +66,7 @@ impl ScanJobInfo {
 }
 
 /// 当前 schema 版本。递增后在 `migrate` 中追加对应分支。
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// 建表 + 版本化迁移。对已存在的库是幂等的。
 pub fn init_db(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
@@ -315,6 +315,76 @@ fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             conn.execute("ALTER TABLE anime_history ADD COLUMN detail_url TEXT", [])?;
         }
         conn.pragma_update(None, "user_version", 5)?;
+    }
+    // v5 -> v6：媒体库搜索 FTS5 全文索引（替代 LIKE 全表扫描）。
+    //
+    // files_fts 是独立虚表（非 external-content），用 trigger 在 files /
+    // media_metadata 写入时同步维护。注意写入路径的两个坑：
+    //  1. scan 对 files 用 `INSERT ... ON CONFLICT DO UPDATE`（触发 INSERT 或 UPDATE）；
+    //  2. metadata 用 `INSERT OR REPLACE`，冲突时触发的是 DELETE + INSERT（不是 UPDATE）。
+    // 因此 DELETE 触发器都按"重建行"处理，保证任何顺序下 FTS 行都与当前数据一致。
+    // 回填先 DELETE 再全量 INSERT，保证迁移幂等（重复跑不产生重复行）。
+    if current < 6 {
+        conn.execute_batch(
+            r#"
+            CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
+              file_id UNINDEXED,
+              name,
+              title,
+              artist,
+              album,
+              tokenize='trigram'
+            );
+
+            CREATE TRIGGER IF NOT EXISTS trg_files_fts_ai AFTER INSERT ON files BEGIN
+              DELETE FROM files_fts WHERE file_id = new.id;
+              INSERT INTO files_fts(file_id, name, title, artist, album)
+                VALUES (
+                  new.id,
+                  new.name,
+                  (SELECT title FROM media_metadata WHERE file_id = new.id),
+                  (SELECT artist FROM media_metadata WHERE file_id = new.id),
+                  (SELECT album FROM media_metadata WHERE file_id = new.id)
+                );
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_files_fts_au AFTER UPDATE OF name ON files BEGIN
+              DELETE FROM files_fts WHERE file_id = new.id;
+              INSERT INTO files_fts(file_id, name, title, artist, album)
+                VALUES (
+                  new.id,
+                  new.name,
+                  (SELECT title FROM media_metadata WHERE file_id = new.id),
+                  (SELECT artist FROM media_metadata WHERE file_id = new.id),
+                  (SELECT album FROM media_metadata WHERE file_id = new.id)
+                );
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_files_fts_ad AFTER DELETE ON files BEGIN
+              DELETE FROM files_fts WHERE file_id = old.id;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_meta_fts_ai AFTER INSERT ON media_metadata BEGIN
+              DELETE FROM files_fts WHERE file_id = new.file_id;
+              INSERT INTO files_fts(file_id, name, title, artist, album)
+                SELECT new.file_id, f.name, new.title, new.artist, new.album
+                FROM files f WHERE f.id = new.file_id;
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_meta_fts_ad AFTER DELETE ON media_metadata BEGIN
+              DELETE FROM files_fts WHERE file_id = old.file_id;
+              INSERT INTO files_fts(file_id, name, title, artist, album)
+                SELECT old.file_id, f.name, NULL, NULL, NULL
+                FROM files f WHERE f.id = old.file_id;
+            END;
+            "#,
+        )?;
+        conn.execute_batch(
+            r#"
+            DELETE FROM files_fts;
+            INSERT INTO files_fts(file_id, name, title, artist, album)
+              SELECT f.id, f.name, m.title, m.artist, m.album
+              FROM files f LEFT JOIN media_metadata m ON m.file_id = f.id;
+            "#,
+        )?;
+        conn.pragma_update(None, "user_version", 6)?;
     }
     Ok(())
 }

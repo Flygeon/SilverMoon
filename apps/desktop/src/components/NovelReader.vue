@@ -10,6 +10,15 @@ import { novelCatalogueCached } from "@/utils/novelCache";
 import { translate } from "@shared/i18n";
 import { requestRelogin } from "@/novel/wenku8Auth";
 import { isLoginRequiredError } from "@/novel/wenku8Login";
+import {
+  addBookmark,
+  formatBookmarkTime,
+  getBookmarks,
+  hasBookmark,
+  removeBookmark,
+  removeBookmarkAt,
+  type Bookmark,
+} from "@/utils/bookmarks";
 import type { NovelChapter, NovelContent, NovelVolume } from "@shared/types";
 
 const props = defineProps<{
@@ -33,6 +42,8 @@ const content = ref<NovelContent | null>(null);
 const loading = ref(true);
 const error = ref("");
 const showToc = ref(false);
+const showBookmarks = ref(false);
+const bookmarks = ref<Bookmark[]>([]);
 
 // 章节级计时
 let sessionId = "";
@@ -220,6 +231,44 @@ function close() {
   emit("close");
 }
 
+// ---- 书签 ----
+function refreshBookmarks() {
+  bookmarks.value = getBookmarks(props.aid);
+}
+const bookmarked = computed(() => hasBookmark(props.aid, currentCid.value));
+
+/** 工具栏书签按钮：未加则添加当前章节，已加则取消 */
+function toggleBookmark() {
+  if (!currentCid.value) return;
+  if (bookmarked.value) {
+    removeBookmarkAt(props.aid, currentCid.value);
+  } else {
+    addBookmark(props.aid, {
+      locator: currentCid.value,
+      title: currentTitle.value || props.title,
+    });
+  }
+  refreshBookmarks();
+}
+
+function openBookmarks() {
+  refreshBookmarks();
+  showBookmarks.value = true;
+}
+
+function goBookmark(b: Bookmark) {
+  const idx = chapters.value.findIndex((c) => c.cid === b.locator);
+  if (idx >= 0) {
+    showBookmarks.value = false;
+    void loadChapter(idx);
+  }
+}
+
+function delBookmark(id: string) {
+  removeBookmark(props.aid, id);
+  refreshBookmarks();
+}
+
 watch(loading, (v) => void capabilities.appLog(`[reader] watch loading=${v}`).catch(() => {}));
 watch(error, (v) => {
   if (v) void capabilities.appLog(`[reader] watch error=${v}`).catch(() => {});
@@ -276,6 +325,18 @@ onBeforeUnmount(() => {
         <button class="tool-btn" @click="showToc = true">
           <span class="material-symbols-outlined">list</span>
         </button>
+        <button
+          class="tool-btn"
+          :title="bookmarked ? '取消书签' : '添加书签'"
+          @click="toggleBookmark"
+        >
+          <span class="material-symbols-outlined">{{
+            bookmarked ? "bookmark" : "bookmark_add"
+          }}</span>
+        </button>
+        <button class="tool-btn" title="书签列表" @click="openBookmarks">
+          <span class="material-symbols-outlined">bookmarks</span>
+        </button>
         <button class="tool-btn" :disabled="currentIndex >= chapters.length - 1" @click="next">
           <span class="material-symbols-outlined">chevron_right</span>
         </button>
@@ -304,6 +365,32 @@ onBeforeUnmount(() => {
               >
                 <span class="toc-title">{{ ch.title }}</span>
               </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+
+      <!-- 书签抽屉 -->
+      <Transition name="toc-fade">
+        <div v-if="showBookmarks" class="toc-mask" @click="showBookmarks = false">
+          <div class="toc-panel" @click.stop>
+            <div class="toc-head">
+              <h3>书签</h3>
+              <button class="tool-btn" @click="showBookmarks = false">
+                <span class="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            <div class="toc-body">
+              <div v-for="b in bookmarks" :key="b.id" class="bm-row">
+                <button class="bm-main" @click="goBookmark(b)">
+                  <span class="bm-title">{{ b.title }}</span>
+                  <span class="bm-time">{{ formatBookmarkTime(b.createdAt) }}</span>
+                </button>
+                <button class="tool-btn bm-del" title="删除书签" @click="delBookmark(b.id)">
+                  <span class="material-symbols-outlined">delete</span>
+                </button>
+              </div>
+              <p v-if="!bookmarks.length" class="bm-empty">还没有书签，点顶栏书签图标添加</p>
             </div>
           </div>
         </div>
@@ -498,6 +585,60 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* 书签列表行 */
+.bm-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: var(--md-sys-shape-corner-medium);
+}
+.bm-row:hover {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.bm-main {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.bm-title {
+  display: block;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bm-time {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  opacity: 0.55;
+}
+.bm-del {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  opacity: 0.6;
+}
+.bm-del:hover {
+  opacity: 1;
+}
+.bm-del .material-symbols-outlined {
+  font-size: 18px;
+}
+.bm-empty {
+  padding: 24px 0;
+  text-align: center;
+  font-size: 13px;
+  opacity: 0.55;
 }
 .toc-fade-enter-active,
 .toc-fade-leave-active {

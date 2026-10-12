@@ -20,6 +20,9 @@ import { useFillHeight } from "@/composables/useFillHeight";
 import type { DrawTool, Drawing, ShapeFillMode } from "@/features/drawing/types";
 import { SHAPE_FILL_MODES } from "@/features/drawing/types";
 import { floodFill } from "@/features/drawing/floodFill";
+import { readLayers, writeLayers } from "@/features/drawing/layers";
+import { layerText } from "@/features/drawing/layerText";
+import LayerPanel from "@/components/LayerPanel.vue";
 import { attachGpuCanvas, gpuCanvasAvailable, type GpuCanvasHandle } from "@/utils/gpuCanvas";
 import { translate } from "@shared/i18n";
 
@@ -37,7 +40,6 @@ const emit = defineEmits<{
 
 /** 只取类型（不产生运行时 import）；运行时要等动态 import 回来 */
 type LeaferNS = typeof import("leafer-editor");
-type LeaferInstance = InstanceType<LeaferNS["Leafer"]>;
 type LeafNode = InstanceType<LeaferNS["Path"]>;
 type Bounds = { x: number; y: number; width: number; height: number };
 
@@ -49,9 +51,34 @@ const PAPER = "#ffffff";
 
 const rootRef = ref<HTMLElement | null>(null);
 const host = ref<HTMLElement | null>(null);
-const leafer = shallowRef<LeaferInstance | null>(null);
+type AppInstance = InstanceType<LeaferNS["App"]>;
+/**
+ * 图层宿主：App 管理多个 Leafer 引擎分层叠加（LeaferJS 官方多图层方案）。
+ * - layers[]：用户图层，索引 0 为最底层；
+ * - overlay：顶层覆盖引擎，只放选中框（不进图层面板）。
+ */
+const app = shallowRef<AppInstance | null>(null);
 let ns: LeaferNS | null = null;
-/** 已有画作载入的底图：不参与选中、清空，也不进历史 */
+/** 用户图层的一项。leafer 用结构化类型（只声明实际用到的成员），
+ * 避开 leafer-editor 多包之间 Leafer 类定义不一致导致的类型打架。 */
+interface LayerState {
+  id: number;
+  name: string;
+  visible: boolean;
+  leafer: {
+    add(node: unknown): void;
+    remove(): void;
+    set(props: Record<string, unknown>): void;
+    readonly children?: unknown[];
+    export?(type: string, opts?: unknown): unknown;
+  };
+}
+const layers = ref<LayerState[]>([]);
+const activeLayerId = ref(0);
+let layerSeq = 0;
+/** 选中框所在的顶层覆盖引擎（结构化类型，同 LayerState.leafer） */
+let overlay: LayerState["leafer"] | null = null;
+/** 已有画作载入的底图（无 sidecar 时的兼容模式）：不参与选中、清空，也不进历史 */
 let backdrop: LeafNode | null = null;
 /** 选中框：仅作视觉反馈，导出前会隐藏 */
 let marquee: LeafNode | null = null;
@@ -144,19 +171,212 @@ function redo() {
   syncHistory();
 }
 
-// ---- 节点 ----
-/** 可编辑节点：排除底图与选中框 */
-function nodes(): LeafNode[] {
-  const lf = leafer.value;
-  if (!lf) return [];
-  const list = ((lf.children ?? []) as unknown as LeafNode[]).slice();
-  return list.filter((n) => n !== backdrop && n !== marquee);
+// ---- 图层 ----
+/** 当前活动图层（新节点都画进它） */
+function activeLayer(): LayerState | null {
+  return layers.value.find((l) => l.id === activeLayerId.value) ?? null;
 }
 
+/** 节点所属的用户图层（选中框在 overlay 引擎，不在这里） */
+function layerOf(node: LeafNode): LayerState | null {
+  for (const l of layers.value) {
+    const kids = (l.leafer.children ?? []) as unknown as LeafNode[];
+    if (kids.includes(node)) return l;
+  }
+  return null;
+}
+
+/** 新图层默认名：图层 1、图层 2……按创建序号递增，不复用已删的编号 */
+function nextLayerName(): string {
+  return layerText(settings.lang, "draw.layer") + " " + (layerSeq + 1);
+}
+
+/**
+ * 把 layers[] 的顺序同步到 App 的子引擎堆叠顺序。
+ * App.children[0] 为最底层；overlay 永远保持最顶。
+ */
+function syncLayerOrder() {
+  const a = app.value;
+  if (!a) return;
+  for (const l of layers.value) l.leafer.remove();
+  // App.addAt/add 要的是 leafer-editor 自己的 ILeafer 类型，这里做一次桥接断言
+  type LeaferArg = Parameters<NonNullable<typeof a>["addAt"]>[0];
+  layers.value.forEach((l, i) => a.addAt(l.leafer as unknown as LeaferArg, i));
+  if (overlay) {
+    overlay.remove();
+    type AddArg = Parameters<NonNullable<typeof a>["add"]>[0];
+    a.add(overlay as unknown as AddArg);
+  }
+}
+
+/** 内部：建一个空图层并挂载（不推历史） */
+function createLayerInternal(name: string): LayerState {
+  const a = app.value;
+  if (!a) throw new Error("layer host not ready");
+  // 子引擎默认透明，只有 App 本体带 PAPER 底色——上层不会盖住下层
+  const lf = a.addLeafer({
+    width: props.canvasWidth,
+    height: props.canvasHeight,
+    pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+  });
+  const layer: LayerState = { id: ++layerSeq, name, visible: true, leafer: lf };
+  layers.value.push(layer);
+  syncLayerOrder();
+  return layer;
+}
+
+/** 内部：把已有 LayerState 挂回指定位置（撤销「删除图层」用，不推历史） */
+function attachLayerInternal(layer: LayerState, at: number) {
+  layers.value.splice(Math.min(at, layers.value.length), 0, layer);
+  syncLayerOrder();
+}
+
+/**
+ * 内部：从画布摘除图层（只 detach，不销毁引擎、不清节点，撤销时可原样挂回）。
+ * 返回摘除前的位置，并顺手修好活动图层与选中态。
+ */
+function detachLayerInternal(layer: LayerState): number {
+  const at = layers.value.indexOf(layer);
+  if (at >= 0) layers.value.splice(at, 1);
+  layer.leafer.remove();
+  if (activeLayerId.value === layer.id) {
+    const fallback = layers.value[Math.min(at, layers.value.length - 1)];
+    activeLayerId.value = fallback ? fallback.id : 0;
+  }
+  if (selected.value && !layerOf(selected.value)) {
+    selected.value = null;
+    hideMarquee();
+  }
+  return at;
+}
+
+/** 新建图层（可撤销）：建完自动切到新图层 */
+function addLayer() {
+  const prevActive = activeLayerId.value;
+  const layer = createLayerInternal(nextLayerName());
+  activeLayerId.value = layer.id;
+  selected.value = null;
+  hideMarquee();
+  pushCmd({
+    undo: () => {
+      detachLayerInternal(layer);
+      if (layers.value.some((l) => l.id === prevActive)) activeLayerId.value = prevActive;
+    },
+    redo: () => {
+      attachLayerInternal(layer, layers.value.length);
+      activeLayerId.value = layer.id;
+    },
+  });
+}
+
+/** 删除图层（可撤销）：整层节点跟着走，撤销时原样回来 */
+function deleteLayer(id: number) {
+  const layer = layers.value.find((l) => l.id === id);
+  if (!layer) return;
+  if (layers.value.length <= 1) {
+    toast(layerText(settings.lang, "draw.cannotDeleteLastLayer"));
+    return;
+  }
+  const at = detachLayerInternal(layer);
+  pushCmd({
+    undo: () => attachLayerInternal(layer, at),
+    redo: () => detachLayerInternal(layer),
+  });
+}
+
+/** 图层上移 / 下移（dir=+1 朝顶，-1 朝底），可撤销 */
+function moveLayer(id: number, dir: 1 | -1) {
+  const from = layers.value.findIndex((l) => l.id === id);
+  const to = from + dir;
+  if (from < 0 || to < 0 || to >= layers.value.length) return;
+  const apply = (a: number, b: number) => {
+    const [l] = layers.value.splice(a, 1);
+    layers.value.splice(b, 0, l);
+    syncLayerOrder();
+  };
+  apply(from, to);
+  pushCmd({
+    undo: () => apply(to, from),
+    redo: () => apply(from, to),
+  });
+}
+
+/** 显示 / 隐藏图层（可撤销）：隐藏层不参与拾取与导出 */
+function toggleLayer(id: number) {
+  const layer = layers.value.find((l) => l.id === id);
+  if (!layer) return;
+  const next = !layer.visible;
+  layer.visible = next;
+  layer.leafer.set({ visible: next });
+  pushCmd({
+    undo: () => {
+      layer.visible = !next;
+      layer.leafer.set({ visible: !next });
+    },
+    redo: () => {
+      layer.visible = next;
+      layer.leafer.set({ visible: next });
+    },
+  });
+}
+
+/** 重命名图层（可撤销） */
+function renameLayer(id: number, name: string) {
+  const layer = layers.value.find((l) => l.id === id);
+  if (!layer) return;
+  const prev = layer.name;
+  const next = name.trim() || prev;
+  if (next === prev) return;
+  layer.name = next;
+  pushCmd({
+    undo: () => {
+      layer.name = prev;
+    },
+    redo: () => {
+      layer.name = next;
+    },
+  });
+}
+
+/** 切换活动图层：清掉选中态（选中框属于旧图层的视觉概念） */
+function selectLayer(id: number) {
+  if (activeLayerId.value === id) return;
+  activeLayerId.value = id;
+  selected.value = null;
+  hideMarquee();
+}
+
+/** 图层面板的行数据（面板只关心 id/名字/可见性） */
+const panelLayers = computed(() =>
+  layers.value.map((l) => ({ id: l.id, name: l.name, visible: l.visible })),
+);
+
+// ---- 节点 ----
+/**
+ * 可编辑节点：所有用户图层的 children，排除底图。
+ * 选中框在 overlay 引擎里，本来就不在 layers[] 中。
+ */
+function nodes(): LeafNode[] {
+  const out: LeafNode[] = [];
+  for (const l of layers.value) {
+    const list = ((l.leafer.children ?? []) as unknown as LeafNode[]).slice();
+    for (const n of list) if (n !== backdrop) out.push(n);
+  }
+  return out;
+}
+
+/**
+ * 新节点进历史。redo 时加回创建时的图层；
+ * 若那层已被删，则退回当前活动图层（总比丢节点好）。
+ */
 function commitNode(node: LeafNode) {
+  const owner = activeLayer();
   pushCmd({
     undo: () => node.remove(),
-    redo: () => leafer.value?.add(node),
+    redo: () => {
+      const target = owner && layers.value.includes(owner) ? owner : activeLayer();
+      target?.leafer.add(node);
+    },
   });
 }
 
@@ -167,17 +387,17 @@ function boundsOf(node: LeafNode): Bounds | null {
 
 function ensureMarquee(): LeafNode | null {
   if (marquee) return marquee;
-  if (!ns || !leafer.value) return null;
+  if (!ns || !overlay) return null;
   const box = new ns.Rect({
     stroke: "#3b82f6",
     strokeWidth: 2,
     dashPattern: [6, 4],
     hittable: false,
     visible: false,
-    // 置顶：否则后画的节点会盖住选中框
+    // 选中框住在 overlay 顶层引擎：永远盖在所有用户图层之上
     zIndex: 9999,
   });
-  leafer.value.add(box);
+  overlay.add(box);
   marquee = box;
   return box;
 }
@@ -193,13 +413,18 @@ function hideMarquee() {
   marquee?.set({ visible: false });
 }
 
-/** 命中测试：从最上层往下找第一个包住该点的节点 */
+/** 命中测试：从最上层图层往下找第一个包住该点的节点（隐藏图层跳过） */
 function pick(p: { x: number; y: number }): LeafNode | null {
-  const list = nodes();
-  for (let i = list.length - 1; i >= 0; i--) {
-    const b = boundsOf(list[i]);
-    if (b && p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height)
-      return list[i];
+  for (let li = layers.value.length - 1; li >= 0; li--) {
+    const layer = layers.value[li];
+    if (!layer.visible) continue;
+    const list = ((layer.leafer.children ?? []) as unknown as LeafNode[]).slice();
+    for (let i = list.length - 1; i >= 0; i--) {
+      const n = list[i];
+      if (n === backdrop) continue;
+      const b = boundsOf(n);
+      if (b && p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height) return n;
+    }
   }
   return null;
 }
@@ -291,21 +516,23 @@ function hexToRgba(hex: string): { r: number; g: number; b: number; a: number } 
  * 撤销时反向恢复。
  */
 async function applyFill(p: { x: number; y: number }) {
-  const lf = leafer.value;
-  if (!lf || !ns) return;
+  const a = app.value;
+  const target = activeLayer();
+  if (!a || !ns || !target) return;
 
   const x = Math.round(p.x);
   const y = Math.round(p.y);
   if (x < 0 || y < 0 || x >= props.canvasWidth || y >= props.canvasHeight) return;
 
   // 1) 把当前画面导出为像素（选中框与底图不参与，见 export 的 screenshot 语义）
+  //    App.export 会把所有可见图层合成在一张图上——所见即所填。
   const hideMarquee = marquee ? (marquee as unknown as { visible: boolean }).visible : false;
   if (marquee) (marquee as unknown as { visible: boolean }).visible = false;
   let pixels: Uint8ClampedArray;
   let width = props.canvasWidth;
   let height = props.canvasHeight;
   try {
-    const res = await lf.export("canvas", { screenshot: true, fill: PAPER, pixelRatio: 1 });
+    const res = await a.export("canvas", { screenshot: true, fill: PAPER, pixelRatio: 1 });
     const el = res as unknown as HTMLCanvasElement;
     const ctx = el.getContext("2d");
     if (!ctx) return;
@@ -348,7 +575,8 @@ async function applyFill(p: { x: number; y: number }) {
     height: props.canvasHeight,
     url: out.toDataURL("image/png"),
   });
-  lf.add(image);
+  // 填充结果落在活动图层（多图层下「拍平」只拍进当前层，其它层不受影响）
+  target.leafer.add(image);
 
   // 4) 把之前的可见节点藏起来（连同底图），只留这一张位图
   const hidden: LeafNode[] = [];
@@ -371,14 +599,17 @@ async function applyFill(p: { x: number; y: number }) {
       for (const n of hidden) n.set({ visible: true });
     },
     redo: () => {
-      leafer.value?.add(image);
+      const t2 = layers.value.includes(target) ? target : activeLayer();
+      t2?.leafer.add(image);
       for (const n of hidden) n.set({ visible: false });
     },
   });
 }
 
 async function addText(p: { x: number; y: number }) {
-  if (!ns || !leafer.value) return;
+  if (!ns || !app.value) return;
+  const layer = activeLayer();
+  if (!layer) return;
   const text = await promptText(t("draw.textPrompt"), "");
   if (!text) return;
   const node = new ns.Text({
@@ -388,12 +619,12 @@ async function addText(p: { x: number; y: number }) {
     fill: color.value,
     fontSize: Math.max(16, strokeWidth.value * 4),
   });
-  leafer.value.add(node);
+  layer.leafer.add(node);
   commitNode(node);
 }
 
 function onPointerDown(e: PointerEvent) {
-  if (!ready.value || !ns || !leafer.value) return;
+  if (!ready.value || !ns || !app.value) return;
   // 中键 / 空格：平移视图（绘画软件的通用习惯），与画布内容无关
   if (e.button === 1 || spaceDown.value) {
     e.preventDefault();
@@ -434,6 +665,8 @@ function onPointerDown(e: PointerEvent) {
   }
 
   if (tool.value === "brush" || tool.value === "eraser") {
+    const layer = activeLayer();
+    if (!layer) return;
     const erase = tool.value === "eraser";
     const node = new ns.Path({
       path: "M " + p.x + " " + p.y,
@@ -442,7 +675,7 @@ function onPointerDown(e: PointerEvent) {
       strokeCap: "round",
       strokeJoin: "round",
     });
-    leafer.value.add(node);
+    layer.leafer.add(node);
     gesture = { kind: "free", node, pts: [p.x, p.y] };
     return;
   }
@@ -467,7 +700,12 @@ function onPointerDown(e: PointerEvent) {
   } else {
     node = new ns.Line({ ...paint, points: [p.x, p.y, p.x, p.y] });
   }
-  leafer.value.add(node);
+  const shapeLayer = activeLayer();
+  if (!shapeLayer) {
+    // 没有活动图层时不留半成品节点
+    return;
+  }
+  shapeLayer.leafer.add(node);
   gesture = { kind: "shape", node, start: p, tool: tool.value };
 }
 
@@ -594,17 +832,26 @@ function fitScale(): number {
  *
  * 只改 **CSS 尺寸与 transform**，不动 Leafer 的内部像素尺寸 —— 因此导出仍是
  * 原始分辨率，缩放纯粹是「看」的事，高分屏清晰度也不受影响。
+ *
+ * 多图层下 host 里有多个 canvas（每引擎一层），全部都要同步变换，
+ * 否则图层之间会错位。
  */
 function applyView() {
-  const canvas = host.value?.querySelector("canvas") as HTMLCanvasElement | null;
+  const canvases = host.value?.querySelectorAll("canvas");
   const box = host.value;
-  if (!canvas || !box) return;
+  if (!canvases || !canvases.length || !box) return;
   const scale = fitScale() * zoom.value;
-  canvas.style.width = Math.round(props.canvasWidth * scale) + "px";
-  canvas.style.height = Math.round(props.canvasHeight * scale) + "px";
-  // 平移用 transform 而不是改 left/top：不触发布局重算，拖起来更顺
-  canvas.style.transform = "translate(" + pan.value.x + "px, " + pan.value.y + "px)";
-  canvas.style.transformOrigin = "center center";
+  const width = Math.round(props.canvasWidth * scale) + "px";
+  const height = Math.round(props.canvasHeight * scale) + "px";
+  const transform = "translate(" + pan.value.x + "px, " + pan.value.y + "px)";
+  canvases.forEach((c) => {
+    const el = c as HTMLCanvasElement;
+    el.style.width = width;
+    el.style.height = height;
+    // 平移用 transform 而不是改 left/top：不触发布局重算，拖起来更顺
+    el.style.transform = transform;
+    el.style.transformOrigin = "center center";
+  });
 }
 
 /** 滚轮缩放。以光标为锚点的做法留给后续（先做整体缩放，够用且不易错）。 */
@@ -643,15 +890,23 @@ function fitCanvas() {
 
 // ---- 清空 / 保存 ----
 function clearAll() {
-  const list = nodes();
-  if (!list.length) return;
-  list.forEach((n) => n.remove());
+  const owned: { node: LeafNode; layer: LayerState }[] = [];
+  for (const l of layers.value) {
+    const list = ((l.leafer.children ?? []) as unknown as LeafNode[]).slice();
+    for (const n of list) if (n !== backdrop) owned.push({ node: n, layer: l });
+  }
+  if (!owned.length) return;
+  owned.forEach(({ node }) => node.remove());
   // 必须清掉选中态：否则清空后按 Del 会去操作一个已经不在画布上的节点
   selected.value = null;
   hideMarquee();
   pushCmd({
-    undo: () => list.forEach((n) => leafer.value?.add(n)),
-    redo: () => list.forEach((n) => n.remove()),
+    // 撤销时各回各层（层若已被删则不恢复该层节点，避免往已销毁的引擎里加）
+    undo: () =>
+      owned.forEach(({ node, layer }) => {
+        if (layers.value.includes(layer)) layer.leafer.add(node);
+      }),
+    redo: () => owned.forEach(({ node }) => node.remove()),
   });
 }
 
@@ -666,18 +921,33 @@ function dataUrlToBytes(url: string): Uint8Array {
 }
 
 async function save() {
-  const lf = leafer.value;
-  if (!lf || saving.value) return;
+  const a = app.value;
+  if (!a || saving.value) return;
   saving.value = true;
   try {
     // 选中框不能进成品图
     hideMarquee();
     // pixelRatio 固定为 1：画布自身就是成品的分辨率，导出尺寸必须等于声明的画布尺寸
-    const res = await lf.export("png", { screenshot: true, fill: PAPER, pixelRatio: 1 });
+    // App.export 会把所有可见图层合成在一张 PNG 上
+    const res = await a.export("png", { screenshot: true, fill: PAPER, pixelRatio: 1 });
     const data = res?.data;
     if (typeof data !== "string") throw new Error("unexpected export result");
     const targetId = name.value.trim() || store.newDrawingName();
     const saved = await store.save(targetId, dataUrlToBytes(data));
+    // 图层结构存 sidecar（<id>.layers.json），下次打开时重建图层。
+    // 写失败不影响 PNG 本体：最差情况是下次打开时回到「整图当底图」的兼容模式。
+    try {
+      await writeLayers(targetId, {
+        version: 1,
+        layers: layers.value.map((l) => ({
+          name: l.name,
+          visible: l.visible,
+          data: (l.leafer as unknown as { toJSON(): unknown }).toJSON(),
+        })),
+      });
+    } catch {
+      /* 忽略，见上 */
+    }
     // 改名保存后清掉旧文件
     if (props.drawing && props.drawing.id !== targetId) {
       await store.remove(props.drawing.id);
@@ -721,11 +991,15 @@ function deleteSelected() {
     hideMarquee();
     return;
   }
+  const owner = layerOf(node);
   node.remove();
   selected.value = null;
   hideMarquee();
   pushCmd({
-    undo: () => leafer.value?.add(node),
+    undo: () => {
+      const target = owner && layers.value.includes(owner) ? owner : activeLayer();
+      target?.leafer.add(node);
+    },
     redo: () => node.remove(),
   });
 }
@@ -750,18 +1024,22 @@ function copySelected() {
  */
 function pasteClipboard() {
   const src = clipboardNode;
-  const lf = leafer.value;
-  if (!src || !lf) return;
+  if (!src) return;
+  const target = activeLayer();
+  if (!target) return;
   const copy = (src as unknown as { clone?: () => LeafNode }).clone?.();
   if (!copy) return;
   // 偏移 16px：粘贴出来的东西要能被看见（否则与原节点严丝合缝，像是没反应）
   copy.set({ x: (src.x ?? 0) + 16, y: (src.y ?? 0) + 16 });
-  lf.add(copy);
+  target.leafer.add(copy);
   selected.value = copy;
   showMarquee(copy);
   pushCmd({
     undo: () => copy.remove(),
-    redo: () => leafer.value?.add(copy),
+    redo: () => {
+      const t2 = layers.value.includes(target) ? target : activeLayer();
+      t2?.leafer.add(copy);
+    },
   });
 }
 
@@ -872,7 +1150,9 @@ onMounted(async () => {
   try {
     ns = await import("leafer-editor");
     if (!host.value) return;
-    const lf = new ns.Leafer({
+    // App = 多引擎图层宿主：每个子 Leafer 是一层，叠加合成。
+    // 底色只给 App 本体，子引擎保持透明，上层才不会盖住下层。
+    const appInst = new ns.App({
       view: host.value,
       width: props.canvasWidth,
       height: props.canvasHeight,
@@ -880,20 +1160,52 @@ onMounted(async () => {
       // 显示按设备像素比走（高分屏清晰），导出时再压回 1
       pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
     });
-    leafer.value = lf;
+    app.value = appInst;
 
     if (props.drawing) {
-      const bg = new ns.Image({
-        x: 0,
-        y: 0,
-        width: props.canvasWidth,
-        height: props.canvasHeight,
-        url: capabilities.thumbUrl(props.drawing.path),
-        hittable: false,
-      });
-      lf.add(bg);
-      backdrop = bg;
+      const restored = await readLayers(props.drawing.id);
+      if (restored) {
+        // sidecar 还原：按存档顺序重建（索引 0 = 最底层）
+        for (const ld of restored.layers) {
+          const lf = appInst.addLeafer({
+            width: props.canvasWidth,
+            height: props.canvasHeight,
+            pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+          });
+          try {
+            (lf as unknown as { load(d: unknown): void }).load(ld.data);
+          } catch {
+            // 单层数据坏了就空着，不影响其它层（PNG 成品不受影响）
+          }
+          lf.set({ visible: ld.visible });
+          layers.value.push({ id: ++layerSeq, name: ld.name, visible: ld.visible, leafer: lf });
+        }
+      } else {
+        // 兼容模式：老画作没有 sidecar，整张 PNG 当底图放在第一层
+        const first = createLayerInternal(layerText(settings.lang, "draw.layer") + " 1");
+        const bg = new ns.Image({
+          x: 0,
+          y: 0,
+          width: props.canvasWidth,
+          height: props.canvasHeight,
+          url: capabilities.thumbUrl(props.drawing.path),
+          hittable: false,
+        });
+        first.leafer.add(bg);
+        backdrop = bg;
+      }
+    } else {
+      createLayerInternal(layerText(settings.lang, "draw.layer") + " 1");
     }
+    // 选中框专用顶层引擎：最后创建，天然在最上
+    overlay = appInst.addLeafer({
+      width: props.canvasWidth,
+      height: props.canvasHeight,
+      pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+    });
+    syncLayerOrder();
+
+    activeLayerId.value = layers.value[layers.value.length - 1]?.id ?? 0;
 
     ready.value = true;
     fitCanvas();
@@ -916,8 +1228,10 @@ onBeforeUnmount(() => {
   // 先收 GPU 画布：它是独立的原生窗口，不关掉会留在屏幕上
   void gpuCanvas?.dispose();
   gpuCanvas = null;
-  leafer.value?.destroy();
-  leafer.value = null;
+  // App.destroy 会连带销毁子引擎
+  app.value?.destroy();
+  app.value = null;
+  overlay = null;
   ns = null;
 });
 
@@ -1063,6 +1377,21 @@ function zoomReset() {
 
       <!-- ============ 右侧属性面板 ============ -->
       <aside class="panel">
+        <section class="panel-block">
+          <LayerPanel
+            :layers="panelLayers"
+            :active-id="activeLayerId"
+            :can-delete="layers.length > 1"
+            @select="selectLayer"
+            @toggle="toggleLayer"
+            @add="addLayer"
+            @delete="deleteLayer"
+            @up="(id: number) => moveLayer(id, 1)"
+            @down="(id: number) => moveLayer(id, -1)"
+            @rename="renameLayer"
+          />
+        </section>
+
         <section class="panel-block">
           <h3 class="panel-title">{{ t("draw.color") }}</h3>
           <div class="swatches">

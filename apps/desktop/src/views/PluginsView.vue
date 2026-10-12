@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 扩展管理面板：已安装扩展列表（启用开关 / 卸载）+ 安装（文件夹 / zip）。
+ * 插件管理面板：已安装扩展列表（启用开关 / 卸载）+ 安装（文件夹 / zip）。
  * 引擎状态（engine_ready）与模型下载进度经 ext_invoke 轮询扩展引擎。
  * 注意：文案不进 shared/i18n.ts（项目 WIP 文件，禁止改动）。
  */
@@ -27,7 +27,7 @@ async function load() {
   try {
     list.value = await capabilities.extList();
   } catch (e) {
-    notify(`加载扩展列表失败：${String(e)}`);
+    notify(`加载插件列表失败：${String(e)}`);
   } finally {
     loading.value = false;
   }
@@ -67,7 +67,7 @@ async function openWindow(ext: ExtInfo) {
 }
 
 async function uninstall(ext: ExtInfo) {
-  if (!window.confirm(`卸载扩展「${ext.name}」？数据目录（索引/模型）将一并删除。`)) return;
+  if (!window.confirm(`卸载插件「${ext.name}」？数据目录（索引/模型）将一并删除。`)) return;
   busy.value = ext.id;
   try {
     await capabilities.extUninstall(ext.id);
@@ -84,7 +84,7 @@ async function install(kind: "folder" | "zip") {
   const selected = await dialogOpen({
     directory: kind === "folder",
     multiple: false,
-    filters: kind === "zip" ? [{ name: "扩展包", extensions: ["zip"] }] : undefined,
+    filters: kind === "zip" ? [{ name: "插件包", extensions: ["zip"] }] : undefined,
   });
   if (typeof selected !== "string") return;
   const source: ExtSource =
@@ -107,7 +107,7 @@ onActivated(load);
 
 <template>
   <div class="view">
-    <PageHeader title="扩展" description="为 SilverMoon 安装独立分发的功能扩展包" />
+    <PageHeader title="插件" description="为 SilverMoon 安装独立分发的功能插件包" />
     <div class="toolbar">
       <button :disabled="busy !== ''" @click="install('zip')">安装 zip 包</button>
       <button :disabled="busy !== ''" @click="install('folder')">从文件夹安装</button>
@@ -116,8 +116,8 @@ onActivated(load);
     <p v-if="toast" class="toast">{{ toast }}</p>
 
     <div v-if="!list.length && !loading" class="empty">
-      尚未安装任何扩展。<br />
-      扩展自带引擎与前端、不随主程序分发，安装扩展 zip 或文件夹即可。
+      尚未安装任何插件。<br />
+      插件自带引擎与前端、不随主程序分发，安装插件 zip 或文件夹即可。
     </div>
 
     <div v-for="ext in list" :key="ext.id" class="ext-card">
@@ -135,14 +135,14 @@ onActivated(load);
             <span v-if="ext.enabled && !ext.hasEngine" class="state plain">纯界面</span>
           </div>
           <div v-if="!ext.compatible" class="warn">
-            该扩展要求更高的扩展 API 版本，已跳过加载：{{ ext.incompatibleReason }}
+            该插件要求更高的插件 API 版本，已跳过加载：{{ ext.incompatibleReason }}
           </div>
           <div v-else-if="ext.engineError" class="warn">引擎启动失败：{{ ext.engineError }}</div>
           <div class="perms">
             <template v-if="ext.permissions.length">
               权限：<span v-for="p in ext.permissions" :key="p" class="perm">{{ p }}</span>
             </template>
-            <span v-else class="legacy">未声明权限（旧版扩展包，宿主按兼容模式放行）</span>
+            <span v-else class="legacy">未声明权限（旧版插件包，宿主按兼容模式放行）</span>
           </div>
         </div>
         <div class="ops">
