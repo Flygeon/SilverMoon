@@ -199,6 +199,8 @@
     "report",
     "resize",
     "restart_alt",
+    "rotate_left",
+    "rotate_right",
     "rule",
     "save",
     "scale",
