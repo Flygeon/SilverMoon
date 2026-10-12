@@ -992,11 +992,7 @@ onBeforeUnmount(() => {
     </m3e-card>
 
     <!-- 阅读 -->
-    <PluginSlot
-      v-if="activeSection === 'settings-reading'"
-      slot="settings.library"
-      mode="panel"
-    />
+    <PluginSlot v-if="activeSection === 'settings-reading'" slot="settings.library" mode="panel" />
     <m3e-card v-if="activeSection === 'settings-reading'" class="card" variant="outlined">
       <div slot="content">
         <h3>{{ t("settings.reading") }}</h3>

@@ -125,6 +125,8 @@ export default [
       // 绘画页：m3e-button 的 icon 槽
       "src/components/DrawingStudio.vue",
       "src/components/DrawingBoard.vue",
+      // 图层面板：m3e-list-item 的 leading/trailing 槽
+      "src/components/LayerPanel.vue",
     ],
     rules: {
       "vue/no-deprecated-slot-attribute": "off",
