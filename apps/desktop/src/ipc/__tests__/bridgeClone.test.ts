@@ -1,5 +1,5 @@
 /**
- * 桥的「过桥载荷安全」回归测试（Tauri 版）。
+ * 桥的「过桥载荷安全」回归测试（Electron 版）。
  *
  * 背景（用户实报）：本地音乐点「应用」写标签时报
  * `An object could not be cloned.` —— 渲染进程里的 `state.original` / `state.fields`
@@ -37,22 +37,23 @@ function stubBridge(): void {
       platform: "win32",
       invoke: async (_cmd: string, args: unknown) => {
         sent.push(args);
-        JSON.stringify(args); // 真实 Tauri invoke 的序列化语义：必须是 JSON 安全的
+        structuredClone(args); // 真实 Electron ipcRenderer.invoke 的语义：必须可结构化克隆
         return { ok: true, data: null };
       },
       invokeBatch: async (calls: unknown) => {
         sent.push(calls);
-        JSON.stringify(calls);
-        return { ok: true, data: [] };
+        structuredClone(calls);
+        // 归档版契约：data 是与入参等长的结果数组
+        return { ok: true, data: (calls as unknown[]).map(() => ({ ok: true, data: null })) };
       },
       call: async (_channel: string, payload: unknown) => {
         sent.push(payload);
-        JSON.stringify(payload);
+        structuredClone(payload);
         return { ok: true, data: null };
       },
       emitTo: async (_label: string, _event: string, payload: unknown) => {
         sent.push(payload);
-        JSON.stringify(payload);
+        structuredClone(payload);
       },
     },
   };
@@ -69,23 +70,24 @@ describe("toCloneablePayload", () => {
   it("解开嵌套响应式 Proxy（用户实报的场景）", () => {
     const state = reactive({ original: { title: "a", artist: "b" } });
     const payload = toCloneablePayload({ op: "backupLocal", fields: state.original });
-    expect(() => JSON.stringify(payload)).not.toThrow();
+    expect(() => structuredClone(payload)).not.toThrow();
     expect(payload).toEqual({ op: "backupLocal", fields: { title: "a", artist: "b" } });
   });
 
   it("解开 ref().value 的对象与数组", () => {
     const nested = ref({ list: [{ x: 1 }], meta: { y: 2 } });
     const payload = toCloneablePayload(nested.value);
-    expect(() => JSON.stringify(payload)).not.toThrow();
+    expect(() => structuredClone(payload)).not.toThrow();
     expect(payload).toEqual({ list: [{ x: 1 }], meta: { y: 2 } });
   });
 
   it("浅拷贝救不了嵌套 Proxy —— 这正是必须在边界深解的原因", () => {
     const state = reactive({ fields: { nested: { deep: 1 } } });
-    // 直接展开：外层是普通对象，内层 nested 仍是 Proxy
-    // 浅展开后内层仍是 Proxy：JSON 能跑，但 Proxy 会被序列化成它当前的值，语义上不该依赖
-    expect(() => JSON.stringify({ ...state.fields })).not.toThrow();
-    expect(() => JSON.stringify(toCloneablePayload({ ...state.fields }))).not.toThrow();
+    // 直接展开：外层是普通对象，内层 nested 仍是 Proxy。
+    // Electron 的结构化克隆**会因此抛 DataCloneError** —— 这就是 bug 的原始形态。
+    expect(() => structuredClone({ ...state.fields })).toThrow();
+    // 经 toCloneablePayload 深解之后才能安全过桥
+    expect(() => structuredClone(toCloneablePayload({ ...state.fields }))).not.toThrow();
   });
 
   it("二进制原样透传（写文件 / 缩略图要用）", () => {
@@ -93,48 +95,53 @@ describe("toCloneablePayload", () => {
     const out = toCloneablePayload({ data: bytes });
     expect(out.data).toBe(bytes);
     expect(out.data).toBeInstanceOf(Uint8Array);
-    expect(() => JSON.stringify(out)).not.toThrow();
+    expect(() => structuredClone(out)).not.toThrow();
   });
 
-  it("ArrayBuffer 原样透传；Date 转为 ISO 字符串（JSON 语义）", () => {
+  it("ArrayBuffer 原样透传；Date 保留类型（结构化克隆原生支持）", () => {
     const buf = new ArrayBuffer(4);
     const date = new Date(0);
     const out = toCloneablePayload({ buf, date });
-    // 二进制必须原样透传（Tauri 的 invoke 原生支持，转 JSON 数组会膨胀数倍）
+    // 二进制必须原样透传（结构化克隆原生支持，转数组会膨胀数倍）
     expect(out.buf).toBe(buf);
-    // Date 在 JSON 里没有原生表示，统一降级为 ISO 字符串
-    expect(out.date).toBe(date.toISOString());
+    // Date 保留类型：结构化克隆原生支持，无需降级成字符串（比 JSON 语义更完整）
+    expect(out.date).toBe(date);
   });
 
-  it("响应式 Map 展开成普通对象（musicTags store 的 overrides 就是 Map）", () => {
-    const map = toCloneablePayload(reactive(new Map([["a", { b: 1 }]]))) as unknown as Record<
+  it("响应式 Map / Set 解开内部 Proxy 并保留类型（musicTags 的 overrides 就是 Map）", () => {
+    const map = toCloneablePayload(reactive(new Map([["a", { b: 1 }]]))) as unknown as Map<
       string,
       unknown
     >;
-    expect(map).toEqual({ a: { b: 1 } });
-    // 元素里的 Proxy 也必须一起解开
-    expect(() => JSON.stringify(map)).not.toThrow();
+    expect(map).toBeInstanceOf(Map);
+    expect(map.get("a")).toEqual({ b: 1 });
+    // 元素里的 Proxy 也必须一起解开（否则结构化克隆会抛 DataCloneError）
+    expect(() => structuredClone(map)).not.toThrow();
 
-    const set = toCloneablePayload(reactive(new Set([{ a: 1 }]))) as unknown as unknown[];
-    expect(set).toEqual([{ a: 1 }]);
+    const set = toCloneablePayload(reactive(new Set([{ a: 1 }]))) as unknown as Set<unknown>;
+    expect(set).toBeInstanceOf(Set);
+    expect([...set]).toEqual([{ a: 1 }]);
 
     const nested = toCloneablePayload({ m: reactive(new Map([["x", 1]])) }) as unknown as {
-      m: Record<string, unknown>;
+      m: Map<string, unknown>;
     };
-    expect(nested.m).toEqual({ x: 1 });
+    expect(nested.m).toBeInstanceOf(Map);
+    expect(nested.m.get("x")).toBe(1);
   });
 
-  it("普通 Map / Set 同样展开（JSON 里没有 Map/Set 原生表示）", () => {
+  it("普通 Map / Set 保留类型（结构化克隆原生支持）", () => {
     const out = toCloneablePayload({
       map: new Map([["a", 1]]),
       set: new Set([1, 2]),
     }) as unknown as {
-      map: Record<string, unknown>;
-      set: unknown[];
+      map: Map<string, unknown>;
+      set: Set<unknown>;
     };
-    expect(out.map).toEqual({ a: 1 });
-    expect(out.set).toEqual([1, 2]);
-    expect(() => JSON.stringify(out)).not.toThrow();
+    expect(out.map).toBeInstanceOf(Map);
+    expect(out.map.get("a")).toBe(1);
+    expect(out.set).toBeInstanceOf(Set);
+    expect([...out.set]).toEqual([1, 2]);
+    expect(() => structuredClone(out)).not.toThrow();
   });
 
   it("循环引用不无限递归", () => {
@@ -173,12 +180,12 @@ describe("桥的各个出口都能安全过桥", () => {
   it("invokeBatchCommands：响应式 calls 也能过桥", async () => {
     stubBridge();
     const calls = reactive([{ cmd: "a", args: { x: { y: 1 } } }]);
-    // Tauri 没有批量通道，这里是「逐条并发 invoke」的等价实现：
-    // 每个下标的载荷都过桥一次，结果按顺序聚合。
+    // Electron 版有真正的批量通道（主进程一次处理整批），
+    // 因此这里断言的是「整批载荷作为一个整体过桥且可克隆」。
     const results = await invokeBatchCommands(calls);
-    expect(results).toHaveLength(1);
-    expect(results[0].ok).toBe(true);
-    expect(() => JSON.stringify(sent)).not.toThrow();
+    expect(sent).toHaveLength(1);
+    expect(() => structuredClone(sent)).not.toThrow();
+    expect(Array.isArray(results)).toBe(true);
   });
 
   it("emitToWindow：响应式 payload 也能过桥", async () => {

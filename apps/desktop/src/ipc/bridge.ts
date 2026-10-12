@@ -1,107 +1,61 @@
 /**
- * 渲染进程 ↔ 原生层的桥（Tauri 2 版）。
+ * 渲染进程 ↔ Electron 主进程的桥。
  *
- * 迁回 Tauri 后桥不再是 preload 注入的 `window.__SILVERMOON__`，而是
- * `@tauri-apps/api` 的 `invoke` / `Channel`。但**对外语义保持不变**：
- * 模块级导出（`hasBridge` / `platform` / `invokeCommand` / `invokeBatchCommands` /
- * `callBridge` / `toBytes` / `toAssetUrl` …）与 Electron 版逐一对应，
- * 因此 `src/capabilities/` 与业务代码一行都不用改。
+ * 渲染进程对外只有这一个通道：`window.__SILVERMOON__.call(channel, payload)`，
+ * 由 preload 通过 `contextBridge` 注入，主进程按 `channel` 白名单分发。
+ * `src/ipc/` 下的各模块（invoke / window / fs / dialog / store …）都建立在它之上。
  *
- * 与 Electron 版的差异（都在这一层吸收掉）：
- * 1. 结构化克隆 → JSON。serde 走 JSON，Vue 的响应式 Proxy 天然无碍；
- *    但 `undefined` 会丢、`Map`/`Set`/`Date` 需要显式转换，故仍统一过
- *    `toCloneablePayload()` 降级成纯 JSON 值。
- * 2. 二进制过桥：Tauri 2 的 invoke 直接支持 `Uint8Array`（经 `ArrayBuffer`），
- *    比 Electron 的 base64 回退路径更直接。
- * 3. 命令名不再分区（`fs` / `dialog` / `store` …），改为 Tauri 插件自己的命令名，
- *    由本层映射。
- *
- * ⚠️ 业务代码**不要**直接 `import { invoke } from "@tauri-apps/api/core"`，
- * 一律经 `@/ipc/`，否则浏览器预览（无 Tauri）下会直接抛错。
+ * 与主进程的约定：**业务错误不做成 rejected promise**，而是返回 `{ ok: false, error }`，
+ * 由这里转成 `Promise.reject(error)`，保证 reject 值就是原始字符串
+ * （例如 `[WENKU8_LOGIN_CANCELLED] ...` 这种靠字符串前缀判断的协议）。
  */
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import { recordIpcCall } from "@/utils/ipcMetrics";
+/** 主进程暴露的桥。未注入时说明不在 Electron 里跑。 */
+export interface SilverMoonBridge {
+  /** 当前窗口的 label（`main` / `desktop-lyrics` / `extension` / ...） */
+  readonly label: string;
+  /** 进程平台（`win32` / `darwin` / `linux`） */
+  readonly platform: string;
+  /** 调用 Rust 侧车命令 */
+  invoke(cmd: string, args: unknown): Promise<BridgeReply>;
+  /** 一次往返执行多条命令（逐条独立成败） */
+  invokeBatch(calls: { cmd: string; args?: unknown }[]): Promise<BridgeReply>;
+  /** 通用能力调用（窗口 / 文件 / 对话框 / 存储 / ...） */
+  call(channel: string, payload: unknown): Promise<BridgeReply>;
+  /** 跨窗口派发事件 */
+  emitTo(label: string, event: string, payload: unknown): Promise<void>;
+  /**
+   * 本地文件 URL 前缀（仅移动端提供）。
+   * 桌面端为 undefined，此时 toAssetUrl 走 Electron 的 asset:// 协议。
+   */
+  readonly assetBase?: string;
+}
 
-/** 宿主回复格式（保持与 Electron 版一致的宽松形状）。 */
+/** 主进程统一回复格式。 */
 export interface BridgeReply {
   ok: boolean;
   data?: unknown;
   error?: string;
 }
 
-/**
- * 桥接口。保留它是因为 `src/capabilities/mock.ts` 与若干单测会打桩
- * `window.__SILVERMOON__`；Tauri 下该对象不存在，`hasBridge()` 改判
- * `__TAURI_INTERNALS__`（见下），但类型仍导出以兼容旧引用。
- */
-export interface SilverMoonBridge {
-  readonly label: string;
-  readonly platform: string;
-  invoke(cmd: string, args: unknown): Promise<BridgeReply>;
-  invokeBatch(calls: { cmd: string; args?: unknown }[]): Promise<BridgeReply>;
-  call(channel: string, payload: unknown): Promise<BridgeReply>;
-  emitTo(label: string, event: string, payload: unknown): Promise<void>;
-  readonly assetBase?: string;
-}
-
 declare global {
   interface Window {
-    /** 仅浏览器预览 / 单测打桩用；Tauri 环境下为 undefined。 */
     __SILVERMOON__?: SilverMoonBridge;
-    __TAURI_INTERNALS__?: unknown;
   }
 }
 
-/**
- * 是否运行在桌面宿主里。
- *
- * Tauri 会注入 `window.__TAURI_INTERNALS__`；同时保留对打桩的
- * `window.__SILVERMOON__` 的识别，使既有单测无需改动。
- */
+/** 桥是否可用。 */
 export function hasBridge(): boolean {
-  if (typeof window === "undefined") return false;
-  return !!window.__TAURI_INTERNALS__ || !!window.__SILVERMOON__;
+  return typeof window !== "undefined" && !!window.__SILVERMOON__;
 }
 
-/**
- * 当前窗口 label。
- *
- * ⚠️ 不能用固定的 `"main"` 兜底：桌面歌词窗口（`desktop-lyrics`）加载的是同一个
- * Vue 应用、只是 hash 路由不同，一旦 label 判成 `main`，那个窗口里的
- * `getCurrentWindow()` 就会去操作**主窗口**（表现为桌面歌词无法移动/关闭）。
- *
- * Tauri 在 `window.__TAURI_INTERNALS__.metadata.currentWindow.label` 里同步提供了
- * 真实 label，因此这里直接取它；非 Tauri 环境（浏览器预览 / 单测）再退回到打桩桥
- * 与 URL 参数。
- */
+/** 当前窗口 label；无桥时回退 `main`（纯浏览器调试用）。 */
 export function currentLabel(): string {
-  const injected = window.__SILVERMOON__?.label;
-  if (injected) return injected;
-  try {
-    // 动态取：静态引入会在模块加载期读 __TAURI_INTERNALS__，浏览器预览下直接炸
-    const internals = window.__TAURI_INTERNALS__ as
-      { metadata?: { currentWindow?: { label?: string } } } | undefined;
-    const label = internals?.metadata?.currentWindow?.label;
-    if (label) return label;
-  } catch {
-    /* 非 Tauri 环境，走下面的兜底 */
-  }
-  if (typeof window !== "undefined") {
-    const param = new URLSearchParams(window.location.search).get("label");
-    if (param) return param;
-  }
-  return "main";
+  return window.__SILVERMOON__?.label ?? "main";
 }
 
-/** 进程平台。Tauri 下由 `platform()` 异步获取，这里用 UA 同步近似。 */
+/** 进程平台。 */
 export function platform(): string {
-  const injected = window.__SILVERMOON__?.platform;
-  if (injected) return injected;
-  if (typeof navigator === "undefined") return "win32";
-  const ua = navigator.userAgent;
-  if (/Windows/i.test(ua)) return "win32";
-  if (/Macintosh|Mac OS X/i.test(ua)) return "darwin";
-  return "linux";
+  return window.__SILVERMOON__?.platform ?? "win32";
 }
 
 function bridge(): SilverMoonBridge {
@@ -112,49 +66,15 @@ function bridge(): SilverMoonBridge {
   return b;
 }
 
-// ---------------------------------------------------------------------------
-// 底层：一次 Tauri invoke
-// ---------------------------------------------------------------------------
-
-/**
- * 直接调用 Tauri 命令。失败时以**原始错误字符串**拒绝
- * （与 Electron 版一致：上层靠字符串前缀判定，例如 `[WENKU8_LOGIN_CANCELLED]`）。
- */
-export async function invokeRaw<T>(cmd: string, args?: unknown): Promise<T> {
-  // 计量起点。`performance.now()` 是单调时钟，不受系统时间调整影响。
-  // 计量默认关闭（见 utils/ipcMetrics.ts），关闭时 recordIpcCall 会立刻返回，
-  // 因此这行只在开关打开时有意义。
-  const t0 = performance.now();
-  // 打桩桥优先（单测 / 浏览器预览）
-  if (window.__SILVERMOON__ && !window.__TAURI_INTERNALS__) {
-    const reply = await window.__SILVERMOON__.invoke(cmd, toCloneablePayload(args ?? {}));
-    if (!reply.ok) {
-      recordIpcCall(cmd, args, t0, true);
-      return Promise.reject(reply.error ?? `命令 ${cmd} 失败`);
-    }
-    recordIpcCall(cmd, args, t0, false);
-    return reply.data as T;
-  }
-  try {
-    const result = (await tauriInvoke<T>(
-      cmd,
-      (toCloneablePayload(args ?? {}) ?? {}) as Record<string, unknown>,
-    )) as T;
-    recordIpcCall(cmd, args, t0, false);
-    return result;
-  } catch (error) {
-    recordIpcCall(cmd, args, t0, true);
-    // Tauri 把命令返回的 Err(String) 原样作为 reject 值抛出；
-    // 只有非字符串（框架层错误）才包装，保证上层字符串前缀判定不失效。
-    if (typeof error === "string") return Promise.reject(error);
-    if (error instanceof Error) return Promise.reject(error.message);
-    return Promise.reject(String(error));
-  }
-}
-
-/** 调用 Rust 侧命令（保持 Electron 版签名）。 */
+/** 调用 Rust 侧车命令。失败时以**原始错误字符串**拒绝。 */
 export async function invokeCommand<T>(cmd: string, args?: unknown): Promise<T> {
-  return invokeRaw<T>(cmd, args);
+  // 边界深解响应式 Proxy —— 否则结构化克隆会抛 DataCloneError（见 toCloneablePayload）
+  const reply = await bridge().invoke(cmd, toCloneablePayload(args ?? {}));
+  if (!reply.ok) {
+    // 关键：reject 值必须是命令返回的原始字符串，不能包一层 Error
+    return Promise.reject(reply.error ?? `命令 ${cmd} 失败`);
+  }
+  return reply.data as T;
 }
 
 /** 批量命令的单条结果。 */
@@ -167,149 +87,32 @@ export interface BatchItemResult<T = unknown> {
 /**
  * 一次往返执行多条 Rust 命令。
  *
- * Tauri 没有批量通道，这里改为在渲染进程侧并发发起（`Promise.all`）。
- * 语义与 Electron 版一致：**只有整条通道失败才 reject**，单条失败体现为
- * 该下标的 `{ ok: false, error }`。
+ * 与 `invokeCommand` 不同：**只有整条通道失败才 reject**；单条命令失败体现为
+ * 该下标的 `{ ok: false, error }`，不影响其它条。调用方按需忽略失败项。
  */
 export async function invokeBatchCommands<T = unknown>(
   calls: { cmd: string; args?: unknown }[],
 ): Promise<BatchItemResult<T>[]> {
   if (calls.length === 0) return [];
-  return Promise.all(
-    calls.map(async (call) => {
-      try {
-        const data = await invokeRaw<T>(call.cmd, call.args);
-        return { ok: true, data };
-      } catch (error) {
-        return { ok: false, error: typeof error === "string" ? error : String(error) };
-      }
-    }),
-  );
+  const reply = await bridge().invokeBatch(toCloneablePayload(calls));
+  if (!reply.ok) {
+    return Promise.reject(reply.error ?? "批量命令失败");
+  }
+  return (reply.data ?? []) as BatchItemResult<T>[];
 }
 
-/**
- * 旧「宿主能力通道」的统一入口，保留给尚未迁移到 Tauri 插件命令的调用点
- * （目前只有 `musicTags` 一个）。Tauri 下映射到同名 Rust 命令。
- *
- * 参数形状保持 `{ channel, payload }` 不变，因此调用方（`src/ipc/*`、
- * `capabilities`）无需改动。
- */
+/** 调用主进程能力。失败时以原始错误字符串拒绝。 */
 export async function callBridge<T>(channel: string, payload?: unknown): Promise<T> {
-  const clean = toCloneablePayload(payload ?? {}) as Record<string, unknown>;
-  if (window.__SILVERMOON__ && !window.__TAURI_INTERNALS__) {
-    const reply = await bridge().call(channel, clean);
-    if (!reply.ok) return Promise.reject(reply.error ?? `${channel} 调用失败`);
-    return reply.data as T;
+  const reply = await bridge().call(channel, toCloneablePayload(payload ?? {}));
+  if (!reply.ok) {
+    return Promise.reject(reply.error ?? `${channel} 调用失败`);
   }
-  return invokeRaw<T>(hostCommand(channel), hostArgs(channel, clean));
-}
-
-/**
- * 通道名 → Tauri 命令名。
- *
- * Electron 版每个通道在 `electron/ipc.ts` 里是一个 switch；Tauri 下按用途拆成
- * 三个 Rust 命令（见 `src-tauri/src/commands/host.rs` 与 `music_tags.rs`）：
- *
- * | 通道 | Rust 命令 | 说明 |
- * |---|---|---|
- * | `musicTags` | `music_tags_op` | op 分支多，单独一个命令 |
- * | `app` | `host_app` | 启动打点 / 内存诊断 / 自动更新 |
- * | `updater` | `host_updater` | 自动更新 |
- * | 其它 | `host_<channel>` | 路径 / 版本号 / 退出 / 清缓存 |
- */
-function hostCommand(channel: string): string {
-  switch (channel) {
-    case "musicTags":
-      return "music_tags_op";
-    case "app":
-      return "host_app";
-    case "updater":
-      return "host_updater";
-    default:
-      return `host_${channel}`;
-  }
-}
-
-/**
- * 通道 payload → Rust 命令形参。
- *
- * `musicTags` 与 `app` 都是「op + 其余字段」的多路复用形态，Rust 侧统一收成
- * `(op, payload)` 两个形参；其余通道直接把 payload 当字段表传（字段名与 Rust
- * 形参一一对应）。
- */
-function hostArgs(channel: string, payload: Record<string, unknown>): Record<string, unknown> {
-  if (channel === "musicTags" || channel === "app" || channel === "updater") {
-    const { op, ...rest } = payload;
-    return { op: op ?? "", payload: rest };
-  }
-  return payload;
+  return reply.data as T;
 }
 
 /** 跨窗口派发事件。 */
 export async function emitToWindow(label: string, event: string, payload: unknown): Promise<void> {
-  if (window.__SILVERMOON__ && !window.__TAURI_INTERNALS__) {
-    await bridge().emitTo(label, event, toCloneablePayload(payload));
-    return;
-  }
-  const { emitTo } = await import("@tauri-apps/api/event");
-  await emitTo(label, event, toCloneablePayload(payload));
-}
-
-/**
- * 把 payload 深度降级成「JSON 安全」的纯值。
- *
- * 渲染进程里的状态大多是 Vue 响应式 Proxy。Tauri 走 serde/JSON，
- * Proxy 本身无碍，但下面两类必须显式处理，否则**静默丢数据**：
- * - `undefined`：JSON 里不存在该键（Electron 的结构化克隆会保留）。
- *   命令形参多为 `Option<T>`，缺键与 `null` 等价，故仅需保证不炸。
- * - `Map` / `Set` / `Date`：JSON 会序列化成 `{}` / 时间串。
- *   本项目用到的 `Map`（musicTags 的 `overrides`）与 `Set` 一律展开成
- *   普通对象 / 数组，保持与 Electron 版一致的可读形态。
- *
- * 二进制（`Uint8Array` / `ArrayBuffer`）**原样透传**：Tauri 2 的 invoke
- * 原生支持它，转成 JSON 数组反而会膨胀数倍并拖慢大文件写入。
- */
-export function toCloneablePayload<T>(value: T, seen = new WeakMap<object, unknown>()): T {
-  if (value === null || typeof value !== "object") return value;
-  const cached = seen.get(value as object);
-  if (cached !== undefined) return cached as T;
-  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return value;
-
-  if (Array.isArray(value)) {
-    const out: unknown[] = [];
-    seen.set(value as object, out);
-    for (const item of value as unknown[]) out.push(toCloneablePayload(item, seen));
-    return out as unknown as T;
-  }
-
-  if (value instanceof Map) {
-    const out: Record<string, unknown> = {};
-    seen.set(value as object, out);
-    for (const [k, v] of value as Map<unknown, unknown>) {
-      out[String(k)] = toCloneablePayload(v, seen);
-    }
-    return out as unknown as T;
-  }
-
-  if (value instanceof Set) {
-    const out: unknown[] = [];
-    seen.set(value as object, out);
-    for (const item of value as Set<unknown>) out.push(toCloneablePayload(item, seen));
-    return out as unknown as T;
-  }
-
-  if (value instanceof Date) return value.toISOString() as unknown as T;
-
-  const proto = Object.getPrototypeOf(value);
-  // 只重建纯对象：RegExp / 其它类实例保持原样，避免破坏其语义
-  if (proto !== Object.prototype && proto !== null) return value;
-
-  const out: Record<string, unknown> = {};
-  seen.set(value as object, out);
-  for (const key of Object.keys(value)) {
-    out[key] = toCloneablePayload((value as Record<string, unknown>)[key], seen);
-  }
-  return out as unknown as T;
+  await bridge().emitTo(label, event, toCloneablePayload(payload));
 }
 
 /**
@@ -336,6 +139,8 @@ function asBytesView(view: Uint8Array): Uint8Array<ArrayBuffer> {
  *
  * ⚠️ **不要**写 `new Uint8Array(value)` 当兜底：`value` 若是**原始字符串**，
  * 构造器会把它当成长度（`ToIndex("...")` → 0），静默返回**空数组**。
+ * 宿主早期对文本响应传字符串、这里却按字节数组处理，导致所有走该通道的
+ * JSON 接口都拿到空 body（`Unexpected end of JSON input`）——逐字歌词就是这样全挂的。
  * 因此这里把每种形态都显式列出来，字符串按 UTF-8 编码而不是丢成空。
  */
 export function toBytes(value: unknown): Uint8Array<ArrayBuffer> {
@@ -344,7 +149,70 @@ export function toBytes(value: unknown): Uint8Array<ArrayBuffer> {
   if (ArrayBuffer.isView(value)) {
     return asBytesView(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
   }
+  if (Array.isArray(value)) return Uint8Array.from(value as number[]);
   if (typeof value === "string") return new TextEncoder().encode(value);
-  if (Array.isArray(value)) return new Uint8Array(value as number[]);
   return new Uint8Array(0);
+}
+/**
+ * 把过桥载荷里的**响应式 Proxy 深解成普通值**。
+ *
+ * ## 为什么必须有它（用户实报过的 bug）
+ *
+ * Electron 的 `ipcRenderer.invoke` 走**结构化克隆**，遇到 Vue 的响应式 Proxy 会直接抛
+ * `An object could not be cloned.`（`DataCloneError`）。所以经这座桥出去的任何值
+ * 都必须在边界先解成普通对象 —— 典型场景是本地音乐写标签时传 `state.original` /
+ * `state.fields`。
+ *
+ * ## 与 Tauri 版的差异（重要）
+ *
+ * Tauri 走 serde/JSON，所以那一版还要把 `Map` / `Set` / `Date` 降级成 JSON 表示，
+ * 二进制也要特意透传。**结构化克隆原生支持这三者**，因此这里只在遇到它们时
+ * 递归解开内部值，**保留类型本身**（Map 仍是 Map、Date 仍是 Date、
+ * `Uint8Array` 原样透传），语义比 JSON 版更完整。
+ *
+ * 用 `WeakMap` 记录已处理对象：既避免循环引用无限递归，也避免同一对象被重复复制。
+ */
+export function toCloneablePayload<T>(value: T, seen = new WeakMap<object, unknown>()): T {
+  if (value === null || typeof value !== "object") return value;
+  // 二进制原样透传：结构化克隆直接支持，转成数组反而会让大文件写入膨胀数倍
+  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return value;
+
+  const cached = seen.get(value as object);
+  if (cached !== undefined) return cached as T;
+
+  if (Array.isArray(value)) {
+    const out: unknown[] = [];
+    seen.set(value as object, out);
+    for (const item of value as unknown[]) out.push(toCloneablePayload(item, seen));
+    return out as unknown as T;
+  }
+
+  // Map / Set / Date：保留类型，只递归解开内部值
+  if (value instanceof Map) {
+    const out = new Map<unknown, unknown>();
+    seen.set(value as object, out);
+    for (const [k, v] of value as Map<unknown, unknown>) {
+      out.set(k, toCloneablePayload(v, seen));
+    }
+    return out as unknown as T;
+  }
+  if (value instanceof Set) {
+    const out = new Set<unknown>();
+    seen.set(value as object, out);
+    for (const item of value as Set<unknown>) out.add(toCloneablePayload(item, seen));
+    return out as unknown as T;
+  }
+  if (value instanceof Date) return value;
+
+  const proto = Object.getPrototypeOf(value);
+  // 只重建纯对象：RegExp / 类实例等保持原样，避免破坏其语义
+  // （响应式 Proxy 的原型就是 Object.prototype 或 null，会走到下面）
+  if (proto !== Object.prototype && proto !== null) return value;
+
+  const out: Record<string, unknown> = {};
+  seen.set(value as object, out);
+  for (const key of Object.keys(value)) {
+    out[key] = toCloneablePayload((value as Record<string, unknown>)[key], seen);
+  }
+  return out as unknown as T;
 }
