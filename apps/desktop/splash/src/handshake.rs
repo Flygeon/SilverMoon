@@ -1,16 +1,16 @@
-//! 启动器 ↔ 主程序（Tauri 应用）的握手协议。
+//! 启动器 ↔ Electron 的握手协议。
 //!
 //! 为什么用**命名管道**而不是别的：
-//! - 应用是父进程、启动器是子进程，管道随父子生命周期联动；
-//! - 不依赖应用已就绪（HTTP/端口都得等应用起来）；
-//! - 一端退出管道即断开，另一端能立刻感知，不会傻等。
+//! - 启动器是父进程、Electron 是子进程，管道随父子生命周期联动；
+//! - 不依赖 Electron 主进程已就绪（HTTP/端口都得等 Electron 起来）；
+//! - 子进程一退出管道即断开，启动器能立刻感知「Electron 挂了」，不会傻等。
 //!
 //! 协议极简（一行一条，'\n' 结尾）：
 //!
-//!   应用 → 启动器:  READY          # 首屏已就绪，可以淡出了
-//!   启动器 → 应用:  FADING:<ms>    # 我开始淡出，预计 ms 后消失
+//!   Electron → 启动器:  READY          # 主窗口已渲染完，可以淡出了
+//!   启动器 → Electron:  FADING:<ms>    # 我开始淡出，预计 ms 后消失
 //!
-//! 约定：应用收到 FADING 后再等 <ms> 才显示主窗口，
+//! 约定：Electron 收到 FADING 后再等 <ms> 才 show 主窗口，
 //! 让 splash 淡出与主窗口出现**有时间交叠**，视觉上不会「先黑一下再亮」。
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,24 +25,24 @@ use windows::Win32::System::Pipes::{
     PIPE_WAIT,
 };
 
-/// 等待应用 READY 的上限。超时即如实放弃（应用异常 / 被杀）。
+/// 等待 Electron READY 的上限。超时即如实放弃（后端异常 / 被杀）。
 pub const READY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 「完全没有客户端连上」的兜底上限。
 ///
 /// 为什么需要它（真实缺陷）：`ConnectNamedPipe` 会**无限期**阻塞直到有客户端连接。
-/// 若应用根本没连上来（崩了/没起来），后台等待线程会永远卡在那里，
+/// 若 Electron 根本没启动成功（被杀/缺文件），后台等待线程会永远卡在那里，
 /// 主线程的消息循环便永远等不到 ready 标志 —— 用户会对着 splash 无限转圈、
 /// 且无法进入应用。所以连接阶段也要有独立的硬上限。
-pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// 淡出时长（毫秒）。
 ///
-/// **这个值同时决定应用等多久才显示主窗口** —— 两端共用它做交叠，
+/// **这个值同时决定 Electron 等多久才 show 主窗口** —— 两端共用它做交叠，
 /// 所以改这里就等于同时改两端的行为。
 pub const FADE_MS: u64 = 220;
 
-/// 管道名：现在由**应用**生成，并以 --splash-pipe= 传给启动器。仍然带 pid 与时间戳，
+/// 由启动器生成、并以 --splash-pipe= 交给 Electron 的管道名。
 ///
 /// 带 pid 与时间戳，避免多实例 / 快速重启时撞名。
 pub fn pipe_name() -> String {
@@ -61,7 +61,7 @@ fn wide(s: &str) -> Vec<u16> {
 
 /// 握手通道服务端（启动器持有）。
 ///
-/// 只持有句柄：管道名由调用方（main.rs）从命令行拿到，
+/// 只持有句柄：管道名由调用方（main.rs）自己保存并传给 Electron，
 /// 这里再存一份会变成无人读取的冗余字段。
 pub struct Handshake {
     handle: HANDLE,
@@ -89,13 +89,13 @@ impl Handshake {
         Ok(Self { handle })
     }
 
-    /// 阻塞等待应用连上来并读到 READY。
+    /// 阻塞等待 Electron 连上来并读到 READY。
     ///
     /// 调用方应在**后台线程**里跑它，主线程继续跑动画。
-    /// 返回 true = 收到 READY；false = 超时或对端提前断开（应用崩了）。
+    /// 返回 true = 收到 READY；false = 超时或对端提前断开（Electron 崩了）。
     pub fn wait_ready(&self, timeout: Duration) -> bool {
         // 连接阶段**不能**直接 ConnectNamedPipe 阻塞等待：它是无限期的，
-        // 应用起不来时会把我们永久卡住（见 CONNECT_TIMEOUT 的说明）。
+        // Electron 起不来时会把我们永久卡住（见 CONNECT_TIMEOUT 的说明）。
         // 做法：把连接放到独立线程，主逻辑用带超时的轮询观察 `connected` 标志。
         let connected = Arc::new(AtomicBool::new(false));
         let raw = self.handle.0 as usize; // 句柄值跨线程传递（HANDLE 本身就是裸指针包装）
@@ -148,7 +148,7 @@ impl Handshake {
         }
     }
 
-    /// 向应用发送一行命令。
+    /// 向 Electron 发送一行命令。
     pub fn send(&self, msg: &str) -> std::io::Result<()> {
         let line = format!("{msg}\n");
         let mut written = 0u32;
