@@ -10,12 +10,12 @@
 use silvermoon_ipc::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use silvermoon_ipc::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager,
+    EventEmitter, Host, HostApi,
 };
 
 use crate::commands::extension;
 
-fn show_main_window(app: &AppHandle) {
+fn show_main_window(app: &Host) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.unminimize();
@@ -23,11 +23,11 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
-fn emit_command(app: &AppHandle, action: &str) {
+fn emit_command(app: &Host, action: &str) {
     let _ = app.emit("app:player-command", action);
 }
 
-pub fn setup(app: &AppHandle) -> silvermoon_ipc::Result<()> {
+pub fn setup(app: &Host) -> silvermoon_ipc::Result<()> {
     let toggle = MenuItem::with_id(app, "toggle", "播放 / 暂停", true, None::<&str>)?;
     let next = MenuItem::with_id(app, "next", "下一首", true, None::<&str>)?;
     let prev = MenuItem::with_id(app, "prev", "上一首", true, None::<&str>)?;

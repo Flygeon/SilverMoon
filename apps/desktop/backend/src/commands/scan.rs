@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use silvermoon_ipc::{Emitter, Manager, State};
+use silvermoon_ipc::{EventEmitter, HostApi, State};
 use walkdir::WalkDir;
 
 use crate::commands::{init_db, now_secs, DbState, JobState, ScanJob, ScanJobInfo};

@@ -27,7 +27,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
-use silvermoon_ipc::{AppHandle, Manager};
+use silvermoon_ipc::{Host, HostApi};
 
 /// 标签缓存根目录下的子目录 / 文件名（与 Electron 版一致）。
 const TAGS_DIR: &str = "music-tags";
@@ -106,7 +106,7 @@ fn sha1(text: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn tags_root(app: &AppHandle) -> Result<PathBuf, String> {
+fn tags_root(app: &Host) -> Result<PathBuf, String> {
     let dir = app
         .path()
         .app_data_dir()
@@ -440,7 +440,7 @@ fn read_local_tags(path: &str) -> Value {
 ///
 /// payload 形状见契约 §4：op 与各自字段平铺在同一个对象里。
 #[silvermoon_ipc::command]
-pub fn music_tags_op(app: AppHandle, op: String, payload: Value) -> Result<Value, String> {
+pub fn music_tags_op(app: Host, op: String, payload: Value) -> Result<Value, String> {
     let root = tags_root(&app)?;
     let obj = payload.as_object().cloned().unwrap_or_default();
     let str_of = |k: &str| obj.get(k).and_then(|v| v.as_str()).map(|s| s.to_string());

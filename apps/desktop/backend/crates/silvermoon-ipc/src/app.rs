@@ -140,6 +140,15 @@ impl PathResolver {
     pub fn app_cache_dir(&self) -> Result<PathBuf> {
         Ok(self.cache_dir.clone())
     }
+    /// 日志目录。
+    ///
+    /// Tauri 期新增：启动打点（`boot_log.rs`）要把时间线写到日志文件，
+    /// 而 Tauri 的 `path().app_log_dir()` 提供了这个位置。
+    /// 契约层本来只暴露 data / cache 两个目录，这里按同样方式补上 ——
+    /// 取值沿用 Electron 的惯例：`<appDataDir>/logs`。
+    pub fn app_log_dir(&self) -> Result<PathBuf> {
+        Ok(self.data_dir.join("logs"))
+    }
 }
 
 /// 解析应用数据/缓存目录。

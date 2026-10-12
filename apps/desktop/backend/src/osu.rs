@@ -20,7 +20,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::Serialize;
-use silvermoon_ipc::{Emitter, Manager};
+use silvermoon_ipc::{EventEmitter, HostApi};
 
 use crate::commands::{metadata, now_ms, now_secs, DbState};
 
@@ -83,7 +83,7 @@ pub struct OsuImportResult {
     pub beatmapset_id: String,
 }
 
-// Tauri 的 `Emitter::emit` 要求 `S: Serialize + Clone`（Electron 时代的兼容层只要求
+// Tauri 的 `EventEmitter::emit` 要求 `S: Serialize + Clone`（Electron 时代的兼容层只要求
 // Serialize），因此这里必须一并 derive Clone，否则编译不过。
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]

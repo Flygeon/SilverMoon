@@ -17,6 +17,7 @@
 //!   每个版本号 `?v=N` 破坏系统侧缓存，避免换歌后封面残留旧图。
 
 use serde::Serialize;
+use silvermoon_ipc::EventEmitter;
 
 /// 系统媒体键命令（事件 `smtc:command` 的载荷，与前端 `SmtcCommand` 一一对应）
 #[derive(Serialize, Clone)]
