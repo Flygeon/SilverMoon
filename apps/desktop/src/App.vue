@@ -174,6 +174,13 @@ const isPlayerPage = computed(() => route.path === "/music/player");
 const isDesktopLyricsPage = computed(() => route.path === "/desktop-lyrics");
 const isExtensionHostPage = computed(() => route.path === "/extension-host");
 /**
+ * 设置页是**自管滚动**的页面：它的左右两栏各自带 overflow 容器，
+ * 外层 .main-content 再套一个滚动条就会变成「滚动容器套滚动容器」——
+ * 鼠标落在左栏滚列表、落在右侧滚整页，且底部内容会被迷你播放条压住。
+ * 所以这里按页面短路 .main-content 的滚动（与 extension-host-page 同一套做法）。
+ */
+const isSettingsPage = computed(() => route.path === "/settings");
+/**
  * 当前窗口是否是**独立绘画窗口**。
  *
  * ⚠️ 必须用窗口 **label** 判定，不能只看路由 `route.path === "/drawing"`。
@@ -359,6 +366,7 @@ router.afterEach((to) => {
       'has-player': player.song && !isPlayerPage,
       'desktop-lyrics-page': isDesktopLyricsPage,
       'extension-host-page': isExtensionHostPage,
+      'settings-page': isSettingsPage,
     }"
   >
     <!-- 皮肤背景图层（v2：变量由 skinLoader 写入；播放器页/桌面歌词页不渲染） -->
@@ -747,6 +755,25 @@ router.afterEach((to) => {
 }
 .has-player .main-content {
   padding-bottom: calc(var(--lm-miniplayer-height) + var(--lm-content-pad));
+}
+
+/* 设置页（.settings-view）：
+   它自己管滚动 —— 左右两栏各带一个 overflow 容器（见 SettingsView.vue 的
+   .settings-nav / .settings-body），所以外壳**不能再套一层滚动条**，
+   否则就是「滚动容器套滚动容器」：鼠标落在左栏滚列表、落在右侧滚整页。
+
+   用 flex 而不是 height:100%：flex 项的「已用高度」是确定值，子元素靠 flex:1
+   就能拿到确定高度，不依赖百分比高度能否解析。
+
+   注意：这里**不要**另写 padding-bottom 给迷你播放条留位 —— 上面的
+   .has-player .main-content 已经给了 calc(--lm-miniplayer-height + --lm-content-pad)，
+   再写一条更具体的规则去覆盖它只会把 --lm-content-pad 吃掉。
+   旧代码的问题恰恰是「自己猜高度」（max-height: calc(100vh - 120px)），别再重复这个错。 */
+.settings-page .main-content {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  scrollbar-gutter: auto;
 }
 
 /* 扩展宿主页（专用窗口 label="extension"）：
