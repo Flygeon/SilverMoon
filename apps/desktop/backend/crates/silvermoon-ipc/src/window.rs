@@ -239,7 +239,10 @@ impl Window {
 
     /// 设置窗口尺寸（逻辑像素，宿主代为设置）。
     pub fn set_size(&self, width: f64, height: f64) -> Result<()> {
-        self.call_unit(HostOp::WebviewSetBounds, json!({ "width": width, "height": height }))
+        self.call_unit(
+            HostOp::WebviewSetBounds,
+            json!({ "width": width, "height": height }),
+        )
     }
 
     /// 设置窗口位置与尺寸（逻辑像素，宿主代为设置）。
@@ -252,7 +255,10 @@ impl Window {
 
     /// 设置置顶（宿主代为设置）。
     pub fn set_always_on_top(&self, on_top: bool) -> Result<()> {
-        self.call_unit(HostOp::WebviewSetAlwaysOnTop, json!({ "alwaysOnTop": on_top }))
+        self.call_unit(
+            HostOp::WebviewSetAlwaysOnTop,
+            json!({ "alwaysOnTop": on_top }),
+        )
     }
 
     /// 关闭窗口
