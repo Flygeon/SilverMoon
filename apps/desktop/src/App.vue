@@ -762,8 +762,15 @@ router.afterEach((to) => {
    .settings-nav / .settings-body），所以外壳**不能再套一层滚动条**，
    否则就是「滚动容器套滚动容器」：鼠标落在左栏滚列表、落在右侧滚整页。
 
-   用 flex 而不是 height:100%：flex 项的「已用高度」是确定值，子元素靠 flex:1
-   就能拿到确定高度，不依赖百分比高度能否解析。
+   高度走 flex（而不是让子元素 height:100%），这样扩展注入到内容区的块
+   （ExtensionEmbed surface="main"）仍能先占自己的自然高度，设置页拿剩下的。
+
+   ⚠️ **踩过的坑**：把这里改成 display:flex 之后，子元素 .settings-view 的
+   margin:0 auto 换了含义 —— flex 的自动外边距会吞掉交叉轴剩余空间，使该项
+   不再被 align-items:stretch 拉伸，宽度退化成 fit-content。表现是设置卡片
+   宽度随内容长短乱跳（外观 ~520px、歌词 ~750px），右侧空出一大片。
+   解法是给 .settings-view 显式 width:100%（见 SettingsView.vue），
+   而不是把父级改回 block —— 那样扩展块就没法参与高度分配了。
 
    注意：这里**不要**另写 padding-bottom 给迷你播放条留位 —— 上面的
    .has-player .main-content 已经给了 calc(--lm-miniplayer-height + --lm-content-pad)，

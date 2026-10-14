@@ -2471,6 +2471,12 @@ onBeforeUnmount(() => {
   /* 由 .settings-page .main-content（flex column）拉伸到确定高度 */
   flex: 1;
   min-height: 0;
+  /* ⚠️ width:100% 不能删。父级 .main-content 是 flex 容器时，下面的
+     margin:0 auto 是「自动外边距」——它会吞掉交叉轴剩余空间，使本元素
+     不再被 stretch 拉伸，宽度退化成 fit-content（卡片宽度随内容长短乱跳、
+     右侧空一大片）。显式 width:100% 让宽度先撑满、再由 max-width 封顶、
+     最后靠 margin:auto 居中。 */
+  width: 100%;
   /* 原本 1040px 且右栏封顶 800px：窗口一拉宽，卡片就不再变宽，
      右侧空出一大片。这里放宽上限，并把右栏改成 1fr 吃满剩余宽度。 */
   max-width: 1180px;
