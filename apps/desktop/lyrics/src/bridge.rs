@@ -120,13 +120,39 @@ mod tests {
     }
 
     #[test]
-    fn quotes_in_lyrics_do_not_break_js() {
-        // 歌词里出现引号是常态（英文歌、对话式歌词），必须不破坏语法
-        // 注意 JSON 里要转义引号：text 的值是 say "hello"
-        let line = `{"type":"state","payload":{"lines":[{"time":0,"text":"say \"hello\""}],"currentTime":0,"playing":false}}`;
+    fn quotes_in_lyrics_survive_the_round_trip() {
+        // 歌词里出现引号是常态（英文歌、对话式歌词）。
+        //
+        // 断言方式用**往返**而不是「找子串」：子串匹配只能证明「某处出现了转义」，
+        // 证明不了「页面真的能解析回原文本」。而这里要防的正是——
+        // 引号把 JS 字符串字面量提前截断，导致页面拿到半截 JSON。
+        let original = "say \"hello\"";
+        let line = r#"{"type":"state","payload":{"lines":[{"time":0,"text":"say \"hello\""}],"currentTime":0,"playing":false}}"#;
         let js = line_to_js(line).expect("should produce js");
-        // 原始引号必须已被转义，不能裸露在 JS 字面量里
-        assert!(js.contains("\\\"hello\\\""), "quotes must be escaped: {js}");
+
+        // 取出 JSON.parse(...) 的参数 —— 它就是那个 JS 字符串字面量。
+        //
+        // 注意结尾有**两个**右括号：一个是 JSON.parse( 的，一个是外层 state( 的。
+        // 只剥一个会得到末尾带右括号的残片，那不是合法字面量。
+        const PREFIX: &str = "JSON.parse(";
+        let start = js.find(PREFIX).expect("should contain JSON.parse(") + PREFIX.len();
+        let literal = js
+            .strip_suffix("))")
+            .expect("should end with the two closing parens")
+            .get(start..)
+            .expect("literal slice");
+
+        // 第一跳：JS 字符串字面量 → 它承载的 JSON 文本
+        let json_text: String =
+            serde_json::from_str(literal).expect("literal must be a valid JS string literal");
+        // 第二跳：JSON 文本 → 值。引号若被截断，这里必然报错。
+        let value: serde_json::Value =
+            serde_json::from_str(&json_text).expect("embedded payload must stay valid JSON");
+        assert_eq!(
+            value["lines"][0]["text"].as_str(),
+            Some(original),
+            "歌词里的引号必须原样往返"
+        );
     }
 
     #[test]
