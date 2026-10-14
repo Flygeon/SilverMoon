@@ -61,6 +61,23 @@ export interface DesktopLyricsBounds {
   width: number;
   height: number;
 }
+
+/**
+ * 桌面歌词的定位模式。
+ *
+ * - `manual`：用户自己拖到哪儿就记哪儿（历史行为，默认）
+ * - `taskbar`：自动吸附到任务栏（贴着任务栏闲置区），拖动会自动回到锚点
+ *
+ * 之所以默认 manual 而不是 taskbar：老用户已经存了 `desktopLyricsBounds`，
+ * 改成默认 taskbar 会让他们的窗口在升级后**自己跳位置**，属于破坏性变更。
+ */
+export type DesktopLyricsAnchor = "manual" | "taskbar";
+
+/** 沿任务栏长边的锚点位置 */
+export type DesktopLyricsAnchorAlign = "left" | "center" | "right";
+
+/** 无歌词时的替代显示 */
+export type DesktopLyricsIdleMode = "none" | "spectrum";
 /** 本地音乐库展示模式 */
 export type MusicViewMode = "grid" | "list";
 /** Wenku8 节点 */
@@ -270,6 +287,12 @@ const DEFAULTS = {
   desktopLyricsDoubleClick: "toggle" as DesktopLyricsDoubleClick,
   desktopLyricsAnimation: "fade" as DesktopLyricsAnimation,
   desktopLyricsBounds: { width: 420, height: 120 } as DesktopLyricsBounds,
+  desktopLyricsAnchor: "manual" as DesktopLyricsAnchor,
+  desktopLyricsAnchorAlign: "center" as DesktopLyricsAnchorAlign,
+  desktopLyricsAnchorOffsetX: 0,
+  desktopLyricsAnchorOffsetY: 0,
+  desktopLyricsWordByWord: true,
+  desktopLyricsIdleMode: "none" as DesktopLyricsIdleMode,
   /** 关闭窗口时最小化到托盘（而非退出应用） */
   closeToTray: true,
   /** 本地音乐库展示模式：网格 / 列表 */
@@ -468,6 +491,12 @@ export const useSettingsStore = defineStore("settings", () => {
   const desktopLyricsDoubleClick = ref<DesktopLyricsDoubleClick>(DEFAULTS.desktopLyricsDoubleClick);
   const desktopLyricsAnimation = ref<DesktopLyricsAnimation>(DEFAULTS.desktopLyricsAnimation);
   const desktopLyricsBounds = ref<DesktopLyricsBounds>({ ...DEFAULTS.desktopLyricsBounds });
+  const desktopLyricsAnchor = ref<DesktopLyricsAnchor>(DEFAULTS.desktopLyricsAnchor);
+  const desktopLyricsAnchorAlign = ref<DesktopLyricsAnchorAlign>(DEFAULTS.desktopLyricsAnchorAlign);
+  const desktopLyricsAnchorOffsetX = ref(DEFAULTS.desktopLyricsAnchorOffsetX);
+  const desktopLyricsAnchorOffsetY = ref(DEFAULTS.desktopLyricsAnchorOffsetY);
+  const desktopLyricsWordByWord = ref(DEFAULTS.desktopLyricsWordByWord);
+  const desktopLyricsIdleMode = ref<DesktopLyricsIdleMode>(DEFAULTS.desktopLyricsIdleMode);
   const closeToTray = ref(DEFAULTS.closeToTray);
   const musicViewMode = ref<MusicViewMode>(DEFAULTS.musicViewMode);
   const danmakuEnabled = ref(DEFAULTS.danmakuEnabled);
@@ -600,6 +629,12 @@ export const useSettingsStore = defineStore("settings", () => {
     desktopLyricsDoubleClick,
     desktopLyricsAnimation,
     desktopLyricsBounds,
+    desktopLyricsAnchor,
+    desktopLyricsAnchorAlign,
+    desktopLyricsAnchorOffsetX,
+    desktopLyricsAnchorOffsetY,
+    desktopLyricsWordByWord,
+    desktopLyricsIdleMode,
     closeToTray,
     musicViewMode,
     danmakuEnabled,

@@ -16,6 +16,24 @@ export const DL_STATE_EVENT = "desktop-lyrics:state";
 export const DL_READY_EVENT = "desktop-lyrics:ready";
 export const DL_CONTROL_EVENT = "desktop-lyrics:control";
 export const DL_BOUNDS_EVENT = "desktop-lyrics:bounds";
+/**
+ * 主窗口 → 桌面歌词：频谱数据（无歌词时的替代显示）。
+ *
+ * 单独一条通道而不是塞进 DL_STATE_EVENT：频谱是**高频**数据（约 15-20Hz），
+ * 而歌词状态是低频（200ms）且载荷大（整份歌词行 + 逐字时间轴）。
+ * 混在一起会让每次频谱刷新都重传整份歌词。
+ */
+export const DL_SPECTRUM_EVENT = "desktop-lyrics:spectrum";
+
+/** 推送频谱数据（主窗口调用） */
+export async function emitDesktopLyricsSpectrum(bins: number[]): Promise<void> {
+  if (!isDesktop) return;
+  try {
+    await emitTo(DESKTOP_LYRICS_LABEL, DL_SPECTRUM_EVENT, { bins });
+  } catch {
+    /* 窗口尚未就绪 */
+  }
+}
 
 export interface DesktopLyricLine {
   time: number;
@@ -24,6 +42,22 @@ export interface DesktopLyricLine {
   romaji?: string;
   /** 背景和声子行文本（无则空）——桌面歌词窗口按副行展示 */
   bg?: string;
+  /**
+   * 逐字时间轴（秒，绝对时间）。
+   *
+   * 只在 `desktopLyricsWordByWord` 开启时下发，且**只在歌词真正变化时**随
+   * 整包推送 —— 播放进度不走这条通道（它走 200ms 节流的 currentTime），
+   * 逐字填充由桌面窗口自己用 rAF 按 audio 时间外推。
+   * 这样既拿到逐字效果，又不必提高推送频率（上游 TaskbarLyrics 的教训）。
+   */
+  units?: DesktopLyricUnit[];
+}
+
+export interface DesktopLyricUnit {
+  /** 起始时间（秒） */
+  start: number;
+  /** 结束时间（秒） */
+  end: number;
 }
 
 export interface DesktopLyricsState {

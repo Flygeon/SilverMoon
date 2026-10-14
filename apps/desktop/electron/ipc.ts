@@ -285,6 +285,31 @@ const handlers: Record<string, Handler> = {
         }
         return null;
       }
+      /**
+       * 该窗口所在显示器的几何信息（**逻辑像素**）。
+       *
+       * 桌面歌词的「任务栏锚定」需要知道任务栏占哪块区域。Electron 不提供
+       * 任务栏矩形，但 `bounds`（整块屏幕）与 `workArea`（去掉任务栏后的可用区）
+       * 的差集就是任务栏 —— 这是零 native 代码的正解（见 utils/taskbarAnchor.ts）。
+       *
+       * 这里做 DIP 换算后返回，是因为渲染进程的窗口定位走 LogicalPosition，
+       * 两边都统一成逻辑像素就不必在下游反复乘除 scaleFactor。
+       */
+      case "displayInfo": {
+        const d = screen.getDisplayMatching(win.getBounds());
+        const s = d.scaleFactor || 1;
+        const toLogical = (r: { x: number; y: number; width: number; height: number }) => ({
+          x: Math.round(r.x / s),
+          y: Math.round(r.y / s),
+          width: Math.round(r.width / s),
+          height: Math.round(r.height / s),
+        });
+        return {
+          bounds: toLogical(d.bounds),
+          workArea: toLogical(d.workArea),
+          scaleFactor: s,
+        };
+      }
       default:
         throw new Error(`未知窗口操作：${op}`);
     }

@@ -1074,6 +1074,8 @@ export const usePlayerStore = defineStore("player", () => {
     const now = Date.now();
     if (!force && now - lastDesktopLyricsSync < 200) return;
     lastDesktopLyricsSync = now;
+    // 逐字时间轴按设置下发：关掉时不下发 units，桌面窗口自然退回整行高亮
+    const withUnits = settings.desktopLyricsWordByWord;
     void emitDesktopLyricsState({
       lines: lyrics.value.map((l) => ({
         time: l.time,
@@ -1081,6 +1083,12 @@ export const usePlayerStore = defineStore("player", () => {
         translation: l.translation,
         romaji: l.romaji,
         bg: l.bg?.text,
+        // 只带 start/end —— units 里还有 text/obscene，逐字渲染用不到，
+        // 每 200ms 推一次全量文本会白白放大载荷。
+        units:
+          withUnits && l.units?.length
+            ? l.units.map((u) => ({ start: u.start, end: u.end }))
+            : undefined,
       })),
       currentTime: currentTime.value,
       playing: playing.value,

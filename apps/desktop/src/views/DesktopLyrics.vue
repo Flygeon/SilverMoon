@@ -12,7 +12,9 @@ import { getCurrentWindow } from "@/ipc/window";
 import { listen, type UnlistenFn } from "@/ipc/events";
 import { useSettingsStore } from "@/stores/settings";
 import { isDesktop } from "@/capabilities";
+import SpectrumBars from "@/components/SpectrumBars.vue";
 import {
+  DL_SPECTRUM_EVENT,
   DL_STATE_EVENT,
   emitDesktopLyricsBounds,
   emitDesktopLyricsControl,
@@ -20,11 +22,99 @@ import {
   isDesktopLyricsWindow,
   type DesktopLyricsState,
 } from "@/utils/desktopLyrics";
+import { computeLineFill } from "@/utils/karaokeFill";
+import { applyAnchorSize, applyTaskbarAnchor, watchDisplay } from "@/utils/desktopLyricsAnchor";
 
 const settings = useSettingsStore();
 const state = ref<DesktopLyricsState | null>(null);
 const toolbarOpen = ref(settings.desktopLyricsToolbar === "always");
 let autoHideTimer: number | null = null;
+
+/**
+ * 本地播放时钟（秒）。
+ *
+ * 主窗口只以 200ms 节流推送 `currentTime`，直接拿它做逐字填充会一跳一跳。
+ * 这里在两次推送之间用 rAF 自走（按真实经过时间累加），收到推送再校准回
+ * 权威值 —— 于是填充能平滑到帧级，而**推送频率不必提高**
+ * （这正是上游 TaskbarLyrics 的取舍：逐字效果放前端做）。
+ *
+ * 只在播放中自走：暂停时冻结，避免歌词继续往前跑。
+ */
+const clock = ref(0);
+let rafId: number | null = null;
+let lastFrameAt = 0;
+
+function tickClock(now: number): void {
+  const prev = lastFrameAt || now;
+  const dt = (now - prev) / 1000;
+  lastFrameAt = now;
+  // 上限 0.25s：窗口被挂起/最小化后回来时，别让时钟一次跳很远
+  if (state.value?.playing && dt > 0 && dt < 0.25) {
+    clock.value += dt;
+  }
+  rafId = requestAnimationFrame(tickClock);
+}
+
+function startClock(): void {
+  if (rafId !== null) return;
+  lastFrameAt = 0;
+  rafId = requestAnimationFrame(tickClock);
+}
+
+function stopClock(): void {
+  if (rafId === null) return;
+  cancelAnimationFrame(rafId);
+  rafId = null;
+  lastFrameAt = 0;
+}
+
+/** 校准：以推送来的权威时间为准 */
+function calibrate(time: number): void {
+  // 偏差超过 0.35s 才硬拉，否则逐帧微调，避免画面抖动
+  if (Math.abs(clock.value - time) > 0.35) clock.value = time;
+  else clock.value = clock.value * 0.8 + time * 0.2;
+}
+
+/** 当前行填充比例（0-1）；未开逐字或该行无词级时间轴时由纯函数内部退化 */
+const currentFill = computed(() => {
+  const idx = currentIndex.value;
+  const lines = state.value?.lines;
+  if (idx < 0 || !lines || !settings.desktopLyricsWordByWord) return 1;
+  const line = lines[idx];
+  if (!line) return 1;
+  const next = lines[idx + 1];
+  return computeLineFill(
+    { time: line.time, text: line.text, units: line.units },
+    next?.time,
+    clock.value,
+  );
+});
+
+/** 逐字填充用 CSS 渐变实现：已唱部分实心、未唱部分半透明 */
+const fillStyle = computed(() => {
+  const pct = Math.round(currentFill.value * 100);
+  if (!settings.desktopLyricsWordByWord) return {};
+  return {
+    backgroundImage: `linear-gradient(90deg, #fff ${pct}%, rgba(255,255,255,0.45) ${pct}%)`,
+    "-webkit-background-clip": "text",
+    backgroundClip: "text",
+    color: "transparent",
+    // 渐变必须跟随文本宽度，否则百分比落在元素盒子上而不是文字上
+    display: "inline-block",
+  } as Record<string, string>;
+});
+
+/**
+ * 无歌词时才显示频谱。
+ *
+ * 判据是「当前没有可显示的歌词行」——包括纯音乐（三点行不算歌词内容）
+ * 与整首歌没有歌词两种情况。
+ */
+const showSpectrum = computed(() => {
+  if (settings.desktopLyricsIdleMode !== "spectrum") return false;
+  const lines = state.value?.lines ?? [];
+  return lines.length === 0 || currentIndex.value < 0;
+});
 
 const currentIndex = computed(() => {
   const lines = state.value?.lines ?? [];
@@ -106,7 +196,13 @@ function cancelAutoHide() {
 let unlistenState: UnlistenFn | null = null;
 let unlistenMoved: UnlistenFn | null = null;
 let unlistenResized: UnlistenFn | null = null;
+let unlistenSpectrum: UnlistenFn | null = null;
+let unlistenDisplay: (() => void) | null = null;
 let boundsTimer: number | null = null;
+let anchorRestoreTimer: number | null = null;
+
+/** 无歌词时显示的频谱数据（由主窗口推送） */
+const spectrumBins = ref<number[] | null>(null);
 
 function scheduleReportBounds() {
   if (boundsTimer !== null) return;
@@ -114,6 +210,46 @@ function scheduleReportBounds() {
     boundsTimer = null;
     void reportBounds();
   }, 300);
+}
+
+/**
+ * 窗口被移动。
+ *
+ * 锚定模式下**用户拖动会被拉回锚点** —— 但只在「确实偏离了」时才拉，
+ * 且加一个短延时：用户拖到一半时立刻回弹会像卡住一样，
+ * 松手后归位才符合「吸附」的预期。
+ */
+function onWindowMoved() {
+  if (settings.desktopLyricsAnchor === "taskbar") {
+    if (anchorRestoreTimer !== null) window.clearTimeout(anchorRestoreTimer);
+    anchorRestoreTimer = window.setTimeout(() => {
+      anchorRestoreTimer = null;
+      void reanchor();
+    }, 400);
+    return;
+  }
+  scheduleReportBounds();
+}
+
+/**
+ * 重新贴到任务栏。
+ *
+ * 只在 taskbar 模式生效；manual 模式什么都不做（尊重用户拖放的位置）。
+ * 锚定失败（该屏幕没有任务栏 / 取不到显示器信息）时保持原位不动。
+ */
+async function reanchor() {
+  if (!isDesktop) return;
+  if (settings.desktopLyricsAnchor !== "taskbar") return;
+  try {
+    await applyAnchorSize(settings.desktopLyricsBounds.width, settings.desktopLyricsBounds.height);
+    await applyTaskbarAnchor({
+      align: settings.desktopLyricsAnchorAlign,
+      offsetX: settings.desktopLyricsAnchorOffsetX,
+      offsetY: settings.desktopLyricsAnchorOffsetY,
+    });
+  } catch {
+    /* 锚定失败不影响歌词显示 */
+  }
 }
 
 async function reportBounds() {
@@ -169,12 +305,21 @@ onMounted(async () => {
   try {
     unlistenState = await listen<DesktopLyricsState>(DL_STATE_EVENT, (e) => {
       state.value = e.payload;
+      // 每次推送都校准本地时钟，逐字填充因此始终贴着权威进度
+      calibrate(e.payload.currentTime);
+      startClock();
     });
     const win = getCurrentWindow();
     void win.setAlwaysOnTop(settings.desktopLyricsAlwaysOnTop);
     void win.setIgnoreCursorEvents(settings.desktopLyricsClickThrough);
-    unlistenMoved = await win.onMoved(scheduleReportBounds);
+    unlistenMoved = await win.onMoved(onWindowMoved);
     unlistenResized = await win.onResized(scheduleReportBounds);
+    unlistenSpectrum = await listen<{ bins: number[] }>(DL_SPECTRUM_EVENT, (e) => {
+      spectrumBins.value = e.payload?.bins ?? null;
+    });
+    // 任务栏锚定：进入时贴一次，之后显示器变化再贴（不再轮询）
+    await reanchor();
+    unlistenDisplay = watchDisplay(() => void reanchor());
     emitDesktopLyricsReady();
   } catch {
     /* ignore */
@@ -195,12 +340,37 @@ watch(
   },
 );
 
+// 锚定相关设置变化时立刻重新贴（用户改锚点/对齐/偏移应即时生效）
+watch(
+  () => [
+    settings.desktopLyricsAnchor,
+    settings.desktopLyricsAnchorAlign,
+    settings.desktopLyricsAnchorOffsetX,
+    settings.desktopLyricsAnchorOffsetY,
+  ],
+  ([anchor], [prevAnchor]) => {
+    if (anchor === "taskbar") {
+      void reanchor();
+      return;
+    }
+    // 从「吸附任务栏」切回「手动拖放」：把**当前实际位置**记成手动位置。
+    //
+    // 不这么做的话，设置里留着的还是吸附之前那次拖放的旧坐标：窗口当场不动，
+    // 但下次启动会跳回那个旧位置，用户会觉得「位置丢了」。
+    if (prevAnchor === "taskbar") scheduleReportBounds();
+  },
+);
+
 onBeforeUnmount(() => {
   cancelAutoHide();
+  stopClock();
   if (boundsTimer !== null) window.clearTimeout(boundsTimer);
+  if (anchorRestoreTimer !== null) window.clearTimeout(anchorRestoreTimer);
   unlistenState?.();
   unlistenMoved?.();
   unlistenResized?.();
+  unlistenSpectrum?.();
+  unlistenDisplay?.();
 });
 </script>
 
@@ -218,14 +388,26 @@ onBeforeUnmount(() => {
     @dblclick.prevent="onDblClick"
   >
     <div class="lyrics-main" @click.stop="toggleToolbar">
-      <Transition :name="'dl-' + settings.desktopLyricsAnimation" mode="out-in">
-        <div :key="currentIndex" class="line-stack">
-          <p class="line current">{{ mainText }}</p>
-          <p v-if="bgText" class="line bg-vocal">{{ bgText }}</p>
-          <p v-if="translationText" class="line translation">{{ translationText }}</p>
-        </div>
-      </Transition>
-      <p v-if="subText" class="line next">{{ subText }}</p>
+      <!-- 无歌词时的替代显示：实时频谱（纯音乐/未匹配到歌词） -->
+      <div v-if="showSpectrum" class="spectrum-slot">
+        <SpectrumBars :bins="spectrumBins" :playing="state?.playing ?? false" />
+      </div>
+
+      <template v-else>
+        <Transition :name="'dl-' + settings.desktopLyricsAnimation" mode="out-in">
+          <div :key="currentIndex" class="line-stack">
+            <!--
+              逐字填充：用 background-clip:text + 渐变实现「已唱实心、未唱半透明」。
+              不用两个叠层是因为叠层要求两份文本像素级对齐，字体渲染会有亚像素差，
+              在高分屏上边缘会出现彩边。
+            -->
+            <p class="line current" :style="fillStyle">{{ mainText }}</p>
+            <p v-if="bgText" class="line bg-vocal">{{ bgText }}</p>
+            <p v-if="translationText" class="line translation">{{ translationText }}</p>
+          </div>
+        </Transition>
+        <p v-if="subText" class="line next">{{ subText }}</p>
+      </template>
     </div>
 
     <Transition name="dl-bar">
@@ -309,6 +491,13 @@ html {
   transition: padding-top 180ms var(--md-sys-motion-spring-effects-fast);
   position: relative;
   z-index: 1;
+}
+/* 频谱占据歌词的同一块视觉区域，高度留足以免柱状图被压扁 */
+.spectrum-slot {
+  width: 100%;
+  height: 2.2em;
+  min-height: 40px;
+  padding: 0 6px;
 }
 .desktop-lyrics.toolbar-visible .lyrics-main {
   padding-top: 34px;

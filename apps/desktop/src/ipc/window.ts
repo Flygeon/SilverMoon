@@ -26,6 +26,13 @@ import { listen, type Event, type UnlistenFn } from "./events";
 import { hasBridge } from "./bridge";
 
 /** 子窗口创建选项。未列出的字段会原样透传给主进程。 */
+/** 显示器几何（逻辑像素）。bounds=整块屏幕，workArea=去掉任务栏的可用区 */
+export interface DisplayInfo {
+  bounds: { x: number; y: number; width: number; height: number };
+  workArea: { x: number; y: number; width: number; height: number };
+  scaleFactor: number;
+}
+
 export interface WindowOptions {
   url?: string;
   title?: string;
@@ -178,6 +185,16 @@ export class AppWindow {
     const like = toSizeLike(size);
     if (!like) return;
     await this.run("setSize", { size: like });
+  }
+
+  /**
+   * 该窗口所在显示器的几何信息（逻辑像素）。
+   *
+   * `bounds` 是整块屏幕，`workArea` 是去掉任务栏后的可用区 —— 两者之差即任务栏。
+   * 任务栏锚定靠这个差值算，不必写任何 Win32 代码（见 utils/taskbarAnchor.ts）。
+   */
+  async displayInfo(): Promise<DisplayInfo> {
+    return await this.run<DisplayInfo>("displayInfo");
   }
 
   // ---- 事件 ----

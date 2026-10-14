@@ -543,6 +543,25 @@ export const messages = {
         "开启后鼠标点击将穿透歌词窗口（无法拖动窗口或操作控制栏），需在此关闭以恢复交互。",
       desktopLyricsAlwaysOnTop: "始终置顶",
       desktopLyricsResetPos: "重置窗口位置",
+      desktopLyricsAnchor: "窗口定位",
+      desktopLyricsAnchor_manual: "手动拖放",
+      desktopLyricsAnchor_taskbar: "吸附任务栏",
+      desktopLyricsAnchorHint:
+        "吸附后窗口会自动贴在任务栏上；拖动会在松手后回到锚点。关闭则完全由你拖动决定位置。",
+      desktopLyricsAnchorAlign: "沿任务栏对齐",
+      desktopLyricsAnchorAlign_left: "靠左",
+      desktopLyricsAnchorAlign_center: "居中",
+      desktopLyricsAnchorAlign_right: "靠右",
+      desktopLyricsAnchorOffsetX: "水平微调",
+      desktopLyricsAnchorOffsetY: "垂直微调",
+      desktopLyricsWordByWord: "逐字填充",
+      desktopLyricsWordByWordHint:
+        "已唱的字实心、未唱的半透明，随进度扫过去。需要该曲有逐字时间轴；没有时自动退回整行高亮。",
+      desktopLyricsIdleMode: "无歌词时显示",
+      desktopLyricsIdleMode_none: "保持文字",
+      desktopLyricsIdleMode_spectrum: "实时频谱",
+      desktopLyricsIdleModeHint:
+        "纯音乐或未匹配到歌词时，用实时频谱填补任务栏区域。频谱取自实际播放的音频（含音效与自动混音的结果）。",
     },
     stats: {
       today: "今日",
@@ -1776,6 +1795,25 @@ export const messages = {
         "When on, clicks pass through the lyrics window (you can't drag it or use the toolbar); turn this off to interact again.",
       desktopLyricsAlwaysOnTop: "Always on top",
       desktopLyricsResetPos: "Reset window position",
+      desktopLyricsAnchor: "Positioning",
+      desktopLyricsAnchor_manual: "Manual",
+      desktopLyricsAnchor_taskbar: "Snap to taskbar",
+      desktopLyricsAnchorHint:
+        "Snaps the window onto the taskbar; dragging returns it to the anchor on release. Turn off to place it freely.",
+      desktopLyricsAnchorAlign: "Align along taskbar",
+      desktopLyricsAnchorAlign_left: "Left",
+      desktopLyricsAnchorAlign_center: "Center",
+      desktopLyricsAnchorAlign_right: "Right",
+      desktopLyricsAnchorOffsetX: "Horizontal offset",
+      desktopLyricsAnchorOffsetY: "Vertical offset",
+      desktopLyricsWordByWord: "Word-by-word fill",
+      desktopLyricsWordByWordHint:
+        "Sung characters stay solid while upcoming ones are translucent, sweeping with playback. Requires word-level timing; falls back to whole-line highlighting.",
+      desktopLyricsIdleMode: "When no lyrics",
+      desktopLyricsIdleMode_none: "Keep text",
+      desktopLyricsIdleMode_spectrum: "Live spectrum",
+      desktopLyricsIdleModeHint:
+        "Fills the taskbar area with a live spectrum for instrumental tracks or unmatched lyrics. Captured from the actual audio output, including effects and automix.",
     },
     stats: {
       today: "Today",

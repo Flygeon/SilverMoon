@@ -35,6 +35,7 @@ import {
   type DesktopLyricsState,
 } from "@/utils/desktopLyrics";
 import type { DesktopLyricsBounds } from "@/stores/settings";
+import { startSpectrumPush, stopSpectrumPush } from "@/utils/desktopLyricsSpectrum";
 
 const settings = useSettingsStore();
 const player = usePlayerStore();
@@ -55,6 +56,10 @@ function pushDesktopLyricsState() {
       translation: l.translation,
       romaji: l.romaji,
       bg: l.bg?.text,
+      units:
+        settings.desktopLyricsWordByWord && l.units?.length
+          ? l.units.map((u) => ({ start: u.start, end: u.end }))
+          : undefined,
     })),
     currentTime: player.currentTime,
     playing: player.playing,
@@ -64,6 +69,25 @@ function pushDesktopLyricsState() {
   void emitDesktopLyricsState(stateData);
 }
 
+/**
+ * 频谱推送的启停。
+ *
+ * 只在「桌面歌词开着」且「无歌词显示模式选了频谱」时才推 —— 两个条件任一
+ * 不满足都要停，否则会在没人看的时候持续 20Hz 地发 IPC。
+ * player.audioEl 在音频元素挂载后才可用，所以这里也用 watch 而不是只在
+ * 开关变化时判断一次。
+ */
+function syncSpectrumPush() {
+  const want = settings.desktopLyricsEnabled && settings.desktopLyricsIdleMode === "spectrum";
+  if (!want) {
+    stopSpectrumPush();
+    return;
+  }
+  const ok = startSpectrumPush(player.audioEl);
+  // 音频元素还没就绪时先不起，等它出现后下面的 watch 会再来一次
+  if (!ok) stopSpectrumPush();
+}
+
 watch(
   () => settings.desktopLyricsEnabled,
   async (on) => {
@@ -71,10 +95,17 @@ watch(
       await openDesktopLyricsWindow(settings.desktopLyricsBounds);
       // 等子窗口就绪事件回推一次状态（也做一次兜底延迟发送）
       window.setTimeout(() => pushDesktopLyricsState(), 400);
+      syncSpectrumPush();
     } else {
+      stopSpectrumPush();
       await closeDesktopLyricsWindow();
     }
   },
+);
+
+watch(
+  () => [settings.desktopLyricsIdleMode, player.audioEl] as const,
+  () => syncSpectrumPush(),
 );
 
 onMounted(async () => {
@@ -111,6 +142,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   dlUnlisteners.forEach((un) => un());
   dlUnlisteners = [];
+  stopSpectrumPush();
 });
 const library = useLibraryStore();
 const audioEffects = useAudioEffectsStore();

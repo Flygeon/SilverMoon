@@ -15,7 +15,7 @@
  * createMainWindow() ┘       // 两者并行：界面加载不依赖后端就绪
  * ```
  */
-import { app, dialog, session, shell } from "electron";
+import { app, dialog, screen, session, shell } from "electron";
 import path from "node:path";
 
 import {
@@ -251,6 +251,25 @@ async function bootstrap(): Promise<void> {
 
   const mainWindow = createMainWindow();
   mark("主窗口已创建");
+
+  /**
+   * 显示器变化 → 广播给所有渲染窗口，让桌面歌词重新锚定。
+   *
+   * 桌面歌词的任务栏锚定依赖「显示器 bounds 与 workArea 的差集」。下面任一
+   * 情况都会让已算好的锚点失效，必须重算：
+   * - 分辨率 / 缩放变化（`display-metrics-changed`）
+   * - 插拔显示器（`display-added` / `display-removed`）
+   * - 任务栏自动隐藏被切换、explorer 重启后工作区重算（也走 metrics-changed）
+   *
+   * 这里广播而不是定时轮询：轮询会在空闲时也持续唤醒渲染进程，
+   * 而桌面歌词是常驻窗口，空转开销会一直存在。
+   */
+  const onDisplayChange = () => {
+    dispatchEvent({ event: "display:changed", target: null, payload: null });
+  };
+  screen.on("display-metrics-changed", onDisplayChange);
+  screen.on("display-added", onDisplayChange);
+  screen.on("display-removed", onDisplayChange);
 
   if (!(await sidecarReady)) {
     log.warn("后端未就绪，将以降级模式启动界面");

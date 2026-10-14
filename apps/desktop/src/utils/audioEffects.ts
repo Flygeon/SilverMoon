@@ -45,6 +45,23 @@ export class AudioEffectEngine {
   private bypass: GainNode | null = null;
   private effectMix: GainNode | null = null;
 
+  /**
+   * 末端限幅器引用（attach 时保存）。
+   *
+   * 频谱分析器必须接在 limiter **之后**（= 用户实际听到的信号，含 AutoMix
+   * 双 deck 的混音结果），所以需要留一个引用；此前它只是 attach() 里的局部变量。
+   * 未 attach 时为 null。
+   */
+  private limiter: DynamicsCompressorNode | null = null;
+
+  /**
+   * 频谱分析器抽头（懒创建）。
+   *
+   * 没人调用 getAnalyser() 时始终为 null —— 不用频谱的用户不该为此多付
+   * 一个 AnalyserNode 的开销。
+   */
+  private analyser: AnalyserNode | null = null;
+
   private eqFilters: BiquadFilterNode[] = [];
   private bassFilter: BiquadFilterNode | null = null;
 
@@ -202,6 +219,8 @@ export class AudioEffectEngine {
     this.loudnessGain = loudGain;
     this.input = input;
     this.output = output;
+    // 只保存引用：不新增、不改动任何节点连接
+    this.limiter = limiter;
     this.bypass = bypass;
     this.effectMix = effectMix;
     this.bassFilter = bass;
@@ -269,6 +288,39 @@ export class AudioEffectEngine {
   hasSource(media: HTMLAudioElement): boolean {
     if (this.media === media) return true;
     return this.extraSources.some((s) => s.media === media);
+  }
+
+  /**
+   * 频谱分析器抽头（懒创建）。
+   * 接在 limiter 之后 = 用户实际听到的信号（含 AutoMix 双 deck 混音结果）。
+   * 分析器只做旁路读取，不再连回 destination，因此不影响现有输出链路。
+   */
+  getAnalyser(): AnalyserNode | null {
+    // 未 attach 就没有 AudioContext，也就没有信号可分析，如实返回 null。
+    if (!this.ctx) return null;
+    if (this.analyser) return this.analyser;
+    // limiter 与 ctx 同生共死（都在 attach 里赋值），此处不为 null。
+    if (!this.limiter) return null;
+    const analyser = this.ctx.createAnalyser();
+    // 256 点 FFT = 128 个 bin。频谱图只要 64 个柱子，取 128 个 bin 做
+    // 二合一降采样刚好够用，再大只是白白多算一半数据。
+    analyser.fftSize = 256;
+    // 0.8 是频谱柱「下落」的平滑度：太低每帧抖动，太高看不出节拍。
+    analyser.smoothingTimeConstant = 0.8;
+    // 关键：这里是 **fan-out**（一个输出接多个目的地），不是串联。
+    // limiter→destination 那条链路原样保留，分析器是挂在 limiter 上的
+    // 另一条旁路支线，且不向下游连任何节点 —— 即使它读取失败，
+    // 也只是拿不到频谱，不会改变用户听到的声音。
+    this.limiter.connect(analyser);
+    this.analyser = analyser;
+    return analyser;
+  }
+
+  /** 公开的按需接入（attach 已幂等：this.ctx 存在时直接 return）。 */
+  ensureAttached(media: HTMLAudioElement): boolean {
+    if (this.ctx) return true;
+    this.attach(media);
+    return this.ctx !== null;
   }
 
   update(config: AudioEffectConfig): void {

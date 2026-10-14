@@ -13,6 +13,9 @@ import {
   type LyricLineMotion,
   type ShareCodePreference,
   type DesktopLyricsAnimation,
+  type DesktopLyricsAnchor,
+  type DesktopLyricsAnchorAlign,
+  type DesktopLyricsIdleMode,
   type DesktopLyricsToolbar,
   type DesktopLyricsDoubleClick,
 } from "@/stores/settings";
@@ -228,6 +231,15 @@ const dlToolbarTabs = opts(["click", "always"] as DesktopLyricsToolbar[], (v) =>
 );
 const dlDoubleClickTabs = opts(["none", "toggle"] as DesktopLyricsDoubleClick[], (v) =>
   t("settings.desktopLyricsDoubleClick_" + v),
+);
+const dlAnchorTabs = opts(["manual", "taskbar"] as DesktopLyricsAnchor[], (v) =>
+  t("settings.desktopLyricsAnchor_" + v),
+);
+const dlAnchorAlignTabs = opts(["left", "center", "right"] as DesktopLyricsAnchorAlign[], (v) =>
+  t("settings.desktopLyricsAnchorAlign_" + v),
+);
+const dlIdleTabs = opts(["none", "spectrum"] as DesktopLyricsIdleMode[], (v) =>
+  t("settings.desktopLyricsIdleMode_" + v),
 );
 const playerBgTabs = opts(["animated", "amll", "image", "off"] as PlayerBgMode[], (v) =>
   t("settings.playerBg_" + v),
@@ -470,6 +482,7 @@ type BoolSettingKey =
   | "desktopLyricsLocked"
   | "desktopLyricsClickThrough"
   | "desktopLyricsAlwaysOnTop"
+  | "desktopLyricsWordByWord"
   | "lyricBlur"
   | "enableOnlineMusic"
   | "neteaseEnabled"
@@ -504,6 +517,8 @@ type SliderIntKey =
   | "lyricTranslationGap"
   | "desktopLyricsFontSize"
   | "desktopLyricsOpacity"
+  | "desktopLyricsAnchorOffsetX"
+  | "desktopLyricsAnchorOffsetY"
   | "danmakuOpacity"
   | "danmakuFontSize"
   | "danmakuArea"
@@ -586,7 +601,11 @@ async function clearCache() {
   notify(`${t("settings.cacheCleared")}${freed ? ` · ${formatSize(freed)}` : ""}`);
 }
 function resetDesktopLyricsBounds() {
+  // 回到默认尺寸，并把锚点微调一并归零 —— 用户点「重置」的预期是「回到出厂位置」，
+  // 只重置尺寸而留着 ±200px 的偏移会让人以为重置没生效。
   settings.desktopLyricsBounds = { width: 420, height: 120 };
+  settings.desktopLyricsAnchorOffsetX = 0;
+  settings.desktopLyricsAnchorOffsetY = 0;
 }
 
 /**
@@ -1358,6 +1377,76 @@ onBeforeUnmount(() => {
               @change="setSwitch('desktopLyricsEnabled', $event)"
             />
           </SettingRow>
+
+          <!-- 窗口定位：手动拖放 / 吸附任务栏 -->
+          <div class="row">
+            <div class="row-label">
+              <span>{{ t("settings.desktopLyricsAnchor") }}</span>
+            </div>
+            <SegmentedTabs v-model="settings.desktopLyricsAnchor" bare :tabs="dlAnchorTabs" />
+          </div>
+          <p class="hint">{{ t("settings.desktopLyricsAnchorHint") }}</p>
+
+          <template v-if="settings.desktopLyricsAnchor === 'taskbar'">
+            <div class="row">
+              <div class="row-label">
+                <span>{{ t("settings.desktopLyricsAnchorAlign") }}</span>
+              </div>
+              <SegmentedTabs
+                v-model="settings.desktopLyricsAnchorAlign"
+                bare
+                :tabs="dlAnchorAlignTabs"
+              />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <span>{{ t("settings.desktopLyricsAnchorOffsetX") }}</span>
+              </div>
+              <m3e-slider
+                :min="-600"
+                :max="600"
+                :step="10"
+                @input="onSliderInt($event, 'desktopLyricsAnchorOffsetX')"
+              >
+                <m3e-slider-thumb :value="settings.desktopLyricsAnchorOffsetX" />
+              </m3e-slider>
+              <span class="value tabular-nums">{{ settings.desktopLyricsAnchorOffsetX }}px</span>
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <span>{{ t("settings.desktopLyricsAnchorOffsetY") }}</span>
+              </div>
+              <m3e-slider
+                :min="-200"
+                :max="200"
+                :step="5"
+                @input="onSliderInt($event, 'desktopLyricsAnchorOffsetY')"
+              >
+                <m3e-slider-thumb :value="settings.desktopLyricsAnchorOffsetY" />
+              </m3e-slider>
+              <span class="value tabular-nums">{{ settings.desktopLyricsAnchorOffsetY }}px</span>
+            </div>
+          </template>
+
+          <SettingRow
+            :label="t('settings.desktopLyricsWordByWord')"
+            setting-key="settings.desktopLyricsWordByWord"
+            clickable
+          >
+            <m3e-switch
+              :checked="settings.desktopLyricsWordByWord"
+              @change="setSwitch('desktopLyricsWordByWord', $event)"
+            />
+          </SettingRow>
+          <p class="hint">{{ t("settings.desktopLyricsWordByWordHint") }}</p>
+
+          <div class="row">
+            <div class="row-label">
+              <span>{{ t("settings.desktopLyricsIdleMode") }}</span>
+            </div>
+            <SegmentedTabs v-model="settings.desktopLyricsIdleMode" bare :tabs="dlIdleTabs" />
+          </div>
+          <p class="hint">{{ t("settings.desktopLyricsIdleModeHint") }}</p>
 
           <SettingRow
             :label="t('settings.desktopLyricsShowNext')"
