@@ -18,21 +18,31 @@
 //! （把 \`"\` 转义成 \`\\"\`）。直接拼 \`JSON.parse(<原 JSON>)\` 会在
 //! 遇到引号时语法错误 —— 这是最容易犯的错，所以单独抽成函数并加测试。
 
-use crate::ipc::{parse_incoming, Incoming};
+use crate::ipc::{message_parts, parse_incoming, Incoming};
 
 /// 把一行宿主 JSON 转成要在页面里执行的 JS。无法识别时返回 None。
 ///
 /// 产物形如：\`window.__smLyrics&&window.__smLyrics.state({...})\`
 /// —— 带 \`&&\` 守卫：页面还没加载完时静默忽略，不抛错（否则控制台刷满异常）。
+/// 两步走，各有各的用：
+/// 1. \`parse_incoming\` **校验** —— 宿主推来的东西必须先在 Rust 侧确认结构合法，
+///    否则畸形数据会被原样送进页面、在那边炸成难查的 JS 错误；
+/// 2. \`message_parts\` **透传** —— 页面消费的就是宿主那份 JSON，原样转发既省一次
+///    序列化，也天然前向兼容（宿主加字段，页面立刻能用，不必改 Rust）。
+///
+/// 之所以不把校验结果直接序列化出去：那样要为每个结构体实现 Serialize，
+/// 而 serde derive 是 proc-macro（需要宿主链接器）—— 正是要避开的东西。
 pub fn line_to_js(line: &str) -> Option<String> {
     let msg = parse_incoming(line)?;
-    let (fn_name, payload) = match msg {
-        Incoming::State(s) => ("state", serde_json::to_value(s).ok()?),
-        Incoming::Spectrum(s) => ("spectrum", serde_json::to_value(s).ok()?),
-        Incoming::Settings(s) => ("settings", serde_json::to_value(s).ok()?),
-        Incoming::Quit => return Some("window.__smLyrics&&window.__smLyrics.quit()".to_string()),
-    };
-    Some(build_call(fn_name, &payload))
+    if msg == Incoming::Quit {
+        return Some("window.__smLyrics&&window.__smLyrics.quit()".to_string());
+    }
+    let (kind, payload) = message_parts(line)?;
+    match kind.as_str() {
+        "state" | "spectrum" | "settings" => Some(build_call(&kind, &payload)),
+        // parse_incoming 已经挡掉未知类型，这里只是防御
+        _ => None,
+    }
 }
 
 /// 构造 \`window.__smLyrics.<fn>(<json>)\` 形式的 JS。

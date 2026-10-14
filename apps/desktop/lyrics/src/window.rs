@@ -26,7 +26,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::embed::{self, EmbedResult};
-use silvermoon_lyrics::pathfind;
 
 /// 窗口类名（全局唯一，避免与宿主/其它进程冲突）。
 const CLASS_NAME: &str = "SilverMoonLyrics";

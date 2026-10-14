@@ -95,16 +95,18 @@ fn run_windows() {
     }
 }
 
-/// 往 stdout 打一行错误（宿主会记日志）。
+/// 往 stdout 打一行（宿主按行读取并记日志）。
 #[cfg(windows)]
-fn report_error(message: &str) {
-    let msg = silvermoon_lyrics::ipc::Outgoing::Error(silvermoon_lyrics::ipc::ErrorPayload {
-        message: message.to_string(),
-    });
-    let line = silvermoon_lyrics::ipc::encode_outgoing(&msg);
+fn write_line(line: &str) {
     let mut out = std::io::stdout();
     let _ = out.write_all(line.as_bytes());
     let _ = out.flush();
+}
+
+/// 往 stdout 打一行错误（宿主会记日志）。
+#[cfg(windows)]
+fn report_error(message: &str) {
+    write_line(&silvermoon_lyrics::ipc::encode_error(message));
 }
 
 /// 上报握手（窗口就绪 + 是否真嵌入成功）。
@@ -113,9 +115,5 @@ fn report_error(message: &str) {
 /// 宿主据此可以提示用户或回退到浮贴。
 #[cfg(windows)]
 pub(crate) fn report_ready(hwnd: i64, embedded: bool) {
-    let payload = silvermoon_lyrics::ipc::ReadyPayload { hwnd, embedded };
-    let line = silvermoon_lyrics::ipc::encode_ready(&payload);
-    let mut out = std::io::stdout();
-    let _ = out.write_all(line.as_bytes());
-    let _ = out.flush();
+    write_line(&silvermoon_lyrics::ipc::encode_ready(hwnd, embedded));
 }

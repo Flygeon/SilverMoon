@@ -73,6 +73,23 @@ pub struct SettingsPayload {
 /// 握手行前缀（与 splash 的 SILVERMOON_READY 同风格，载荷是 JSON）。
 pub const READY_PREFIX: &str = "LYRICS_READY";
 
+/// 取出消息的 (type, payload)，**payload 原样透传**。
+///
+/// 为什么要有这个而不只用 parse_incoming：后者把 payload 解析成具名结构体，
+/// 要再发出去就得实现 Serialize —— 那需要 serde derive（proc-macro，需宿主链接器），
+/// 正是我们要避开的东西。而页面消费的就是**宿主原始那一份 JSON**，
+/// 原样透传既省一次序列化，也天然前向兼容（宿主加字段，页面立刻能用）。
+pub fn message_parts(line: &str) -> Option<(String, Value)> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let root: Value = serde_json::from_str(trimmed).ok()?;
+    let kind = root.get("type")?.as_str()?.to_string();
+    let payload = root.get("payload").cloned().unwrap_or(Value::Null);
+    Some((kind, payload))
+}
+
 /// 解析一行下行消息。空行与无法解析的行都返回 None（静默忽略）。
 ///
 /// 为什么不让调用方处理错误：宿主可能在窗口还没就绪时就开始推消息，
@@ -102,8 +119,14 @@ fn parse_state(payload: &Value) -> Option<StatePayload> {
         .collect();
     Some(StatePayload {
         lines,
-        current_time: payload.get("currentTime").and_then(Value::as_f64).unwrap_or(0.0),
-        playing: payload.get("playing").and_then(Value::as_bool).unwrap_or(false),
+        current_time: payload
+            .get("currentTime")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0),
+        playing: payload
+            .get("playing")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         title: payload
             .get("title")
             .and_then(Value::as_str)
@@ -139,7 +162,10 @@ fn parse_line(value: &Value) -> Option<LyricLine> {
     Some(LyricLine {
         time,
         text,
-        translation: value.get("translation").and_then(Value::as_str).map(str::to_string),
+        translation: value
+            .get("translation")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         bg: value.get("bg").and_then(Value::as_str).map(str::to_string),
         units,
     })
@@ -163,9 +189,18 @@ fn parse_settings(payload: &Value) -> Option<SettingsPayload> {
         show_translation: payload.get("showTranslation").and_then(Value::as_bool),
         show_next: payload.get("showNext").and_then(Value::as_bool),
         word_by_word: payload.get("wordByWord").and_then(Value::as_bool),
-        align: payload.get("align").and_then(Value::as_str).map(str::to_string),
-        offset_x: payload.get("offsetX").and_then(Value::as_i64).map(|v| v as i32),
-        offset_y: payload.get("offsetY").and_then(Value::as_i64).map(|v| v as i32),
+        align: payload
+            .get("align")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        offset_x: payload
+            .get("offsetX")
+            .and_then(Value::as_i64)
+            .map(|v| v as i32),
+        offset_y: payload
+            .get("offsetY")
+            .and_then(Value::as_i64)
+            .map(|v| v as i32),
     })
 }
 
@@ -179,6 +214,11 @@ pub fn encode_line(value: &Value) -> String {
 }
 
 /// 构造播放控制消息。
+///
+/// 暂未接线：窗口内控制栏（上一首/播放/下一首）还在页面侧，尚未通过
+/// wry 的 IPC handler 回传到这里。先保留这条协议面与其单测 —— 它是
+/// 「原生窗口也能控制播放」的既定接口，删了下次还得重写。
+#[allow(dead_code)]
 pub fn encode_control(action: &str) -> String {
     let mut m = Map::new();
     m.insert("type".into(), json!("control"));
@@ -351,6 +391,9 @@ mod tests {
     fn error_message_with_quotes_stays_valid_json() {
         let line = encode_error(r#"say "hi""#);
         let v: Value = serde_json::from_str(line.trim()).expect("must stay valid json");
-        assert_eq!(v.get("message").and_then(Value::as_str), Some(r#"say "hi""#));
+        assert_eq!(
+            v.get("message").and_then(Value::as_str),
+            Some(r#"say "hi""#)
+        );
     }
 }
