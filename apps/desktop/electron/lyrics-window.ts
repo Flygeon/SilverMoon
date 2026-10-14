@@ -26,7 +26,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-import { config, isDev } from "./config";
+import { isDev } from "./config";
 import { log } from "./log";
 
 /** 握手行前缀（与 Rust 侧 ipc.rs 的 READY_PREFIX 一致）。 */
