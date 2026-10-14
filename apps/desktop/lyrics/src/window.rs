@@ -156,7 +156,7 @@ pub fn run(
         crate::report_ready(hwnd.0 as i64, embedded);
 
         // 16ms 节拍：驱动动画、轮询宿主消息、刷新 WebView
-        SetTimer(hwnd, 1, TICK_MS, None);
+        SetTimer(Some(hwnd), 1, TICK_MS, None);
 
         // 消息循环
         let mut msg = MSG::default();

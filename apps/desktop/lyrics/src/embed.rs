@@ -188,7 +188,3 @@ pub fn detach_from_taskbar(hwnd: HWND) {
 pub fn taskbar_exists() -> bool {
     find_primary_taskbar().is_some()
 }
-
-// 让 BOOL/LPARAM 的导入不被判为未使用（FindWindowExW 的签名需要它们）
-#[allow(dead_code)]
-fn _keep_imports(_: BOOL, _: LPARAM) {}
