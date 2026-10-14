@@ -122,7 +122,8 @@ mod tests {
     #[test]
     fn quotes_in_lyrics_do_not_break_js() {
         // 歌词里出现引号是常态（英文歌、对话式歌词），必须不破坏语法
-        let line = r#"{"type":"state","payload":{"lines":[{"time":0,"text":"say "hello""}],"currentTime":0,"playing":false}}"#;
+        // 注意 JSON 里要转义引号：text 的值是 say "hello"
+        let line = `{"type":"state","payload":{"lines":[{"time":0,"text":"say \"hello\""}],"currentTime":0,"playing":false}}`;
         let js = line_to_js(line).expect("should produce js");
         // 原始引号必须已被转义，不能裸露在 JS 字面量里
         assert!(js.contains("\\\"hello\\\""), "quotes must be escaped: {js}");
