@@ -106,6 +106,17 @@ win:
     # 不依赖注册表或环境变量。构建前需先 cargo build（见 CI）。
     - from: splash/target/release/silvermoon-splash.exe
       to: silvermoon-splash.exe
+    # 桌面歌词窗口（Rust 原生 + 任务栏真嵌入 + 内嵌 WebView2）。
+    # 独立进程：Electron 主进程 spawn 它并走 stdin/stdout 行分隔 JSON 通信。
+    # 放 bin/ 与 sidecar 同层，便于统一按「随包分发的 Rust 可执行文件」管理。
+    # 构建前需 cargo build（见 CI）。
+    - from: lyrics/target/release/silvermoon-lyrics.exe
+      to: bin/silvermoon-lyrics.exe
+    # 歌词页资源：WebView2 通过 file:// 加载（它不认 Electron 的 app:// 协议）。
+    # 与可执行文件**同级**放 lyrics-web/ —— Rust 侧 pathfind 按「同目录 → 上一级」
+    # 探测，与 splash 的发布布局约定一致。
+    - from: lyrics/lyrics-web
+      to: bin/lyrics-web
 
 nsis:
   oneClick: false

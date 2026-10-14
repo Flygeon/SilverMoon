@@ -17,7 +17,7 @@ import {
 } from "@/utils/musicTagLyrics";
 import { useMusicTagsStore } from "@/stores/musicTags";
 import { useDesktopStore, WAKE_REASON } from "@/stores/desktop";
-import { emitDesktopLyricsState } from "@/utils/desktopLyrics";
+import { pushLyricsState } from "@/utils/desktopLyricsNative";
 import {
   fetchCloudLyrics,
   normalizeTitle,
@@ -1074,27 +1074,16 @@ export const usePlayerStore = defineStore("player", () => {
     const now = Date.now();
     if (!force && now - lastDesktopLyricsSync < 200) return;
     lastDesktopLyricsSync = now;
-    // 逐字时间轴按设置下发：关掉时不下发 units，桌面窗口自然退回整行高亮
-    const withUnits = settings.desktopLyricsWordByWord;
-    void emitDesktopLyricsState({
-      lines: lyrics.value.map((l) => ({
-        time: l.time,
-        text: l.text,
-        translation: l.translation,
-        romaji: l.romaji,
-        bg: l.bg?.text,
-        // 只带 start/end —— units 里还有 text/obscene，逐字渲染用不到，
-        // 每 200ms 推一次全量文本会白白放大载荷。
-        units:
-          withUnits && l.units?.length
-            ? l.units.map((u) => ({ start: u.start, end: u.end }))
-            : undefined,
-      })),
+    // 推给 Rust 原生歌词窗口（独立进程，走 stdin 行分隔 JSON）。
+    // 逐字时间轴按设置下发：关掉时不下发 units，窗口自然退回整行高亮。
+    pushLyricsState({
+      lines: lyrics.value,
       currentTime: currentTime.value,
       playing: playing.value,
       title: song.value.title,
       artist: song.value.artist ?? "",
-    }).catch(() => {});
+      wordByWord: settings.desktopLyricsWordByWord,
+    });
   }
 
   watch([lyrics, song, playing], () => syncDesktopLyrics(true));

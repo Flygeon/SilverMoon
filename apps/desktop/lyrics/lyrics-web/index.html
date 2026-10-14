@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;" />
+    <title>SilverMoon Lyrics</title>
+    <style>
+      /*
+       * 桌面歌词窗口：透明背景 + 双文字层逐字扫描。
+       *
+       * 缓动与时长**直接取自参考项目** TaskbarLyrics 的 Web/Lyrics/style.css
+       * （实测统计：0.22,0.72,0.24,1 出现 7 次、0.2,0.9,0.1,1 出现 6 次、
+       *  0.16,1,0.3,1 出现 4 次；时长 560/760/300/520/90ms）。
+       * 这些数字是它调出来的手感，不要凭感觉改。
+       */
+      :root {
+        --ease-layer: cubic-bezier(0.22, 0.72, 0.24, 1);
+        --ease-roll: cubic-bezier(0.2, 0.9, 0.1, 1);
+        --ease-fade: cubic-bezier(0.16, 1, 0.3, 1);
+        --dur-roll: 560ms;
+        --dur-pair: 760ms;
+        --dur-layer: 300ms;
+        --dur-fade: 520ms;
+
+        --fg: #ffffff;
+        --fg-dim: rgba(255, 255, 255, 0.45);
+        --font-size: 22px;
+      }
+
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+        /* 歌词窗口不参与文本选择，避免拖拽时选中文字 */
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      #root {
+        height: 100%;
+        display: flex;
+        align-items: center;
+        padding: 0 12px;
+        box-sizing: border-box;
+        font-family: "Source Han Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
+        font-size: var(--font-size);
+        color: var(--fg);
+        text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
+        opacity: 1;
+        transition: opacity var(--dur-fade) var(--ease-fade);
+      }
+
+      /* 逐字扫描：两层文字严格互补裁切
+         （参考项目用 clip-path: inset()，这里照做 —— 无依赖、行为确定） */
+      .line-wrap {
+        position: relative;
+        width: 100%;
+        height: 1.4em;
+        overflow: hidden;
+        /* 行切换的滚动容器 */
+        transition: transform var(--dur-roll) var(--ease-roll);
+      }
+
+      .line {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        white-space: nowrap;
+        font-weight: 700;
+      }
+
+      /* 未唱部分（暗） */
+      .line-base {
+        color: var(--fg-dim);
+      }
+      /* 已唱部分（亮）：用同一份文本叠在上面，靠 clip-path 露出左侧 */
+      .line-scan {
+        color: var(--fg);
+        clip-path: inset(0 100% 0 0);
+      }
+
+      .sub {
+        font-size: 0.6em;
+        font-weight: 500;
+        opacity: 0.72;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      /* 无歌词时的频谱 */
+      #spectrum {
+        display: none;
+        width: 100%;
+        height: 100%;
+      }
+      body.spectrum-mode #spectrum {
+        display: block;
+      }
+      body.spectrum-mode #lyrics {
+        display: none;
+      }
+
+      /* 减少动态效果：直接给最终画面（与参考项目的可访问性取舍一致） */
+      @media (prefers-reduced-motion: reduce) {
+        .line-wrap,
+        #root {
+          transition: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div id="lyrics" style="flex: 1; min-width: 0">
+        <div class="line-wrap">
+          <div class="line line-base" id="base">SilverMoon</div>
+          <div class="line line-scan" id="scan">SilverMoon</div>
+        </div>
+        <div class="sub" id="sub"></div>
+      </div>
+      <canvas id="spectrum"></canvas>
+    </div>
+    <script src="lyrics.js"></script>
+  </body>
+</html>

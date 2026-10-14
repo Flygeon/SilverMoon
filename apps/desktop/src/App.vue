@@ -26,17 +26,13 @@ import { listen, type Event, type UnlistenFn } from "@/ipc/events";
 import { onDragDropEvent, type DragDropEvent } from "@/ipc/dragdrop";
 import { getCurrentWindow } from "@/ipc/window";
 import {
-  DL_BOUNDS_EVENT,
-  DL_CONTROL_EVENT,
-  DL_READY_EVENT,
-  closeDesktopLyricsWindow,
-  emitDesktopLyricsState,
-  openDesktopLyricsWindow,
-  type DesktopLyricsState,
-} from "@/utils/desktopLyrics";
-import type { DesktopLyricsBounds } from "@/stores/settings";
-import { startSpectrumPush, stopSpectrumPush } from "@/utils/desktopLyricsSpectrum";
-import { emitDesktopLyricsSettingsChanged } from "@/utils/desktopLyrics";
+  pushLyricsSettings,
+  pushLyricsSpectrum,
+  pushLyricsState,
+  startLyricsWindow,
+  stopLyricsWindow,
+} from "@/utils/desktopLyricsNative";
+import { startSpectrumPush, stopSpectrumPush } from "@/utils/spectrumPusher";
 
 const settings = useSettingsStore();
 const player = usePlayerStore();
@@ -45,29 +41,43 @@ const skins = useSkinsStore();
 const desktopEnv = useDesktopStore();
 // 托盘命令 + 关闭最小化到托盘 + 应用内热键
 useDesktopChrome();
-// ---- 桌面歌词控制器 ----
+// ---- 桌面歌词（Rust 原生窗口）----
+//
+// 窗口不再由 Electron 创建：它跑在独立的 Rust 进程里（apps/desktop/lyrics），
+// 自己建原生窗口、SetParent 进任务栏、把 WebView2 作为**子控件**挂进去。
+// 实测 Electron 的 BrowserWindow 走这条路会被 Chromium 抢回位置且渲染变黑，
+// 所以那一版已整体移除。
+//
+// 这里只做三件事：起停进程、推歌词状态、推设置。
+
+/** 跨窗口事件订阅的取消函数（卸载时统一清理） */
 let dlUnlisteners: UnlistenFn[] = [];
 
+/** 推一次完整歌词状态（换歌/就绪时用；播放中的增量由 player store 节流推送） */
 function pushDesktopLyricsState() {
   if (!settings.desktopLyricsEnabled) return;
-  const stateData: DesktopLyricsState = {
-    lines: player.lyrics.map((l) => ({
-      time: l.time,
-      text: l.text,
-      translation: l.translation,
-      romaji: l.romaji,
-      bg: l.bg?.text,
-      units:
-        settings.desktopLyricsWordByWord && l.units?.length
-          ? l.units.map((u) => ({ start: u.start, end: u.end }))
-          : undefined,
-    })),
+  pushLyricsState({
+    lines: player.lyrics,
     currentTime: player.currentTime,
     playing: player.playing,
     title: player.song?.title ?? "",
     artist: player.song?.artist ?? "",
-  };
-  void emitDesktopLyricsState(stateData);
+    wordByWord: settings.desktopLyricsWordByWord,
+  });
+}
+
+/** 推外观设置（窗口自带一份渲染，需要知道字号/透明度/逐字开关等） */
+function pushDesktopLyricsSettings() {
+  pushLyricsSettings({
+    fontSize: settings.desktopLyricsFontSize,
+    opacity: settings.desktopLyricsOpacity,
+    showTranslation: settings.desktopLyricsShowTranslation,
+    showNext: settings.desktopLyricsShowNext,
+    wordByWord: settings.desktopLyricsWordByWord,
+    align: settings.desktopLyricsAnchorAlign,
+    offsetX: settings.desktopLyricsAnchorOffsetX,
+    offsetY: settings.desktopLyricsAnchorOffsetY,
+  });
 }
 
 /**
@@ -93,21 +103,18 @@ watch(
   () => settings.desktopLyricsEnabled,
   async (on) => {
     if (on) {
-      await openDesktopLyricsWindow(settings.desktopLyricsBounds);
-      // 等子窗口就绪事件回推一次状态（也做一次兜底延迟发送）
-      window.setTimeout(() => pushDesktopLyricsState(), 400);
+      const info = await startLyricsWindow();
+      // 窗口起不来（缺可执行文件/嵌入失败）时不要静默 —— 用户会以为功能坏了
+      if (!info) {
+        notifyLyricsUnavailable();
+        return;
+      }
+      pushDesktopLyricsState();
+      pushDesktopLyricsSettings();
       syncSpectrumPush();
-      /**
-       * 子窗口已经开着时，改设置必须**通知它**。
-       *
-       * 两个窗口各有独立的 Pinia store：主窗口改了 desktopLyricsAnchor，
-       * 歌词窗口内存里那份不会跟着变（它只在挂载时 load 一次）。
-       * 所以这里把「设置变了」广播过去，让它重新 load 并重新锚定。
-       */
-      void emitDesktopLyricsSettingsChanged();
     } else {
       stopSpectrumPush();
-      await closeDesktopLyricsWindow();
+      await stopLyricsWindow();
     }
   },
 );
@@ -118,69 +125,67 @@ watch(
 );
 
 /**
- * 桌面歌词相关设置一变就通知子窗口。
+ * 桌面歌词的外观设置一变就推给原生窗口。
  *
- * 两个窗口各有独立的 Pinia store，主窗口这边改了值，子窗口内存里那份不会变
- * —— 子窗口只在自己挂载时 load 过一次。不通知的话，用户在设置页改了
- * 「吸附任务栏」「逐字填充」等，歌词窗口**当场毫无反应**，
- * 必须等下次重开窗口才生效（这正是「吸不上去」的根因之一）。
- *
- * 监听的是**整个桌面歌词设置组**而不是逐项：漏列一项就是一次
- * 「改了没反应」，而多通知一次的代价只是一次 IPC + 一次读盘。
+ * 原生窗口是**独立进程**，有自己的一份渲染状态；主窗口这边改了值，
+ * 它不会自己知道。监听整组而不是逐项：漏列一项就是一次「改了没反应」，
+ * 而多推一次的代价只是一次 IPC。
  */
 watch(
   () => [
-    settings.desktopLyricsAnchor,
-    settings.desktopLyricsAnchorAlign,
-    settings.desktopLyricsAnchorOffsetX,
-    settings.desktopLyricsAnchorOffsetY,
     settings.desktopLyricsWordByWord,
     settings.desktopLyricsIdleMode,
     settings.desktopLyricsShowNext,
     settings.desktopLyricsShowTranslation,
     settings.desktopLyricsFontSize,
     settings.desktopLyricsOpacity,
-    settings.desktopLyricsAnimation,
-    settings.desktopLyricsToolbar,
-    settings.desktopLyricsDoubleClick,
-    settings.desktopLyricsLocked,
-    settings.desktopLyricsAlwaysOnTop,
-    settings.desktopLyricsClickThrough,
+    settings.desktopLyricsAnchorAlign,
+    settings.desktopLyricsAnchorOffsetX,
+    settings.desktopLyricsAnchorOffsetY,
   ],
   () => {
     if (!settings.desktopLyricsEnabled) return;
-    void emitDesktopLyricsSettingsChanged();
+    pushDesktopLyricsSettings();
   },
 );
 
+/** 歌词窗口不可用时的提示（只提示一次，避免每次开开关关都弹） */
+let lyricsWarned = false;
+function notifyLyricsUnavailable() {
+  if (lyricsWarned) return;
+  lyricsWarned = true;
+  settings.desktopLyricsEnabled = false;
+  console.warn(
+    "[lyrics] 桌面歌词窗口启动失败：缺少 silvermoon-lyrics 可执行文件，或它未能创建窗口。" +
+      "开发模式请先构建：cargo build --manifest-path apps/desktop/lyrics/Cargo.toml",
+  );
+}
+
 onMounted(async () => {
-  if (isDesktop) {
-    try {
-      dlUnlisteners.push(
-        await listen<null>(DL_READY_EVENT, () => pushDesktopLyricsState()),
-        await listen<{ action: "toggle" | "next" | "prev" | "close" }>(DL_CONTROL_EVENT, (e) => {
-          switch (e.payload.action) {
-            case "toggle":
-              player.togglePlay();
-              break;
-            case "next":
-              void player.next();
-              break;
-            case "prev":
-              void player.previous();
-              break;
-            case "close":
-              settings.desktopLyricsEnabled = false;
-              break;
-          }
-        }),
-        await listen<DesktopLyricsBounds>(DL_BOUNDS_EVENT, (e) => {
-          settings.desktopLyricsBounds = e.payload;
-        }),
-      );
-    } catch {
-      /* 宿主不可用或权限不足时静默 */
-    }
+  if (!isDesktop) return;
+  try {
+    // 歌词窗口把播放控制（上一首/下一首/关闭）回传到这里，由 player store 分发
+    dlUnlisteners.push(
+      await listen<{ action: "toggle" | "next" | "prev" | "close" }>("lyrics:control", (e) => {
+        switch (e.payload.action) {
+          case "toggle":
+            player.togglePlay();
+            break;
+          case "next":
+            void player.next();
+            break;
+          case "prev":
+            void player.previous();
+            break;
+        }
+      }),
+      // 用户在原生窗口里点了关闭：同步设置，避免下次启动又冒出来
+      await listen<null>("lyrics:closed", () => {
+        settings.desktopLyricsEnabled = false;
+      }),
+    );
+  } catch {
+    /* 宿主不可用或权限不足时静默 */
   }
 });
 

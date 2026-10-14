@@ -1,0 +1,58 @@
+[package]
+name = "silvermoon-lyrics"
+version = "0.1.0"
+description = "SilverMoon 桌面歌词（Rust 原生窗口 + 任务栏真嵌入 + 内嵌 WebView2）"
+edition = "2021"
+rust-version = "1.82"
+license = "GPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "silvermoon-lyrics"
+path = "src/main.rs"
+
+# 库目标：仅供宿主（Linux/CI）跑纯逻辑单元测试，不参与发布产物。
+# main.rs 与窗口/嵌入模块依赖 Win32，宿主上编不过；这里只收无平台依赖的模块。
+[lib]
+name = "silvermoon_lyrics"
+path = "src/lib.rs"
+
+# ⚠️ **不要**加 `serde` 的 `derive` feature。
+#
+# serde_derive 是 proc-macro：编它需要**宿主链接器**（MSVC），而本机没有。
+# 一旦引入，宿主的 `cargo test --lib` 会在编译阶段就挂掉，纯逻辑测试
+# 在 CI 上也跑不起来。splash 的 prefs.rs 也是只用 `serde_json::Value`
+# 手动取值、不派生 —— 这里沿用同一套做法。
+[dependencies]
+serde_json = { version = "1", default-features = false, features = ["std"] }
+
+# ⚠️ **所有**平台相关依赖都必须放 target 段。
+#
+# 这不只是「省编译」：宿主（Linux/CI）跑 `cargo test --lib` 时会把
+# 非 target 限定的依赖一并编译。wry 一旦写在上面，宿主编 lib 就会去编
+# WebView2 绑定，直接失败 —— 那样纯逻辑测试在 CI 上根本跑不起来。
+# （splash 也是同样布局：windows 在 target 段，lib 才编得过。）
+#
+# ⚠️ windows 版本必须与 wry 内部用的对齐（wry 0.57 → windows 0.62）：
+# 两处版本不同会得到**两个不同的 HWND 类型**，传参时编译不过。
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_HiDpi",
+] }
+# 内嵌 WebView2 作为**子控件** —— 这是「真嵌入」能成立的关键：
+# 外层窗口由我们自己的消息循环管，WebView2 只是它里面的一个子控件，
+# 不存在 Electron 那种「Chromium 抢回顶层窗口控制权」的问题。
+# default-features = false + os-webview：只保留 Windows 需要的能力，
+# 不拖进 Linux 的 gtk/x11（那些在宿主上会缺系统库）。
+wry = { version = "0.57", default-features = false, features = ["os-webview"] }
+raw-window-handle = "0.6"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

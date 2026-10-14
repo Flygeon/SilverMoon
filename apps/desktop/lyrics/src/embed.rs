@@ -1,0 +1,185 @@
+//! **真嵌入任务栏**：把窗口变成 \`Shell_TrayWnd\` 的子窗口。
+//!
+//! ## 为什么这条路在 Electron 下不通、在这里通
+//!
+//! 2026-10-15 实测：Electron 的 \`BrowserWindow\` 被 \`SetParent\` 后
+//! ①位置/尺寸被 Chromium 抢回（900ms 内弹回）②渲染变纯黑 ——
+//! 因为它的 HWND **本身就是 Chromium 的顶层 widget**，没有中间层可拦。
+//!
+//! 本进程的窗口是**我们自己用 \`CreateWindowExW\` 建的**，由我们的消息循环管，
+//! WebView2 只是它里面的一个**子控件**（\`wry::build_as_child\`）。
+//! 结构与参考项目 TaskbarLyrics 的 \`MainWindow.xaml\` 完全同构：
+//! 外层原生窗口 + 内层 WebView2。它的 WPF 版本能成功，正是同一个道理。
+//!
+//! ## 嵌入步骤（照抄参考项目 EmbeddedTaskbarAnchor.cs 的顺序）
+//!
+//! 1. \`FindWindowW("Shell_TrayWnd")\` 拿任务栏；多屏用 \`Shell_SecondaryTrayWnd\`；
+//! 2. \`SetParent(hwnd, taskbar)\`；
+//! 3. 改窗口样式：去掉 \`WS_POPUP\`、加上 \`WS_CHILD | WS_VISIBLE\`；
+//! 4. 扩展样式去掉 \`WS_EX_TOOLWINDOW\`、加上 \`WS_EX_NOACTIVATE\`（不抢焦点）；
+//! 5. **校验** \`GetAncestor(hwnd, GA_PARENT) == taskbar\` —— 不成立就算失败。
+//!
+//! 第 5 步是关键：\`SetParent\` 会「成功返回」但实际没生效（参考项目注释里
+//! 记为 \`ReparentRejected\`）。**没有校验的嵌入是自欺欺人**。
+
+use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+use windows::Win32::UI::WindowsAndMessaging::{
+    FindWindowExW, FindWindowW, GetAncestor, GetWindowLongPtrW, SetParent, SetWindowLongPtrW,
+    SetWindowPos, GA_PARENT, GWL_EXSTYLE, GWL_STYLE, HWND_TOP, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+    SWP_SHOWWINDOW, WS_CHILD, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
+};
+
+/// 嵌入结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbedResult {
+    /// 成功成为任务栏子窗口
+    Embedded,
+    /// 找不到任务栏（自动隐藏 / 全屏独占 / 非标准 shell）
+    NoTaskbar,
+    /// \`SetParent\` 返回了但校验不通过（参考项目称之为 ReparentRejected）
+    Rejected,
+}
+
+/// 找主任务栏。找不到返回 \`None\`。
+///
+/// 只找主任务栏：副屏任务栏是 \`Shell_SecondaryTrayWnd\`，多屏场景下
+/// 应该按歌词窗口所在的显示器选 —— 那需要 \`MonitorFromWindow\` 配合，
+/// 留到支持多屏时再做（当前先保证单屏正确）。
+pub fn find_primary_taskbar() -> Option<HWND> {
+    unsafe {
+        let h = FindWindowW(windows::core::w!("Shell_TrayWnd"), None).ok()?;
+        if h.0.is_null() {
+            None
+        } else {
+            Some(h)
+        }
+    }
+}
+
+/// 找任务栏里那个承载任务列表的容器（\`ReBarWindow32\`，退化到 \`WorkerW\`）。
+///
+/// 参考项目会挤占 \`MSTaskListWClass\` 的宽度给歌词腾位置。我们**暂不做**：
+/// 那会在任务栏上「抠掉」一块图标区，用户如果把歌词窗口关掉、
+/// 或窗口没渲染出来，任务栏会留下一个空洞。先做「盖在上面」，
+/// 视觉上够用且完全可逆。
+pub fn find_taskbar_container(taskbar: HWND) -> Option<HWND> {
+    unsafe {
+        let rebar = FindWindowExW(taskbar, None, windows::core::w!("ReBarWindow32"), None).ok()?;
+        if !rebar.0.is_null() {
+            return Some(rebar);
+        }
+        let worker = FindWindowExW(taskbar, None, windows::core::w!("WorkerW"), None).ok()?;
+        if !worker.0.is_null() {
+            Some(worker)
+        } else {
+            None
+        }
+    }
+}
+
+/// 把窗口嵌进任务栏。返回结果供调用方决定是否回退到浮贴。
+pub fn embed_into_taskbar(hwnd: HWND) -> EmbedResult {
+    let Some(taskbar) = find_primary_taskbar() else {
+        return EmbedResult::NoTaskbar;
+    };
+    embed_into(hwnd, taskbar)
+}
+
+/// 嵌入到指定父窗口（拆出来是为了能在测试/调试里指定父窗口）。
+pub fn embed_into(hwnd: HWND, parent: HWND) -> EmbedResult {
+    unsafe {
+        // 嵌入前先取消置顶：任务栏的子窗口不该带 topmost，
+        // 否则切到浮贴模式时会残留置顶状态（参考项目也这么做）。
+        SetWindowPos(
+            hwnd,
+            HWND_TOP,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+        );
+
+        SetParent(hwnd, parent);
+
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        let new_style =
+            (style & !(WS_POPUP.0 as isize)) | WS_CHILD.0 as isize | WS_VISIBLE.0 as isize;
+        SetWindowLongPtrW(hwnd, GWL_STYLE, new_style);
+
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let new_ex = (ex & !(WS_EX_TOOLWINDOW.0 as isize)) | WS_EX_NOACTIVATE.0 as isize;
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex);
+
+        // 让样式变更立即生效（否则窗口要等下一次重绘才认新样式）
+        SetWindowPos(
+            hwnd,
+            HWND_TOP,
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+        );
+
+        // **校验**：SetParent 会「成功返回」但实际没生效，必须验证祖先。
+        // 没有这一步的嵌入是自欺欺人（参考项目把它记为 ReparentRejected）。
+        if GetAncestor(hwnd, GA_PARENT) == parent {
+            EmbedResult::Embedded
+        } else {
+            EmbedResult::Rejected
+        }
+    }
+}
+
+/// 把窗口摆到任务栏内的指定位置（相对任务栏客户区）。
+pub fn place_in_taskbar(hwnd: HWND, x: i32, y: i32, width: i32, height: i32) {
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_TOP,
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+    }
+}
+
+/// 从任务栏脱离（切回浮贴模式时用）。
+///
+/// 必须**恢复原始样式**：只 \`SetParent(None)\` 而留着 \`WS_CHILD\`
+/// 会让窗口变成一个没有父窗口的子窗口 —— 不可见、也无法交互。
+pub fn detach_from_taskbar(hwnd: HWND) {
+    unsafe {
+        SetParent(hwnd, HWND(std::ptr::null_mut()));
+
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        let restored =
+            (style & !(WS_CHILD.0 as isize)) | WS_POPUP.0 as isize | WS_VISIBLE.0 as isize;
+        SetWindowLongPtrW(hwnd, GWL_STYLE, restored);
+
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW.0 as isize);
+
+        SetWindowPos(
+            hwnd,
+            HWND_TOP,
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+        );
+    }
+}
+
+/// 任务栏是否已存在（判断 shell 是否就绪）。
+pub fn taskbar_exists() -> bool {
+    find_primary_taskbar().is_some()
+}
+
+// 让 BOOL/LPARAM 的导入不被判为未使用（FindWindowExW 的签名需要它们）
+#[allow(dead_code)]
+fn _keep_imports(_: BOOL, _: LPARAM) {}

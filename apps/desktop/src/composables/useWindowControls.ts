@@ -19,7 +19,7 @@
  * 原生方案零 IPC、零 JS，且额外白拿 Aero Snap（拖到屏幕边缘吸附）与
  * 双击最大化——这两样自搬窗口都做不到。
  *
- * 与 `ExtensionHost.vue` / `DesktopLyrics.vue` 的既有做法保持一致。
+ * 与 `ExtensionHost.vue` 的既有做法保持一致。
  */
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { getCurrentWindow } from "@/ipc/window";
