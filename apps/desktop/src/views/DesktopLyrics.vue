@@ -14,6 +14,7 @@ import { useSettingsStore } from "@/stores/settings";
 import { isDesktop } from "@/capabilities";
 import SpectrumBars from "@/components/SpectrumBars.vue";
 import {
+  DL_SETTINGS_EVENT,
   DL_SPECTRUM_EVENT,
   DL_STATE_EVENT,
   emitDesktopLyricsBounds,
@@ -197,6 +198,7 @@ let unlistenState: UnlistenFn | null = null;
 let unlistenMoved: UnlistenFn | null = null;
 let unlistenResized: UnlistenFn | null = null;
 let unlistenSpectrum: UnlistenFn | null = null;
+let unlistenSettings: UnlistenFn | null = null;
 let unlistenDisplay: (() => void) | null = null;
 let boundsTimer: number | null = null;
 let anchorRestoreTimer: number | null = null;
@@ -298,6 +300,25 @@ onMounted(async () => {
   if (!isDesktop) return;
   if (!(await isDesktopLyricsWindow())) return;
 
+  /**
+   * ⚠️ 必须**自己**加载设置。
+   *
+   * 桌面歌词是独立渲染进程，它有自己的 Pinia store 实例；而 App.vue 的
+   * onMounted 在别的窗口类型（drawing / extension）会提前 return，
+   * 桌面歌词窗口**不在那条主界面初始化路径上**，所以 settings.load() 从来
+   * 没被调用过 —— store 里全是 DEFAULTS。
+   *
+   * 后果：`settings.desktopLyricsAnchor` 永远是默认的 "manual"，
+   * 于是 reanchor() 第一道守卫就 return，锚定**完全不生效**（表现为
+   * 「设置里选了吸附任务栏，窗口纹丝不动」）。其余读 settings 的地方
+   * （字号 / 不透明度 / 逐字开关 / 无歌词显示）同样一直是默认值。
+   */
+  try {
+    await settings.load();
+  } catch {
+    /* 读不到设置就用默认值，不能因此让歌词窗口起不来 */
+  }
+
   window.addEventListener("blur", () => {
     cancelAutoHide();
     toolbarOpen.value = false;
@@ -316,6 +337,15 @@ onMounted(async () => {
     unlistenResized = await win.onResized(scheduleReportBounds);
     unlistenSpectrum = await listen<{ bins: number[] }>(DL_SPECTRUM_EVENT, (e) => {
       spectrumBins.value = e.payload?.bins ?? null;
+    });
+    // 主窗口改了设置 → 重新 load 并重新锚定（见 DL_SETTINGS_EVENT 注释）
+    unlistenSettings = await listen<null>(DL_SETTINGS_EVENT, async () => {
+      try {
+        await settings.load();
+      } catch {
+        /* 读取失败保持现状 */
+      }
+      await reanchor();
     });
     // 任务栏锚定：进入时贴一次，之后显示器变化再贴（不再轮询）
     await reanchor();
@@ -370,6 +400,7 @@ onBeforeUnmount(() => {
   unlistenMoved?.();
   unlistenResized?.();
   unlistenSpectrum?.();
+  unlistenSettings?.();
   unlistenDisplay?.();
 });
 </script>

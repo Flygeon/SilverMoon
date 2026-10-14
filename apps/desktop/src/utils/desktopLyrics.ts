@@ -24,6 +24,25 @@ export const DL_BOUNDS_EVENT = "desktop-lyrics:bounds";
  * 混在一起会让每次频谱刷新都重传整份歌词。
  */
 export const DL_SPECTRUM_EVENT = "desktop-lyrics:spectrum";
+/**
+ * 主窗口 → 桌面歌词：设置已变更，请重新加载。
+ *
+ * 桌面歌词是**独立渲染进程**，有自己的一份 Pinia store。主窗口改设置时它的
+ * 内存副本不会更新（只在挂载时 load 一次），于是「改了设置但窗口没反应」。
+ * 这里只发「变了」的信号、**不传具体值**：让子窗口自己 load 是唯一可信源，
+ * 免得在 IPC 上再维护一套字段同步（也就不会有「漏传某个字段」的坑）。
+ */
+export const DL_SETTINGS_EVENT = "desktop-lyrics:settings-changed";
+
+/** 通知桌面歌词窗口重新加载设置（主窗口调用） */
+export async function emitDesktopLyricsSettingsChanged(): Promise<void> {
+  if (!isDesktop) return;
+  try {
+    await emitTo(DESKTOP_LYRICS_LABEL, DL_SETTINGS_EVENT, null);
+  } catch {
+    /* 窗口未开时无需通知 */
+  }
+}
 
 /** 推送频谱数据（主窗口调用） */
 export async function emitDesktopLyricsSpectrum(bins: number[]): Promise<void> {

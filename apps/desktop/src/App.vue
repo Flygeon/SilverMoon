@@ -36,6 +36,7 @@ import {
 } from "@/utils/desktopLyrics";
 import type { DesktopLyricsBounds } from "@/stores/settings";
 import { startSpectrumPush, stopSpectrumPush } from "@/utils/desktopLyricsSpectrum";
+import { emitDesktopLyricsSettingsChanged } from "@/utils/desktopLyrics";
 
 const settings = useSettingsStore();
 const player = usePlayerStore();
@@ -96,6 +97,14 @@ watch(
       // 等子窗口就绪事件回推一次状态（也做一次兜底延迟发送）
       window.setTimeout(() => pushDesktopLyricsState(), 400);
       syncSpectrumPush();
+      /**
+       * 子窗口已经开着时，改设置必须**通知它**。
+       *
+       * 两个窗口各有独立的 Pinia store：主窗口改了 desktopLyricsAnchor，
+       * 歌词窗口内存里那份不会跟着变（它只在挂载时 load 一次）。
+       * 所以这里把「设置变了」广播过去，让它重新 load 并重新锚定。
+       */
+      void emitDesktopLyricsSettingsChanged();
     } else {
       stopSpectrumPush();
       await closeDesktopLyricsWindow();
@@ -106,6 +115,42 @@ watch(
 watch(
   () => [settings.desktopLyricsIdleMode, player.audioEl] as const,
   () => syncSpectrumPush(),
+);
+
+/**
+ * 桌面歌词相关设置一变就通知子窗口。
+ *
+ * 两个窗口各有独立的 Pinia store，主窗口这边改了值，子窗口内存里那份不会变
+ * —— 子窗口只在自己挂载时 load 过一次。不通知的话，用户在设置页改了
+ * 「吸附任务栏」「逐字填充」等，歌词窗口**当场毫无反应**，
+ * 必须等下次重开窗口才生效（这正是「吸不上去」的根因之一）。
+ *
+ * 监听的是**整个桌面歌词设置组**而不是逐项：漏列一项就是一次
+ * 「改了没反应」，而多通知一次的代价只是一次 IPC + 一次读盘。
+ */
+watch(
+  () => [
+    settings.desktopLyricsAnchor,
+    settings.desktopLyricsAnchorAlign,
+    settings.desktopLyricsAnchorOffsetX,
+    settings.desktopLyricsAnchorOffsetY,
+    settings.desktopLyricsWordByWord,
+    settings.desktopLyricsIdleMode,
+    settings.desktopLyricsShowNext,
+    settings.desktopLyricsShowTranslation,
+    settings.desktopLyricsFontSize,
+    settings.desktopLyricsOpacity,
+    settings.desktopLyricsAnimation,
+    settings.desktopLyricsToolbar,
+    settings.desktopLyricsDoubleClick,
+    settings.desktopLyricsLocked,
+    settings.desktopLyricsAlwaysOnTop,
+    settings.desktopLyricsClickThrough,
+  ],
+  () => {
+    if (!settings.desktopLyricsEnabled) return;
+    void emitDesktopLyricsSettingsChanged();
+  },
 );
 
 onMounted(async () => {
