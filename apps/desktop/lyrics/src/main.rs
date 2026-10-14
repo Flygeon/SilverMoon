@@ -70,7 +70,7 @@ fn run_windows() {
 
     // 2) 起 stdin 读线程 → 投递到窗口线程
     let (tx, rx) = channel::<HostMessage>();
-    let _ = window::HOST_TX.set(tx.clone());
+    window::set_host_sender(tx.clone());
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
         let reader = BufReader::new(stdin.lock());

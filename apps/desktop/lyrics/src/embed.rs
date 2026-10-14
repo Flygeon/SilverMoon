@@ -22,11 +22,12 @@
 //! 第 5 步是关键：\`SetParent\` 会「成功返回」但实际没生效（参考项目注释里
 //! 记为 \`ReparentRejected\`）。**没有校验的嵌入是自欺欺人**。
 
-use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, FindWindowW, GetAncestor, GetWindowLongPtrW, SetParent, SetWindowLongPtrW,
     SetWindowPos, GA_PARENT, GWL_EXSTYLE, GWL_STYLE, HWND_TOP, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_SHOWWINDOW, WS_CHILD, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, WS_CHILD, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+    WS_VISIBLE,
 };
 
 /// 嵌入结果。
@@ -64,11 +65,17 @@ pub fn find_primary_taskbar() -> Option<HWND> {
 /// 视觉上够用且完全可逆。
 pub fn find_taskbar_container(taskbar: HWND) -> Option<HWND> {
     unsafe {
-        let rebar = FindWindowExW(taskbar, None, windows::core::w!("ReBarWindow32"), None).ok()?;
+        let rebar = FindWindowExW(
+            Some(taskbar),
+            None,
+            windows::core::w!("ReBarWindow32"),
+            None,
+        )
+        .ok()?;
         if !rebar.0.is_null() {
             return Some(rebar);
         }
-        let worker = FindWindowExW(taskbar, None, windows::core::w!("WorkerW"), None).ok()?;
+        let worker = FindWindowExW(Some(taskbar), None, windows::core::w!("WorkerW"), None).ok()?;
         if !worker.0.is_null() {
             Some(worker)
         } else {
@@ -92,7 +99,7 @@ pub fn embed_into(hwnd: HWND, parent: HWND) -> EmbedResult {
         // 否则切到浮贴模式时会残留置顶状态（参考项目也这么做）。
         SetWindowPos(
             hwnd,
-            HWND_TOP,
+            Some(HWND_TOP),
             0,
             0,
             0,
@@ -100,7 +107,8 @@ pub fn embed_into(hwnd: HWND, parent: HWND) -> EmbedResult {
             SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
         );
 
-        SetParent(hwnd, parent);
+        // SetParent 的父窗口参数是 Option<HWND>
+        SetParent(hwnd, Some(parent));
 
         let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
         let new_style =
@@ -114,7 +122,7 @@ pub fn embed_into(hwnd: HWND, parent: HWND) -> EmbedResult {
         // 让样式变更立即生效（否则窗口要等下一次重绘才认新样式）
         SetWindowPos(
             hwnd,
-            HWND_TOP,
+            Some(HWND_TOP),
             0,
             0,
             0,
@@ -137,7 +145,7 @@ pub fn place_in_taskbar(hwnd: HWND, x: i32, y: i32, width: i32, height: i32) {
     unsafe {
         SetWindowPos(
             hwnd,
-            HWND_TOP,
+            Some(HWND_TOP),
             x,
             y,
             width,
@@ -153,7 +161,8 @@ pub fn place_in_taskbar(hwnd: HWND, x: i32, y: i32, width: i32, height: i32) {
 /// 会让窗口变成一个没有父窗口的子窗口 —— 不可见、也无法交互。
 pub fn detach_from_taskbar(hwnd: HWND) {
     unsafe {
-        SetParent(hwnd, HWND(std::ptr::null_mut()));
+        // None = 脱离父窗口
+        SetParent(hwnd, None);
 
         let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
         let restored =
@@ -165,7 +174,7 @@ pub fn detach_from_taskbar(hwnd: HWND) {
 
         SetWindowPos(
             hwnd,
-            HWND_TOP,
+            Some(HWND_TOP),
             0,
             0,
             0,

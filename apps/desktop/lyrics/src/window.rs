@@ -11,11 +11,11 @@
 //! 关键点：**WebView2 是子控件，不是顶层窗口** —— 这正是 Electron 做不到的。
 
 use std::cell::RefCell;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::OnceLock;
 
 use windows::core::w;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetSystemMetrics,
@@ -27,8 +27,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::embed::{self, EmbedResult};
 
-/// 窗口类名（全局唯一，避免与宿主/其它进程冲突）。
-const CLASS_NAME: &str = "SilverMoonLyrics";
+// 窗口类名：`w!` 宏要求编译期字面量，因此下面两处（RegisterClassW 与
+// CreateWindowExW）必须写同一个字面量，改的时候一起改。
 
 /// 默认窗口尺寸（DIP）。高度贴合任务栏内高，宽度按参考项目的 560 起步。
 pub const DEFAULT_WIDTH: i32 = 560;
@@ -55,10 +55,17 @@ pub enum HostMessage {
 }
 
 /// 跨线程的消息投递器。
+///
+/// 保持 private：外部只能通过下面两个函数访问，避免别处直接 set/get
+/// 造成「谁先初始化」的竞态（OnceLock::set 重复调用会静默失败）。
 static HOST_TX: OnceLock<Sender<HostMessage>> = OnceLock::new();
 
-pub fn host_sender() -> Option<&'static Sender<HostMessage>> {
-    HOST_TX.get()
+/// 注册投递器（进程启动时调用一次）。
+///
+/// 返回是否注册成功：已被注册过（重复调用）返回 false 而非 panic ——
+/// 单例竞态不该让整个窗口起不来。
+pub fn set_host_sender(tx: Sender<HostMessage>) -> bool {
+    HOST_TX.set(tx).is_ok()
 }
 
 struct WindowState {
@@ -91,14 +98,12 @@ pub fn run(
 ) -> windows::core::Result<()> {
     unsafe {
         let hinstance = GetModuleHandleW(None)?;
-        let class_name = w!("SilverMoonLyrics");
-        let _ = CLASS_NAME; // 保留常量供调试/查找
 
         let wc = WNDCLASSW {
             style: CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc: Some(wnd_proc),
             hInstance: hinstance.into(),
-            lpszClassName: class_name,
+            lpszClassName: windows::core::w!("SilverMoonLyrics"),
             ..Default::default()
         };
         RegisterClassW(&wc);
@@ -110,7 +115,7 @@ pub fn run(
         // 万一嵌入失败，它也不会在屏幕中央闪一下。
         let hwnd = CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
-            class_name,
+            windows::core::w!("SilverMoonLyrics"),
             w!("SilverMoon Lyrics"),
             WS_POPUP | WS_VISIBLE,
             0,
@@ -119,7 +124,7 @@ pub fn run(
             height,
             None,
             None,
-            hinstance,
+            Some(HINSTANCE(hinstance.0)),
             None,
         )?;
 
@@ -276,7 +281,7 @@ pub fn reflow(hwnd: HWND, x: i32, y: i32, width: i32, height: i32) {
     unsafe {
         SetWindowPos(
             hwnd,
-            HWND_TOPMOST,
+            Some(HWND_TOPMOST),
             x,
             y,
             width,
@@ -291,7 +296,7 @@ pub fn move_to(hwnd: HWND, x: i32, y: i32, width: i32, height: i32) {
     unsafe {
         SetWindowPos(
             hwnd,
-            HWND_TOPMOST,
+            Some(HWND_TOPMOST),
             x,
             y,
             width,

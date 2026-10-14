@@ -31,6 +31,12 @@ pub fn web_dir_candidates(here: &Path) -> Vec<PathBuf> {
     let mut out = vec![here.join(WEB_DIR)];
     if let Some(parent) = here.parent() {
         out.push(parent.join(WEB_DIR));
+        // 开发态要**上两级**：可执行文件在 <crate>/target/release/，
+        // 而 lyrics-web 在 <crate>/lyrics-web/ —— 中间隔着 target/ 一层。
+        // 只上一级会落到 <crate>/target/lyrics-web（不存在）。
+        if let Some(grandparent) = parent.parent() {
+            out.push(grandparent.join(WEB_DIR));
+        }
     }
     out
 }
