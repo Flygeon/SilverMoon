@@ -89,6 +89,38 @@ describe("applyTaskbarAnchor", () => {
     expect(setPosition).not.toHaveBeenCalled();
   });
 
+  it("单位不一致（屏幕矩形被误缩）时拒绝移动，而不是乱吸", async () => {
+    // 复现真实事故：displayInfo 多除了一次 scaleFactor。
+    // 真实屏幕 1024x640 DIP @250%，被误报成 410x256；而窗口是 420 DIP 宽，
+    // outerSize 按约定返回**物理**像素 1050 → 换算回 DIP 得 420，
+    // 于是「窗口比屏幕还宽」——锚定会把窗口夹进一个四分之一大的盒子里。
+    displayInfo.mockResolvedValue({
+      bounds: { x: 0, y: 0, width: 410, height: 256 },
+      workArea: { x: 0, y: 0, width: 410, height: 236 },
+      scaleFactor: 2.5,
+    });
+    outerSize.mockResolvedValue({ width: 1050, height: 300 });
+    const ok = await applyTaskbarAnchor({ align: "center", offsetX: 0, offsetY: 0 });
+    expect(ok).toBe(false);
+    expect(setPosition).not.toHaveBeenCalled();
+  });
+
+  it("窗口与屏幕单位一致时正常锚定（护栏不能误伤）", async () => {
+    // 同一块 250% 缩放的屏幕，但 displayInfo 这次返回**正确**的 DIP 矩形
+    displayInfo.mockResolvedValue({
+      bounds: { x: 0, y: 0, width: 1024, height: 640 },
+      workArea: { x: 0, y: 0, width: 1024, height: 600 },
+      scaleFactor: 2.5,
+    });
+    outerSize.mockResolvedValue({ width: 1050, height: 300 });
+    const ok = await applyTaskbarAnchor({ align: "center", offsetX: 0, offsetY: 0 });
+    expect(ok).toBe(true);
+    const pos = setPosition.mock.calls[0][0];
+    // 居中：(1024-420)/2 = 302；贴任务栏上方：600-120 = 480
+    expect(pos.x).toBe(302);
+    expect(pos.y).toBe(480);
+  });
+
   it("按显示器缩放把物理尺寸换算成逻辑尺寸再定位", async () => {
     // 200% 缩放：窗口物理 840x240 → 逻辑 420x120
     displayInfo.mockResolvedValue({ ...withBottomTaskbar, scaleFactor: 2 });

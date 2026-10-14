@@ -286,28 +286,28 @@ const handlers: Record<string, Handler> = {
         return null;
       }
       /**
-       * 该窗口所在显示器的几何信息（**逻辑像素**）。
+       * 该窗口所在显示器的几何信息（**逻辑像素 DIP**）。
        *
        * 桌面歌词的「任务栏锚定」需要知道任务栏占哪块区域。Electron 不提供
        * 任务栏矩形，但 `bounds`（整块屏幕）与 `workArea`（去掉任务栏后的可用区）
        * 的差集就是任务栏 —— 这是零 native 代码的正解（见 utils/taskbarAnchor.ts）。
        *
-       * 这里做 DIP 换算后返回，是因为渲染进程的窗口定位走 LogicalPosition，
-       * 两边都统一成逻辑像素就不必在下游反复乘除 scaleFactor。
+       * ⚠️ **不要在这里再除以 scaleFactor。**
+       * Electron 的 `Display.bounds` / `workArea` **本来就是 DIP**，
+       * 而 `win.getBounds()` / `win.setPosition()` 收发的也是 DIP ——
+       * 主进程这一层全程是逻辑像素。再除一次会让高 DPI 屏上的屏幕矩形
+       * 缩成 1/scale（250% 缩放下 1024x640 会变成 410x256），
+       * 锚定就把窗口夹进一个只有四分之一大的盒子里，表现为「吸到不知道哪去」。
+       *
+       * scaleFactor 仍然返回：调用方要把 `outerSize()`（那条通道按仓库约定
+       * 输出**物理**像素，见下方 outerSize）换算回 DIP 时需要它。
        */
       case "displayInfo": {
         const d = screen.getDisplayMatching(win.getBounds());
-        const s = d.scaleFactor || 1;
-        const toLogical = (r: { x: number; y: number; width: number; height: number }) => ({
-          x: Math.round(r.x / s),
-          y: Math.round(r.y / s),
-          width: Math.round(r.width / s),
-          height: Math.round(r.height / s),
-        });
         return {
-          bounds: toLogical(d.bounds),
-          workArea: toLogical(d.workArea),
-          scaleFactor: s,
+          bounds: d.bounds,
+          workArea: d.workArea,
+          scaleFactor: d.scaleFactor || 1,
         };
       }
       default:

@@ -49,12 +49,33 @@ export async function applyTaskbarAnchor(options: AnchorOptions): Promise<boolea
   if (taskbar.width <= 0 || taskbar.height <= 0) return false;
 
   const size = await win.outerSize();
-  // outerSize 是物理像素，几何计算统一用逻辑像素
+  // outerSize 按仓库约定输出**物理**像素（见 electron/ipc.ts），
+  // 而 displayInfo 给的 bounds/workArea 是 **DIP** —— 这里换算成同一套单位。
   const scale = display.scaleFactor || 1;
   const logical = {
     width: Math.round(size.width / scale),
     height: Math.round(size.height / scale),
   };
+
+  /**
+   * 单位自检：**窗口不可能比整块屏幕还大**。
+   *
+   * 这是单位用错时最先出现的症状：曾经 displayInfo 多除了一次 scaleFactor，
+   * 250% 缩放下屏幕矩形被缩成 410x256，而窗口仍是 420x120 —— 窗口比「屏幕」还宽，
+   * 于是锚定把它夹进一个只有真实屏幕四分之一大的盒子里，
+   * 表现为「吸到不知道哪去了」。
+   *
+   * 留 8px 容差：无边框窗口的尺寸偶尔会比屏幕多出一点亚像素/边框误差，
+   * 那是正常的；超出更多就一定是两边的坐标系不一致。
+   * 宁可不动，也不要把窗口扔到一个用户找不到的地方。
+   */
+  const TOLERANCE = 8;
+  if (
+    logical.width > display.bounds.width + TOLERANCE ||
+    logical.height > display.bounds.height + TOLERANCE
+  ) {
+    return false;
+  }
 
   const pos = computeAnchoredPosition({
     display,
