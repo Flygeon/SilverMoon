@@ -306,7 +306,10 @@ jobs:
             BIN="apps/desktop/release/win-unpacked/resources/bin"
             EXE="silvermoon-fqapi.exe"
           elif [ "${{ runner.os }}" = "macOS" ]; then
-            BIN="apps/desktop/release/mac/SilverMoon.app/Contents/Resources/bin"
+            # 目录名随架构变（mac / mac-arm64 / mac-universal），不要写死：
+            # 实测 macos runner 是 arm64，产物落在 release/mac-arm64/。
+            APP=$(find apps/desktop/release -maxdepth 3 -name "SilverMoon.app" -type d | head -1)
+            BIN="$APP/Contents/Resources/bin"
             EXE="silvermoon-fqapi"
           else
             BIN="apps/desktop/release/linux-unpacked/resources/bin"
