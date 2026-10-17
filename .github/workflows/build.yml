@@ -292,6 +292,35 @@ jobs:
         working-directory: apps/desktop
         run: npx electron-builder ${{ matrix.package-args }} --publish never
 
+      # 打包产物自检：确认 extraResources 真的落地了。
+      #
+      # 为什么需要这一步：electron-builder 对「from 指向的文件不存在」确实会
+      # 失败，但**如果那是唯一一条资源缺失、或者 to 路径写错**，现象可能是
+      # 安装包里悄悄少一个文件 —— 用户装完才发现内容源不可用。断言在 CI 里
+      # 比在本机拿压缩包猜要可靠。
+      - name: Verify bundled resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            BIN="apps/desktop/release/win-unpacked/resources/bin"
+            EXE="silvermoon-fqapi.exe"
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            BIN="apps/desktop/release/mac/SilverMoon.app/Contents/Resources/bin"
+            EXE="silvermoon-fqapi"
+          else
+            BIN="apps/desktop/release/linux-unpacked/resources/bin"
+            EXE="silvermoon-fqapi"
+          fi
+          if [ ! -d "$BIN" ]; then
+            echo "目录不存在：$BIN —— 下面是 release/ 的实际结构"
+            find apps/desktop/release -maxdepth 4 -type d | head -40
+            exit 1
+          fi
+          ls -la "$BIN"
+          test -f "$BIN/$EXE" || { echo "缺少 $EXE —— extraResources 未生效"; exit 1; }
+          echo "OK: $EXE 已随包分发"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
         with:
