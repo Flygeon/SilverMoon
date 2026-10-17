@@ -25,6 +25,9 @@ release/
 # 启动器（独立原生小程序）的构建产物
 splash/target/
 
+# 番茄内容源 sidecar 的构建产物
+fqapi/target/
+
 # 启动器产物：CI 打包前从 splash/target 拷进来（见 .github/workflows/build.yml）
 src-tauri/splash-bin/
 

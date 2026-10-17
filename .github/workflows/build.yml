@@ -116,6 +116,17 @@ jobs:
       - name: Unit tests (splash pure logic)
         run: cargo test --manifest-path apps/desktop/splash/Cargo.toml --lib
 
+      # 番茄内容源 sidecar。它是独立 crate（reqwest 0.13 + rustls），
+      # 与 backend 的依赖版本不同，因此单独检查、单独缓存。
+      - name: Rustfmt check (fqapi sidecar)
+        run: cargo fmt --check --manifest-path apps/desktop/fqapi/Cargo.toml
+
+      - name: Clippy (fqapi sidecar)
+        run: cargo clippy --manifest-path apps/desktop/fqapi/Cargo.toml --all-targets -- -D warnings
+
+      - name: Unit tests (fqapi pure logic)
+        run: cargo test --manifest-path apps/desktop/fqapi/Cargo.toml --lib
+
   # ---------------------------------------------------------------------------
   # 安装包：Windows NSIS / Linux AppImage / macOS dmg
   #
