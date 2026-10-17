@@ -889,7 +889,13 @@ router.afterEach((to) => {
   transform: translateY(-4px);
 }
 
-/* 播放器路由：抽屉式滑入滑出 */
+/* 播放器路由：抽屉式滑入滑出。
+ *
+ * 注意：这只在**没有 hero 飞行**时生效（从别处直接进播放器，或目标 rect 量不到
+ * 导致飞行取消）。hero 起飞时 <html> 上会挂 .lm-hero-flying，下面那条规则把
+ * 整页位移关掉 —— 否则「整页从下滑上来」和「封面从迷你条飞过来」两条位移
+ * 叠在一起，封面会走出一条诡异的斜线。
+ */
 .player-enter-active,
 .player-leave-active {
   transition:
@@ -900,6 +906,12 @@ router.afterEach((to) => {
 .player-leave-to {
   transform: translateY(100%);
   opacity: 0.6;
+}
+
+/* hero 飞行期间：播放器路由过渡只淡入，不做整页位移 */
+:global(html.lm-hero-flying) .player-enter-from,
+:global(html.lm-hero-flying) .player-leave-to {
+  transform: none;
 }
 
 /* 全局回退提示 toast */

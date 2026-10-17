@@ -9,6 +9,17 @@
  * 动画（lm-rise）与挂载测量时序影响实际不生效；本版改为独立的 fixed
  * 克隆层，完全不依赖目标容器的布局与动画状态——只要能量到目标 rect
  * 就能飞，量不到就静默取消，绝不留残影。
+ *
+ * ## 两种使用场景
+ *
+ * 1. **同组件内切 view**（AnimeOnlineView）：起飞与降落都在同一个组件里，
+ *    直接用局部变量持有 flight 即可。
+ * 2. **跨路由**（MiniPlayer → /music/player）：起飞的组件在导航后被 v-if
+ *    销毁，降落的组件此时才挂载。中间必须寄存，见 holdHeroFlight /
+ *    releaseHeroFlight —— 用模块级变量，因为这是同一渲染进程内的瞬时交接。
+ *
+ * 两个场景都遵守同一条顺序铁律：**先量 rect、起飞、寄存，再切路由**。
+ * 反过来的话源元素已经脱离文档，rect 归零，动画起不来。
  */
 
 export interface HeroFlight {
@@ -33,10 +44,54 @@ const HERO_EASING = "cubic-bezier(0.05, 0.7, 0.1, 1)";
  * `getAnimations()` 默认只返回绑定在**该元素自身**上的动画（不含子树），所以这里手动
  * 沿祖先链逐级收敛；`fill: both` 的动画 `finish()` 后停在终点，因此量到的是最终布局位置。
  */
+/**
+ * 会影响 getBoundingClientRect() 的属性。
+ *
+ * 只有这些在跑时，量到的 rect 才是「中间态」，必须快进到终点。
+ * 纯 opacity / filter / color 的动画不影响布局，**不能**碰 —— 快进它们等于
+ * 把目标页的淡入直接掐掉，观感上变成「页面瞬间全亮、封面还在半空」。
+ */
+const LAYOUT_PROPS = [
+  "transform",
+  "translate",
+  "rotate",
+  "scale",
+  "left",
+  "top",
+  "width",
+  "height",
+  "margin",
+  "padding",
+];
+
+/**
+ * 该动画是否影响布局（判断不了就返回 true，宁可快进也不要量错位置）。
+ *
+ * KeyframeEffect.getKeyframes() 在 lib.dom 里挂在 KeyframeEffect 而不是
+ * AnimationEffect 上，所以要先判类型 —— CSS 过渡/动画产生的都是 KeyframeEffect。
+ */
+function affectsLayout(a: Animation): boolean {
+  try {
+    const effect = a.effect;
+    if (!effect || !("getKeyframes" in effect)) return true;
+    const frames = (effect as KeyframeEffect).getKeyframes();
+    for (const frame of frames) {
+      for (const key of Object.keys(frame)) {
+        const k = key.toLowerCase();
+        if (LAYOUT_PROPS.some((p) => k.includes(p))) return true;
+      }
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 function settleEntryAnimations(el: HTMLElement): void {
   let node: HTMLElement | null = el;
   while (node && node !== document.body) {
     for (const a of node.getAnimations()) {
+      if (!affectsLayout(a)) continue;
       try {
         a.finish();
       } catch {
@@ -51,10 +106,25 @@ function settleEntryAnimations(el: HTMLElement): void {
  * 从源封面元素起飞：克隆一个 fixed 飞行层挂到 body 上并隐藏源元素。
  * 源元素不可用时返回 null（调用方按无动画处理）。
  */
+/**
+ * 飞行期间挂在 <html> 上的标记类。
+ *
+ * 让**页面级过渡**知道「现在有东西在飞，别再整页平移」——见 App.vue 里
+ * html.lm-hero-flying 下的 .player-enter-from 规则。没有这个标记时，
+ * 「整页从下滑上来」会和「封面从迷你条飞过去」叠成一条斜线。
+ */
+const FLYING_CLASS = "lm-hero-flying";
+
+function markFlying(on: boolean): void {
+  if (typeof document === "undefined") return;
+  document.documentElement.classList.toggle(FLYING_CLASS, on);
+}
+
 export function startHeroFlight(srcEl: HTMLElement | null | undefined): HeroFlight | null {
   if (!srcEl?.isConnected) return null;
   const from = srcEl.getBoundingClientRect();
   if (!from.width || !from.height) return null;
+  markFlying(true);
 
   const clone = srcEl.cloneNode(true) as HTMLElement;
   clone.removeAttribute("id");
@@ -88,6 +158,7 @@ export function startHeroFlight(srcEl: HTMLElement | null | undefined): HeroFlig
     clone.remove();
     srcEl.style.visibility = "";
     if (destEl) destEl.style.visibility = "";
+    markFlying(false);
   };
 
   return {
@@ -127,6 +198,45 @@ export function startHeroFlight(srcEl: HTMLElement | null | undefined): HeroFlig
     },
     cancel: restore,
   };
+}
+
+// ---- 跨路由传递：起飞与降落不在同一个组件里时用这一对 ----
+
+/**
+ * 待降落的飞行。
+ *
+ * AnimeOnlineView 那种「同组件内切 view」的场景可以直接持有 flight 变量，
+ * 但「迷你播放条 → 播放器路由」是**跨组件 + 跨路由**的：起飞的组件（MiniPlayer）
+ * 在导航后被 v-if 销毁，降落的组件（PlayerView）此时才挂载。中间必须有个地方
+ * 寄存它，否则飞行层要么永远停在半空，要么被 GC 前先留下残影。
+ *
+ * 用模块级变量而不是 sessionStorage/全局状态：这是**同一个渲染进程内的瞬时**
+ * 交接，不需要持久化，也不需要跨窗口。
+ */
+let pendingFlight: HeroFlight | null = null;
+
+/** 起飞后寄存，等目标组件挂载时取走 */
+export function holdHeroFlight(flight: HeroFlight): void {
+  // 上一次没被取走（目标路由没挂载就退出了）的飞行要先收掉，否则会留下克隆层
+  pendingFlight?.cancel();
+  pendingFlight = flight;
+}
+
+/** 取走并清空。没有待降落飞行时返回 null（调用方按无动画处理）。 */
+export function releaseHeroFlight(): HeroFlight | null {
+  const flight = pendingFlight;
+  pendingFlight = null;
+  return flight;
+}
+
+/**
+ * 是否有待降落的飞行。
+ *
+ * 给「降落方要决定自己怎么出场」的场景用：迷你播放条在被 hero 降落时，
+ * 自己的 slide-up 入场应当关掉（否则两条位移叠在一起）。
+ */
+export function hasPendingHero(): boolean {
+  return pendingFlight !== null;
 }
 
 /**

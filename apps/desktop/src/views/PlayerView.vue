@@ -6,6 +6,12 @@ import { useNeteaseStore } from "@/stores/netease";
 import { useRouter } from "vue-router";
 import { translate } from "@shared/i18n";
 import FluidBackground from "@/components/FluidBackground.vue";
+import {
+  holdHeroFlight,
+  landHeroFlight,
+  releaseHeroFlight,
+  startHeroFlight,
+} from "@/utils/heroTransition";
 import LyricsView from "@/components/LyricsView.vue";
 import PlayerControlIcon from "@/components/PlayerControlIcon.vue";
 import AudioEffectsPanel from "@/components/AudioEffectsPanel.vue";
@@ -40,6 +46,27 @@ const progressValue = computed(() =>
 const commentsOpen = ref(false);
 const panelOpen = ref(false);
 const panelAnchor = ref<HTMLElement | null>(null);
+
+/**
+ * 封面容器：hero 飞行的降落点 / 反向起飞点。
+ *
+ * 绑 .cover-wrap 而不是 <img>：它带圆角与阴影，量 <img> 会漏掉圆角，
+ * 飞行结束时有「方角变圆角」的跳变。
+ */
+const coverWrapEl = ref<HTMLElement | null>(null);
+
+/**
+ * 返回列表页（播放器 → 迷你条）。
+ *
+ * 顺序：**先量封面起飞，再 router.back()**。反过来导航一发生 PlayerView 就被
+ * 卸载，此时再量 rect 拿到的是零尺寸，飞行层起不来。
+ * 降落点由 MiniPlayer 在挂载时自己取（见 App.vue 的 heroLand 调用）。
+ */
+function closePlayer(): void {
+  const flight = startHeroFlight(coverWrapEl.value);
+  if (flight) holdHeroFlight(flight);
+  void router.back();
+}
 
 /**
  * 窄屏（移动端）下封面与歌词互斥显示。
@@ -217,6 +244,18 @@ onMounted(() => {
   player.setPlaybackRate(speed.value);
   document.addEventListener("pointerdown", onDocPointerDown, true);
   document.addEventListener("keydown", onDocKeyDown);
+
+  /*
+   * hero 降落：从迷你播放条展开过来时，飞行层正在半空中等这里挂载。
+   *
+   * releaseHeroFlight() 取走并清空（同一个飞行只能降一次）。没有待降落飞行时
+   * 返回 null，landHeroFlight 会直接返回 —— 从别处（如直接输 URL）进播放页
+   * 就不播动画，符合预期。
+   *
+   * 目标取 .cover-wrap 而不是 <img>：它带着圆角与阴影，量 <img> 会漏掉圆角，
+   * 飞行结束时会有一个「方角变圆角」的跳变。
+   */
+  landHeroFlight(releaseHeroFlight(), () => coverWrapEl.value);
 });
 
 onBeforeUnmount(() => {
@@ -233,7 +272,7 @@ onBeforeUnmount(() => {
 
     <!-- 顶部覆盖层（拖拽由 CSS app-region 交给系统原生处理） -->
     <div class="player-topbar">
-      <button class="back" @click="router.back()" @pointerdown.stop>
+      <button class="back" @click="closePlayer" @pointerdown.stop>
         <span class="material-symbols-outlined">arrow_back</span> {{ t("player.back") }}
       </button>
     </div>
@@ -245,7 +284,12 @@ onBeforeUnmount(() => {
     >
       <!-- 左栏：封面 + 信息 + 进度 + 控制 -->
       <div class="left-col">
-        <div class="cover-wrap" :class="{ clickable: canShowComments }" @click="onCoverTap">
+        <div
+          ref="coverWrapEl"
+          class="cover-wrap"
+          :class="{ clickable: canShowComments }"
+          @click="onCoverTap"
+        >
           <div v-if="player.song?.cover" class="cover">
             <img :src="player.song.cover" alt="" />
           </div>

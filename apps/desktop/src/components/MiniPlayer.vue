@@ -1,14 +1,65 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { usePlayerStore } from "@/stores/player";
 import { useNeteaseStore } from "@/stores/netease";
 import PlayerControlIcon from "@/components/PlayerControlIcon.vue";
 import { formatTime } from "@/utils/format";
+import {
+  hasPendingHero,
+  holdHeroFlight,
+  landHeroFlight,
+  releaseHeroFlight,
+  startHeroFlight,
+} from "@/utils/heroTransition";
 
 const player = usePlayerStore();
 const netease = useNeteaseStore();
 const router = useRouter();
+
+/**
+ * 封面容器：hero 飞行的起飞点。
+ *
+ * 绑在 .cover 而不是 <img> 上：无封面时这里放的是音符图标，同样需要一个
+ * 「有形状的源」。而且 .cover 自带圆角与阴影，克隆出来更像一个整体。
+ */
+const coverEl = ref<HTMLElement | null>(null);
+
+/**
+ * 是否要抑制自己的入场动画。
+ *
+ * 从播放器「返回」时，hero 会从播放器封面飞回这个迷你条；如果迷你条同时
+ * 还在播 slide-up（从底部升起），两条位移叠加会变成一条诡异的抛物线。
+ * 检测方式：挂载时若已有一个「待降落」的飞行，说明这次是从别处飞回来的。
+ *
+ * ⚠️ 必须在 **setup 阶段**（同步）就定下来，不能等 onMounted：
+ * CSS animation 在元素插入文档时立刻开始播，onMounted 已经晚了一拍，
+ * 那时 slide-up 早跑了几帧，再摘掉 animation 会看到一次突兀的跳位。
+ * setup 在渲染之前执行，此时 pendingFlight 还在（降落方还没 release），判断可靠。
+ */
+const suppressEnter = ref(hasPendingHero());
+
+onMounted(() => {
+  /*
+   * 反向 hero 降落：从播放器返回时，飞行层正从播放器封面飞向这里。
+   * 目标取 .cover（48×48 正方形），与起飞时的形状一致，等比缩放不变形。
+   * 没有待降落飞行时 releaseHeroFlight() 返回 null，landHeroFlight 直接返回。
+   */
+  landHeroFlight(releaseHeroFlight(), () => coverEl.value);
+});
+
+/**
+ * 展开到完整播放器。
+ *
+ * 顺序很重要：**先量封面、起飞、寄存，再导航**。
+ * 反过来的话，导航一发生 isPlayerPage 就变 true，MiniPlayer 立刻被 v-if 销毁，
+ * 此时再 startHeroFlight 拿到的 rect 已经是空的（元素已脱离文档）。
+ */
+function expandToPlayer(): void {
+  const flight = startHeroFlight(coverEl.value);
+  if (flight) holdHeroFlight(flight);
+  void router.push("/music/player");
+}
 
 const progress = computed(() =>
   player.duration ? (player.currentTime / player.duration) * 100 : 0,
@@ -34,7 +85,11 @@ function seek(e: MouseEvent) {
 </script>
 
 <template>
-  <div class="mini-player lm-glass" data-lm-region="miniplayer">
+  <div
+    class="mini-player lm-glass"
+    :class="{ 'no-enter': suppressEnter }"
+    data-lm-region="miniplayer"
+  >
     <!-- 进度条置顶，点击可跳转 -->
     <div class="track" @click.stop="seek">
       <div class="fill" :style="{ width: progress + '%' }">
@@ -42,8 +97,9 @@ function seek(e: MouseEvent) {
       </div>
     </div>
 
-    <div class="body" @click="router.push('/music/player')">
-      <div class="cover">
+    <div class="body" @click="expandToPlayer">
+      <!-- 起飞点：hero 飞行层从这里克隆，见 utils/heroTransition -->
+      <div ref="coverEl" class="cover">
         <img v-if="player.song?.cover" :src="player.song.cover" alt="" />
         <span v-else class="material-symbols-outlined">music_note</span>
       </div>
@@ -83,7 +139,7 @@ function seek(e: MouseEvent) {
         <m3e-icon-button size="small" title="下一首" @click="player.next()">
           <span class="material-symbols-outlined filled">skip_next</span>
         </m3e-icon-button>
-        <m3e-icon-button size="small" title="展开播放器" @click="router.push('/music/player')">
+        <m3e-icon-button size="small" title="展开播放器" @click="expandToPlayer">
           <span class="material-symbols-outlined">expand_less</span>
         </m3e-icon-button>
       </div>
@@ -102,6 +158,17 @@ function seek(e: MouseEvent) {
   border-top: 1px solid var(--lm-hairline);
   font-family: var(--lm-player-font);
   animation: slide-up 320ms var(--md-sys-motion-spring-spatial);
+}
+
+/*
+ * hero 降落时关掉自己的入场。
+ *
+ * 从播放器返回时，飞行层正从播放器封面飞向这个迷你条；如果迷你条同时还在播
+ * slide-up（从底部升起），两条位移叠加会变成一条诡异的抛物线。这里直接跳过
+ * 入场——飞行层落到终点后移除，露出的就是静止的迷你条。
+ */
+.mini-player.no-enter {
+  animation: none;
 }
 @keyframes slide-up {
   from {
