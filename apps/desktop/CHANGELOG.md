@@ -1,5 +1,149 @@
 # Changelog
 
+## 0.1.1
+
+> 这一版跨度很大，主线有三条：
+> **① 宿主从 Tauri 迁回 Electron**（用户要求，最终稳定在三平台全绿）；
+> **② 扩展系统补完**（能改主界面，皮肤改由扩展承载）；
+> **③ 新增番茄小说在线书源**（第一个独立进程形态的内容源）。
+> 中间还试过 KMP / RN 两条桌面端路线，都验证后撤掉了；任务栏歌词做过一版
+> 真嵌入，因为稳定性问题回滚，改为指路原项目。
+>
+> 下面按**主题**归类，不按提交顺序 —— 同一条主线往往横跨几十个提交。
+
+### 重大：桌面端宿主 Tauri → Electron
+
+用户判定 Tauri 路线不合适后，整体迁回 Electron。
+
+- **迁移本质是「脱壳改名」，不是重写**。Rust 侧 `src-tauri/src` 约 19891 行里
+  含 tauri 引用的只有 537 行（2.7%），API 表面约 450 处机械改名
+  （`#[tauri::command]` 195 / `AppHandle` 221 / `Manager` 13 / `State` 9）。
+- **恢复了 `silvermoon-ipc` 契约层**（app / host / window / tray / menu / rt /
+  server / plugins / image / internal + ipc-macros）。Tauri 时代这层被删掉了，
+  它的作用是让 156 个业务命令「一行都不用改」。
+- **宿主层重建**：`electron/`（main / sidecar / windows / tray / updater /
+  splash / protocols / csp / net-headers / store / tags …）。后端以独立
+  sidecar 进程运行，经 `POST /cmd` + `GET /events`（SSE）通信。
+- **启动性能**：去掉启动画面的那版把图标字体从 5.2 MB 子集化到 90 KB；
+  后来恢复原生启动动画并改成「首屏就绪再显示窗口」；窗口提前到
+  `ContentLoading` 显示，切开 `run → setup` 那 1.2 秒。
+- 迁移踩的坑（都修了）：`package.json` 缺 `main` 字段、`silvermoon.config.json`
+  缺 `sidecar` 段（直接导致安装包启动失败）、漏改不带 `tauri::` 前缀的
+  `use` 导入、契约层缺 `app_log_dir`、缺 `semver`/`sha1` 依赖。
+
+### 重大：扩展系统补完
+
+- **独立 `ext:` 协议**：扩展 UI 不再复用 `asset:`，权限 / 版本 / 懒加载生效。
+- **扩展可以改主界面**：`contributes.nav` 往导航栏加项、`contributes.ui`
+  往页面塞块 —— 扩展不再只能另开窗口 + 靠热键唤起。
+- **通用具名插槽**：`contributes.ui surface=slot`，宿主在**真实位置**开槽
+  （设置页各分类、百宝箱等 7 个）。
+- **皮肤改由扩展承载**（`contributes.themes`），设置页的皮肤板块移除。
+- 示例扩展 `disk-lens`（磁盘透镜）。
+- 修：扩展窗口空白（宿主 emit 早于前端 listen → 改挂载时拉取）、
+  纯 UI 扩展被误标成「引擎启动失败」。
+
+### 新增：番茄小说书源
+
+- **独立的 sidecar 进程** `silvermoon-fqapi`（`apps/desktop/fqapi/`）。裁剪自
+  [fqapp](https://github.com/ch6vip/fqapp)（GPL-3.0）的 Rust 核心，保留签名
+  （argus / ladon / sm3）、设备池、上游调用与 40+ 端点；删掉了它的宿主形态
+  （flutter_rust_bridge 桥、loopback HTTP 适配器、内置 WebUI）。
+  为什么独立进程：它依赖 `reqwest 0.13 + rustls`，而后端是 `0.12 + native-tls`，
+  编进同一个 crate 会有两份 reqwest、编译时间翻倍，且 TLS provider 只能选一个。
+  独立进程还让上游封禁 / 设备池异常不波及主应用。
+- **通信**：stdio 行分隔 JSON，零端口，握手行 `FQAPI_READY {...}`。
+  **懒启动** —— 不用这个源的用户不付常驻进程的代价。
+- **正文解析放在 Rust 侧**（`src/chapter.rs`）：上游正文是 HTML 富文本，
+  解析成段落后再交给阅读器，规则对齐原项目（含丢弃 `{!-- PGC_VOICE --}` 这类注记）。
+- **前端**：搜索（含分页）、详情、目录、阅读器、**推荐流**（按模块分组）、
+  **排行榜**、**我的书架**。书架复用既有的 `novel_shelf_*` 表，三个源共用。
+- **自检内置**：`selftest` 走「设备池 → 搜索 → 详情 → 解一章正文」四步，
+  失败时把真实原因显示在页面上，而不是给一个空列表。
+
+### 新增：书页渠道下拉
+
+在线源增加到三个后，横向胶囊越来越挤，改为「一级 本地 / 在线 / 创作 +
+二级渠道下拉」（`NovelChannelBar.vue`，`m3e-form-field` + `m3e-select`）。
+将来加第四个源只需往数组推一项。
+
+### 新增：桌面歌词
+
+- 对标 TaskbarLyrics 做了**任务栏锚定 + 逐字填充 + 频谱回退**三件套。
+  锚定用「显示器 bounds 与 workArea 的差集即任务栏矩形」，零 Win32 依赖。
+- 随后按要求改为 **Rust 原生窗口 + `SetParent` 真嵌入任务栏**（新 crate
+  `apps/desktop/lyrics`，双层窗口 + `wry` 内嵌 WebView2）。
+- **最终回滚**：因为稳定性问题（进程活着但窗口不可见、DPI、坐标系、消息循环
+  等多处缺陷反复出现），整体回滚到加任务栏歌词之前的版本，改为在设置页放一张
+  引导卡，指向原项目 TaskbarLyrics。**结论：SilverMoon 不再自己实现任务栏歌词，
+  只保留桌面歌词（浮窗）。**
+
+### 新增：绘画与 GPU 画布
+
+- **独立最大化绘画窗口**（打开先隐藏主窗口），补 floodFill、形状三种填充模式、
+  缩放平移、撤销重做、单键快捷键。
+- **wgpu GPU 画布可行性验证**：独立无边框原生窗口 + GPU 直绘。
+  **最终改为 opt-in、默认关**，因为踩到四个坑（surface 尺寸从不重配导致
+  未定义行为闪退、`gpu-allocator` 版本约束冲突、并发创建、**Intel Vulkan
+  驱动 `igvk64.dll` 导致原生崩溃**），Windows 上默认排除 Vulkan。
+
+### 新增：配色系统
+
+- **改为真正的 MCU 动态主题**（Tonal Spot · M3 Expressive color spec 2025 ·
+  platform=phone · contrastLevel=0），内核 `shared/m3-theme.ts`（浏览器与
+  Electron 主进程共用，零 DOM 依赖），MCU 升 0.4.0。
+- 角色共 56 个（含 2025 新增的 primary/secondary/tertiary/error-dim、
+  fixed 系列 12 个、surface-variant/surface-tint），另加项目语义色
+  success/warning/link。`scrim` 被改成半透明，因为项目里它直接当蒙层用。
+- `theme.css` 的两个色令牌段由脚本生成，手改会被单测挡下。
+
+### 改进：IPC 性能
+
+- 发现**批量缩略图**走的是 N 次往返，改成一趟批量（`sm:invokeBatch`）。
+- **把阻塞命令移出主线程** —— 修掉 3~4.5 秒的界面冻结。
+  （判据：同步 `#[command]` 跑在主线程，耗时含排队时间。）
+- 接入 IPC 计量（默认关，可写日志），指标能事后分析。
+
+### 改进：设置页
+
+- 分类从 6 个扩到 **19 个**，并去掉导航标签里的硬编码中文。
+- 新增**设置搜索**（`SettingRow` 组件 + 生成的索引 + 防漂移守卫）。
+- 布局改成**左右两栏各自滚动**，修掉嵌套滚动与滑块不渲染；
+  修卡片宽度随内容乱跳（flex 容器里 `margin:auto` 吞掉交叉轴空间的经典坑）。
+
+### 改进：搜索栏统一
+
+原先轻小说 / 网络小说 / 番茄各写一份「输入框 + 搜索按钮」，三套样式。
+抽出 `NovelSearchBar.vue` 并改用官方 MD3E 组件 `m3e-search-bar`，
+一致性成为结构保证而不是靠人记得同步。
+
+### 其他修复
+
+- **AutoMix** 曲尾过渡与 `ended` 事件竞态导致切歌后没声音。
+- **B 站视频 403** —— 插件的 Origin 注入与禁头过滤；视频无法播放是
+  capability 的 URL pattern 漏了端口。
+- **扫描目录不生效**，并新增黑白名单两种扫描范围模式。
+- **番茄**：
+  - 搜索结果的标题带 `<em>` 高亮标记，直接渲染会把标签显示出来。
+  - 详情页分类显示成 `悬疑脑洞,/悬/疑/脑/洞` —— 上游 `tags` 是逗号分隔的
+    **字符串**而非数组，按数组展开会让每个字符各占一项。
+  - 推荐流整页「（无标题）」—— 搜索接口给 `title`、推荐/榜接口给 `book_name`，
+    归一化只认前者。
+  - 详情页标签渲染成一排空心圆圈 —— `m3e-chip` 的 `label` 是只读 getter，
+    文字必须放默认插槽。
+  - 详情页「返回」按钮被拉满整行（flex column 默认 `stretch`）。
+- **hero 动画**（迷你条 → 播放器封面飞行）黑屏：真根因是 `scoped` 样式里的
+  `:global(X) .descendant` 会被 Vue 编译器丢弃，覆盖规则成了死代码。
+- **内存**：按进程诊断，消除两处最大内存尖峰；内存基准工具链 + V8 启动开关。
+- 重新生成图标字体子集（多次，随新增图标）。
+
+### 验证过但撤掉的路线
+
+- **KMP / Compose Multiplatform 桌面端**：做完并跑通 CI（含 jpackage 打包、
+  后端 exe 打进 jar、首启释放到 `%APPDATA%`），随后**整个项目移除**。
+- **RN 桌面端（React Native Windows/macOS）**：只做出框架骨架 + CI，
+  未推进。
+
 ## 0.1.0
 
 > 第一个功能版本。重点是**把已实现的东西做扎实**：堵上远程页可触达特权面、补上
@@ -131,6 +275,7 @@
 > 尚未发布过正式版本，1.x 的版本线属于前身项目，直接沿用会让首个 release 名不副实。
 
 ### 品牌
+
 - 全平台图标换新：源图 `assets/icon-source.png`（1254² 方形插画），统一裁**圆角方形 + 保留原背景**
 - 新增 `scripts/gen_icons.py`：单张源图产出 Windows `.ico`（16/24/32/48/64/128/256）、macOS `.icns`（32→1024）、
   Linux/Electron `.png`、Windows Store 磁贴与 Android 自适应图标全套装；改图只需重跑一条命令
@@ -144,6 +289,7 @@
 > **两侧业务逻辑均零改动**；`src/` 与 `shared/` 的 136 个源文件里只有品牌串与构建配置发生变化。
 
 ### 架构
+
 - 桌面壳由 **Tauri 2** 换成 **Electron 44**；Rust 后端保留为**独立 sidecar 进程**，经 `127.0.0.1` 上的 HTTP（命令）+ SSE（事件）与宿主通信，两侧共用 `X-SilverMoon-Token` 鉴权
 - 新增 `backend/crates/silvermoon-ipc/`：命令注册宏 + 路由表 + 托管状态 + 事件总线 + 本地 HTTP/SSE 服务，覆盖实测用到的全部调用面（154 个命令、190+ 处应用句柄、29 处 `State` 注入、42 处 `spawn_blocking`、4 处窗口、托盘/菜单、真 tokio 运行时）
 - 新增 `backend/crates/silvermoon-ipc-macros/`：`#[command]` / `generate_handler!` / `generate_context!` 三个宏，按形参**类型**（而非位置）注入应用句柄与 `State`，键名映射遵循「去前导下划线 → camelCase」规则
@@ -154,6 +300,7 @@
 - **仓库内已无任何 Tauri 依赖或字样**：`@tauri-apps/*` 六个 npm 包与六个 `tauri-plugin-*` crate 全部移除
 
 ### 迁移要点
+
 - 托盘菜单与扩展贡献项仍由 Rust 构造，经宿主操作送交 Electron 创建原生托盘，保持 `tray.rs` 零改动
 - SMTC（`smtc-tokio`）与 WebDAV / 番剧的本地 tiny_http 代理本就与桌面框架无关，原样保留在后端进程
 - 登录态与本地数据目录沿用 `<appData>/<identifier>` 约定；首次启动自动从旧项目目录 `cn.cool.lumiluna` 整目录复制一次（只读旧目录，绝不删改）
@@ -161,21 +308,23 @@
 - 远程页（Pixiv 登录、文库8 登录、番剧取流）的宿主全局由 `window.__TAURI__` 改为 `window.__SILVERMOON_HOST__`
 
 ### 品牌
+
 - 软件显示名统一为 **SilverMoon**（窗口标题、启动屏、标题栏、安装快捷方式、皮肤过滤器名、扩展页文案、对话框标题）
 - 项目另有中文名 **银月**，但**只用于 README / CHANGELOG 等文档描述，不出现在软件界面里**
 - `productName` 与 `identifier` 保持 ASCII 不变（打包产物名、数据目录、`localStorage` / IndexedDB 键名）
 - 修掉一处迁移遗漏：**英文语言包的应用名仍是旧名 `LumiLuna`**（`shared/i18n.ts` 的 `en.app.name`），切到英文界面时会显示错
 
 ### 修复
+
 - **宿主网络层把所有文本响应变成了空 body** —— 这是迁移引入的真 bug，表现为 **QQ / 酷狗逐字歌词失效**（`Failed to execute 'json' on 'Response': Unexpected end of JSON input`）。
   主进程为省一次编解码，对 `text/*` / `application/json` 直接交字符串；渲染端却用 `new Uint8Array(body)` 收字节——**原始字符串会被构造器当成长度**（`ToIndex("…")` → 0），静默得到空数组。
   现改为响应体**一律以字节过桥**（形态唯一，出错面更小），并剥掉因解压而已失效的 `content-encoding` / `content-length`；顺带补上 `AbortSignal` 支持（QQ / 酷狗的 8s 超时此前被静默忽略）。新增 `src/ipc/__tests__/http.test.ts` 把两个方向都钉住
 
 ### 工程
+
 - 新增 `.gitattributes`（`* text=auto eol=lf`），修掉原项目「CRLF 工作区导致本地 prettier/eslint 全量假阳性」的老问题
 - CI 提速：构建作业不再串行等待 lint；补齐 npm / Rust / electron-builder 三级缓存；release profile 由 `lto = true + codegen-units = 1` 放宽为 `thin` + `4`；新增 concurrency 自动取消过期运行；actions 升到 v5、Node 20 → 22
 - 依赖新增 `electron` / `electron-builder` / `esbuild`；移除 `@tauri-apps/cli` 与 6 个 `@tauri-apps/*`
-
 
 ## 1.2.1 (2026-09-12)
 
@@ -186,6 +335,7 @@
 ### 新增功能
 
 #### 扩展框架（Extension Host）
+
 - 新增扩展主机，支持扩展的安装 / 卸载 / 启用停用 / 调用 / 打开，**主项目零体积增加**，扩展包独立分发（b5cc28f）
 - 扩展目录约定 `app_data_dir/extensions/<id>/`：`manifest.json` + `engine/`（引擎）+ `web/dist/`（界面）+ `data/`（数据）（b5cc28f）
 - 主机只暴露通用命令：`ext_list` / `ext_install` / `ext_uninstall` / `ext_set_enabled` / `ext_invoke` / `ext_open`；其中 `open` / `reveal` 由主机拦截代执行，扩展本身不持有高权限（b5cc28f）
@@ -198,6 +348,7 @@
 - 扩展迁移方案文档 `doc/miaohui-migration-plan.md`（b5cc28f）
 
 #### 在线图片（Pixiv，移植自 Pixez）
+
 - 移植 Pixez 在线图片功能：浏览 / 搜索 / 排行榜 + 设置开关（默认关闭）（4fa1ff6）
 - 图片经 Rust 代理命令取回并自动携带 `Referer`，前端转 Blob URL 并按 URL 内存缓存（4fa1ff6）
 - 作品评论 + 大图预览（多页翻页）+ 旧会话用户名恢复（f6f4f53）
@@ -205,12 +356,14 @@
 - 懒刷新 token：接口返回 400 / 401 时自动用 refresh_token 恢复会话后重试（cd63d54）
 
 #### 在线番剧
+
 - **ArtPlayer 替换原生播放器** + DanDanPlay 弹幕接入 + FFmpeg 横幅修复（29d80c4）
 - Bangumi 追番同步 + MD3 三阶取色配色（9e53475）
 - 番剧卡片改竖版；详情页新增 hero 动画；历史记录点击进入详情页（ac69bc0）
 - hero 动画改为 overlay 飞行层实现；回滚三阶配色（1ce00a5）
 
 #### 界面与设置
+
 - 设置页改为**左右双栏**：左侧分类导航 + 右侧内容区（b5cc28f、9149ce2）
 - 设置页改为**一次只显示一个分类**的切换视图，不再是一条长页滚动找锚点（本次发布）
 - 播放器进度条 / 主播放按钮 / 侧边按钮改 MD3 风格，补齐 hover、active、elevation（b5cc28f）
@@ -221,27 +374,33 @@
 ### 修复
 
 #### 设置与播放器
+
 - 设置页双栏错位：`:deep(.page-header)` 与 PageHeader 组件实际根类名 `.page-head` 不符，选择器静默失效导致标题落进 180px 左栏、导航与卡片整体错位（9149ce2）
 - 设置页分类锚点错位：`settings-playback` 原本挂在「播放器」卡片上，点「播放」会跳过 FFmpeg / 歌词 / 桌面歌词（9149ce2）
 - 音乐播放器歌词高亮行偏移（视觉高亮落后播放时间轴一行）——已回滚，高亮行回到 `player.activeLine`（9149ce2）
 
 #### 在线图片（Pixiv）
+
 - 「登录成功但列表全空」：API JSON 为 snake_case 而结构体按 camelCase 反序列化，缺 `rename` 别名导致每条作品解析失败；同时补 `[pixiv]` 诊断日志，避免「列表全空且无报错」的无解现场（3da456a）
 - 补 `base64::Engine` 引入，修复 `URL_SAFE_NO_PAD.encode` 编译错误 E0599（c027b22）
 - 修 E0283：`call_api_post_blocking` 里 `.or(Ok(Value::Null))` 类型推断歧义（ad9237e）
 - `Cargo.toml` 中 `zip` 重复键导致构建失败；返回推荐列表不再反复刷新（aefe342）
 
 #### 在线番剧
+
 - 追番按钮遇到空响应体时解析报错（ac69bc0）
 
 #### 在线小说
+
 - Wenku8 登录窗口点 X 关不掉 / 登录成功后不自动关闭；移除 DevTools 自启（994f6d6）
 
 #### 扩展框架
+
 - 更新 Tauri v2 extension 相关 API 调用（7eb70cf）
 - 移除多余的快捷键 handler 变量（c46e9af）
 
 ### 工程与 CI
+
 - 引入代码质量工具链：ESLint + Prettier（前端）、thiserror + anyhow（Rust 错误处理）、clippy + rustfmt，并修复随之暴露的 CI 问题（6a7fcdd、0dfdfc1、e95643f）
 - 修复 CI clippy `useless_borrows_in_formatting` 告警（854583c）
 - 清理剩余 clippy 告警（5813586）
@@ -256,6 +415,7 @@
 ### 新增功能
 
 #### 在线番剧（Kazumi 规则采集看番）
+
 - 复刻 Kazumi 原版 UX：热门番组主页 + 聚合搜索换源 + Bangumi 详情（e9bc5d3）
 - Kazumi 规则采集看番 Phase 1 看番链路，仅桌面端（a48c538）
 - 正在热播改用 Bangumi `calendar` 热度榜（按 `collection.doing` 降序取 Top30），不再依赖已挂掉的 `next.bgm.tv/p1`（67fe47f）
@@ -264,6 +424,7 @@
 - 死源 DM84 / baimao 默认禁用（持久化到 `disabled.json`，可重新启用）（67fe47f）
 
 #### 在线小说（Wenku8）
+
 - 移植 Wenku8 登录系统：WebView 内嵌登录 + 在线书架合并（9d308ca）
 - 主窗口轮询方案接管 cookie 获取（新增 `wenku8_login_poll`），不再依赖远程页注入脚本（eef9afa）
 - 在线小说主页：书架置顶 + 登录条仅未登录时显示（322d398）
@@ -276,11 +437,13 @@
 - 章节内进度保存（20aa35d）
 
 #### 皮肤系统
+
 - 皮肤系统 v1：外部 JSON 导入 / 固化存储 / 任意 CSS 注入 + 四款内置皮肤（含 Material Design 1）（317509e）
 - 皮肤 v2 格式：ZIP 资产包 + 背景图 + 图标包 + 布局开放；示例皮肤迁至 `example/`（5a0bc60）
 - `.gitignore` 放行 `*.zip`，补上遗漏的 sakura 皮肤打包产物（336cadf）
 
 #### 播放器与桌面歌词
+
 - 桌面歌词：中文翻译显示 + 鼠标穿透（20aa35d）
 - 播放器评论面板与迷你播放器红心喜欢（583e0ee）
 - 移植「现在就听」信息流：私人 FM / 每日推荐 / 为你推荐（9c3c802）
@@ -290,6 +453,7 @@
 - 移植参考项目交互要点：托盘 / 热键、空态、弹性滑块、音乐列表、播放器布局（97a4b86）
 
 #### 听歌时长统计
+
 - 播放会话追踪：每次播放记录开始/结束时间与累计收听时长（6303e27）
 - 日聚合统计：自动聚合每日播放次数、唯一曲目数和总时长（6303e27）
 - 有效播放判定：收听 ≥30 秒或完成度 ≥80% 计入统计（6303e27）
@@ -304,6 +468,7 @@
 - 统计入口移至百宝箱卡片（b0a2c89）
 
 #### Windows 样式与界面
+
 - Windows 样式自定义标题栏：无系统边框（`decorations: false`）、自定义标题栏覆盖全窗口宽度（029894c）
 - 指针拖拽窗口（screen 坐标 + rAF 节流 + 4px 阈值防抖）（029894c）
 - 双击标题栏最大化 / 还原（300ms 判定）（029894c）
@@ -316,15 +481,18 @@
 - 移除侧边栏活动项描述（0743d4d）
 
 #### 网易云音乐（手机号登录）
+
 - 新增手机号短信登录（c6281bc）
 - 修复 phoneLogin 变量遮蔽 profile ref（0313320）
 - 补充 `md-sys-shape-corner-full` token，修复手机号登录控件直角（b7dbb91）
 
 #### 文档
+
 - README_zh.md 更新（f4679bd）
 - 贡献者名单加入 deepseek、ChatGPT（自定义）（a272da3, 2021ac1）
 
 ### 优化
+
 - 在线番剧检索改为真并发 + TTL 缓存 + 并发闸门，修复隐藏 webview 漏音与 m3u8 无画面（a8cf374）
 - 静态取流支持 JSON 转义地址，补隐藏 webview 取流诊断（cebb11e）
 - Wenku8 抓取检查 HTTP 状态码，403 / 拦截页不再静默返回空列表（4088dee）
@@ -333,6 +501,7 @@
 - 在线小说主页暴露错误并支持重试（ba2f230）
 
 ### 修复
+
 - 正在热播选错番（点 A 播 B）：空关键字守卫 + 标题随当前番剧，不再退化到 `trending[0]`（67fe47f）
 - 聚合搜索结果被回写丢弃导致所有源 0 条（343215b）
 - 内置规则过时导致聚合搜索 0 条：7sefun 改语义 class XPath，移除已死 DM84（dc73218）
@@ -366,6 +535,7 @@
 - 补充 `fs write_text_file` ACL 权限，修复保存预设 JSON 被拦截（fd62df9）
 
 ### 调试与可观测性
+
 - 捕获原生层闪退：Rust panic hook + 通用 `app_log` 命令 + 前端全局错误处理器（9d47b17、7fd98f9）
 - 阅读链路全量日志 + `novel_content` 正文开头日志，确认真实章节还是缓存脏数据（69fdf95、70b1c14）
 - `doSearch` 加日志定位在线小说搜索按钮无法触发（501b19d）
@@ -376,6 +546,7 @@
 ### 新增功能
 
 #### 音效系统
+
 - 自定义音效引擎：10 段 EQ 均衡器 + 低音增强 + 混响 + 立体声宽度
 - 内置预设（Flat / Pop / Rock / Classical / Dance / Bass Boost / Vocal）
 - 用户自定义预设：保存、删除、导入、导出
@@ -386,6 +557,7 @@
 - 预设分享码兼容旧版 LLFX1 格式导入
 
 #### 桌面歌词
+
 - 独立透明置顶窗口，始终显示当前歌词
 - 控制栏交互：点击歌词展开，5 秒无操作自动隐藏；设置可选始终显示
 - 4 种歌词切换动画：淡入 / 上滑 / 缩放 / 模糊浮现（设置中可选）
@@ -396,11 +568,13 @@
 - 锁定位置功能，防止误拖动
 
 #### 百宝箱
+
 - 侧边栏新增「百宝箱」选项卡
 - 收纳 WebDAV 远程媒体入口
 - 在线音效预设市场：从 GitHub 仓库拉取预设列表，一键下载导入
 
 #### 网易云音乐
+
 - 扫码登录网易云账号
 - 访问我的歌单
 - 云盘歌曲播放与分页加载
@@ -408,11 +582,13 @@
 - 支持 weapi / xeapi 全协议加密
 
 #### WebDAV
+
 - 远程媒体源配置与浏览
 - 轻量本地代理，凭据不暴露在请求地址中
 - 侧边栏按设置显隐
 
 #### 歌词系统
+
 - 更精确的逐字歌词（QQ 音乐 QRC 官方卡拉 OK 时间轴）
 - 歌词来源切换：QQ → 酷狗 → Meting(网易云) → 本地
 - 歌词来源徽标，显示当前来源
@@ -423,11 +599,13 @@
 - 在线歌词本地缓存
 
 #### 在线音乐
+
 - 实验性在线音乐功能（Meting API）
 - 预设歌单 + 用户自定义歌单
 - 在线搜索
 
 #### 阅读器
+
 - PDF 阅读模式：单页 / 双页 / 滚动
 - 阅读器背景主题（dark/light/sepia/green）
 - 正文字体选择（system/sans/serif/kai/yuan）
@@ -436,6 +614,7 @@
 - 阅读进度保存
 
 #### 其他
+
 - Apple Music 风格图标
 - 播放器背景模式：动态模糊 / 仅图片模糊 / 关闭
 - 全局 Material Design 3 主题（浅色/深色/跟随系统）

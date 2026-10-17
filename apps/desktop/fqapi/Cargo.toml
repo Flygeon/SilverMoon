@@ -1,6 +1,6 @@
 [package]
 name = "silvermoon-fqapi"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "SilverMoon 的番茄（fqnovel）内容源核心：签名 / 设备池 / 上游调用 / 端点"
 license = "GPL-3.0-only"
