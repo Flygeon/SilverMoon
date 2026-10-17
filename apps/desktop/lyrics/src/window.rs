@@ -136,9 +136,12 @@ pub fn run(
         let result = embed::embed_into_taskbar(hwnd);
         let embedded = result == EmbedResult::Embedded;
         if embedded {
-            // 贴合任务栏内高，靠左留一点边距
-            let tb_height = 40; // 任务栏默认高度；真实高度在 layout 里再校正
-            embed::place_in_taskbar(hwnd, 8, 2, width, (tb_height - 4).max(24));
+            // 贴合任务栏内高。**实测**任务栏客户区高度，不用硬编码 40 ——
+            // 任务栏高度随「小/中/大图标」设置变化（实测 40 也可能不是真实值，
+            // 用户改过图标大小就是别的数）。算错的话窗口会被压扁或溢出。
+            let tb_height = embed::taskbar_client_height().unwrap_or(40);
+            let h = (tb_height - 4).max(24);
+            embed::place_in_taskbar(hwnd, 8, 2, width, h);
         }
 
         STATE.with(|s| {

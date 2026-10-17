@@ -47,6 +47,18 @@ fn main() {
 
 #[cfg(windows)]
 fn run_windows() {
+    // 0) **必须在建任何窗口之前**声明 DPI 感知。
+    //
+    // 不声明的话 Windows 会按「系统 DPI 虚拟化」处理本进程：它给窗口一个
+    // 假的高 DPI 上下文（实测拿到 192 = 200%），而真实显示器是 96（100%），
+    // 于是所有 SetWindowPos 的尺寸/坐标都被额外缩放一次 ——
+    // 传 560x36 进去，实际得到 280x18（正好一半），窗口小到看不见。
+    //
+    // 用 Per-Monitor V2：多显示器 + 不同缩放时也能各自按真实 DPI 排版。
+    // 调用失败说明系统太老（Win7 无此 API），退回旧接口；两者都失败就接受
+    // 系统默认 —— 绝不能因为 DPI 设置失败就让窗口起不来。
+    declare_dpi_awareness();
+
     // 1) 定位歌词页资源
     let here = std::env::current_exe()
         .ok()
@@ -92,6 +104,31 @@ fn run_windows() {
     if let Err(e) = window::run(web_dir, window::DEFAULT_WIDTH, window::DEFAULT_HEIGHT, rx) {
         eprintln!("[lyrics] 窗口创建失败：{e}");
         report_error(&format!("窗口创建失败：{e}"));
+    }
+}
+
+/// 声明进程的 DPI 感知级别（Per-Monitor V2 优先）。
+///
+/// 必须在创建任何窗口**之前**调用：窗口一旦创建，DPI 上下文就定型了，
+/// 之后再声明也不会改已存在窗口的行为。
+#[cfg(windows)]
+fn declare_dpi_awareness() {
+    use windows::Win32::UI::HiDpi::{
+        SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    };
+    unsafe {
+        // 先试 Per-Monitor V2（Win10 1703+）
+        if SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2).is_ok() {
+            return;
+        }
+    }
+    // 老系统退回「系统级 DPI 感知」（Win8.1+）。两个都失败就接受默认，
+    // 不能让 DPI 设置失败拖垮整个窗口。
+    #[allow(unused_unsafe)]
+    unsafe {
+        let _ = windows::Win32::UI::HiDpi::SetProcessDpiAwareness(
+            windows::Win32::UI::HiDpi::PROCESS_PER_MONITOR_DPI_AWARE,
+        );
     }
 }
 

@@ -184,6 +184,27 @@ pub fn detach_from_taskbar(hwnd: HWND) {
     }
 }
 
+/// 实测任务栏客户区高度（像素）。
+///
+/// 不用硬编码：任务栏高度随「任务栏图标大小」设置变化（小/中/大各不相同），
+/// 用户改过就对不上了。拿不到时返回 None，调用方退化到 40。
+pub fn taskbar_client_height() -> Option<i32> {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+
+    let taskbar = find_primary_taskbar()?;
+    unsafe {
+        let mut rect = RECT::default();
+        GetClientRect(taskbar, &mut rect).ok()?;
+        let h = rect.bottom - rect.top;
+        if h > 0 {
+            Some(h)
+        } else {
+            None
+        }
+    }
+}
+
 /// 任务栏是否已存在（判断 shell 是否就绪）。
 pub fn taskbar_exists() -> bool {
     find_primary_taskbar().is_some()
