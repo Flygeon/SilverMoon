@@ -144,6 +144,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   { key: "settings.ffmpegMissing", section: "settings-deps" },
   { key: "settings.ffmpegRecheck", section: "settings-deps" },
   { key: "settings.ffmpegReset", section: "settings-deps" },
+  { key: "settings.fqNovelEnable", section: "settings-novel" },
   { key: "settings.globalScanHint", section: "settings-scan" },
   { key: "settings.kugouAutoSignIn", section: "settings-kugou" },
   { key: "settings.kugouEnable", section: "settings-kugou" },

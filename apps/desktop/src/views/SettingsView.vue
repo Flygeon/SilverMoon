@@ -504,6 +504,7 @@ type BoolSettingKey =
   | "kugouAutoSignIn"
   | "onlineNovelEnabled"
   | "bqgNovelEnabled"
+  | "fqNovelEnabled"
   | "onlineAnimeEnabled"
   | "bilibiliEnabled"
   | "biliAntifraudEnabled"
@@ -1838,6 +1839,17 @@ onBeforeUnmount(() => {
             <m3e-switch
               :checked="settings.bqgNovelEnabled"
               @change="setSwitch('bqgNovelEnabled', $event)"
+            />
+          </SettingRow>
+          <SettingRow
+            :label="t('settings.fqNovelEnable')"
+            setting-key="settings.fqNovelEnable"
+            hint=""
+            clickable
+          >
+            <m3e-switch
+              :checked="settings.fqNovelEnabled"
+              @change="setSwitch('fqNovelEnabled', $event)"
             />
           </SettingRow>
           <div v-if="settings.onlineNovelEnabled" class="row">

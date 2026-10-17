@@ -7,6 +7,7 @@ import MediaGrid from "@/components/MediaGrid.vue";
 import BookReader from "@/components/BookReader.vue";
 import NovelOnlineView from "@/components/NovelOnlineView.vue";
 import NovelBqgView from "@/components/NovelBqgView.vue";
+import NovelFqapiView from "@/components/NovelFqapiView.vue";
 import WritingStudio from "@/components/WritingStudio.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import SegmentedTabs from "@/components/SegmentedTabs.vue";
@@ -25,7 +26,7 @@ const hasScanDirs = computed(() => settings.scanDirs.length > 0);
 /** 正在阅读的书；null 表示未打开阅读器 */
 const reading = ref<MediaEntry | null>(null);
 /** 本地 / 在线(轻小说) / 网络小说(笔趣阁) / 创作 分段 */
-const bookTab = ref<"local" | "online" | "bqg" | "write">("local");
+const bookTab = ref<"local" | "online" | "bqg" | "fq" | "write">("local");
 /** 分段标签：在线(轻小说) 与 网络小说(笔趣阁) 各自按开关显示；
  *  两者都关时只剩本地，分段条不显示。 */
 const bookTabs = computed(() => {
@@ -37,6 +38,9 @@ const bookTabs = computed(() => {
   }
   if (settings.bqgNovelEnabled) {
     tabs.push({ value: "bqg", label: "网络小说", icon: "auto_stories" });
+  }
+  if (settings.fqNovelEnabled) {
+    tabs.push({ value: "fq", label: "番茄小说", icon: "local_library" });
   }
   // 创作常驻：它是书籍页自己的写作入口，不挂在线开关
   tabs.push({ value: "write", label: t("write.tab"), icon: "edit_note" });
@@ -124,6 +128,7 @@ function clearSearch() {
 
       <!-- 网络小说（笔趣阁） -->
       <NovelBqgView v-else-if="bookTab === 'bqg'" />
+      <NovelFqapiView v-else-if="bookTab === 'fq'" />
 
       <!-- 创作（本地 Markdown 写作工作台） -->
       <WritingStudio v-else-if="bookTab === 'write'" />

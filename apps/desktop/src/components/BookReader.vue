@@ -13,6 +13,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch 
 import { readFile } from "@/ipc/fs";
 import { capabilities, isDesktop } from "@/capabilities";
 import { bqgCatalogueCached, novelCatalogueCached } from "@/utils/novelCache";
+import { fqapiCatalogue, fqapiContent } from "@/utils/fqapiNovel";
 import { useSettingsStore, type ReaderFontKey, type ReaderThemeKey } from "@/stores/settings";
 import { loadPdfjs, toArrayBuffer } from "@/utils/pdf";
 import { isLoginRequiredError } from "@/novel/wenku8Login";
@@ -65,7 +66,7 @@ const props = defineProps<{
     initialCid?: string;
     initialChapterTitle?: string;
     /** 文本来源：文库8（默认）走 node/charset 直连；笔趣阁走隐藏 WebView */
-    source?: "wenku8" | "bqg";
+    source?: "wenku8" | "bqg" | "fqapi";
   };
 }>();
 const emit = defineEmits<{ (e: "close"): void }>();
@@ -120,6 +121,13 @@ const kind = computed(() => {
 });
 /** 文本来源是否为笔趣阁（走隐藏 WebView 取正文/目录，而非文库8 node/charset） */
 const isBqgSource = computed(() => props.novelSource?.source === "bqg");
+/**
+ * 文本来源是否为番茄（经独立 sidecar `silvermoon-fqapi` 取数）。
+ *
+ * 它和另外两个源的差别在于：正文由 sidecar 先解析成段落再送过来
+ * （见 utils/fqapiNovel.ts），这里拿到的已经是可直接排版的中文文本。
+ */
+const isFqapiSource = computed(() => props.novelSource?.source === "fqapi");
 const mode = computed(() => settings.pdfReadMode);
 /** 双页模式一次前进两页 */
 const step = computed(() => (mode.value === "dual" ? 2 : 1));
@@ -475,7 +483,10 @@ async function loadTextChapter(index: number) {
   loading.value = true;
   error.value = "";
   try {
-    if (isBqgSource.value) {
+    if (isFqapiSource.value) {
+      const got = await fqapiContent(ch.cid);
+      textContent.value = got;
+    } else if (isBqgSource.value) {
       textContent.value = await capabilities.bqgContent(props.novelSource!.aid, ch.cid);
     } else {
       textContent.value = await capabilities.novelContent(
@@ -605,7 +616,9 @@ async function initText() {
   loading.value = true;
   error.value = "";
   try {
-    if (isBqgSource.value) {
+    if (isFqapiSource.value) {
+      textVolumes.value = await fqapiCatalogue(props.novelSource!.aid);
+    } else if (isBqgSource.value) {
       textVolumes.value = await bqgCatalogueCached(props.novelSource!.aid);
     } else {
       textVolumes.value = await novelCatalogueCached(

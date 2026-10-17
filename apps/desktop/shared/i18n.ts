@@ -308,6 +308,8 @@ export const messages = {
       benchStep4: "④ 番剧取流",
       benchStep5: "⑤ 静置 5 分钟",
       bqgNovelEnable: "启用笔趣阁小说阅读",
+      fqNovelEnable: "启用番茄小说阅读",
+      fqNovelHint: "经独立 sidecar 取数，首次使用需匿名注册设备（几秒）。",
       searchPlaceholder: "搜索设置项…",
       searchNoResult: "没有匹配的设置项",
       loudnessNormalizeHint:
@@ -1555,6 +1557,9 @@ export const messages = {
       benchStep4: "④ Anime stream",
       benchStep5: "⑤ Idle 5 min",
       bqgNovelEnable: "Enable Biquge novel reading",
+      fqNovelEnable: "Enable Fanqie novel reading",
+      fqNovelHint:
+        "Fetched via a separate sidecar; first use registers an anonymous device (a few seconds).",
       searchPlaceholder: "Search settings…",
       searchNoResult: "No matching setting",
       loudnessNormalizeHint:

@@ -125,6 +125,8 @@ export default [
       // 绘画页：m3e-button 的 icon 槽
       "src/components/DrawingStudio.vue",
       "src/components/DrawingBoard.vue",
+      // 番茄小说源：m3e-button 的 icon 槽
+      "src/components/NovelFqapiView.vue",
     ],
     rules: {
       "vue/no-deprecated-slot-attribute": "off",

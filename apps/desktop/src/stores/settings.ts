@@ -237,6 +237,8 @@ const DEFAULTS = {
   onlineNovelEnabled: false,
   /** 实验性：笔趣阁网络小说（m.bqglll.cc，JS 验证门，走隐藏 WebView） */
   bqgNovelEnabled: false,
+  /** 实验性：番茄小说（经独立 sidecar silvermoon-fqapi；需要匿名设备注册） */
+  fqNovelEnabled: false,
   /** 实验性：在线番剧（Kazumi 规则采集，仅桌面端） */
   onlineAnimeEnabled: false,
   /** 实验性：B 站视频（推荐流 / 搜索 / 扫码登录 / 解析播放，仅桌面端） */
@@ -469,6 +471,7 @@ export const useSettingsStore = defineStore("settings", () => {
   const kugouAutoSignIn = ref(DEFAULTS.kugouAutoSignIn);
   const onlineNovelEnabled = ref(DEFAULTS.onlineNovelEnabled);
   const bqgNovelEnabled = ref(DEFAULTS.bqgNovelEnabled);
+  const fqNovelEnabled = ref(DEFAULTS.fqNovelEnabled);
   const onlineAnimeEnabled = ref(DEFAULTS.onlineAnimeEnabled);
   const bilibiliEnabled = ref(DEFAULTS.bilibiliEnabled);
   const biliAntifraudEnabled = ref(DEFAULTS.biliAntifraudEnabled);
@@ -607,6 +610,7 @@ export const useSettingsStore = defineStore("settings", () => {
     kugouAutoSignIn,
     onlineNovelEnabled,
     bqgNovelEnabled,
+    fqNovelEnabled,
     onlineAnimeEnabled,
     bilibiliEnabled,
     biliAntifraudEnabled,
