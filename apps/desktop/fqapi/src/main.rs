@@ -203,38 +203,38 @@ impl Core {
         let content = self
             .call(&format!("/api/v1/chapters/{item_id}"), "", "GET")
             .await;
-        let content_len = content
-            .get("body")
-            .and_then(|b| b.get("data"))
-            .and_then(|d| d.get("content"))
-            .and_then(|c| c.as_str())
-            .map(|s| s.chars().count())
-            .unwrap_or(0);
+        // 上游给的是 HTML 富文本，这里用 chapter 模块解析成段落再判定。
+        // 直接数字符会把 <header></header><article><p idx="0"> 这些标签也算进去，
+        // 看不出「到底有没有正文」。
+        let parsed = raw_chapter_html(&content)
+            .map(|html| fqapi_core::chapter::parse_chapter_content(&html))
+            .unwrap_or_default();
+        let chars = parsed.chars();
         steps.push(json!({
             "step": "chapter_content",
-            "ok": content_len > 0,
+            "ok": chars > 0,
             "item_id": item_id,
-            "chars": content_len,
-            "preview": if content_len > 0 { chapter_preview(&content) } else { Value::Null },
-            "result": if content_len > 0 { Value::Null } else { content },
+            "chars": chars,
+            "paragraphs": parsed.paragraphs.len(),
+            "preview": parsed.paragraphs.first().cloned().unwrap_or_default(),
+            "result": if chars > 0 { Value::Null } else { content },
         }));
         json!({
-            "ok": content_len > 0,
-            "failedAt": if content_len > 0 { Value::Null } else { json!("chapter_content") },
+            "ok": chars > 0,
+            "failedAt": if chars > 0 { Value::Null } else { json!("chapter_content") },
             "steps": steps,
         })
     }
 }
 
-/// 正文前 60 字，用来确认「解出来的是真的中文正文」而不是一段乱码。
-fn chapter_preview(content: &Value) -> Value {
-    let s = content
+/// 取正文 HTML 原文。
+fn raw_chapter_html(content: &Value) -> Option<String> {
+    content
         .get("body")
         .and_then(|b| b.get("data"))
         .and_then(|d| d.get("content"))
         .and_then(|c| c.as_str())
-        .unwrap_or("");
-    json!(s.chars().take(60).collect::<String>())
+        .map(|s| s.to_string())
 }
 
 /// 响应体里带 `error` / `success:false` 即视为失败（HTTP 200 也可能业务失败）。
@@ -379,6 +379,38 @@ async fn main() {
         }
         if req.get("op").and_then(|v| v.as_str()) == Some("ping") {
             emit(&json!({ "id": id, "op": "ping", "pong": true, "version": VERSION }));
+            continue;
+        }
+
+        // 章节正文：宿主最常用的一个 op。它把上游 HTML 解析成段落，
+        // 直接给出阅读器能用的形状，省得每个调用方各写一份解析。
+        if req.get("op").and_then(|v| v.as_str()) == Some("chapter") {
+            let item_id = req.get("itemId").and_then(|v| v.as_str()).unwrap_or("");
+            if item_id.is_empty() {
+                emit(&json!({ "id": id, "error": "missing itemId" }));
+                continue;
+            }
+            let raw = core
+                .call(&format!("/api/v1/chapters/{item_id}"), "", "GET")
+                .await;
+            let html = raw_chapter_html(&raw);
+            match html {
+                Some(html) => {
+                    let parsed = fqapi_core::chapter::parse_chapter_content(&html);
+                    emit(&json!({
+                        "id": id,
+                        "op": "chapter",
+                        "itemId": item_id,
+                        "title": raw.get("body").and_then(|b| b.get("data"))
+                            .and_then(|d| d.get("title")).cloned().unwrap_or(Value::Null),
+                        "paragraphs": parsed.paragraphs,
+                        "chars": parsed.chars(),
+                    }));
+                }
+                None => emit(
+                    &json!({ "id": id, "op": "chapter", "error": "no content", "result": raw }),
+                ),
+            }
             continue;
         }
 

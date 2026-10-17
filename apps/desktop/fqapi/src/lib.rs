@@ -12,6 +12,7 @@
 //   device    - 持久化设备池 + 注册
 //   sign      - 请求签名原语
 
+pub mod chapter;
 pub mod config;
 pub mod crypto;
 pub mod device;
