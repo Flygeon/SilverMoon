@@ -3,6 +3,7 @@ import { onMounted, ref } from "vue";
 import { capabilities } from "@/capabilities";
 import { bqgCatalogueCached } from "@/utils/novelCache";
 import NovelCard from "@/components/NovelCard.vue";
+import NovelSearchBar from "@/components/NovelSearchBar.vue";
 import BookReader from "@/components/BookReader.vue";
 import type { NovelCover, NovelDetail, NovelVolume } from "@shared/types";
 
@@ -51,6 +52,12 @@ async function loadHome() {
   } finally {
     homeLoading.value = false;
   }
+}
+
+/** 适配共享搜索栏：它回传关键词，本页的 doSearch 读的是 searchQuery ref。 */
+function doSearchWith(keyword: string) {
+  searchQuery.value = keyword;
+  void doSearch();
 }
 
 async function doSearch() {
@@ -179,13 +186,8 @@ onMounted(loadHome);
 
     <!-- 主页 -->
     <template v-else>
-      <div class="search-bar">
-        <input v-model="searchQuery" placeholder="搜索笔趣阁小说" @keyup.enter="doSearch" />
-        <m3e-button variant="tonal" size="small" :disabled="searching" @click="doSearch">
-          <span slot="icon" class="material-symbols-outlined">search</span>
-          {{ searching ? "搜索中" : "搜索" }}
-        </m3e-button>
-      </div>
+      <!-- 搜索：与另外两个在线源共用同一个组件，保证视觉一致 -->
+      <NovelSearchBar placeholder="搜索笔趣阁小说" :busy="searching" @search="doSearchWith" />
       <p v-if="searchError" class="error">{{ searchError }}</p>
 
       <div v-if="searchResults.length" class="search-results">
@@ -220,25 +222,6 @@ onMounted(loadHome);
   flex-direction: column;
   gap: 20px;
   animation: lm-rise 340ms var(--md-sys-motion-spring-spatial) both;
-}
-.search-bar {
-  display: flex;
-  gap: 8px;
-}
-.search-bar input {
-  flex: 1;
-  height: 40px;
-  padding: 0 14px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-extra-large);
-  background: var(--md-sys-color-surface-container);
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-medium-size);
-  outline: none;
-}
-.search-bar input:focus {
-  border-color: var(--md-sys-color-primary);
 }
 .error {
   margin: 0;

@@ -102,6 +102,39 @@ function toStr(v: string | number | undefined | null): string {
   return String(v);
 }
 
+/**
+ * 剥掉上游的关键词高亮标记。
+ *
+ * 搜索接口返回的标题**自带 `<em>`**（如 `"<em>剑来</em>仙<em>剑</em>"`），
+ * 那是给网页渲染用的。直接塞进 UI 会连标签一起显示出来。
+ */
+function stripHighlight(s: string): string {
+  return s
+    .replace(/<\/?em>/gi, "")
+    .replace(/<\/?strong>/gi, "")
+    .trim();
+}
+
+/**
+ * 上游的 `tags` 是**逗号分隔的字符串**（如 `"东方仙侠,玄幻,武侠"`），不是数组。
+ *
+ * 踩过的坑：当成数组展开会把每个字符各占一项，界面上出现
+ * `悬疑脑洞,/悬/疑/脑/洞` 这种荒谬的分类行。这里按逗号切分并去重去空。
+ */
+function splitTags(raw: unknown): string[] {
+  const list: string[] = [];
+  if (Array.isArray(raw)) {
+    for (const item of raw) list.push(...splitTags(item));
+  } else if (typeof raw === "string") {
+    for (const part of raw.split(/[,，、|]/)) {
+      const t = part.trim();
+      if (t) list.push(t);
+    }
+  }
+  const seen = new Set<string>();
+  return list.filter((t) => (seen.has(t) ? false : (seen.add(t), true)));
+}
+
 /** 上游封面走 CDN，带鉴权参数，`<img>` 直接引用即可（不需要 Referer 伪装）。 */
 function coverUrl(raw: string | undefined): string {
   const u = (raw ?? "").trim();
@@ -114,9 +147,9 @@ function coverUrl(raw: string | undefined): string {
 function itemToCover(item: RawSearchItem): NovelCover {
   return {
     aid: toStr(item.book_id),
-    title: (item.title ?? "").trim() || "（无标题）",
+    title: stripHighlight(toStr(item.title)) || "（无标题）",
     imageUrl: coverUrl(item.thumb_url),
-    author: (item.author ?? "").trim() || null,
+    author: stripHighlight(toStr(item.author)) || null,
   };
 }
 
@@ -147,16 +180,19 @@ export async function fqapiDetail(bookId: string): Promise<NovelDetail> {
   });
   const d = unwrap(frame);
   const statusRaw = toStr(d?.creation_status);
+  // category 是单个分类，tags 是逗号串；合并去重后作为标签。
+  // 顺序：先分类，再标签 —— 分类更有信息量，放前面。
+  const tags = splitTags([d?.category, d?.tags]);
   return {
     aid: bookId,
-    title: (d?.book_name ?? "").trim() || "（无标题）",
-    author: (d?.author ?? "").trim(),
+    title: stripHighlight(toStr(d?.book_name)) || "（无标题）",
+    author: stripHighlight(toStr(d?.author)),
     // 上游 creation_status：0 = 连载中，1 = 已完结（与本项目其余源口径一致）
     status: statusRaw === "1" ? "已完结" : "连载中",
     finUpdate: (d?.last_chapter_title ?? "").trim(),
     imgUrl: coverUrl(d?.thumb_url),
     introduce: (d?.abstract ?? "").trim(),
-    tags: [...(d?.category ? [d.category] : []), ...(d?.tags ?? [])].filter(Boolean),
+    tags,
     heat: toStr(d?.word_number),
     trending: (d?.score ?? "").trim(),
   };
@@ -213,4 +249,110 @@ export async function fqapiContent(
 /** 自检：排障用（设置页/开发工具可以调）。 */
 export async function fqapiSelftest(): Promise<unknown> {
   return capabilities.fqapiSelftest();
+}
+
+// ---------------------------------------------------------------------------
+// 推荐流 / 排行榜
+//
+// 两者共用同一种「模块 → 书」形状：
+//   cell_data[]            ← 模块，cell_name 就是标题（「排行榜」「猜你喜欢」）
+//     .cell_data[]         ← 条目，真正的内容在第 0 项上
+//       .book_data[]       ← 书（1 本/条，偶尔为空）
+// 区别只在于外层的字段名：推荐在 tab_item["0"]，榜在 cell_view。
+// ---------------------------------------------------------------------------
+
+/** 推荐流里的一个模块（如「排行榜」「猜你喜欢」）。 */
+export interface FqapiFeedSection {
+  title: string;
+  books: NovelCover[];
+}
+
+interface RawCellItem {
+  book_data?: RawSearchItem[];
+}
+
+interface RawCell {
+  cell_name?: string;
+  cell_data?: RawCellItem[];
+}
+
+interface RawHomepageData {
+  tab_item?: Record<
+    string,
+    { cell_data?: RawCell[]; has_more?: boolean; next_offset?: number | string }
+  >;
+}
+
+interface RawRankData {
+  cell_view?: RawCell;
+  has_more?: boolean;
+  next_offset?: number | string;
+}
+
+/** 把一个 cell 里的书全部摊平（每个条目通常 1 本，空条目直接跳过）。 */
+function booksOfCell(cell: RawCell): NovelCover[] {
+  const out: NovelCover[] = [];
+  for (const item of cell.cell_data ?? []) {
+    for (const book of item.book_data ?? []) {
+      const cover = itemToCover(book);
+      if (cover.aid) out.push(cover);
+    }
+  }
+  return out;
+}
+
+/**
+ * 首页推荐流。
+ *
+ * `tab` 是上游的频道下标（`tab_item` 的 key）：0 = 推荐，1 = 小说……，
+ * 与响应里的 9 个频道一一对应。这里只取「有内容模块」的那些。
+ */
+export async function fqapiFeed(
+  tab = "0",
+  offset = "",
+): Promise<{ sections: FqapiFeedSection[]; hasMore: boolean; nextOffset: string }> {
+  const query = new URLSearchParams();
+  if (offset) query.set("offset", offset);
+  const frame = await capabilities.fqapi<SidecarFrame<RawHomepageData>>({
+    path: "/api/v1/recommend/homepage",
+    query: query.toString(),
+  });
+  const data = unwrap(frame);
+  const tabData = data?.tab_item?.[tab];
+  const sections: FqapiFeedSection[] = [];
+  for (const cell of tabData?.cell_data ?? []) {
+    const books = booksOfCell(cell);
+    if (books.length) sections.push({ title: cell.cell_name?.trim() || "推荐", books });
+  }
+  return {
+    sections,
+    hasMore: !!tabData?.has_more,
+    nextOffset: toStr(tabData?.next_offset),
+  };
+}
+
+/**
+ * 排行榜。
+ *
+ * `rankId` 就是首页「排行榜」模块的 `cell_id_str`（18 位数字串）。
+ * 不传时用内置的默认榜 —— 上游的男女频总榜，入口稳定。
+ */
+export async function fqapiRank(
+  rankId = "7098235271900037133",
+  offset = "",
+): Promise<{ title: string; books: NovelCover[]; hasMore: boolean; nextOffset: string }> {
+  const query = new URLSearchParams();
+  if (offset) query.set("offset", offset);
+  const frame = await capabilities.fqapi<SidecarFrame<RawRankData>>({
+    path: `/api/v1/rank/${encodeURIComponent(rankId)}`,
+    query: query.toString(),
+  });
+  const data = unwrap(frame);
+  const cell = data?.cell_view;
+  return {
+    title: cell?.cell_name?.trim() || "排行榜",
+    books: cell ? booksOfCell(cell) : [],
+    hasMore: !!data?.has_more,
+    nextOffset: toStr(data?.next_offset),
+  };
 }

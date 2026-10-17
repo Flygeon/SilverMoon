@@ -5,6 +5,7 @@ import { capabilities } from "@/capabilities";
 import { novelRankCached, novelRecommendCached } from "@/utils/novelCache";
 import { translate } from "@shared/i18n";
 import NovelCard from "@/components/NovelCard.vue";
+import NovelSearchBar from "@/components/NovelSearchBar.vue";
 import NovelDetailPanel from "@/components/NovelDetailPanel.vue";
 import BookReader from "@/components/BookReader.vue";
 import { openWenku8Login, isLoginRequiredError } from "@/novel/wenku8Login";
@@ -119,6 +120,12 @@ async function loadRecommend() {
 async function loadHome() {
   homeError.value = "";
   await Promise.all([loadShelf(), loadRank(), loadRecommend()]);
+}
+
+/** 适配共享搜索栏：它回传关键词，本页的 doSearch 读的是 searchQuery ref。 */
+function doSearchWith(keyword: string) {
+  searchQuery.value = keyword;
+  void doSearch();
 }
 
 async function doSearch() {
@@ -248,18 +255,13 @@ onMounted(() => {
         </div>
       </section>
 
-      <!-- 搜索 -->
-      <div class="search-bar">
-        <input
-          v-model="searchQuery"
-          :placeholder="t('novel.searchPlaceholder')"
-          @keyup.enter="doSearch"
-        />
-        <m3e-button variant="tonal" size="small" @click="doSearch">
-          <span slot="icon" class="material-symbols-outlined">search</span>
-          {{ t("novel.search") }}
-        </m3e-button>
-      </div>
+      <!-- 搜索：与另外两个在线源共用同一个组件，保证视觉一致 -->
+      <NovelSearchBar
+        :placeholder="t('novel.searchPlaceholder')"
+        :label="t('novel.search')"
+        :busy="searching"
+        @search="doSearchWith"
+      />
       <p v-if="searchError" class="error">{{ searchError }}</p>
       <div v-if="homeError" class="home-error">
         <span>{{ homeError }}</span>
@@ -332,25 +334,6 @@ onMounted(() => {
   flex-direction: column;
   gap: 20px;
   animation: lm-rise 340ms var(--md-sys-motion-easing-emphasized-decelerate) both;
-}
-.search-bar {
-  display: flex;
-  gap: 8px;
-}
-.search-bar input {
-  flex: 1;
-  height: 40px;
-  padding: 0 14px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-extra-large);
-  background: var(--md-sys-color-surface-container);
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-medium-size);
-  outline: none;
-}
-.search-bar input:focus {
-  border-color: var(--md-sys-color-primary);
 }
 .error {
   margin: 0;
