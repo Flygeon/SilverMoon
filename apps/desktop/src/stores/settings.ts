@@ -293,6 +293,21 @@ const DEFAULTS = {
   desktopLyricsAnchorOffsetY: 0,
   desktopLyricsWordByWord: true,
   desktopLyricsIdleMode: "none" as DesktopLyricsIdleMode,
+  /**
+   * 任务栏歌词 —— **与桌面歌词是两个独立业务**，不是同一功能的两种模式。
+   *
+   * | | 桌面歌词（上面的 desktopLyrics*） | 任务栏歌词（这一组） |
+   * |---|---|---|
+   * | 实现 | Electron 独立 BrowserWindow | Rust 进程 + SetParent 进 Shell_TrayWnd |
+   * | 形态 | 可拖动/可吸附的浮窗 | 真正成为任务栏的子窗口 |
+   * | 位置 | 屏幕任意位置 | 任务栏内部，左侧起 |
+   *
+   * 两者可以同时开启，互不影响。
+   */
+  taskbarLyricsEnabled: false,
+  taskbarLyricsFontSize: 24,
+  taskbarLyricsOpacity: 90,
+  taskbarLyricsShowTranslation: false,
   /** 关闭窗口时最小化到托盘（而非退出应用） */
   closeToTray: true,
   /** 本地音乐库展示模式：网格 / 列表 */
@@ -497,6 +512,11 @@ export const useSettingsStore = defineStore("settings", () => {
   const desktopLyricsAnchorOffsetY = ref(DEFAULTS.desktopLyricsAnchorOffsetY);
   const desktopLyricsWordByWord = ref(DEFAULTS.desktopLyricsWordByWord);
   const desktopLyricsIdleMode = ref<DesktopLyricsIdleMode>(DEFAULTS.desktopLyricsIdleMode);
+  // 任务栏歌词（独立业务，见 DEFAULTS 里的对照表）
+  const taskbarLyricsEnabled = ref(DEFAULTS.taskbarLyricsEnabled);
+  const taskbarLyricsFontSize = ref(DEFAULTS.taskbarLyricsFontSize);
+  const taskbarLyricsOpacity = ref(DEFAULTS.taskbarLyricsOpacity);
+  const taskbarLyricsShowTranslation = ref(DEFAULTS.taskbarLyricsShowTranslation);
   const closeToTray = ref(DEFAULTS.closeToTray);
   const musicViewMode = ref<MusicViewMode>(DEFAULTS.musicViewMode);
   const danmakuEnabled = ref(DEFAULTS.danmakuEnabled);
@@ -635,6 +655,11 @@ export const useSettingsStore = defineStore("settings", () => {
     desktopLyricsAnchorOffsetY,
     desktopLyricsWordByWord,
     desktopLyricsIdleMode,
+    // 任务栏歌词
+    taskbarLyricsEnabled,
+    taskbarLyricsFontSize,
+    taskbarLyricsOpacity,
+    taskbarLyricsShowTranslation,
     closeToTray,
     musicViewMode,
     danmakuEnabled,

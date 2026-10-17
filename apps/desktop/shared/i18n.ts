@@ -15,6 +15,16 @@ export const messages = {
       settingsPlayback: "播放行为",
       settingsLyrics: "歌词",
       settingsDesktopLyrics: "桌面歌词",
+      settingsTaskbarLyrics: "任务栏歌词",
+      taskbarLyricsEnable: "启用任务栏歌词",
+      taskbarLyricsHint:
+        "把歌词嵌进 Windows 任务栏内部（真正成为任务栏的一部分），而不是浮在屏幕上。",
+      taskbarLyricsEnableHint:
+        "开启后会在任务栏左侧显示歌词条。与「桌面歌词」是两个独立功能，可以同时开。",
+      taskbarLyricsFontSize: "字号",
+      taskbarLyricsOpacity: "不透明度",
+      taskbarLyricsShowTranslation: "显示中文翻译",
+      taskbarLyricsUnavailable: "任务栏歌词当前不可用（未找到歌词组件）",
       settingsAudioEffects: "音效",
       settingsAutoMix: "自动混音",
       settingsOnlineMusic: "在线音乐",
@@ -1249,6 +1259,16 @@ export const messages = {
       settingsPlayback: "Playback behaviour",
       settingsLyrics: "Lyrics",
       settingsDesktopLyrics: "Desktop lyrics",
+      settingsTaskbarLyrics: "Taskbar lyrics",
+      taskbarLyricsEnable: "Enable taskbar lyrics",
+      taskbarLyricsHint:
+        "Embed lyrics inside the Windows taskbar itself, instead of floating on screen.",
+      taskbarLyricsEnableHint:
+        "Shows a lyric strip on the left of the taskbar. Independent from Desktop lyrics; both can run at once.",
+      taskbarLyricsFontSize: "Font size",
+      taskbarLyricsOpacity: "Opacity",
+      taskbarLyricsShowTranslation: "Show translation",
+      taskbarLyricsUnavailable: "Taskbar lyrics unavailable (component not found)",
       settingsAudioEffects: "Audio effects",
       settingsAutoMix: "AutoMix",
       settingsOnlineMusic: "Online music",
