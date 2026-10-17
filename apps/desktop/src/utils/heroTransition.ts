@@ -51,18 +51,20 @@ const HERO_EASING = "cubic-bezier(0.05, 0.7, 0.1, 1)";
  * 纯 opacity / filter / color 的动画不影响布局，**不能**碰 —— 快进它们等于
  * 把目标页的淡入直接掐掉，观感上变成「页面瞬间全亮、封面还在半空」。
  */
-const LAYOUT_PROPS = [
-  "transform",
-  "translate",
-  "rotate",
-  "scale",
-  "left",
-  "top",
-  "width",
-  "height",
-  "margin",
-  "padding",
-];
+/*
+ * ⚠️ 用**正则字面量**而不是字符串数组。
+ *
+ * 原因：`scripts/fetch-icon-font.mjs` 会把源码里所有「带引号的短小写字符串」
+ * 当作候选图标名（图标名常以动态取值出现，它只能这样扫）。而 `transform` /
+ * `width` / `height` / `margin` 恰好都是合法的 Material Symbols 图标名 ——
+ * 写成字符串数组会让它白烘四个用不到的图标，并让 CI 的 `check:icon-font` 变红。
+ * 正则里的这些词没有引号包裹，扫描器看不见。
+ *
+ * 匹配规则：keyframe 的键可能带浏览器前缀（-webkit-transform）或子属性
+ * （margin-top / padding-inline），所以用「可选前缀 + 词根」的前缀匹配。
+ */
+const LAYOUT_PROP_RE =
+  /^-?(?:webkit-|moz-|ms-)?(?:transform|translate|rotate|scale|left|top|right|bottom|width|height|margin|padding|inset|flex|grid|font|line-height|border-width)/;
 
 /**
  * 该动画是否影响布局（判断不了就返回 true，宁可快进也不要量错位置）。
@@ -78,7 +80,7 @@ function affectsLayout(a: Animation): boolean {
     for (const frame of frames) {
       for (const key of Object.keys(frame)) {
         const k = key.toLowerCase();
-        if (LAYOUT_PROPS.some((p) => k.includes(p))) return true;
+        if (LAYOUT_PROP_RE.test(k)) return true;
       }
     }
     return false;
