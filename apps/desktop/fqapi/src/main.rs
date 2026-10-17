@@ -123,14 +123,27 @@ impl Core {
     async fn selftest(&self) -> Value {
         let mut steps: Vec<Value> = Vec::new();
 
-        // 1) 设备池：能拿到一台可用设备（首次会触发真实注册）
+        // 1) 设备池：真正走一次 get()（首次会触发 check_and_refill → 联网注册）。
+        //    注意不能用 count()：它只读内存，池空时直接返回 0，永远不会去注册，
+        //    这样的自检测的是「文件里有没有设备」而不是「能不能拿到设备」。
+        let got = self.server.ctx.pool.get().await;
         let devices = self.server.ctx.pool.count().await;
-        steps.push(json!({
-            "step": "device_pool",
-            "ok": devices > 0,
-            "devices": devices,
-        }));
-        if devices == 0 {
+        steps.push(match &got {
+            Ok(d) => json!({
+                "step": "device_pool",
+                "ok": true,
+                "devices": devices,
+                "device_id": d.device_id,
+                "has_secret_key": !d.secret_key.is_empty(),
+            }),
+            Err(e) => json!({
+                "step": "device_pool",
+                "ok": false,
+                "devices": devices,
+                "error": e,
+            }),
+        });
+        if got.is_err() {
             return json!({ "ok": false, "failedAt": "device_pool", "steps": steps });
         }
 
