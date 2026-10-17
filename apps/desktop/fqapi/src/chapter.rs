@@ -153,8 +153,9 @@ pub fn parse_chapter_content(html: &str) -> ChapterText {
                 continue;
             }
             if c.is_whitespace() {
-                // 进入属性区：继续吃到 `>`，期间只跟踪最后一个字符
-                while let Some(c2) = chars.next() {
+                // 进入属性区：继续吃到 `>`，期间只跟踪最后一个字符。
+                // 这里可以用 for + by_ref()：循环体内不再借用 chars。
+                for c2 in chars.by_ref() {
                     if c2 == '>' {
                         self_closing = last == '/';
                         break;
