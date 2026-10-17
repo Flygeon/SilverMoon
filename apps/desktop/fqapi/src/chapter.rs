@@ -126,33 +126,42 @@ pub fn parse_chapter_content(html: &str) -> ChapterText {
         }
 
         // 收集标签名与是否闭合
+        //
+        // 这里必须把自闭合的 `/` 认出来（`<br/>`），否则标签名会变成 "br/"，
+        // 既不是 "br" 也不在 BLOCK_TAGS 里，整个换行就被吞掉了 —— 单测
+        // `br_splits_paragraphs` 抓的就是这个。
         let mut tag = String::new();
         let mut closing = false;
-        let mut prev = '\0';
         let mut self_closing = false;
 
         if chars.peek() == Some(&'/') {
             closing = true;
             chars.next();
         }
+        let mut last = '\0';
         for c in chars.by_ref() {
             if c == '>' {
-                self_closing = prev == '/';
+                self_closing = last == '/';
                 break;
             }
-            if c == ' ' && !tag.is_empty() {
-                // 进入属性区，继续吃到 >
+            // 紧邻 `>` 的斜杠是自闭合标记，不进标签名
+            if c == '/' && chars.peek() == Some(&'>') {
+                last = c;
+                continue;
+            }
+            if c.is_whitespace() {
+                // 进入属性区：继续吃到 `>`，期间只跟踪最后一个字符
                 for c2 in chars.by_ref() {
                     if c2 == '>' {
-                        self_closing = prev == '/';
+                        self_closing = last == '/';
                         break;
                     }
-                    prev = c2;
+                    last = c2;
                 }
                 break;
             }
             tag.push(c);
-            prev = c;
+            last = c;
         }
         let name = tag.trim().to_ascii_lowercase();
         if name.is_empty() {
@@ -320,6 +329,20 @@ mod tests {
     fn br_splits_paragraphs() {
         let got = parse_chapter_content("第一行<br/>第二行<br>第三行");
         assert_eq!(got.paragraphs, vec!["第一行", "第二行", "第三行"]);
+    }
+
+    #[test]
+    fn self_closing_with_space_splits_paragraphs() {
+        // `<br />` 这种带空格的写法同样要断段：属性区里那个 `/` 必须被认出来，
+        // 否则标签名会变成 "br/" 而不在 BLOCK_TAGS 里。
+        let got = parse_chapter_content("第一行<br />第二行");
+        assert_eq!(got.paragraphs, vec!["第一行", "第二行"]);
+    }
+
+    #[test]
+    fn attributes_do_not_leak_into_tag_name() {
+        let got = parse_chapter_content("<p class=\"a b\" idx=\"3\">正文</p>");
+        assert_eq!(got.paragraphs, vec!["正文"]);
     }
 
     #[test]
