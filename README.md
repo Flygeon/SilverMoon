@@ -10,19 +10,19 @@
 
 </div>
 
-SilverMoon（中文名**银月**）是一个 **monorepo**：桌面端是 **Tauri 2 + Vue 3 + TypeScript + Material Design 3**，业务后端是 **Rust**（与桌面壳同进程）；移动端是 **Flutter** 原生实现。数据全部留在本地，无云同步、不强制账号。
+SilverMoon（中文名**银月**）是一个 **monorepo**：桌面端是 **Electron 44 + Vue 3 + TypeScript + Material Design 3**，业务后端是**独立的 Rust sidecar 进程**（HTTP + SSE 通信）；移动端是 **Flutter** 原生实现。数据全部留在本地，无云同步、不强制账号。
 
-> 项目起源于 [LumiLuna](https://github.com/Flygeon/LumiLuna-Next)，经历 Tauri 2 → Electron → **迁回 Tauri 2**，并更名 SilverMoon；桌面端的业务逻辑（Vue 前端 + Rust 后端）在两次迁移中都基本原样保留。
+> 项目起源于 [LumiLuna](https://github.com/Flygeon/LumiLuna-Next)，宿主几经迁移：Tauri 2 → Electron 44 → 迁回 Tauri 2 → **2026-10 再迁回 Electron**，并更名 SilverMoon。每次迁移都是「换壳不换芯」：桌面端的业务逻辑（Vue 前端 + Rust 后端）基本原样保留。
 
 ## 🗂️ 仓库结构
 
 | 路径 | 内容 | 技术栈 |
 |---|---|---|
-| [`apps/desktop/`](apps/desktop/) | 桌面端应用（Windows / Linux / macOS） | Tauri 2 + Vue 3 + TypeScript + Rust |
+| [`apps/desktop/`](apps/desktop/) | 桌面端应用（Windows / Linux / macOS） | Electron 44 + Vue 3 + TypeScript + Rust sidecar |
 | [`apps/mobile/`](apps/mobile/) | 移动端应用（Android / iOS），音乐播放器为主 | Flutter 3.x（Dart） |
 | [`apps/RNdesktop/`](apps/RNdesktop/) | 桌面端 **React Native 重构版**（Windows / macOS），**目前只有框架骨架** | React Native 0.83 + react-native-windows / react-native-macos |
 | [`archive/electron-desktop/`](archive/electron-desktop/) | 桌面端更早一轮（切 Flutter 宿主未成）的源码快照 | 归档，只读参考 |
-| [`archive/electron-host/`](archive/electron-host/) | 本轮迁回 Tauri 前的 Electron 宿主层快照 | 归档，只读参考 |
+| [`archive/electron-host/`](archive/electron-host/) | 上一轮迁回 Tauri 时留下的宿主层归档 | 归档，只读参考 |
 | [`docs/mobile-spec/`](docs/mobile-spec/) | 移动端技术规格（播放 / 歌词 / 桥调用清点） | 文档 |
 | [`tools/`](tools/) | 跨端图标生成器（桌面 + 移动两套图标） | Python + Pillow |
 | [`.github/workflows/`](.github/workflows/) | 桌面端与移动端的 CI（构建、静态检查、发版） | GitHub Actions |
@@ -87,40 +87,49 @@ SilverMoon（中文名**银月**）是一个 **monorepo**：桌面端是 **Tauri
 
 ### 🏗️ 架构
 
-宿主与 Rust 后端同进程，前端只经一层 IPC：
+三个进程：Electron 宿主、渲染进程、Rust 后端 sidecar。宿主与后端之间是一条**明文、可 curl 的 HTTP 边界**。
 
 ```
-┌────────────────────── Tauri 2 主程序（Rust，单进程）──────────────────────┐
-│ 窗口管理 / 托盘 / 全局热键 / 系统媒体控件（SMTC）                          │
-│ tauri:// 承载前端产物   asset: 协议（本地文件代理，原生支持 Range）         │
-│ app-cover: 协议（在线封面代理：绕 CORS + 防盗链伪装 + 磁盘缓存）            │
-│ 154 条 #[tauri::command] 商品命令                                        │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │ @tauri-apps/api（invoke / listen）
-┌───────────────────────────────▼─────────────────────────────────────────┐
-│ 渲染进程（Vue 3）   src/ipc/ 原生能力层   src/ 业务代码                  │
-└─────────────────────────────────────────────────────────────────────────┘
+┌──────────────── Electron 主进程（Node，esbuild 打包）────────────────┐
+│ 窗口 / 托盘 / 全局热键 / 文件对话框 / 系统默认程序                    │
+│ app:// 前端产物   asset:// 本地文件（支持 Range）                     │
+│ app-cover:// 在线封面代理（Referer 伪装 + 磁盘缓存 + 并发去重）       │
+│ host-server: POST /_host ←── 后端反向调用（建窗口 / 托盘 / 热键）     │
+└────────┬─────────────────────────────────────┬──────────────────────┘
+         │ IPC（preload contextBridge）         │ POST /cmd、/batch
+         │                                     │ SSE GET /events
+┌────────▼──────────────┐            ┌─────────▼──────────────┐
+│ 渲染进程（Vue 3）     │            │ 后端 sidecar（Rust）   │
+│ src/ipc/ 原生能力层   │            │ backend/ 业务代码       │
+└───────────────────────┘            └────────────────────────┘
 ```
 
-- **渲染进程 → 宿主**：`@tauri-apps/api` 的 `invoke`（命令）与 `listen`（事件），业务代码统一走 `src/ipc/`
-- **文件 / 对话框 / 网络 / 系统默认程序**：Tauri 官方插件（`plugin-fs` / `plugin-dialog` / `plugin-http` / `plugin-opener` / `plugin-store`）
-- **权限清单**：`src-tauri/capabilities/default.json` 逐项放行插件能力，缺一项就会在运行期被拒
-- Rust 侧注册 **154 条 `#[tauri::command]`**；宿主与后端之间没有进程边界，也不再需要本地 HTTP / SSE 通道
+- **渲染进程 → 主进程**：`electron/preload.ts` 经 `contextBridge` 暴露 `window.__SILVERMOON__`，业务代码统一走 `src/ipc/`
+- **主进程 → 后端**：`electron/sidecar.ts` spawn 可执行文件，从 stdout 解析 `SILVERMOON_READY {"port":N}` 握手
+- **后端 → 主进程**：`electron/host-server.ts` 的 `POST /_host`，用于建窗口、托盘、热键、打开文件
+- 两个 HTTP 服务都只绑 `127.0.0.1`，共用 `X-SilverMoon-Token` 请求头（每次启动随机生成）
+- Rust 侧注册 **180 条业务命令**（`#[silvermoon_ipc::command]`），在 `backend/src/lib.rs` 的 `generate_handler!` 里统一登记
+- **番茄小说**是一个额外的 sidecar（`fqapi/`）：stdio 行分隔 JSON、零端口，宿主按需懒启动
 
-> **迁移沿革**：Tauri 2（原名 LumiLuna） → Electron 44 → **迁回 Tauri 2**。详见
-> [`apps/desktop/doc/TAURI-MIGRATION.md`](apps/desktop/doc/TAURI-MIGRATION.md)。
+> **迁移沿革**：Tauri 2（原名 LumiLuna） → Electron 44 → 迁回 Tauri 2 → **2026-10 再迁回 Electron**。
+> 详见 [`apps/desktop/doc/AGENTS.md`](apps/desktop/doc/AGENTS.md) 与 [`doc/TAURI-MIGRATION.md`](apps/desktop/doc/TAURI-MIGRATION.md)（后者记录的是上一轮迁回 Tauri 的过程）。
 
 ### 🚀 快速开始
 
-环境要求：[Node.js](https://nodejs.org/) 20+、[Rust](https://www.rust-lang.org/) 1.82+；Windows 需要 MSVC Build Tools，Linux 需要 WebKitGTK 等 Tauri 前置依赖。
+环境要求：[Node.js](https://nodejs.org/) 20+、[Rust](https://www.rust-lang.org/) 1.82+；Windows 编译 Rust 后端需要 MSVC Build Tools，Linux 需要基础构建工具。
 
 ```bash
 cd apps/desktop
 npm install
 
-# 一条命令拉起 Vite dev server + Tauri（自动编译 Rust 并开窗口）
+# 先编一次 Rust 后端（产物：backend/target/debug/silvermoon[.exe]）
+npm run build:backend
+
+# 一条命令拉起 Vite dev server + Electron 主进程 watch + Electron
 npm run dev
 ```
+
+> 后端没编也能打开界面，只是数据相关操作会提示「后端未启动」—— 只调前端时很方便。
 
 仅前端预览（浏览器 + mock）：
 
@@ -131,18 +140,19 @@ npm run dev:renderer     # Vite dev server (localhost:1420)
 打包：
 
 ```bash
-npm run build                   # 类型检查 + 前端产物 + tauri build
-npm run dist                    # tauri build 打包（Windows NSIS / Linux AppImage / macOS dmg）
+npm run build:backend:release   # release 版 Rust 后端
+npm run build                   # 类型检查 + 前端产物 + Electron 主进程产物
+npm run dist                    # electron-builder 打包（Windows NSIS / Linux AppImage / macOS dmg）
 ```
 
 ### 🧱 技术栈
 
 | 领域 | 技术 |
 |---|---|
-| 桌面壳 | Tauri 2（复用系统 WebView：WebView2 / WKWebView / WebKitGTK） |
+| 桌面壳 | Electron 44（主进程 Node，esbuild 打包为单文件） |
 | 前端 | Vue 3 + Vite + TypeScript + Pinia + vue-router |
 | UI | Material Design 3（`@m3e/web` M3 Expressive + `@material/web`） |
-| 后端 | Rust（与桌面壳同进程，`#[tauri::command]` 直接过桥） |
+| 后端 | Rust（独立 sidecar 进程，通过 HTTP + SSE 与宿主通信） |
 | 数据库 | rusqlite（SQLite，WAL） |
 | 媒体处理 | lofty、image、kamadak-exif、FFmpeg（可选外部依赖） |
 | Windows 媒体控件 | smtc-tokio + tiny_http |
@@ -194,11 +204,11 @@ CI（[`.github/workflows/mobile.yml`](.github/workflows/mobile.yml)，Flutter 3.
 
 ## 🗄️ 归档 · archive/electron-desktop
 
-[`archive/electron-desktop/`](archive/electron-desktop/) 与 [`archive/electron-host/`](archive/electron-host/) 是两轮宿主重构留下的**只读源码快照**：前者是更早一轮（切 Flutter 宿主，未成），后者是 **Electron 宿主层**（`electron/`、splash 启动器、electron-builder 配置与相关脚本）——本轮迁回 Tauri 2 后归档，仅作历史参考与行为对照。
+[`archive/electron-desktop/`](archive/electron-desktop/) 与 [`archive/electron-host/`](archive/electron-host/) 是两轮宿主重构留下的**只读源码快照**：前者是更早一轮（切 Flutter 宿主，未成），后者是上一轮迁回 Tauri 时归档的宿主层（现只剩 `splash-feature.md`）—— 仅作历史参考与行为对照。
 
 ## 🧰 文档与工具
 
-- [`apps/desktop/doc/`](apps/desktop/doc/)：设计指南、皮肤系统方案、逐字歌词策划、后端迁移与性能评审等
+- [`apps/desktop/doc/`](apps/desktop/doc/)：**`AGENTS.md`（架构与约定的当前真源）**、`SPEC.md`（设计边界与验收标准）、`LOG.md`（逐轮施工记录）、设计指南、扩展开发指南等
 - [`docs/mobile-spec/`](docs/mobile-spec/)：移动端播放 / 歌词技术规格与桥调用清点
 - [`tools/make-icons.py`](tools/make-icons.py)：一张源图产出桌面（ICO / ICNS / PNG / 磁贴）与移动端（iOS 满幅、Android 自适应）全套图标
   ```bash
@@ -210,7 +220,7 @@ CI（[`.github/workflows/mobile.yml`](.github/workflows/mobile.yml)，Flutter 3.
 
 | 工作流 | 触发 | 内容 |
 |---|---|---|
-| [`build.yml`](.github/workflows/build.yml) | push `main` / PR / `v*` tag | 桌面端：ESLint + Prettier + 类型检查 + 单测 + Rust fmt/clippy；Windows NSIS 与 Linux AppImage 并行构建；打 tag 时自动创建 Release |
+| [`build.yml`](.github/workflows/build.yml) | push `main` / PR / `v*` tag | 桌面端：ESLint + Prettier + 类型检查 + 单测 + Rust fmt/clippy（backend / ipc 契约层 / splash / fqapi 四处）+ fqapi sidecar 三平台构建；Windows NSIS、Linux AppImage、macOS dmg 并行；打 tag 时自动创建 Release |
 | [`mobile.yml`](.github/workflows/mobile.yml) | `apps/mobile/**` 变更 / 手动 | 移动端：Android 分 ABI APK 与未签名 iOS IPA，并发布 prerelease |
 | [`rndesktop.yml`](.github/workflows/rndesktop.yml) | `apps/RNdesktop/**` 变更 / 手动 | RN 桌面端：ESLint + Prettier + tsc + Jest；Windows MSIX 构建；macOS 为**手动触发**；`rndesktop-v*` tag 发 prerelease |
 
@@ -226,14 +236,14 @@ CI（[`.github/workflows/mobile.yml`](.github/workflows/mobile.yml)，Flutter 3.
 | [hikari_novel_flutter](https://github.com/15dd/hikari_novel_flutter) | 小说解析与登录 | MIT |
 | [Kazumi](https://github.com/Predidit/Kazumi) | 番剧规则采集与播放 | GPL-3.0 |
 | [LDDC](https://github.com/chenmozhijin/LDDC) | QQ 音乐 QRC 逐字歌词、酷狗 API 客户端 | GPL-3.0-only |
-| [md3Music](https://github.com/zzyoxml/md3Music) | 酷狗音乐 API（登录 / 解析 / 签到），其内嵌 Rust 服务端原样引入 `apps/desktop/src-tauri/kugou_server/` | AGPL-3.0 |
+| [md3Music](https://github.com/zzyoxml/md3Music) | 酷狗音乐 API（登录 / 解析 / 签到），其内嵌 Rust 服务端原样引入 `apps/desktop/backend/kugou_server/` | AGPL-3.0 |
 | [PiliPlus](https://github.com/PiliPlus/PiliPlus) | B 站接口与 WBI 签名的移植参考 | GPL-3.0 |
 | [api-enhanced](https://github.com/neteasecloudmusicapienhanced/api-enhanced) | 网易云 weapi / eapi / xeapi 签名与风控对策 | MIT |
 | [MiaoHui](https://github.com/Kian0034/miaohui) | 参考扩展：图片视频索引 + OCR + ASR + 向量检索 | MIT |
 
 > 各参考项目的许可条款适用于其对应代码；本项目的自有代码仍以 GPL-3.0-only 发布。
-> 其中 `apps/desktop/src-tauri/kugou_server/` 为 md3Music 的 AGPL-3.0 代码，原样 vendored 并保留其
-> [LICENSE](apps/desktop/src-tauri/kugou_server/LICENSE)。依 GPLv3 §13，AGPLv3 代码可与本项目组合，
+> 其中 `apps/desktop/backend/kugou_server/` 为 md3Music 的 AGPL-3.0 代码，原样 vendored 并保留其
+> [LICENSE](apps/desktop/backend/kugou_server/LICENSE)。依 GPLv3 §13，AGPLv3 代码可与本项目组合，
 > AGPL §13 的网络交互条款适用于该组合；如需分发，请一并遵守 AGPL-3.0。
 
 ## 🤝 贡献

@@ -1,121 +1,243 @@
 # AGENTS.md
 
+> **最后核对：2026-10-17，v0.1.1。** 本文件每轮会作为「Additional instructions」自动注入，
+> **写错会直接误导接手的 AI**。改动前先按下面「如何核对」一节验证，不要凭印象改。
+>
+> **如何核对**：架构看 `apps/desktop/package.json` 的 `main` 与 `.github/workflows/build.yml`
+> 的 `--manifest-path`；命令数看 `backend/src/lib.rs` 的 `generate_handler![...]`；
+> 目录行为看实际 `ls`。**怀疑本文件与代码冲突时，以代码与 CI 为准，并回来修本文件。**
+>
+> **文档三层**：本文件（项目现在是什么）→ [`SPEC.md`](SPEC.md)（应该成为什么、验收标准）
+> → [`LOG.md`](LOG.md)（怎么一步步变成现在这样、决策原因）。对外变化看
+> [`../CHANGELOG.md`](../CHANGELOG.md)。
+
 ## Project
 
-**银月（SilverMoon）** — **Tauri 2 + Vue 3 + TypeScript** desktop media library app, with the backend written in Rust (SQLite, lofty, image processing) running **in the same process as the desktop shell**. Frontend uses Pinia, vue-router and Material Design 3.
+**银月（SilverMoon）** — 本地优先的**全媒体库**桌面应用：图片 / 视频 / 音乐 / 小说 / 绘画 /
+书籍 / 番剧，数据全部留在本地，无云同步、不强制账号。
 
-The project lineage: Tauri 2 (originally `LumiLuna`) → Electron 44 → **back to Tauri 2**. See `README_zh.md` → 架构, and `doc/TAURI-MIGRATION.md` for what changed and what deliberately did not.
+技术栈：**Electron 44 + Vue 3 + TypeScript + Material Design 3**，业务后端是**独立的 Rust
+sidecar 进程**（SQLite / lofty / 图像处理 / 在线源协议）。
+
+宿主沿革：Tauri 2（原名 LumiLuna）→ Electron 44 → 迁回 Tauri 2 → **2026-10 再迁回 Electron**。
+两次迁移都是「换壳不换芯」：业务代码几乎没动，只换宿主层。`silvermoon-ipc` 契约层就是
+为此存在（`silvermoon_ipc::command` 宏让 180 条业务命令一行都不用改）。
 
 ## Process model
 
+**三进程**，宿主与后端之间是一条明文、可 curl 的 HTTP 边界：
+
 ```
-┌────────────────────── Tauri 2 主程序（Rust，单进程）──────────────────────┐
-│  窗口 / 托盘 / 全局热键 / 系统媒体控件（SMTC）                            │
-│  154 条 `#[tauri::command]` 业务命令                                    │
-│  app-cover:// 自定义协议（在线封面代理：绕 CORS + 防盗链 + 磁盘缓存）      │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │ @tauri-apps/api 的 invoke / listen
-                      渲染进程（Vue 3，src/ipc/ 原生能力层）
+┌──────────────── Electron 主进程（Node）───────────────┐
+│ 窗口 / 托盘 / 全局热键 / 对话框 / 默认程序             │
+│ app:// 前端产物   asset:// 本地文件（支持 Range）      │
+│ app-cover:// 在线封面代理（Referer 伪装 + 磁盘缓存）   │
+│ host-server: POST /_host ←── 后端反向调用（建窗口/托盘）│
+└──────┬──────────────────────────────────┬─────────────┘
+       │ IPC（preload contextBridge）      │ POST /cmd、/batch
+       │                                  │ SSE GET /events
+┌──────▼──────────────┐        ┌──────────▼──────────────┐
+│ 渲染进程（Vue 3）   │        │ 后端 sidecar（Rust）     │
+│ src/ipc/ 原生能力层 │        │ backend/ 业务代码         │
+└─────────────────────┘        └─────────────────────────┘
 ```
 
-- 渲染进程 → 宿主：`@tauri-apps/api/core` 的 `invoke`（命令）与 `@tauri-apps/api/event` 的 `listen`（事件）。
-- 文件 / 对话框 / 网络 / 系统默认程序：Tauri 官方插件（`plugin-fs` / `plugin-dialog` / `plugin-http` / `plugin-opener` / `plugin-store` / `plugin-global-shortcut` / `plugin-updater`）。
-- `src-tauri/src/commands/host.rs` 只保留插件覆盖不到、或必须与 Rust 侧目录口径一致的那几项（路径解析、版本号、退出、封面缓存、内存诊断、更新器门面）。
+- **渲染进程 → 主进程**：`electron/preload.ts` 经 `contextBridge` 暴露 `window.__SILVERMOON__`，
+  通道只有 `sm:invoke` / `sm:invokeBatch` / `sm:call` / `sm:emit`（白名单式）。
+- **主进程 → 后端**：`electron/sidecar.ts` spawn 可执行文件，从 stdout 解析
+  `SILVERMOON_READY {"port":N}` 握手，之后转发命令与事件。
+- **后端 → 主进程**：`electron/host-server.ts` 的 `POST /_host`，用于建窗口、托盘、热键、开文件。
+- 两个 HTTP 服务都只绑 `127.0.0.1`，共用 `X-SilverMoon-Token` 请求头（每次启动随机生成）。
+- **splash 启动器**（`splash/`，Rust + Win32）是**父进程**：先出画面，再拉起 `SilverMoon.exe`
+  并传 `--splash-pipe=<name>`。因此 NSIS 快捷方式指向 `silvermoon-splash.exe`（见
+  `build/installer.nsh`）。`npm run dev` **不启** splash。
+- **第二个 sidecar**：`fqapi/`（番茄小说内容源）独立进程，stdio 行分隔 JSON、零端口，
+  握手行 `FQAPI_READY {...}`。宿主侧管理在 `electron/fqapi.ts`（懒启动）。
 
 ## Commands
 
 ```bash
-# Frontend only (browser preview; all native capabilities fall back to mocks)
-npm install && npm run dev:renderer   # Vite dev server on :1420
+# 开发（Vite :1420 + esbuild watch + Electron，三件事由 30 行原生代码串起来）
+npm run dev
 
-# Rust backend (needs MSVC on Windows / WebKitGTK deps on Linux — CI builds it otherwise)
-npm run build:backend                 # cargo build --manifest-path src-tauri/Cargo.toml
-npm run build:backend:release         # release build
+# 仅前端预览（浏览器 + mock，无原生能力）
+npm run dev:renderer
 
-# Full desktop app
-npm run dev                           # tauri dev（自动拉起 Vite dev server）
-npm run build                         # typecheck + renderer + tauri build
-npm run dist                          # tauri build（打包安装包）
+# Rust 后端（需要 MSVC；本机没有就走 CI）
+npm run build:backend              # cargo build --manifest-path backend/Cargo.toml
+npm run build:backend:release
 
-# Checks (all runnable locally)
-npm run lint                          # eslint .
-npm run format:check                  # prettier
-npm run typecheck                     # vue-tsc --noEmit
-npm test                              # vitest
-npm run verify:rust-pure              # 真实执行 Rust 纯逻辑（wasm，绕开 MSVC 链接器）
-npm run verify:mock-coverage          # mock 与后端路由表漂移
-cd src-tauri && cargo fmt --check
-cd src-tauri && cargo clippy --all-targets -- -D warnings   # 需要 MSVC / WebKitGTK 前置依赖
+# 打包
+npm run build                      # typecheck + build:renderer + build:main
+npm run dist                       # build + electron-builder（NSIS / AppImage / dmg）
+
+# 本地能跑的校验（全部接入 CI）
+npm run lint                       # check-version.mjs && eslint .
+npm run format:check               # prettier（src / shared / scripts / electron）
+npm run typecheck                  # vue-tsc --noEmit && tsc -p tsconfig.electron.json
+npm test                           # vitest run
+npm run verify:rust-pure           # wasm 旁路真实执行 Rust 纯逻辑（见下）
+npm run verify:mock-coverage       # mock 与后端路由表漂移
+npm run verify:m3-tokens           # 颜色令牌与 shared/m3-theme.ts 是否一致
+npm run verify:settings-index      # 设置项索引是否过期
+npm run check:icon-font            # 图标字体子集是否与源码一致
 ```
 
 ## Architecture
 
-- `src-tauri/tauri.conf.json` — 应用配置（窗口、打包目标、`asset:` 协议范围、CSP）。**改了要用 `node_modules/@tauri-apps/cli/config.schema.json` 校验**（官方 schema）。
-- `src-tauri/capabilities/*.json` — **按窗口**的权限清单（Tauri 2 的细粒度权限模型）。`default.json` 是主窗口，另有 `desktop-lyrics` / `extension` / `pixiv-login` / `wenku8-login` / `anime-webview` 五份。**新增窗口必须补一份**，否则该窗口的 IPC 全被拒；新增插件命令要在用到它的每个窗口里放行。
-- `src-tauri/src/` — Rust 业务后端（命令、SQLite 库、扫描、元数据、在线源）。
-  - `src-tauri/src/commands/host.rs` — 宿主能力（路径 / 版本 / 退出 / 封面缓存 / 诊断 / 更新器）。
-  - `src-tauri/src/commands/music_tags.rs` — `musicTags` 通道（lofty 读写音频标签 + 在线标签磁盘缓存）。
-  - `src-tauri/src/cover.rs` — `app-cover://` 协议（在线封面代理）。
-  - `src-tauri/src/gpu_canvas.rs` — **GPU 画布**（wgpu 直绘到独立原生窗口，绘画用）。见 `doc/GPU-CANVAS.md`。
-  - `src-tauri/src/app_meta.rs` — 应用元信息 + 首个启动的旧数据迁移。
-  - `src-tauri/silvermoon.config.json` — **single source of truth** for the app version (shared with `tauri.conf.json` and `scripts/check-version.mjs`).
-- `src/ipc/` — **the single bridge between the renderer and the native layer** (`invoke` / `events` / `window` / `dragdrop` / `paths` / `app` / `store` / `dialog` / `fs` / `opener` / `http`). Business code imports from here directly; it must never import `@tauri-apps/*` itself (browser preview would break).
-- `src/capabilities/index.ts` — higher-level facade over `src/ipc/`: wraps every backend command and provides a **browser mock** so `npm run dev:renderer` works without Tauri.
-- `src/stores/` — Pinia stores: `library` (file cache + scan), `player` (audio playback + queue), `settings` (persisted via `JsonStore`).
-- `src/tokens/theme.css` — M3 design tokens (CSS variables). Shape / motion / spacing tokens are hand-written here; **the color tokens are generated** — never edit them by hand, change `shared/m3-theme.ts` and run `npm run gen:m3-tokens`. See `doc/M3配色系统.md` for the color pipeline (Tonal Spot · M3 Expressive spec 2025 · phone · standard contrast), the full role list, and the deliberate exceptions (drawing palette, reader background).
-- `archive/electron-host/` — **只读参考**：Electron 宿主层的完整快照（含 `electron/*`、splash 启动器、electron-builder 配置与相关脚本）。迁回 Tauri 后不再参与构建，但排查行为差异时可直接对照旧实现。
+- `electron/` — **Electron 宿主层**（24 个文件）。启动顺序写死在 `main.ts` 顶部注释：
+  `registerSchemes()`（必须在 ready 前）→ 解析路径 + 迁移旧数据（决定 userData）→ ready →
+  `handle*Protocol()` → `startHostServer()` → `registerIpc()` → `startSidecar()` 与
+  `createMainWindow()` **并行**（界面不等后端就绪）。关键文件：
+  `main.ts` / `ipc.ts`（命令分发 + 远程窗口白名单）/ `sidecar.ts` / `windows.ts` /
+  `protocols.ts` / `host-server.ts` / `preload.ts` / `webview-preload.ts` / `tray.ts` /
+  `updater.ts` / `store.ts` / `fqapi.ts` / `csp.ts`。
+- `backend/` — **Rust 业务后端**（独立进程）。`src/lib.rs` 是启动编排与命令注册表
+  （`generate_handler![...]`），`src/commands/` 是命令实现，其余按业务分文件
+  （`anime` / `bilibili` / `kugou` / `netease` / `novel*` / `pixiv` / `osu` / `webdav` / …）。
+  - `backend/crates/silvermoon-ipc` — **契约层**（Host / State / 窗口 / 托盘 / 菜单 / rt / server）。
+  - `backend/crates/silvermoon-ipc-macros` — `#[silvermoon_ipc::command]`、
+    `generate_handler!`、`generate_context!`。**这两个 crate 是 path 依赖、不属于 workspace 成员**，
+    `cargo fmt --manifest-path backend/Cargo.toml` 不会检查它们，CI 里单独各查一次。
+  - `backend/silvermoon.config.json` — **版本号单一真源**（vite 与 Rust 两侧都读它）。
+- `fqapi/` — 番茄内容源 sidecar（GPL-3.0，裁剪自 fqapp）。`sign` / `device` / `upstream` /
+  `endpoints` 四个模块。**它的 reqwest 0.13 + rustls 与 backend 的 0.12 + native-tls 刻意隔离**
+  （同一 crate 会出现两份 reqwest、TLS provider 只能选一个）。
+- `src/ipc/` — **渲染进程与原生层之间的唯一通道**（`bridge` / `invoke` / `events` / `window` /
+  `dragdrop` / `dpi` / `paths` / `app` / `store` / `dialog` / `fs` / `opener` / `http`）。
+  业务代码只 import 这里，**不得直接碰 `window.__SILVERMOON__`**（浏览器预览会废）。
+- `src/capabilities/index.ts` — `src/ipc/` 之上的门面：包好每条后端命令，并提供**浏览器 mock**。
+- `src/stores/` — Pinia：`library` / `player` / `settings` / `pixiv` / `anime` / `skins` /
+  `musicTags` / `bilibili` / `drawing` / `writing` / …。
+- `src/m3e.ts` — `@m3e/web` 原生组件按需副作用注册（导入即 `customElements.define`）。
+  **UI 一律用官方 `m3e-*` 组件**，不要手写「长得像 MD3」的原生元素。
+- `src/tokens/theme.css` — M3 令牌。**颜色令牌段是生成的，禁止手改** —— 改
+  `shared/m3-theme.ts` 后跑 `npm run gen:m3-tokens`。见 `doc/M3配色系统.md`。
+- `src/views/settingsIndex.generated.ts` — **生成的**设置项索引，供设置搜索跳转，
+  别手改；跑 `npm run gen:settings-index`。
+- `shared/` — 双端共享（`m3-theme.ts` 配色内核、`types.ts`、`i18n.ts`）。
+- `doc/` — 设计文档。**`doc/AGENTS.md` 就是本文件**；同目录还有 [`SPEC.md`](SPEC.md)
+  （设计边界与验收标准）与 [`LOG.md`](LOG.md)（逐轮施工记录 + 决策原因）。
+  `REWRITE_PROMPT_TAURI2.md` 是历史归档，**不要照着它建 Tauri 项目**；
+  `TAURI-MIGRATION.md` 记录的是**上一轮**迁回 Tauri 的过程，也不是当前架构。
+- ⚠️ `apps/desktop/src-tauri/` 是 **Tauri 时代的遗留树**（192 文件），CI、npm scripts、
+  eslint 均不参与构建。除了 `check-version.mjs` 里那条「遗留副本」校验，**没有任何东西读它**。
+  不要在里面改代码，也不要按它推断当前架构。
 
 ## Key Conventions
 
-- **No emojis in UI** — Use Material Symbols Rounded icons only (class: `material-symbols-outlined`)
-- **Path aliases**: `@` → `src/`, `@shared` → `shared/`
-- **Icons font**: Google Fonts CDN (Chinese mirror `fonts.googleapis.cn`). CSS class `.material-symbols-outlined` maps to `Material Symbols Rounded` font family.
-- **Music player**: FluidBackground uses 4-quadrant rotating canvas + `screen` blend + `blur(30px) saturate(2.5) brightness(0.5) scale(1.5)`. Magic numbers from Apple Music reference — do not change.
-- **Lyric parser**: `parseLrc()` in `player.ts` supports dual-language (same-timestamp lines or `[tr:]` tags) + trailing-paren translations. `buildLyricSequence` (`src/utils/lyricTimeline.ts`) attaches a rough word-timeline (`units`) and — when `settings.detectInstrumental` is on — replaces leading credits (作词/作曲/编曲) with a 3-dot intro and inserts 3-dot interludes for long pauses. Plan: `逐字歌词策划书.md`.
-- **Audio playback**: use `toAssetUrl()` from `src/ipc/invoke.ts` to convert a file path into an `asset:` URL (`convertFileSrc`). Audio element must be bound via `bindAudio()` then `initAudio()` called after mount.
-- **Windows SMTC**: `commands/smtc.rs` registers the app as a system media session (Windows-only deps `smtc-tokio` + `tiny_http`, target-gated). Frontend pushes metadata via `capabilities.smtcSetMedia()` (local: `filePath`; online: `coverUrl`) and throttled state via `syncSmtc()` in the player store; OS media keys arrive as `smtc:command` events. Covers are served over `http://127.0.0.1` by a tiny_http thread — Windows' `RandomAccessStreamReference` does NOT accept `file://` URIs. Commands no-op on non-Windows.
-- **Thumbnails**: Cached in `library.thumbCache`. Loaded via `loadThumbnails()` with 6-concurrent worker pool.
-- **Settings persistence**: `settings.ts` uses `JsonStore` from `@/ipc/store` (backed by `tauri-plugin-store`). Auto-saves on any `watch()` change. Load on app start in `App.vue` `onMounted`.
+- **UI 不用 emoji**，一律 Material Symbols Rounded（class `material-symbols-outlined`）。
+  字体是**本地子集**（`src/assets/fonts/material-symbols-rounded.woff2`，约 86KB）；
+  新增图标名后必须跑 `npm run fetch:icon-font` 重新生成子集，否则界面缺图标。
+- 路径别名：`@` → `src/`，`@shared` → `shared/`。
+- **本地文件 URL 一律走 `toAssetUrl()`**（`src/ipc/invoke.ts`），生成 `asset://localhost/<path>`。
+  **在线封面一律走 `toCoverProxyUrl()` → `app-cover://`**（宿主补 Referer + 磁盘缓存 + 并发去重）。
+- **FluidBackground 的魔法数字不要改**：4 象限旋转 canvas + `screen` 混合 +
+  `blur(30px) saturate(2.5) brightness(0.5) scale(1.5)`（取自 Apple Music 参考）。
+- **歌词**：`parseLrc()` / `buildLyricSequence()` 都在 `src/utils/lyricTimeline.ts`
+  （不在 store 里）。支持同时间戳双语行、`[tr:]`、行尾括号译文；`detectInstrumental`
+  开启时会把开头的作词/作曲/编曲替换成三点前奏、并为长停顿插入三点间奏。
+- **音频**：`bindAudio()` 后调 `initAudio()`（在 mount 之后）。
+- **设置持久化**：`settings.ts` 用 `JsonStore`（`src/ipc/store.ts` → `electron/store.ts`），
+  整文件 JSON 落在应用数据目录。写盘是**显式** `save()`，主进程退出前有兜底落盘。
+- **SMTC（Windows）**：`backend/src/commands/smtc.rs` 用 `smtc-tokio` 注册系统媒体会话，
+  封面必须走 `http://127.0.0.1:<随机端口>`（`tiny_http` 线程提供）——
+  `RandomAccessStreamReference::CreateFromUri` **不接受 `file://`**。非 Windows 下命令空转。
+- **设置项文案/索引**：`SettingsView.vue` 的结构决定索引，加设置项后跑
+  `npm run gen:settings-index`，否则设置搜索搜不到。
 
 ## Gotchas
 
-- **事件与命令的命名不要改**：Rust 侧 `app.emit("scan:progress", …)` 与前端 `listen("scan:progress", …)` 靠字符串对齐，改名不会报错、只会静默静默。
-- **二进制过桥**：Tauri 2 的 invoke 原生支持 `Uint8Array`；`src/ipc/bridge.ts` 的 `toCloneablePayload()` 会**原样透传**它。不要把它转成 JSON 数组——写大文件时会膨胀数倍。
-- **Map / Set 必须显式降级**：JSON 里没有原生表示，`toCloneablePayload()` 会把 Map 展开成普通对象、Set 展开成数组。musicTags store 的 `overrides` 就是 Map。
-- **权限清单是按窗口的**：capabilities 用 `windows: [...]` 限定生效窗口。新增窗口（如新的子窗口）必须补一份 capability，否则该窗口里所有 IPC 都会被拒 —— 表现为「窗口能开，但界面全是 mock 行为/静默失败」。新增插件命令要加到**每个用到它的窗口**的清单里。
-- **旧数据迁移**：数据目录仍是 `<appData>/<identifier>`。首次启动若新目录不存在而旧项目 `cn.cool.lumiluna` 存在，会自动整目录复制一次（只读旧目录）。逻辑在 `src-tauri/src/app_meta.rs`，且必须**早于**打开数据库。
-- **封面代理是必需的**：酷狗 / 网易云 / QQ 图床都不返回 CORS 头且做防盗链，`<img>` 直连会失败。统一走 `toCoverProxyUrl()` → `app-cover://`（Rust 侧 `cover.rs`，带 256MB LRU 磁盘缓存 + 并发去重 + 负缓存）。
-- **HTTP 响应要剥传输头**：Rust 侧 reqwest 已把 body 解压成明文，插件却把上游的 `content-length`（压缩后长度）原样透传；`src/ipc/http.ts` 会剥掉 `content-encoding` / `content-length` / `transfer-encoding`，否则调用方按错误长度截取。
-- **命令错误以原始字符串 reject**：`[WENKU8_LOGIN_CANCELLED] …` 这类前缀判定依赖它，`invokeRaw()` 保证不把它包成 `Error`。
-- `src/ipc/opener.ts` exports `openPath` (not `open`)
-- Router uses `createWebHashHistory` — components are destroyed/recreated on route change. `keep-alive` is used in `App.vue` to preserve state (excludes PlayerView).
-- `library.refresh(type)` caches by type. Call with `force=true` to bypass cache after scan.
-- **Never pass Vue reactive state through the IPC bridge without `toCloneablePayload()`**: Tauri serialises to JSON, and a reactive Proxy plus `Map`/`Set` needs normalising first. `src/ipc/bridge.ts` runs every outbound payload through it, so new channels are covered — but a **shallow** spread is not enough. Regression tests: `src/ipc/__tests__/bridgeClone.test.ts`, `src/composables/__tests__/localTagIpcClone.test.ts`.
-- **`titleBarStyle` / 无边框窗口**：主窗口 `decorations: false` 由 `tauri.conf.json` 声明，前端自绘标题栏靠 CSS `app-region: drag`；不要再引入 JS 拖拽窗口的实现（历史上因此出过 bug）。
+- **事件名不能改**：Rust 侧 `emit("scan:progress", …)` 与前端 `listen(...)` 靠字符串对齐，
+  改名不报错、只静默失效。扩展事件是 `ext://<id>/<event>`。
+- **`capabilities/*.json` 已经失效** —— 那是 Tauri 2 按窗口的权限模型。迁回 Electron 后
+  权限在 `electron/ipc.ts` 的通道白名单与 `isTrustedRenderer()` 里。**新增窗口不需要
+  capabilities**，但要在 `windows.ts` 里创建、并确认它属于可信来源。
+- **远程页窗口只允许白名单命令**：Pixiv / 文库8 / 番剧取流窗口的预加载跑在**页面世界**且
+  `contextIsolation: false`，`electron/ipc.ts` 的 `REMOTE_WINDOW_ALLOWED_COMMANDS` 是唯一的收敛点。
+  **新增注入脚本调用必须同步加进这张表**（历史上漏掉 `wenku8_login_submit` 会让登录静默失效）。
+- **⚠️ `ext:` 协议当前未注册（实测缺陷，待修）**：`ExtensionEmbed.vue` / `ExtensionHost.vue`
+  用 `toAssetUrl(dir, "ext")` 生成 `ext://localhost/...`，但 `electron/protocols.ts` 的
+  `registerSchemes()` 与 `protocol.handle()` **只有 `app` / `asset` / `app-cover` 三个**，
+  全仓 grep 不到 `ext` scheme。Tauri 时代实现在 `src-tauri/src/ext_protocol.rs`
+  （7.7KB，最后改动是 `ee88689` 2026-10-11），迁回 Electron 后**没人碰过它、也没搬回来**；
+  那份实现可直接照抄的语义是「只服务 `extensions/<id>/` 之内的文件、拒绝含 `..` 的路径、
+  Windows 前缀比较忽略大小写」。
+  症状：扩展 UI 的 iframe 加载不出来（导航到未注册协议直接失败）。
+  **验证方法**：装一个带 `contributes.ui` 的扩展，看 iframe 是否白屏 + DevTools 是否报
+  unknown scheme。修法是在 `protocols.ts` 补第四个 scheme + handler（路径与 `asset:` 同构，
+  但根目录锁在 `app_data_dir/extensions/<id>/`）。
+- **二进制过桥**：`invoke` 原生支持 `Uint8Array`，`toCloneablePayload()` 会原样透传 ——
+  **不要转成 JSON 数组**（写大文件会膨胀数倍）。
+- **Map / Set 必须显式降级**：JSON 没有原生表示，`toCloneablePayload()` 会把 Map 展开成对象、
+  Set 展开成数组（`musicTags` 的 `overrides` 就是 Map）。
+- **响应式 Proxy 不能直接过桥**：Electron 的 `ipcRenderer.invoke` 走结构化克隆，直接传 Vue
+  Proxy 会抛 `DataCloneError`。新通道都在 `src/ipc/bridge.ts` 里统一降级，但**浅拷贝不够**。
+  回归测试：`src/ipc/__tests__/bridgeClone.test.ts`。
+- **封面代理是必需的**：酷狗 / 网易云 / QQ 图床都不返回 CORS 头且做防盗链，`<img>` 直连必失败。
+- **HTTP 响应要剥传输头**：主进程的 `net.fetch` 已把 body 解压成明文，但上游的
+  `content-length`（压缩后长度）会原样透传；`src/ipc/http.ts` 剥掉
+  `content-encoding` / `content-length` / `transfer-encoding`，否则调用方按错误长度截取。
+- **命令错误以原始字符串 reject**：`[WENKU8_LOGIN_CANCELLED] …` 这类前缀判定依赖它，
+  `invokeRaw()` 保证不包成 `Error`。
+- `src/ipc/opener.ts` 导出的是 `openPath`（不是 `open`）。
+- **路由是 hash 模式**（`createWebHashHistory`），切页会销毁重建组件；`App.vue` 用
+  `keep-alive` 保状态（排除 `PlayerView`）。
+- `library.refresh(type)` 按类型缓存，扫描后要 `force=true` 才绕过。
+- **无边框窗口**：主窗口的 `decorations: false` 来自 `backend/silvermoon.config.json` 的
+  `window.decorations`，由 `electron/windows.ts` 读成 BrowserWindow 的 `frame`；前端自绘
+  标题栏靠 CSS `app-region: drag`。**不要再引入 JS 拖拽窗口的实现**（历史上因此出过 bug）。
+- **`electron-builder.yml` 的 `extraResources` 只在平台级写**，顶层一律不写：顶层与平台级
+  同时出现同一个 `from → to` 会让 electron-builder 并发 copyfile，Windows 上必踩
+  `EBUSY: resource busy or locked`，NSIS 整步失败。
+- **只保留两个语言包**（`electronLanguages: zh-CN / en-US`）：Electron 自带 55 个
+  `locales/*.pak`，实测 48.3MB，而界面只有中英。
+- **taglib-wasm 必须在 asar 之外**（`asarUnpack`）：WASI 后端要用真实文件系统打开 `.wasm`。
+- **旧数据迁移**：数据目录是 `<appData>/<identifier>`（`cn.cool.silvermoon`）；首次启动若旧
+  项目目录 `cn.cool.lumiluna` 存在，会整目录复制一次（只读旧目录）。逻辑在
+  `backend/src/app_meta.rs`，**必须早于打开数据库**。
 
 ## 在**没有 MSVC 链接器**的机器上验证 Rust
 
-`cargo check / build / test` 需要宿主链接器（连 build script 都要），因此没装 VS Build Tools
-的机器上跑不了。但有一条可用的旁路，**务必用它**：
+本机装不了 `cargo check / build / test`（连 build script 都要链接器）。可用的旁路：
 
 ```bash
 rustup target add wasm32-unknown-unknown   # 一次性
 npm run verify:rust-pure
 ```
 
-`wasm32-unknown-unknown` 用 rustup 自带的 `rust-lld` 链接，不需要 MSVC。该脚本把
-`src-tauri/src` 里**不带外部依赖的纯函数按原文抽出来**编成 wasm，在 Node 里真的跑断言
-（函数改名会直接报错，不会静默失效）。
+`wasm32-unknown-unknown` 用 rustup 自带的 `rust-lld` 链接。脚本把 `backend/src` 里
+**不带外部依赖的纯函数按原文抽出来**编成 wasm，在 Node 里真跑断言（改名会直接报错，
+不会静默失效）。新增纯逻辑时把它加进 `scripts/verify-rust-pure.mjs` 的 `TARGETS`。
 
-- **能覆盖**：封面 Referer 伪装、封面扩展名推断、路径规范化等纯逻辑。
-- **不能覆盖**：任何带 build script 的 crate（`serde` 等传递依赖会拖进来），
-  因此网络 / 数据库 / Tauri API 路径仍需 CI。
-- 新增纯逻辑时，把它加进 `scripts/verify-rust-pure.mjs` 的 `TARGETS`。
-
-另外 `cargo generate-lockfile` / `cargo fetch` **不需要链接器**，可用于验证依赖声明是否自洽。
+- **能覆盖**：封面 Referer 伪装、扩展名推断、路径规范化等纯逻辑。
+- **不能覆盖**：任何带 build script 的 crate（`serde` 等会拖进来），网络 / 数据库 /
+  宿主 API 路径仍必须走 CI。
+- `cargo generate-lockfile` / `cargo fetch` **不需要链接器**，可用于验证依赖声明是否自洽。
 
 ## Build CI
 
-GitHub Actions builds Windows (NSIS), Linux (AppImage) and macOS (dmg) in parallel with a `lint` job. Push to `main` triggers the build; pushing a `v*` tag creates a Release with the artifacts.
+`.github/workflows/build.yml` 有四个 job：`lint`、`fqapi sidecar`（三平台 + 握手冒烟）、
+`build`（Windows NSIS / Linux AppImage / macOS dmg 矩阵）、`release`（**仅 `v*` tag**）。
 
-The `build` job deliberately does **not** declare `needs: lint`, so the slow Windows job starts immediately instead of waiting for lint.
+- `lint` 是**顺序步骤**：前端（ESLint / Prettier / typecheck / vitest / mock 漂移 /
+  图标字体 / M3 token）全过才轮到 Rust（fmt × 4 处 → Clippy → 单测）。
+  **前面任一失败会 skip 后面的** —— lint 红 ≠ Rust 已验证。
+- `build` **刻意不写 `needs: lint`**，让最慢的 Windows 构建立即开跑。
+- macOS 产物目录**不固定**（`mac` / `mac-arm64` / `mac-universal`），
+  踩过：别人以为叫 `mac`，实际 runner 是 arm64。脚本里用 `find` 找 `SilverMoon.app`。
+- 本机无链接器，Rust 编译只能由 CI 完成（约 20 分钟一轮）。**用户说「push 构建」= 推并
+  关注 CI 结果**，不是只推上去。
+
+## 版本号与提交
+
+- **版本号分散在多处，单一真源是 `backend/silvermoon.config.json`**（vite 与 Rust 两侧都读它）。
+  `node scripts/check-version.mjs`（挂在 `npm run lint` 里）会校验：单一真源、
+  `src-tauri/silvermoon.config.json`（遗留副本，可选）、`package.json`、`backend/Cargo.toml`、
+  `backend/Cargo.lock`（可选）、仓库根 `README.md` / `README_en.md`（可选）、
+  `apps/desktop/README.md` / `README_zh.md`。
+  **⚠️ 脚本不覆盖 `fqapi/`** —— `fqapi/Cargo.toml` 与 `fqapi/Cargo.lock` 要**手动**
+  一起改，否则「关于」页版本与 fqapi 自报版本（它用 `env!("CARGO_PKG_VERSION")`）对不上。
+- **禁止 `git add -A`**：仓库根常驻大量未跟踪的参考项目与 `.local/state` 里的敏感文件。
+  一律显式列路径，提交前 `git diff --cached --name-only` 核对。
+- 提交信息只写定位所需的要点；**决策原因写 LOG / CHANGELOG**，不堆在 commit body 里。

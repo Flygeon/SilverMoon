@@ -13,7 +13,7 @@
 
 SilverMoon (Chinese name **银月**) is a **monorepo**: the desktop app is built on **Electron + Vue 3 + TypeScript + Material Design 3** with its business backend still running as a standalone **Rust sidecar process**; the mobile app is a **Flutter** native implementation. All data stays local — no cloud sync, no mandatory account.
 
-> The project started as [LumiLuna](https://github.com/Flygeon/LumiLuna-Next), was renamed SilverMoon after a Tauri 2 → Electron port, and the desktop business logic (Vue front end + Rust backend) was carried over nearly untouched.
+> The project started as [LumiLuna](https://github.com/Flygeon/LumiLuna-Next) on Tauri 2, then moved to Electron 44, then back to Tauri 2, and **in 2026-10 moved to Electron again**. Every move was "swap the shell, keep the engine": the desktop business logic (Vue front end + Rust backend) was carried over nearly untouched.
 
 ## 🗂️ Repository layout
 
@@ -22,7 +22,8 @@ SilverMoon (Chinese name **银月**) is a **monorepo**: the desktop app is built
 | [`apps/desktop/`](apps/desktop/) | Desktop app (Windows / Linux / macOS) | Electron 44 + Vue 3 + TypeScript + Rust sidecar |
 | [`apps/mobile/`](apps/mobile/) | Mobile app (Android / iOS), music player first | Flutter 3.x (Dart) |
 | [`apps/RNdesktop/`](apps/RNdesktop/) | Desktop app, **React Native rewrite** (Windows / macOS) — **framework skeleton only** | React Native 0.83 + react-native-windows / react-native-macos |
-| [`archive/electron-desktop/`](archive/electron-desktop/) | Source snapshot from before the desktop moved to a Flutter host (that refactor was later rolled back; mainline is still Electron) | Archived, read-only reference |
+| [`archive/electron-desktop/`](archive/electron-desktop/) | Source snapshot from before the desktop moved to a Flutter host (that refactor was rolled back) | Archived, read-only reference |
+| [`archive/electron-host/`](archive/electron-host/) | Host-layer archive left behind by the previous move back to Tauri | Archived, read-only reference |
 | [`docs/mobile-spec/`](docs/mobile-spec/) | Mobile technical specs (playback / lyrics / bridge inventory) | Docs |
 | [`tools/`](tools/) | Cross-platform icon generator (desktop + mobile asset sets) | Python + Pillow |
 | [`.github/workflows/`](.github/workflows/) | CI for desktop and mobile (build, static checks, release) | GitHub Actions |
@@ -104,9 +105,10 @@ Three processes, with a single plain-text, curl-friendly boundary between host a
 
 - **Renderer → main**: `window.__SILVERMOON__` (contextBridge, whitelisted channels); business code always goes through `src/ipc/`
 - **Main → backend**: `electron/sidecar.ts` spawns the executable, parses `SILVERMOON_READY {"port":N}` from stdout, and relays commands and events
-- **Backend → main**: `electron/host-server.ts` exposes `POST /_host`, used by Rust to create windows, eval, register tray and hotkeys, and open files
-- Both HTTP servers bind `127.0.0.1` only and share the `X-SilverMoon-Token` authentication header
-- The backend registers **164 commands** in one routing table, exposed over `POST /cmd` and pushed back via SSE `GET /events`
+- **Backend → main**: `electron/host-server.ts` exposes `POST /_host`, used by Rust to create windows, register tray and hotkeys, and open files
+- Both HTTP servers bind `127.0.0.1` only and share the `X-SilverMoon-Token` authentication header (a fresh random token per launch)
+- The backend registers **180 commands** (`#[silvermoon_ipc::command]`, listed in `backend/src/lib.rs`'s `generate_handler!`), exposed over `POST /cmd` and pushed back via SSE `GET /events`
+- **Tomato Novel** is a second sidecar (`fqapi/`): line-delimited JSON over stdio, no port at all, started lazily by the host
 
 ### 🚀 Quick start
 

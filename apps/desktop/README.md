@@ -10,9 +10,9 @@ Current version **v0.1.1**
 
 </div>
 
-SilverMoon is built on **Tauri 2 + Vue 3 + TypeScript + Material Design 3**, with the backend written in **Rust** (in the same process as the desktop shell): one web front end plus a Rust backend, all data kept local — no cloud sync, no mandatory account.
+SilverMoon is built on **Electron 44 + Vue 3 + TypeScript + Material Design 3**, with the backend written in **Rust** and running as a **standalone sidecar process** (HTTP + SSE): one web front end plus a Rust backend, all data kept local — no cloud sync, no mandatory account.
 
-> **SilverMoon — Chinese name 「银月」.** [LumiLuna](https://github.com/Flygeon/LumiLuna-Next) (Tauri 2) was ported to Electron, and then **ported back to Tauri 2**. Both times the strategy was "swap the shell, keep the engine": the Vue front end and the Rust backend keep their business logic nearly untouched — only the host layer was replaced. See [Architecture](#-architecture) and [doc/TAURI-MIGRATION.md](doc/TAURI-MIGRATION.md).
+> **SilverMoon — Chinese name 「银月」.** [LumiLuna](https://github.com/Flygeon/LumiLuna-Next) (Tauri 2) was ported to Electron, then back to Tauri 2, and **in 2026-10 ported back to Electron again**. Every time the strategy was "swap the shell, keep the engine": the Vue front end and the Rust backend keep their business logic nearly untouched — only the host layer was replaced. For the current architecture see [`doc/AGENTS.md`](doc/AGENTS.md); the previous move back to Tauri is documented in [doc/TAURI-MIGRATION.md](doc/TAURI-MIGRATION.md) (historical).
 
 The music player follows an **Apple Music–style** design — fluid animated background, cover-driven color extraction, word-by-word karaoke lyrics — and the whole app adheres to **Material Design 3**.
 
@@ -60,52 +60,52 @@ The music player follows an **Apple Music–style** design — fluid animated ba
 
 ## 🏗️ Architecture
 
-The app is now a **single Tauri 2 process**: desktop shell and Rust backend ship as one executable.
+The app is now **three processes**: the Electron main process, the renderer, and the Rust backend running as a **standalone sidecar**. Host and backend talk over a **plain-text, curl-friendly** HTTP boundary.
 
 ```
-┌──────────────────── Tauri 2 program (Rust, single process) ────────────────────┐
-│ Windows / tray / global shortcuts / system media controls (SMTC)               │
-│ tauri:// serves the built front end   asset: protocol (local files, Range)     │
-│ app-cover: protocol (online cover proxy: CORS bypass + hotlink referer + cache)│
-│ 154 #[tauri::command] business commands                                        │
-└───────────────────────────────┬───────────────────────────────────────────────┘
-                                │ @tauri-apps/api (invoke / listen)
-┌───────────────────────────────▼───────────────────────────────────────────────┐
-│ Renderer (Vue 3)   src/ipc/ - native capability layer   src/ - business code  │
-└───────────────────────────────────────────────────────────────────────────────┘
+┌──────────────── Electron main process (Node, bundled) ────────────────┐
+│ Windows / tray / global hotkeys / file dialogs / default apps        │
+│ app:// serves the built front end   asset:// local files (Range)     │
+│ app-cover:// online cover proxy (Referer spoof + disk cache)         │
+│ host-server: POST /_host ←── reverse calls from the backend          │
+└────────┬─────────────────────────────────────┬───────────────────────┘
+         │ IPC (preload contextBridge)          │ POST /cmd, /batch
+         │                                      │ SSE GET /events
+┌────────▼──────────────┐            ┌──────────▼─────────────┐
+│ Renderer (Vue 3)      │            │ Backend sidecar (Rust) │
+│ src/ipc/ capability   │            │ backend/ business code │
+└───────────────────────┘            └────────────────────────┘
 ```
 
-> **Porting history**: Tauri 2 (originally LumiLuna) → Electron 44 → **back to Tauri 2**.
-> The full write-up (what changed, what behaves deliberately differently, how to roll back)
-> lives in [doc/TAURI-MIGRATION.md](doc/TAURI-MIGRATION.md).
+> **Porting history**: Tauri 2 (originally LumiLuna) → Electron 44 → back to Tauri 2 → **back to Electron in 2026-10**.
+> The authoritative description of the current architecture is [`doc/AGENTS.md`](doc/AGENTS.md);
+> the previous move back to Tauri is written up in [doc/TAURI-MIGRATION.md](doc/TAURI-MIGRATION.md) (**historical**).
 
-**How "swap the shell, keep the engine" was achieved**: business code keeps its **calling style**; only the **host layer** was replaced. The `silvermoon-ipc` shim left behind by the Electron port kept every host difference in one place, so migrating back was a **mechanical rewrite on the Rust side**, plus a re-implementation of `src/ipc/` on the front end.
+**How "swap the shell, keep the engine" was achieved**: business code keeps its **calling style**; only the **host layer** was replaced. The `silvermoon-ipc` contract layer keeps every host difference in one place — it mirrors Tauri's `Builder` / `Host` (≈AppHandle) / `State` / `Window` / `rt` plus a few macros, so 180 business commands needed **zero** changes.
 
 | Layer | Approach | Business-code changes |
 |---|---|---|
-| Front end | Every `src/ipc/` module keeps its **exported names and signatures**, swapping the internals for `@tauri-apps/*` | `src/capabilities/` and all views/stores: **untouched** |
-| Rust | Drop the `crates/silvermoon-ipc` shim; `silvermoon_ipc::X` → `tauri::Y` (473 sites, one-to-one) | Logic untouched |
-| New modules | `src/cover.rs` (cover protocol), `src/commands/music_tags.rs` (lofty tag writing), `src/commands/host.rs` (host commands) | Restores what the Node main process used to do |
+| Front end | Every `src/ipc/` module keeps its **exported names and signatures**, swapping the internals for `window.__SILVERMOON__` | `src/capabilities/` and all views/stores: **untouched** |
+| Rust | Keep the `crates/silvermoon-ipc` contract layer; the `#[silvermoon_ipc::command]` macro emits route records | Logic untouched |
+| New modules | `electron/` (host layer), `fqapi/` (Tomato Novel sidecar) | Host abilities now live in the Node main process |
 | Data | Directory stays `<appData>/<identifier>`; the first launch copies the whole legacy `cn.cool.lumiluna` directory once (read-only) | — |
 
-### IPC layer coverage (measured usage)
+### IPC layer coverage (measured)
 
 | Item | Count |
 |---|---|
-| `#[command]` commands | 154 |
-| `Host` (app handle) references | 190+ |
-| `State<'_, T>` injections | 29 |
-| `rt::spawn_blocking` | 42 |
-| `WindowBuilder` / `Window` | 4 |
-| `emit` / `emit_to` | 8 |
-| tray / menu construction sites | 1 |
+| `#[silvermoon_ipc::command]` registrations | **180** |
+| Sidecar HTTP routes | `/health` `/cmd` `/batch` `/events` `/_host` |
+| Renderer IPC channels | `sm:invoke` / `sm:invokeBatch` / `sm:call` / `sm:emit` |
+| Custom protocols | `app://` / `asset://` / `app-cover://` (`ext://` pending — see below) |
 
 ### Design decisions and behavioural notes
 
-1. **Window navigation interception**: Tauri's `on_navigation` can reject a navigation **synchronously** by returning `false`, which is more direct than the Electron version's "allow first, roll back if the backend says no". The only call site (Pixiv login callback) behaves identically.
-2. **`panic = "abort"` in release**: with a single process the backend shares its fate with the UI, so the aggressive old-Tauri optimisations are back (fat LTO + single codegen unit + abort).
-3. **Memory diagnostics changed scope**: Tauri is "one process plus the system WebView", so the per-Chromium-process snapshot Electron could produce is unavailable. `metrics` reports this process's RSS only and states that explicitly in a `note` field; `bench` degrades to an empty report.
-4. **Capability manifest**: Tauri 2 uses a fine-grained permission model — the main window's plugin abilities are each allowed in `src-tauri/capabilities/default.json`. New plugin commands must be added there or they will be rejected at runtime.
+1. **Authentication**: both HTTP servers bind `127.0.0.1` only and share a fresh random `X-SilverMoon-Token` per launch. A missing token is **rejected**, not allowed (set `SILVERMOON_ALLOW_NO_TOKEN=1` to debug).
+2. **Remote-page command whitelist**: the preloads for the Pixiv / Wenku8 / anime-stream windows run in the **page world** with `contextIsolation: false`, so the commands they may call are narrowed to `REMOTE_WINDOW_ALLOWED_COMMANDS` in `electron/ipc.ts`. **New injected calls must be added to that table.**
+3. **`panic = "abort"` in release**: the sidecar is a separate process, so a backend crash no longer takes the UI with it; release builds still use fat LTO + a single codegen unit to shrink the binary.
+4. **Memory diagnostics**: `bench` uses Electron's `app.getAppMetrics()`, which yields per-process snapshots (something the Tauri era could not produce).
+5. **⚠️ The `ext:` protocol is not registered yet**: extension UIs build `ext://localhost/...` via `toAssetUrl(dir, "ext")`, but `electron/protocols.ts` only registers `app` / `asset` / `app-cover`. Symptom: extension iframes fail to load. See the Gotchas section of [`doc/AGENTS.md`](doc/AGENTS.md).
 
 ## 🔗 Reference projects
 
@@ -125,16 +125,21 @@ Parts of this project are inspired by or ported from the following open-source p
 
 - [Node.js](https://nodejs.org/) 20+
 - [Rust](https://www.rust-lang.org/) 1.82+
-- On Windows, building the Rust part needs MSVC Build Tools (`link.exe`); on Linux you need the Tauri WebKitGTK dependencies (see `Install system dependencies` in `.github/workflows/build.yml`)
+- On Windows, building the Rust backend needs MSVC Build Tools (`link.exe`); on Linux you need the base build toolchain (see `Install system dependencies` in `.github/workflows/build.yml`)
 
 ### Development
 
 ```bash
 npm install
 
-# One command starts the Vite dev server + Tauri (compiles Rust and opens the window)
+# Build the Rust backend once (output: backend/target/debug/silvermoon[.exe])
+npm run build:backend
+
+# One command starts the Vite dev server + Electron main watch + Electron
 npm run dev
 ```
+
+> The window opens even without a built backend; data operations then report "backend not started" — handy for front-end-only work.
 
 ### Front-end preview only (browser + mock data)
 
@@ -142,13 +147,31 @@ npm run dev
 npm run dev:renderer     # Vite dev server (localhost:1420)
 ```
 
-In a plain browser there is no Tauri runtime, so `src/capabilities` falls back to its built-in mocks and the UI remains browsable.
+In a plain browser there is no Electron runtime, so `src/capabilities` falls back to its built-in mocks and the UI remains browsable.
+
+### Checks
+
+```bash
+npm run lint                 # check-version + eslint
+npm run format:check         # prettier
+npm run typecheck            # vue-tsc + tsc (electron main)
+npm test                     # vitest
+npm run verify:rust-pure     # really executes pure Rust logic (wasm, no MSVC needed)
+npm run verify:mock-coverage # mock vs backend route-table drift
+npm run verify:m3-tokens     # colour tokens vs shared/m3-theme.ts
+npm run verify:settings-index # settings index freshness
+npm run check:icon-font      # icon font subset vs source
+```
+
+> ⚠️ CI's `lint` job runs its steps **sequentially** — any earlier failure skips the Rust checks.
+> **A red lint job does not mean Rust was verified**; look at which step failed first.
 
 ### Packaging
 
 ```bash
-npm run build                    # Typecheck + front-end bundle + tauri build
-npm run dist                     # tauri build (packages only, no extra typecheck)
+npm run build:backend:release    # release Rust backend (required before packaging)
+npm run build                    # Typecheck + renderer bundle + Electron main bundle
+npm run dist                     # electron-builder (Windows NSIS / Linux AppImage / macOS dmg)
 ```
 
 > **CI/CD (recommended)**: pushing to `main` builds Windows NSIS + Linux AppImage + macOS dmg
@@ -159,8 +182,8 @@ npm run dist                     # tauri build (packages only, no extra typechec
 
 | Area | Technology |
 |---|---|
-| Desktop shell | **Tauri 2** (uses the system WebView: WebView2 / WKWebView / WebKitGTK) |
-| Backend | **Rust** (same process as the desktop shell, `#[tauri::command]` over IPC) |
+| Desktop shell | **Electron 44** (main process in Node, bundled by esbuild into a single `dist-electron/main.cjs`) |
+| Backend | **Rust** (standalone sidecar process, HTTP `POST /cmd` + SSE `GET /events`) |
 | Front end | **Vue 3 + Vite + TypeScript** |
 | State management | **Pinia** |
 | UI | **Material Design 3** (`@m3e/web` M3 Expressive + `@material/web` + custom components) |
@@ -173,61 +196,79 @@ npm run dist                     # tauri build (packages only, no extra typechec
 | NetEase protocol | Pure-Rust weapi / eapi / xeapi signing (AES-CBC/ECB, RSA, X25519 + AES-GCM) |
 | Word-by-word analysis | Web Worker + FFT (spectral flux) + IndexedDB |
 | Online music aggregation | meting API |
+| Tomato Novel source | Dedicated sidecar (`fqapi/`, line-delimited JSON over stdio, reqwest 0.13 + rustls) |
 | i18n | Lightweight in-house i18n (`shared/i18n.ts`) |
 
 ## 📁 Project layout
 
 ```
-src-tauri/         # Tauri 2 program (Rust; shell + business backend in one process)
-  tauri.conf.json  #   App config (windows / bundle targets / asset: protocol / CSP)
-  capabilities/    #   Per-window permission manifest (new plugin commands go here)
-  silvermoon.config.json # App metadata (single source of truth for the version)
+electron/          # Electron host layer (main process, 24 files)
+  main.ts          #   Entry point; boot order is documented at the top — don't reorder it
+  ipc.ts           #   Command dispatch (sm:invoke) + remote-page whitelist + host ops
+  sidecar.ts       #   Spawns the Rust backend, parses the SILVERMOON_READY handshake
+  host-server.ts   #   POST /_host ← reverse calls from the backend (windows / tray / hotkeys)
+  windows.ts       #   Main window and child windows (desktop-lyrics / extension / …)
+  protocols.ts     #   The app: / asset: / app-cover: custom protocols
+  preload.ts       #   Exposes window.__SILVERMOON__ via contextBridge (the only outward channel)
+  webview-preload.ts # Remote-page preload (runs in the page world; narrowed by the whitelist)
+  tray.ts updater.ts store.ts fqapi.ts csp.ts perf.ts bench.ts log.ts
+backend/           # Rust business backend (standalone process)
+  silvermoon.config.json # App metadata (single source of truth for the version, read by vite and Rust)
   src/
-    lib.rs         #   Boot: register protocols → migrate legacy data → open DB → tray/extensions/online
+    lib.rs         #   Boot orchestration + command registry (generate_handler!)
     main.rs        #   Entry point (panic logging hook)
-    cover.rs       #   app-cover: protocol (cover proxy: CORS bypass + hotlink referer + LRU cache)
     app_meta.rs    #   App metadata + first-launch legacy data migration
-    tray.rs        #   System tray (menu built in Rust)
+    tray.rs        #   System tray
     commands/
-      host.rs      #   Host abilities: paths / version / exit / cover cache / memory metrics / updater
-      music_tags.rs#   musicTags channel (lofty tag read-write + online tag disk cache)
       scan.rs metadata.rs thumbnail.rs song.rs book.rs skin.rs stats.rs
+      music_tags.rs#   musicTags channel (lofty tag read-write + online tag disk cache)
       smtc.rs      #   Windows system media controls (SMTC)
       desktop.rs   #   Wallpaper / wakelock / notifications / accent colour (UDA)
-      extension.rs #   Extension framework
+      extension.rs #   Extension framework (ext_* commands, routed to the engine's localhost HTTP)
       ffmpeg.rs app.rs
     anime.rs netease.rs kugou.rs pixiv.rs novel.rs novel_auth.rs novel_bqg.rs
     osu.rs webdav.rs bilibili.rs media.rs error.rs
   crates/
-    silvermoon-bili/ # Bilibili protocol layer (WBI signing / danmaku parsing / normalisation)
-src/ipc/           # Native capability layer of the renderer (the only place importing @tauri-apps/*)
+    silvermoon-ipc/        # Contract layer (Host / State / Window / tray / rt / server)
+    silvermoon-ipc-macros/ # #[silvermoon_ipc::command] / generate_handler! / generate_context!
+    silvermoon-bili/       # Bilibili protocol layer (WBI signing / danmaku parsing / normalisation)
+  kugou_server/    # Vendored: md3Music's Kugou Rust server (AGPL-3.0)
+fqapi/             # Tomato Novel content sidecar (standalone process, stdio line JSON)
+splash/            # Native launcher (Rust + Win32, MD3-drawn splash)
+  # It is the **parent process**: shows the splash first, then spawns SilverMoon.exe
+  # with --splash-pipe=<name>.
+src/ipc/           # Native capability layer of the renderer (the only place touching __SILVERMOON__)
   bridge.ts        #   Low-level wrapper (invoke / batch / payload normalisation)
   invoke.ts        #   Backend command calls + local file URLs (toAssetUrl)
-  events.ts        #   listen / once / emit / emitTo
+  events.ts        #   listen / once / emit (incl. dynamic names ext://<id>/<event>)
   window.ts        #   Window handles, creation, lookup
-  dragdrop.ts      #   File drag & drop (Tauri supplies real paths)
-  dpi.ts           #   Logical coordinates vs physical pixels (re-exports Tauri's geometry classes)
+  dragdrop.ts      #   File drag & drop
+  dpi.ts           #   Logical coordinates vs physical pixels
   paths.ts         #   App directories and path joining (same source as the Rust side)
   app.ts           #   Version and other app metadata
-  store.ts         #   JSON key-value store (JsonStore → plugin-store)
-  dialog.ts        #   File dialogs and message boxes (plugin-dialog)
-  fs.ts            #   File reads and writes (plugin-fs)
-  opener.ts        #   Hand off to the OS / reveal in file manager (plugin-opener)
-  http.ts          #   fetch with CORS exemption (plugin-http, Rust network stack)
-src/               # Web front end (business logic untouched by the port)
+  store.ts         #   JSON key-value store (JsonStore → main-process electron/store.ts)
+  dialog.ts        #   File dialogs and message boxes
+  fs.ts            #   File reads and writes
+  opener.ts        #   Hand off to the OS / reveal in file manager
+  http.ts          #   fetch with CORS exemption (main-process network stack)
+src/               # Web front end (business logic survives host swaps)
   capabilities/    # Unified native capability layer (invoke wrappers + browser mocks)
+  features/        # Drawing / writing workbenches
   stores/          # Pinia stores (library / player / settings / pixiv / anime / skins / audioEffects …)
-  components/      # FluidBackground / LyricsView / BookReader / NovelReader / AnimePlayer / PixivCard …
-  views/           # Tab views / full-screen player / desktop lyrics / extension host
+  components/      # FluidBackground / LyricsView / BookReader / NovelReader / AnimePlayer / BilibiliCard …
+  views/           # Tab views / full-screen player / desktop lyrics / extension host / settings
+  composables/     # Reusable composition (useLazyCover / useDesktopChrome / useAmbilight …)
   workers/         # Word-by-word analysis Web Worker
-  utils/           # Lyric timelines / anime rules and streaming / NetEase / skins / WebDAV / audio effects …
-  tokens/          # M3 design tokens (theme.css, fonts.css)
-shared/            # Types shared by both ends / i18n
-example/           # Example skins
+  utils/           # Lyric timelines / anime rules and streaming / NetEase / skins / WebDAV / hero transitions …
+  tokens/          # M3 design tokens (theme.css, fonts.css; colour section is generated)
+shared/            # Types shared by both ends / i18n / the M3 colour kernel
+example/           # Example extensions and skins
 miaohui-extension/ # Reference extension: image/video indexing + OCR + ASR + vector search (MIT)
-doc/               # Design and planning documents (incl. TAURI-MIGRATION.md)
+packages/extension-api/ # Author SDK for extensions
+doc/               # Docs: AGENTS.md (architecture source of truth) / SPEC.md / LOG.md / proposals
 scripts/           # Build and verification scripts
-archive/electron-host/ # Read-only reference: the Electron host snapshot (not part of the build)
+src-tauri/         # ⚠️ Tauri-era leftovers — not part of the build; do not infer architecture from it
+archive/electron-host/ # Read-only reference: archive from the previous host move
 .github/workflows/ # GitHub Actions automated builds (Windows / Linux / macOS)
 ```
 
@@ -245,9 +286,9 @@ Third-party projects referenced or ported:
 - [hikari_novel_flutter](https://github.com/15dd/hikari_novel_flutter) — novel parsing (© 15dd, MIT)
 - [Kazumi](https://github.com/Predidit/Kazumi) — anime parsing (© Predidit, GPL-3.0)
 - [LDDC](https://github.com/chenmozhijin/LDDC) — QQ Music QRC word-by-word lyrics ported from it (© 沉默の金, GPL-3.0-only)
-- [md3Music](https://github.com/zzyoxml/md3Music) — Kugou Music API (login / parsing / check-in); its embedded Rust server is vendored verbatim under `src-tauri/kugou_server/` (© zzyoxml, AGPL-3.0)
+- [md3Music](https://github.com/zzyoxml/md3Music) — Kugou Music API (login / parsing / check-in); its embedded Rust server is vendored verbatim under `kugou_server/` (© zzyoxml, AGPL-3.0)
 
 > Each reference project's license applies to its own code; this project's own code remains GPL-3.0-only.
-> `src-tauri/kugou_server/` is AGPL-3.0 code from md3Music, vendored verbatim with its
-> [LICENSE](src-tauri/kugou_server/LICENSE) preserved. Under GPLv3 §13, AGPLv3 code may be combined with this project,
+> `backend/kugou_server/` is AGPL-3.0 code from md3Music, vendored verbatim with its
+> [LICENSE](backend/kugou_server/LICENSE) preserved. Under GPLv3 §13, AGPLv3 code may be combined with this project,
 > and AGPL §13's network-interaction terms apply to that combination; if you redistribute it, comply with AGPL-3.0 as well.
