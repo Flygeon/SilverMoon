@@ -92,6 +92,7 @@ jobs:
           workspaces: |
             apps/desktop/backend -> target
             apps/desktop/splash -> target
+            apps/desktop/fqapi -> target
           prefix-key: clippy
 
       - name: Rustfmt check (backend)
@@ -126,6 +127,66 @@ jobs:
 
       - name: Unit tests (fqapi pure logic)
         run: cargo test --manifest-path apps/desktop/fqapi/Cargo.toml --lib
+
+  # ---------------------------------------------------------------------------
+  # 番茄内容源 sidecar 的可执行文件
+  #
+  # 单独一个 job 的理由：lint 里那条只跑 `cargo test --lib`，它**不链接
+  # binary**。sidecar 要靠 exe 才能跑自检（设备注册 → 书详情 → 解正文），
+  # 所以必须真的 build 一次并把产物传出来，否则「能不能跑」永远没有答案。
+  #
+  # 与 build 矩阵并行，不拖慢安装包流水线。
+  # ---------------------------------------------------------------------------
+  fqapi:
+    name: fqapi sidecar (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: windows
+            os: windows-latest
+            bin: silvermoon-fqapi.exe
+          - label: linux
+            os: ubuntu-latest
+            bin: silvermoon-fqapi
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/fqapi -> target
+
+      - name: Build sidecar (release)
+        run: cargo build --release --manifest-path apps/desktop/fqapi/Cargo.toml
+
+      # 冒烟测试：binary 能起来、打印握手行、响应 ping。
+      # 不联网（不触发设备注册），只证明进程与协议是通的。
+      - name: Smoke test (handshake + ping)
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="apps/desktop/fqapi/target/release/${{ matrix.bin }}"
+          test -f "$BIN" || { echo "missing $BIN"; exit 1; }
+          export SILVERMOON_FQAPI_DATA="$RUNNER_TEMP/fqapi-smoke"
+          # 送一行 ping 后关闭 stdin，让进程自己退出
+          out=$(printf '{"id":1,"op":"ping"}\n' | "$BIN" 2>&1 || true)
+          echo "$out"
+          echo "$out" | grep -q 'FQAPI_READY' || { echo "no handshake"; exit 1; }
+          echo "$out" | grep -q '"pong":true' || { echo "ping failed"; exit 1; }
+          echo "smoke ok"
+
+      - name: Upload sidecar binary
+        uses: actions/upload-artifact@v5
+        with:
+          name: fqapi-${{ matrix.label }}
+          path: apps/desktop/fqapi/target/release/${{ matrix.bin }}
+          if-no-files-found: error
 
   # ---------------------------------------------------------------------------
   # 安装包：Windows NSIS / Linux AppImage / macOS dmg
