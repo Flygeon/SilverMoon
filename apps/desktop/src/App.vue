@@ -956,29 +956,22 @@ router.afterEach((to) => {
   opacity: 0.6;
 }
 
-/* hero 飞行期间：播放器路由过渡**整体停用**。
- *
- * 只把 transform 去掉是不够的 —— `mode="out-in"` 会先等离场动画走完再挂载新页，
- * 而离场仍有 420ms 的 opacity 过渡（0.6）。那 420ms 里旧页已经淡掉、新页还没出现，
- * 屏幕上什么都没有 —— 就是用户看到的「点迷你条黑一下」。
- *
- * 这里连 transition 一起关掉：Vue 检测不到过渡会立刻结束离场、直接挂载目标页，
- * 全部视觉过渡交给 hero 飞行层。 */
 /*
- * 用「时长令牌」而不是 transition:none。
+ * ⚠️ hero 飞行期间的路由过渡覆盖规则**不写在这里**，见文件末尾那个不带 scoped 的
+ * <style> 块。
  *
- * Vue 判断过渡是否结束时读的是 **getComputedStyle 里的 transition-duration**。
- * 直接写 `transition: none` 会让 duration 变成 0s，Vue 确实会立刻结束 —— 但这条
- * 规则同时作用于 enter-active，入场也会瞬间完成（等于没有过渡）。
- * 这里把两段时长都归零，语义更明确：hero 期间路由切换**不做**任何 CSS 过渡，
- * 新旧页面瞬切，视觉全部由飞行层承担。
+ * 原因（构建产物实测，不是推测）：本块是 `scoped`，Vue 的 scoped CSS 编译器会把
+ * `:global(html.lm-hero-flying) .player-enter-from` 编译成
+ *
+ *     html.lm-hero-flying{transform:none;opacity:1}
+ *
+ * —— **后代选择器整条被丢弃**。期望的 `html.lm-hero-flying .player-enter-from` 从未出现，
+ * 所以这条覆盖从第一版（2f2f1d8）起就一直是死规则；`.player-enter-from` 上的
+ * `transform: translateY(100%)` 照常生效，播放器页每次都从屏幕外 100vh 处开始滑入。
+ * 这正是「黑屏 + 小封面停在原地」的真正根因：`land()` 量到的目标 rect 也在屏幕外。
+ *
+ * 教训：scoped 块里不要依赖 `:global()` 去拼后代选择器，直接开一个非 scoped 块。
  */
-:global(html.lm-hero-flying) .player-enter-active,
-:global(html.lm-hero-flying) .player-leave-active,
-:global(html.lm-hero-flying) .page-enter-active,
-:global(html.lm-hero-flying) .page-leave-active {
-  transition-duration: 0s !important;
-}
 
 /* 全局回退提示 toast */
 .lyric-toast {
@@ -1099,5 +1092,44 @@ router.afterEach((to) => {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+</style>
+
+<!--
+  hero 飞行期间的全局覆盖：**必须是独立、不带 scoped 的 style 块**。
+
+  不能放进上面那个 scoped 块里用 `:global(...)` 拼后代选择器 —— 实测（构建产物）
+  Vue 的 scoped 编译器会把 `:global(html.x) .player-enter-from` 压成
+  `html.x{...}`，**后代选择器整条丢失**，规则成为死代码。
+
+  两种状态都要覆盖，缺一不可：
+
+  1. 位移（transform / opacity）
+     Vue 的 enter 流程是：加 `-from` + `-active` 类 → 强制 reflow → 下一帧才移除
+     `-from`。所以**挂载后的头一两帧里元素仍带着 translateY(100%)**，而 hero 的
+     `land()` 正好在这段窗口里量目标 rect → 量到屏幕外 → 克隆层朝屏幕外飞，
+     表现为「黑屏 + 小封面停在原地」。
+
+  2. 时长（duration）
+     `mode="out-in"` 会先等离场播完再挂新页。离场哪怕只剩 420ms 的 opacity 过渡，
+     那段时间新旧都不在，屏幕是空的（深色主题下就是黑屏）。
+     Vue 靠 getComputedStyle 的 transition-duration 判断何时结束，归零即可立即结束。
+
+  两段合起来的效果：hero 飞行期间路由切换「瞬切、无位移」，全部视觉由飞行层承担。
+-->
+<style>
+html.lm-hero-flying .player-enter-from,
+html.lm-hero-flying .player-leave-to,
+html.lm-hero-flying .page-enter-from,
+html.lm-hero-flying .page-leave-to {
+  transform: none !important;
+  opacity: 1 !important;
+}
+
+html.lm-hero-flying .player-enter-active,
+html.lm-hero-flying .player-leave-active,
+html.lm-hero-flying .page-enter-active,
+html.lm-hero-flying .page-leave-active {
+  transition-duration: 0s !important;
 }
 </style>

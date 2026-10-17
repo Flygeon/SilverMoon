@@ -31,6 +31,15 @@ export interface HeroFlight {
 
 /** 飞行时长与缓动：对齐 MD3 emphasized decelerate（与页面入场动画同族） */
 const HERO_DURATION_MS = 420;
+
+/**
+ * 克隆层的自毁上限（ms）。
+ *
+ * 比 holdHeroFlight 的 900ms 更宽：正常流程是「起飞 → 路由确认 → 目标挂载 →
+ * 降落动画 420ms」，全链路约 900–1200ms。留到 2000ms 是为了不在正常路径上误杀，
+ * 同时保证异常路径下克隆层不会永久残留。
+ */
+const SELF_DESTRUCT_MS = 2000;
 const HERO_EASING = "cubic-bezier(0.05, 0.7, 0.1, 1)";
 
 /**
@@ -117,9 +126,29 @@ function settleEntryAnimations(el: HTMLElement): void {
  */
 const FLYING_CLASS = "lm-hero-flying";
 
+/** 兜底看门狗：飞行标记最多存活这么久，超时无条件摘掉 */
+const FLYING_CLASS_TIMEOUT_MS = 1500;
+let flyingWatchdog: ReturnType<typeof setTimeout> | null = null;
+
 function markFlying(on: boolean): void {
   if (typeof document === "undefined") return;
   document.documentElement.classList.toggle(FLYING_CLASS, on);
+  if (flyingWatchdog !== null) {
+    clearTimeout(flyingWatchdog);
+    flyingWatchdog = null;
+  }
+  /*
+   * 看门狗存在的理由：`lm-hero-flying` 会把路由过渡压成 0 时长。
+   * 一旦因为异常路径（land 抛错 / 目标组件没挂载 / 页面被卸载）导致它没被摘掉，
+   * **之后所有的路由切换都会失去过渡**，而且很难联想到这里 —— 用户只会说「动画没了」。
+   * 所以无论发生什么，1.5s 后必须摘掉。
+   */
+  if (on) {
+    flyingWatchdog = setTimeout(() => {
+      flyingWatchdog = null;
+      document.documentElement.classList.remove(FLYING_CLASS);
+    }, FLYING_CLASS_TIMEOUT_MS);
+  }
 }
 
 /**
@@ -171,11 +200,24 @@ export function startHeroFlight(srcEl: HTMLElement | null | undefined): HeroFlig
   const restore = () => {
     if (settled) return;
     settled = true;
+    clearTimeout(selfDestruct);
     clone.remove();
     srcEl.style.visibility = "";
     if (destEl) destEl.style.visibility = "";
     markFlying(false);
   };
+
+  /*
+   * 自毁定时器：无论走哪条路径（有没有被 hold / land / cancel），
+   * 克隆层最多存在 SELF_DESTRUCT_MS。
+   *
+   * 只靠 holdHeroFlight 的超时是不够的 —— 那条只覆盖「已寄存」的情况。
+   * 若因为异常路径（目标组件没挂载、onMounted 抛错、页面被直接替换）
+   * 导致飞行既没被 hold 也没被 cancel，克隆层会**永久钉在屏幕上**，
+   * 表现为「黑屏上贴着一个小封面」且怎么点都不消失。
+   * 注意必须定义在 restore 之后：箭头函数体里引用，但要能 clearTimeout 到它。
+   */
+  const selfDestruct = setTimeout(() => restore(), SELF_DESTRUCT_MS);
 
   return {
     land(dest) {
@@ -361,18 +403,58 @@ export function hasPendingHero(): boolean {
 }
 
 /**
- * 等详情页完成挂载与首帧布局后再降落。
- * nextTick 由调用方保证（视图已切换），这里再让出两帧：
- * 第一帧完成样式计算，第二帧拿到稳定 rect。
+ * 目标是否「看起来还没就位」。
+ *
+ * Vue 的 enter 流程会先给元素加 `-from` 类（本例是 `translateY(100%)`）、强制 reflow、
+ * 下一帧才移除。所以**挂载后的头一两帧里元素可能在屏幕外**。若此时量 rect，
+ * 得到的 `top` 会比视口高出一整个屏幕 —— 克隆层就会朝屏幕外飞，
+ * 表现为「黑屏 + 小封面停在原地不动」。
+ *
+ * 判据故意放得很宽（只要和视口有任何一像素重叠就算就位），避免误伤
+ * 「封面本来就该在屏幕边缘」的情况。
+ */
+function looksOffscreen(el: HTMLElement): boolean {
+  const r = el.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return true;
+  const vh = window.innerHeight || 0;
+  const vw = window.innerWidth || 0;
+  return r.bottom <= 0 || r.top >= vh || r.right <= 0 || r.left >= vw;
+}
+
+/** 最多等多少帧让目标就位（约 100ms @60fps，够 Vue 走完 enter 的类切换） */
+const MAX_LAND_FRAMES = 6;
+
+/**
+ * 等目标页挂载并**真正就位**后再降落。
+ *
+ * nextTick 由调用方保证（视图已切换）。之后不能只死等两帧 —— 页面可能还在
+ * 入场过渡里（哪怕时长是 0，Vue 也要走完「加 from 类 → reflow → 移除」的流程）。
+ * 这里每帧检查一次「目标是否还在视口外」，就位即降，最多等 MAX_LAND_FRAMES 帧。
  */
 export function landHeroFlight(
   flight: HeroFlight | null,
   getDest: () => HTMLElement | null | undefined,
 ): void {
   if (!flight) return;
-  requestAnimationFrame(() =>
-    requestAnimationFrame(() => {
-      if (!flight.land(getDest())) flight.cancel();
-    }),
-  );
+  let tries = 0;
+  const tick = () => {
+    const dest = getDest();
+    // 元素还没出现：继续等（可能是异步组件仍在挂载）
+    if (!dest) {
+      if (++tries > MAX_LAND_FRAMES) {
+        flight.cancel();
+        return;
+      }
+      requestAnimationFrame(tick);
+      return;
+    }
+    // 还在屏幕外（入场动画未收敛）：继续等，别量错位置
+    if (looksOffscreen(dest) && tries < MAX_LAND_FRAMES) {
+      tries++;
+      requestAnimationFrame(tick);
+      return;
+    }
+    if (!flight.land(dest)) flight.cancel();
+  };
+  requestAnimationFrame(tick);
 }
