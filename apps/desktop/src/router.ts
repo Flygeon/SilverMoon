@@ -20,6 +20,7 @@ const router = createRouter({
     { path: "/novel-stats", component: () => import("@/views/NovelStatsView.vue") },
     { path: "/trash", component: () => import("@/views/TrashView.vue") },
     { path: "/settings", component: () => import("@/views/SettingsView.vue") },
+    { path: "/desktop-lyrics", component: () => import("@/views/DesktopLyrics.vue") },
     { path: "/extensions", component: () => import("@/views/ExtensionsView.vue") },
     { path: "/extension-host", component: () => import("@/views/ExtensionHost.vue") },
     // 扩展页面：承载 contributes.nav / contributions.ui(surface="nav") 注入的导航项。
