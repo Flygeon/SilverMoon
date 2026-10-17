@@ -142,6 +142,21 @@ pub fn run(
             let tb_height = embed::taskbar_client_height().unwrap_or(40);
             let h = (tb_height - 4).max(24);
             embed::place_in_taskbar(hwnd, 8, 2, width, h);
+            // ⚠️ 必须**再设一次**尺寸。
+            //
+            // 实测：wry 的 build_as_child 会创建自己的容器 HWND，并**顺手改小
+            // 父窗口**（传 560x40 进去，父窗口变成 280x38 —— 正好按 DPI 192/96
+            // 折算成逻辑尺寸）。而 SetWindowPos 本身不缩放（已实测：请求 560
+            // 就得到 560），所以不是我们算错，是**它覆盖了我们的尺寸**。
+            //
+            // 放在 WebView2 建好之后再设一次，它就改不动了。
+            embed::place_in_taskbar(hwnd, 8, 2, width, h);
+            eprintln!(
+                "[lyrics] 已嵌入任务栏：请求 {}x{}，实际 {:?}",
+                width,
+                h,
+                embed::window_rect(hwnd)
+            );
         }
 
         STATE.with(|s| {
@@ -210,11 +225,17 @@ fn create_webview(
     match wry::WebViewBuilder::new()
         .with_url(url)
         .with_transparent(true)
+        // ⚠️ 用 **Logical** 而不是 Physical。
+        //
+        // 实测：传 Physical(560,40) 时，wry 会按窗口 DPI(192) 把它折算成逻辑
+        // 尺寸再用，结果子容器与父窗口都变成 280x20（正好一半）。
+        // 而我们的 width/height 本来就是**逻辑像素**（任务栏锚定、DIP 布局都是），
+        // 所以这里必须原样按 Logical 传，不做任何换算。
         .with_bounds(wry::Rect {
-            position: wry::dpi::Position::Physical(wry::dpi::PhysicalPosition::new(0, 0)),
-            size: wry::dpi::Size::Physical(wry::dpi::PhysicalSize::new(
-                width.max(1) as u32,
-                height.max(1) as u32,
+            position: wry::dpi::Position::Logical(wry::dpi::LogicalPosition::new(0.0, 0.0)),
+            size: wry::dpi::Size::Logical(wry::dpi::LogicalSize::new(
+                width.max(1) as f64,
+                height.max(1) as f64,
             )),
         })
         .build_as_child(&parent)

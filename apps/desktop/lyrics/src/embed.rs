@@ -184,6 +184,17 @@ pub fn detach_from_taskbar(hwnd: HWND) {
     }
 }
 
+/// 诊断用：读窗口的屏幕矩形（l,t,w,h）。
+pub fn window_rect(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+    unsafe {
+        let mut r = RECT::default();
+        GetWindowRect(hwnd, &mut r).ok()?;
+        Some((r.left, r.top, r.right - r.left, r.bottom - r.top))
+    }
+}
+
 /// 实测任务栏客户区高度（像素）。
 ///
 /// 不用硬编码：任务栏高度随「任务栏图标大小」设置变化（小/中/大各不相同），
