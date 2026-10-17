@@ -174,7 +174,22 @@ function loadCover() {
   const im = new Image();
   im.onload = () => {
     img = im;
-    if (mode.value === "animated" && canvasRef.value) startLoop();
+    /*
+     * 延后两帧再起动画循环。
+     *
+     * 进播放页时，路由过渡正把整页从下方滑上来（.player-enter，420ms 的空间弹簧）。
+     * 如果图片 onload 正好落在这段动画里，startLoop() 会立刻做一次 resize()
+     * （设 canvas.width/height → 重建 backing store）和 buildTiles()（4 张切片离屏
+     * 重绘），这些都在主线程/合成器最忙的时候插队，表现为「滑到一半顿一下」。
+     * 两帧足够让过渡的第一帧先提交，之后的绘制不再和位移抢帧。
+     */
+    if (mode.value === "animated" && canvasRef.value) {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          if (mode.value === "animated" && canvasRef.value && img === im) startLoop();
+        }),
+      );
+    }
   };
   im.src = src;
 }

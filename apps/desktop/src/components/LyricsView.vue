@@ -321,6 +321,42 @@ function inViewport(y: number, h: number, containerH: number): boolean {
   return y + h >= -buffer && y <= containerH + buffer;
 }
 
+/**
+ * 把「合成层提升」收窄到当前行附近。
+ *
+ * 历史原因：.lyric-item 上曾写着 will-change: transform, filter, opacity，
+ * 而它是 v-for 的每一项 —— 一首歌 80–150 行，等于常驻上百个合成层，每层还带
+ * filter: blur()。进播放页那一帧要一次性分配这些层的 GPU 纹理，这是「点一下
+ * 卡一会儿」的主要来源（见 .lyric-item 的注释）。
+ *
+ * 现在只在切行时把 .lyric-near-active 挪到新的一组（±2 行）。只在 activeIdx
+ * 变化时调用，不要放进逐帧循环 —— 150 次 classList.toggle 每帧也是一笔开销。
+ */
+const NEAR_ACTIVE_SPAN = 2;
+let nearActiveFrom = -1;
+
+/** 清掉当前窗口上的标记（换歌 / 卸载时用，避免行元素按 index 复用后残留） */
+function clearNearActive(): void {
+  if (nearActiveFrom < 0) return;
+  const n = player.lyrics.length;
+  const from = Math.max(0, nearActiveFrom - NEAR_ACTIVE_SPAN);
+  const to = Math.min(n - 1, nearActiveFrom + NEAR_ACTIVE_SPAN);
+  for (let i = from; i <= to; i++) lineRefs.value[i]?.classList.remove("lyric-near-active");
+  nearActiveFrom = -1;
+}
+
+function syncNearActive(activeIdx: number): void {
+  if (activeIdx === nearActiveFrom) return;
+  const n = player.lyrics.length;
+  clearNearActive();
+  // 没有当前行（无歌 / 歌词未加载）：什么都不提升，免得把前两行无谓地留在合成层上
+  if (activeIdx < 0 || n === 0) return;
+  const from = Math.max(0, activeIdx - NEAR_ACTIVE_SPAN);
+  const to = Math.min(n - 1, activeIdx + NEAR_ACTIVE_SPAN);
+  for (let i = from; i <= to; i++) lineRefs.value[i]?.classList.add("lyric-near-active");
+  nearActiveFrom = activeIdx;
+}
+
 // ---- 旧版换行动效：CSS transition + setTimeout 级联 ----
 //
 // 下面是 AMLL 改造之前的实现，设置里选「旧版」时启用。位移公式与新版共用 lineOffset
@@ -404,6 +440,7 @@ function rafLoop(ts: number): void {
   if (activeIdx !== lastActive) {
     lastActive = activeIdx;
     heightsDirty = true;
+    syncNearActive(activeIdx);
     // 当前行 DOM 结构会随 active 变化（整行文本 ↔ 逐词 span），需重新取词元素并重建上浮动画
     void nextTick(syncActiveWords);
   }
@@ -537,8 +574,14 @@ function rafLoop(ts: number): void {
     const opacity = !visible ? 0 : i === activeIdx ? 1 : Math.max(0.22, 1 - distance * 0.22);
     if (el.style.opacity !== String(opacity)) el.style.opacity = String(opacity);
 
-    // 模糊：与 AMLL 同样按行距分档，已读行比同距离的未读行再糊一档
-    const blur = lyricLineBlur(i, activeIdx, visible, settings.lyricBlur);
+    /*
+     * 模糊：与 AMLL 同样按行距分档，已读行比同距离的未读行再糊一档。
+     *
+     * 但**视口外的行一律不给 filter**：它们 opacity 已经是 0，再挂 blur(5px) 只是
+     * 让 Chromium 为不可见的元素做离屏高斯卷积（每帧）。AMLL 的 1e-4 技巧是给
+     * WebGL 用的，CSS 这条路上「看不见就不该算」。
+     */
+    const blur = visible ? lyricLineBlur(i, activeIdx, visible, settings.lyricBlur) : 0;
     const filter = blur ? "blur(" + blur + "px)" : "none";
     if (el.style.filter !== filter) el.style.filter = filter;
   }
@@ -564,6 +607,8 @@ watch(
     lastFill = new WeakMap<HTMLElement, number>();
     cancelFloatAnims();
     cancelLegacyLayout();
+    // 行元素按 index 复用：不先摘掉旧窗口的合成层提升，新歌的前两行会白白带着 will-change
+    clearNearActive();
     heightsDirty = true;
     seekDetector.reset();
     // v-for 按 index 复用元素，旧的内联 transform / 滤镜会残留一帧；先清掉再让 rAF 重写。
@@ -846,7 +891,17 @@ function bgFirst(line: LyricLine): boolean {
   font-weight: bold;
   letter-spacing: 0.6px;
   cursor: pointer;
-  will-change: transform, filter, opacity;
+  /*
+   * ⚠️ 这里**不要**写 will-change。
+   *
+   * .lyric-item 是 v-for 的每一项，一首歌 80–150 行；will-change 挂在每行上等于
+   * 常驻上百个合成层，每层还带 filter: blur()（逐像素高斯）。进播放页那一帧
+   * Chromium 要一次性分配这些层的 GPU 纹理，实测就是「点一下卡一会儿」的主要来源。
+   *
+   * 现在改成只给「当前行 ±2 行」加 .lyric-near-active 类（见下方规则），
+   * 合成层数量从上百降到 5 个左右。逐帧 rAF 仍然直接写内联 transform，
+   * 命中近邻行的层提升即可，不需要全量预提升。
+   */
   /*
    * 只给 opacity / filter 加过渡，**刻意不含 transform**：
    * - transform 由 rAF 里的两条弹簧（位移 + 缩放）逐帧积分，目标突变时速度是连续的，
@@ -858,6 +913,21 @@ function bgFirst(line: LyricLine): boolean {
   transition:
     opacity 0.4s ease,
     filter 0.4s ease;
+}
+
+/*
+ * 近邻行才提升为合成层。
+ *
+ * 取 ±2 行而不是 ±1：弹簧有延迟与回弹，切行瞬间旧行还在动、新行已经开始动，
+ * 只覆盖 3 行会让边界上的行在动画中途被降层（表现为一次轻微的重绘抖动）。
+ * ±2 是 5 个层，仍然远小于「每行都提升」的上百个。
+ */
+.lyric-item.lyric-near-active {
+  will-change: transform, opacity;
+}
+/* 只有当前行需要 filter 的合成层：它的 blur 是 0，但切行瞬间会从 blur(2px) 过渡过来 */
+.lyric-item.lyric-near-active.active {
+  will-change: transform, opacity, filter;
 }
 
 /* 换歌瞬间就位：不走过渡（与 transform 的弹簧无关，这里专治 opacity / filter） */
