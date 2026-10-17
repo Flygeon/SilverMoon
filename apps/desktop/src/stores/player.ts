@@ -17,6 +17,7 @@ import {
 } from "@/utils/musicTagLyrics";
 import { useMusicTagsStore } from "@/stores/musicTags";
 import { useDesktopStore, WAKE_REASON } from "@/stores/desktop";
+import { emitDesktopLyricsState } from "@/utils/desktopLyrics";
 import { pushLyricsState } from "@/utils/desktopLyricsNative";
 import {
   fetchCloudLyrics,
@@ -1074,8 +1075,33 @@ export const usePlayerStore = defineStore("player", () => {
     const now = Date.now();
     if (!force && now - lastDesktopLyricsSync < 200) return;
     lastDesktopLyricsSync = now;
-    // 推给 Rust 原生歌词窗口（独立进程，走 stdin 行分隔 JSON）。
-    // 逐字时间轴按设置下发：关掉时不下发 units，窗口自然退回整行高亮。
+    // 推给**桌面歌词窗口**（Electron 独立窗口）。
+    //
+    // ⚠️ 这里曾经被改成只推 Rust 原生窗口，而那套在旧窗口恢复后就没有消费方了 ——
+    // 结果是「桌面歌词窗口开着却收不到任何歌词」。两套并存期间，两边都要推。
+    const withUnits = settings.desktopLyricsWordByWord;
+    void emitDesktopLyricsState({
+      lines: lyrics.value.map((l) => ({
+        time: l.time,
+        text: l.text,
+        translation: l.translation,
+        romaji: l.romaji,
+        bg: l.bg?.text,
+        // 只带 start/end —— units 里还有 text/obscene，逐字渲染用不到，
+        // 每 200ms 推一次全量文本会白白放大载荷。
+        units:
+          withUnits && l.units?.length
+            ? l.units.map((u) => ({ start: u.start, end: u.end }))
+            : undefined,
+      })),
+      currentTime: currentTime.value,
+      playing: playing.value,
+      title: song.value.title,
+      artist: song.value.artist ?? "",
+    }).catch(() => {});
+
+    // 同时推给 Rust 原生窗口（独立进程，走 stdin 行分隔 JSON）。
+    // 它没启动时 pushLyricsState 内部会静默返回，不会报错。
     pushLyricsState({
       lines: lyrics.value,
       currentTime: currentTime.value,

@@ -181,6 +181,20 @@ onMounted(async () => {
     } catch {
       /* 宿主不可用或权限不足时静默 */
     }
+
+    // ⚠️ 启动兜底：**必须**在这里补一次开窗。
+    //
+    // 上面那个 watch 只在 desktopLyricsEnabled **变化**时触发。而应用重启后
+    // 设置里这个值本来就是 true（上次开着），值没有变化 → watch 不触发 →
+    // openDesktopLyricsWindow 永远不被调用 → 窗口不出现，而设置页开关却是开着的。
+    //
+    // 实测症状：用户勾着「启用桌面歌词」，重启后桌面歌词完全不见了，
+    // 手动开关一次才出来。这个兜底就是为这条路径存在的。
+    if (settings.desktopLyricsEnabled) {
+      await openDesktopLyricsWindow(settings.desktopLyricsBounds).catch(() => undefined);
+      window.setTimeout(() => pushDesktopLyricsState(), 400);
+      syncSpectrumPush();
+    }
   }
 });
 
