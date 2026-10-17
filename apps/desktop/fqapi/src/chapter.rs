@@ -139,7 +139,10 @@ pub fn parse_chapter_content(html: &str) -> ChapterText {
             chars.next();
         }
         let mut last = '\0';
-        for c in chars.by_ref() {
+        // 用 while + next() 而不是 `for c in chars.by_ref()`：for 循环体里
+        // 还要调 `chars.peek()` 和 `chars.next()`（属性区、自闭合判定），
+        // 而 `by_ref()` 的借用会持续整个循环，Rust 直接给 E0499。
+        while let Some(c) = chars.next() {
             if c == '>' {
                 self_closing = last == '/';
                 break;
@@ -151,7 +154,7 @@ pub fn parse_chapter_content(html: &str) -> ChapterText {
             }
             if c.is_whitespace() {
                 // 进入属性区：继续吃到 `>`，期间只跟踪最后一个字符
-                for c2 in chars.by_ref() {
+                while let Some(c2) = chars.next() {
                     if c2 == '>' {
                         self_closing = last == '/';
                         break;
