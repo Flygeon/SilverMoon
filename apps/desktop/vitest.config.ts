@@ -33,7 +33,8 @@ import { defineConfig } from "vitest/config";
 const appVersion = (
   JSON.parse(
     readFileSync(
-      fileURLToPath(new URL("./src-tauri/silvermoon.config.json", import.meta.url)),
+      // 与 vite.config.ts 同一个真源。曾误用 src-tauri 的遗留副本。
+      fileURLToPath(new URL("./backend/silvermoon.config.json", import.meta.url)),
       "utf8",
     ),
   ) as { version: string }

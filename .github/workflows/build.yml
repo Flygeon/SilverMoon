@@ -204,7 +204,12 @@ jobs:
             label: windows
             package-args: --win nsis
             artifact-name: windows-build
-            artifact-path: apps/desktop/release/*.exe
+            # latest.yml / *.blockmap 是 autoupdater 的元数据，必须随产物一起走,
+            # 否则 Release 里没有它,安装包能装但永远升不了级。
+            artifact-path: |
+              apps/desktop/release/*.exe
+              apps/desktop/release/latest.yml
+              apps/desktop/release/*.blockmap
             cache-paths: |
               ~/AppData/Local/electron/Cache
               ~/AppData/Local/electron-builder/Cache
@@ -212,7 +217,10 @@ jobs:
             label: linux
             package-args: --linux AppImage
             artifact-name: linux-build
-            artifact-path: apps/desktop/release/*.AppImage
+            artifact-path: |
+              apps/desktop/release/*.AppImage
+              apps/desktop/release/latest-linux.yml
+              apps/desktop/release/*.blockmap
             cache-paths: |
               ~/.cache/electron
               ~/.cache/electron-builder
@@ -220,7 +228,10 @@ jobs:
             label: macos
             package-args: --mac dmg
             artifact-name: macos-build
-            artifact-path: apps/desktop/release/*.dmg
+            artifact-path: |
+              apps/desktop/release/*.dmg
+              apps/desktop/release/latest-mac.yml
+              apps/desktop/release/*.blockmap
             cache-paths: |
               ~/Library/Caches/electron
               ~/Library/Caches/electron-builder
@@ -290,7 +301,39 @@ jobs:
 
       - name: Package
         working-directory: apps/desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # 用 `never` 而不是 `always`：`always` 会让 electron-builder 自己创建
+        # Release 并上传，与下面的 release job（softprops/action-gh-release +
+        # 自动 release notes + 汇总三平台产物与 fqapi 二进制）抢同一个 Release。
+        #
+        # 但 `never` **只阻止上传，不阻止本地生成** latest*.yml / *.blockmap ——
+        # 这两样是 autoupdater 判断「有没有新版」的唯一依据。所以真正要做的是
+        # 让下面的 upload-artifact 把它们一起带走（见 matrix 的 artifact-path）。
         run: npx electron-builder ${{ matrix.package-args }} --publish never
+
+      # 自动更新的元数据自检：tag 构建**必须**产出 latest.yml / *.blockmap，
+      # 否则 electron-updater 找不到更新源，设置页会显示「当前构建不支持自动更新」。
+      #
+      # 这正是 0.1.1 踩过的坑：CI 用 `--publish never`，本地虽然生成了
+      # latest.yml，但没有被传到 Release；安装包能装，却永远升不了级，
+      # 而且界面上看不出真实原因（更新器只报 error）。
+      - name: Verify update metadata (tag builds)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ runner.os }}" in
+            Windows) PAT="apps/desktop/release/latest.yml" ;;
+            macOS)   PAT="apps/desktop/release/latest-mac.yml" ;;
+            *)       PAT="apps/desktop/release/latest-linux.yml" ;;
+          esac
+          if [ ! -f "$PAT" ]; then
+            echo "缺少更新元数据 $PAT —— 自动更新不可用"
+            ls -la apps/desktop/release/ || true
+            exit 1
+          fi
+          echo "== $PAT"; cat "$PAT"
 
       # 打包产物自检：确认 extraResources 真的落地了。
       #

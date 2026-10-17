@@ -4,12 +4,19 @@ import { fileURLToPath, URL } from "node:url";
 import { readFileSync } from "node:fs";
 
 /**
- * 应用版本号以构建期常量注入（`__APP_VERSION__`）。单一真源是
- * `src-tauri/silvermoon.config.json`（主进程与后端都读它），
- * 前端通过同名常量取用，避免又多一处要同步的版本号。
+ * 应用版本号以构建期常量注入（`__APP_VERSION__`）。
+ *
+ * ⚠️ 单一真源是 **`backend/silvermoon.config.json`** —— 与 Electron 主进程
+ * （`electron/config.ts` 直接 import 它）、Rust 侧（`generate_context!` 编译期
+ * 读取）、以及 `scripts/check-version.mjs` 校验的是同一个文件。
+ *
+ * 曾经这里错误地指向 `src-tauri/silvermoon.config.json`（Tauri 时代的遗留
+ * 副本）。后果很有迷惑性：改版本号后「关于」页仍显示旧版本，而
+ * `check-version.mjs` 只校验 backend 那份、**根本不知道这份遗留文件的存在**，
+ * 于是 CI 全绿、界面却是错的。
  */
 const appConfig = JSON.parse(
-  readFileSync(fileURLToPath(new URL("./src-tauri/silvermoon.config.json", import.meta.url)), "utf8"),
+  readFileSync(fileURLToPath(new URL("./backend/silvermoon.config.json", import.meta.url)), "utf8"),
 ) as { version: string };
 
 // https://vitejs.dev/config/

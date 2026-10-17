@@ -134,6 +134,15 @@
   - 详情页「返回」按钮被拉满整行（flex column 默认 `stretch`）。
 - **hero 动画**（迷你条 → 播放器封面飞行）黑屏：真根因是 `scoped` 样式里的
   `:global(X) .descendant` 会被 Vue 编译器丢弃，覆盖规则成了死代码。
+- **「关于」页版本号停在旧值**：`vite.config.ts` / `vitest.config.ts` 读的是
+  `src-tauri/silvermoon.config.json`（Tauri 时代的遗留副本），而真源是
+  `backend/silvermoon.config.json`。`check-version.mjs` 只校验后者、**不知道遗留
+  文件存在**，于是 CI 全绿而界面显示旧版本。现已改读真源，并把这处遗留副本
+  一并纳入版本校验（共 7 处）。
+- **自动更新不可用**：`Release` 里没有 `latest.yml`。`electron-builder` 本地
+  **会**生成它（`--publish never` 只阻止上传、不阻止生成），但 CI 的
+  `artifact-path` 只写了安装包，元数据没进 artifact，release job 自然传不上去。
+  现三平台各补上 `latest*.yml` 与 `*.blockmap`，并加了 tag 构建的元数据自检。
 - **内存**：按进程诊断，消除两处最大内存尖峰；内存基准工具链 + V8 启动开关。
 - 重新生成图标字体子集（多次，随新增图标）。
 
