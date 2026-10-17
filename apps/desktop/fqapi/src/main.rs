@@ -147,23 +147,46 @@ impl Core {
             return json!({ "ok": false, "failedAt": "device_pool", "steps": steps });
         }
 
-        // 2) 签名请求上游书详情。这里用一本书的真实 id 由调用方传入，
-        //    自检模式下一个都没给就跳过，避免把测试书号写死在代码里。
-        let probe = std::env::var("SILVERMOON_FQAPI_PROBE_BOOK").unwrap_or_default();
+        // 2) 搜一本书拿到 book_id。优先用环境变量指定，否则用搜索自取 ——
+        //    这样自检是自包含的，不需要人先去找一个书号。
+        let mut probe = std::env::var("SILVERMOON_FQAPI_PROBE_BOOK").unwrap_or_default();
         if probe.trim().is_empty() {
+            let kw = std::env::var("SILVERMOON_FQAPI_PROBE_QUERY")
+                .unwrap_or_else(|_| "剑来".to_string());
+            let s = self
+                .call(
+                    "/api/v1/search/fanqie",
+                    &format!("query={}", urlencode(&kw)),
+                    "GET",
+                )
+                .await;
+            let found = find_book_id(&s);
+            let ok = found.is_some();
             steps.push(json!({
-                "step": "book_detail",
-                "ok": null,
-                "skipped": "未设置 SILVERMOON_FQAPI_PROBE_BOOK（示例书号）",
+                "step": "search",
+                "ok": ok,
+                "keyword": kw,
+                "book_id": found,
+                "result": if ok { Value::Null } else { s },
             }));
-            return json!({ "ok": null, "partial": true, "steps": steps });
+            match found {
+                Some(id) => probe = id,
+                None => return json!({ "ok": false, "failedAt": "search", "steps": steps }),
+            }
         }
 
+        // 3) 签名请求上游书详情
         let detail = self
             .call(&format!("/api/v1/books/{probe}"), "", "GET")
             .await;
-        let detail_ok = detail.get("status").and_then(|v| v.as_u64()) == Some(200);
-        steps.push(json!({ "step": "book_detail", "ok": detail_ok, "result": detail }));
+        let detail_ok =
+            detail.get("status").and_then(|v| v.as_u64()) == Some(200) && !is_error_body(&detail);
+        steps.push(json!({
+            "step": "book_detail",
+            "ok": detail_ok,
+            "book_id": probe,
+            "result": if detail_ok { Value::Null } else { detail },
+        }));
         if !detail_ok {
             return json!({ "ok": false, "failedAt": "book_detail", "steps": steps });
         }
@@ -190,7 +213,10 @@ impl Core {
         steps.push(json!({
             "step": "chapter_content",
             "ok": content_len > 0,
+            "item_id": item_id,
             "chars": content_len,
+            "preview": if content_len > 0 { chapter_preview(&content) } else { Value::Null },
+            "result": if content_len > 0 { Value::Null } else { content },
         }));
         json!({
             "ok": content_len > 0,
@@ -198,6 +224,74 @@ impl Core {
             "steps": steps,
         })
     }
+}
+
+/// 正文前 60 字，用来确认「解出来的是真的中文正文」而不是一段乱码。
+fn chapter_preview(content: &Value) -> Value {
+    let s = content
+        .get("body")
+        .and_then(|b| b.get("data"))
+        .and_then(|d| d.get("content"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("");
+    json!(s.chars().take(60).collect::<String>())
+}
+
+/// 响应体里带 `error` / `success:false` 即视为失败（HTTP 200 也可能业务失败）。
+fn is_error_body(v: &Value) -> bool {
+    let body = v.get("body").unwrap_or(&Value::Null);
+    body.get("error").is_some()
+        || body.get("success").and_then(|x| x.as_bool()) == Some(false)
+        || body
+            .get("code")
+            .and_then(|c| c.as_f64())
+            .is_some_and(|c| c != 0.0 && c != 200.0)
+}
+
+/// 最小 URL 编码（自检只用来拼一个搜索关键词，不必引入 form_urlencoded）。
+fn urlencode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// 从搜索响应里挖出第一个 book_id。
+fn find_book_id(search: &Value) -> Option<String> {
+    fn scan(v: &Value, depth: usize) -> Option<String> {
+        if depth > 8 {
+            return None;
+        }
+        match v {
+            Value::Object(m) => {
+                for key in ["book_id", "bookId", "book_id_str"] {
+                    if let Some(s) = m.get(key).and_then(|x| x.as_str()) {
+                        if !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()) {
+                            return Some(s.to_string());
+                        }
+                    }
+                    if let Some(n) = m.get(key).and_then(|x| x.as_i64()) {
+                        return Some(n.to_string());
+                    }
+                }
+                for (_, child) in m.iter() {
+                    if let Some(found) = scan(child, depth + 1) {
+                        return Some(found);
+                    }
+                }
+                None
+            }
+            Value::Array(a) => a.iter().find_map(|x| scan(x, depth + 1)),
+            _ => None,
+        }
+    }
+    scan(search, 0)
 }
 
 /// 从目录响应里挖出第一个章节的 item_id。
