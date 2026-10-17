@@ -41,7 +41,9 @@ const sources = [
     read: () =>
       matchOptional(
         readOptional("src-tauri/silvermoon.config.json") ?? "",
-        /^  "version": "([^"]+)"/m,
+        // 用 {2} 而不是两个空格：eslint 的 no-regex-spaces 会拦下后者
+        // （连续空格在正则里数不清，容易看错成 1 个或 3 个）。
+        /^ {2}"version": "([^"]+)"/m,
       ),
   },
   {
