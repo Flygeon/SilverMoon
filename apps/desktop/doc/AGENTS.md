@@ -62,7 +62,7 @@ cd src-tauri && cargo clippy --all-targets -- -D warnings   # 需要 MSVC / WebK
 - `src/ipc/` — **the single bridge between the renderer and the native layer** (`invoke` / `events` / `window` / `dragdrop` / `paths` / `app` / `store` / `dialog` / `fs` / `opener` / `http`). Business code imports from here directly; it must never import `@tauri-apps/*` itself (browser preview would break).
 - `src/capabilities/index.ts` — higher-level facade over `src/ipc/`: wraps every backend command and provides a **browser mock** so `npm run dev:renderer` works without Tauri.
 - `src/stores/` — Pinia stores: `library` (file cache + scan), `player` (audio playback + queue), `settings` (persisted via `JsonStore`).
-- `src/tokens/theme.css` — M3 design tokens (CSS variables). Edit colors here, not in components.
+- `src/tokens/theme.css` — M3 design tokens (CSS variables). Shape / motion / spacing tokens are hand-written here; **the color tokens are generated** — never edit them by hand, change `shared/m3-theme.ts` and run `npm run gen:m3-tokens`. See `doc/M3配色系统.md` for the color pipeline (Tonal Spot · M3 Expressive spec 2025 · phone · standard contrast), the full role list, and the deliberate exceptions (drawing palette, reader background).
 - `archive/electron-host/` — **只读参考**：Electron 宿主层的完整快照（含 `electron/*`、splash 启动器、electron-builder 配置与相关脚本）。迁回 Tauri 后不再参与构建，但排查行为差异时可直接对照旧实现。
 
 ## Key Conventions

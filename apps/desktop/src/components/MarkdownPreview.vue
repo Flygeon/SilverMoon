@@ -278,59 +278,35 @@ function onClick(e: MouseEvent) {
   margin-bottom: 0.2em;
 }
 
+/* GitHub 风格的 5 种提示块 → 全部落到 M3 语义色角色上。
+   原来写死 GitHub 调色板（#4493f8 / #3fb950 / …）再为暗色手写一套提亮值：
+   既跟种子色无关（换配色后提示块永远是那五个色），又要维护两份。
+   现在引一个 --alert-hue 变量，深浅两套自动由令牌适配。
+   注意：文字直接用角色色本身（M3 的 40/80 tone 已满足 AA 对比度），
+   不再叠加 color-mix 提亮层。 */
+.md-body :deep(.md-alert) {
+  border-left-color: var(--alert-hue);
+  background: color-mix(in srgb, var(--alert-hue) 10%, transparent);
+  color: var(--alert-hue);
+}
+
 .md-body :deep(.md-alert-note) {
-  border-left-color: #4493f8;
-  background: color-mix(in srgb, #4493f8 8%, transparent);
-  color: #3f6ea8;
+  --alert-hue: var(--md-sys-color-link);
 }
 
 .md-body :deep(.md-alert-tip) {
-  border-left-color: #3fb950;
-  background: color-mix(in srgb, #3fb950 8%, transparent);
-  color: #2f7d3d;
+  --alert-hue: var(--md-sys-color-success);
 }
 
 .md-body :deep(.md-alert-important) {
-  border-left-color: #ab7df8;
-  background: color-mix(in srgb, #ab7df8 8%, transparent);
-  color: #6d4bb5;
+  --alert-hue: var(--md-sys-color-tertiary);
 }
 
 .md-body :deep(.md-alert-warning) {
-  border-left-color: #d29922;
-  background: color-mix(in srgb, #d29922 8%, transparent);
-  color: #8a6415;
+  --alert-hue: var(--md-sys-color-warning);
 }
 
 .md-body :deep(.md-alert-caution) {
-  border-left-color: #f85149;
-  background: color-mix(in srgb, #f85149 8%, transparent);
-  color: #b3382f;
-}
-
-/* 暗色下提亮文字，避免彩底上对比度不足 */
-:global([data-theme="dark"]) .md-body :deep(.md-alert-note),
-:global(.dark) .md-body :deep(.md-alert-note) {
-  color: #8fbdff;
-}
-
-:global([data-theme="dark"]) .md-body :deep(.md-alert-tip),
-:global(.dark) .md-body :deep(.md-alert-tip) {
-  color: #7ee787;
-}
-
-:global([data-theme="dark"]) .md-body :deep(.md-alert-important),
-:global(.dark) .md-body :deep(.md-alert-important) {
-  color: #d2b3ff;
-}
-
-:global([data-theme="dark"]) .md-body :deep(.md-alert-warning),
-:global(.dark) .md-body :deep(.md-alert-warning) {
-  color: #e3b341;
-}
-
-:global([data-theme="dark"]) .md-body :deep(.md-alert-caution),
-:global(.dark) .md-body :deep(.md-alert-caution) {
-  color: #ff9d95;
+  --alert-hue: var(--md-sys-color-error);
 }
 </style>

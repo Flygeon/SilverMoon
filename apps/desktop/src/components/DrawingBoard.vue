@@ -21,6 +21,7 @@ import type { DrawTool, Drawing, ShapeFillMode } from "@/features/drawing/types"
 import { SHAPE_FILL_MODES } from "@/features/drawing/types";
 import { floodFill } from "@/features/drawing/floodFill";
 import { attachGpuCanvas, gpuCanvasAvailable, type GpuCanvasHandle } from "@/utils/gpuCanvas";
+import { readPrimaryHex } from "@/utils/dynamicTheme";
 import { translate } from "@shared/i18n";
 
 const props = defineProps<{
@@ -72,6 +73,12 @@ const canRedo = ref(false);
 
 const { fit: fitHeight } = useFillHeight(rootRef, 520);
 
+/**
+ * 画笔调色板：**固定色**（不是主题色）。
+ * 绘画是「用户选颜色画画」的场景，色板必须在任何主题下都稳定可预期，
+ * 所以这里刻意不跟随种子色 —— 换主题时用户的上色习惯不该被改。
+ * 顺序：墨黑 / 朱红 / 琥珀 / 松绿 / 群青 / 紫罗兰。
+ */
 const PALETTE = ["#1b1b1f", "#e5484d", "#f5a524", "#30a46c", "#3b82f6", "#8b5cf6"];
 
 const TOOLS: { value: DrawTool; icon: string; key: string }[] = [
@@ -168,8 +175,9 @@ function boundsOf(node: LeafNode): Bounds | null {
 function ensureMarquee(): LeafNode | null {
   if (marquee) return marquee;
   if (!ns || !leafer.value) return null;
+  // 选框走主题主色（Leafer 只吃具体色值，从令牌里读一次；换种子色后重建即可）
   const box = new ns.Rect({
-    stroke: "#3b82f6",
+    stroke: readPrimaryHex(),
     strokeWidth: 2,
     dashPattern: [6, 4],
     hittable: false,

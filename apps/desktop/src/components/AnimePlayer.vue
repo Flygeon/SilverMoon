@@ -24,6 +24,7 @@ import { useSettingsStore } from "@/stores/settings";
 import { useAnimeStore } from "@/stores/anime";
 import { animeLog } from "@/utils/animeLog";
 import { danmakuLog } from "@/utils/danmakuLog";
+import { readPrimaryHex as readThemeColor } from "@/utils/dynamicTheme";
 import {
   getDandanAnimeIdByBgmId,
   getDandanBangumi,
@@ -151,22 +152,8 @@ async function loadDanmakuForEpisode(): Promise<Danmu[]> {
 }
 
 // ---- 主题色：跟随 --md-sys-color-primary ----
-function readThemeColor(): string {
-  const v = getComputedStyle(document.documentElement)
-    .getPropertyValue("--md-sys-color-primary")
-    .trim();
-  // MD3 token 是 #aabbcc 或 rgb(r,g,b) 形式
-  if (!v) return "#1A5C9E";
-  if (v.startsWith("#")) return v;
-  const m = v.match(/rgb[a]?\(([^)]+)\)/);
-  if (!m) return "#1A5C9E";
-  const parts = m[1].split(",").map((x) => Number(x.trim()));
-  if (parts.length < 3) return "#1A5C9E";
-  return `#${parts
-    .slice(0, 3)
-    .map((n) => Math.round(n).toString(16).padStart(2, "0"))
-    .join("")}`;
-}
+// artplayer 只吃具体色值、拿不到 CSS 变量，所以从当前生效令牌里读一次。
+// 解析逻辑在 utils/dynamicTheme.ts（与 B 站播放器共用），避免两处各写一份。
 
 function destroyHls() {
   if (hls) {

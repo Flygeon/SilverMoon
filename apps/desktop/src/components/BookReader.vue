@@ -19,7 +19,13 @@ import { isLoginRequiredError } from "@/novel/wenku8Login";
 import { requestRelogin } from "@/novel/wenku8Auth";
 import type { MediaEntry, NovelContent, NovelVolume } from "@shared/types";
 
-/** 阅读器背景主题：背景色 / 前景色 / 链接色 三元组 */
+/**
+ * 阅读器背景主题：背景色 / 前景色 / 链接色 三元组。
+ *
+ * 这是**排版底色**，刻意不跟主题令牌走 —— 阅读场景要的是稳定的纸感
+ * （深色/浅色/羊皮纸/护眼绿），若跟着种子色变，正文背景会变成彩色的，
+ * 长时间阅读很累。链接色同样按各底色单独给，保证对比度。
+ */
 const READER_THEMES: Record<
   ReaderThemeKey,
   { label: string; bg: string; fg: string; link: string }

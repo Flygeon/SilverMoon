@@ -61,61 +61,75 @@
     'opsz' 24;
 }
 3. 常用图标角色映射表功能语义Material Symbol 名称未激活态 (Unfilled)激活/选中态 (Filled)媒体库/首页grid_viewFILL: 0, wght: 400FILL: 1, wght: 500音乐/播放器music_noteFILL: 0, wght: 400FILL: 1, wght: 500收藏/星标favoriteFILL: 0, wght: 400FILL: 1, wght: 500文件夹/目录folderFILL: 0, wght: 400FILL: 1, wght: 500搜索searchFILL: 0, wght: 400FILL: 1, wght: 600设置settingsFILL: 0, wght: 400FILL: 1, wght: 500播放控制play_arrow, pause, skip_next, skip_previousFILL: 1, wght: 400FILL: 1, wght: 600空状态指示collections_bookmark, search_off, broken_imageFILL: 0, wght: 300N/A0.3 动效哲学 (Motion Philosophy)有因有果 (Causality)：所有入场或展开动效的源头点必须精确对应用户的触控或点击坐标。父子错开 (Staggering)：列表或网格组件加载时，子项动画需保持 20ms–35ms 的延迟错开（Stagger），体现视觉深度。物理弹簧 (Spring Physics)：全面使用 M3 Expressive 弹簧参数取代传统三次贝塞尔曲线，消除机械式的匀速或假减速感。1. 设计令牌（Design Tokens）—— Layer 11.1 颜色系统（M3 语义化颜色映射）项目严格遵循 Material Design 3 语义化命名定义变量，确保支持主题实时切换与动态取色。CSS:root {
-  /* ===== 亮色模式 (Light Theme) ===== */
-  --md-sys-color-primary: #1A5C9E;
-  --md-sys-color-on-primary: #FFFFFF;
-  --md-sys-color-primary-container: #D2E4FF;
-  --md-sys-color-on-primary-container: #001C3B;
-  
-  --md-sys-color-secondary: #535F70;
-  --md-sys-color-on-secondary: #FFFFFF;
-  --md-sys-color-secondary-container: #D7E3F7;
-  --md-sys-color-on-secondary-container: #101C2B;
-  
-  --md-sys-color-surface: #FCFCFC;
-  --md-sys-color-on-surface: #1A1C1E;
-  --md-sys-color-surface-container-lowest: #FFFFFF;
-  --md-sys-color-surface-container-low: #F6F7F9;
-  --md-sys-color-surface-container: #F2F3F5;
-  --md-sys-color-surface-container-high: #ECEEE0;
-  --md-sys-color-surface-container-highest: #E2E4E7;
-  
-  --md-sys-color-on-surface-variant: #44474E;
-  --md-sys-color-outline: #7A7E87;
-  --md-sys-color-outline-variant: #C4C6CF;
+```css
+:root {
+  /* 亮色：由 shared/m3-theme.ts 的 defaultScheme(false) 生成，勿手改 */
+  --md-sys-color-primary: #426089;
+  --md-sys-color-on-primary: #f8f8ff;
+  --md-sys-color-primary-container: #afcefd;
+  --md-sys-color-on-primary-container: #25456c;
+  --md-sys-color-secondary: #556071;
+  --md-sys-color-on-secondary: #f8f8ff;
+  --md-sys-color-secondary-container: #d8e3f8;
+  --md-sys-color-on-secondary-container: #475263;
+  --md-sys-color-surface: #f9f9fe;
+  --md-sys-color-on-surface: #2e333a;
+  --md-sys-color-surface-container-lowest: #ffffff;
+  --md-sys-color-surface-container-low: #f2f3fa;
+  --md-sys-color-surface-container: #eceef5;
+  --md-sys-color-surface-container-high: #e6e8f0;
+  --md-sys-color-surface-container-highest: #dfe2ec;
+  --md-sys-color-on-surface-variant: #5b5f67;
+  --md-sys-color-outline: #777b83;
+  --md-sys-color-outline-variant: #aeb2bb;
   --md-sys-color-scrim: rgba(0, 0, 0, 0.7);
-  --md-sys-color-error: #BA1A1A;
-  --md-sys-color-on-error: #FFFFFF;
+  --md-sys-color-error: #a83836;
+  --md-sys-color-on-error: #fff7f6;
 }
 
-.dark-theme {
-  /* ===== 暗色模式 (Dark Theme) ===== */
-  --md-sys-color-primary: #8BB9F0;
-  --md-sys-color-on-primary: #001C3B;
-  --md-sys-color-primary-container: #002E5E;
-  --md-sys-color-on-primary-container: #D2E4FF;
-  
-  --md-sys-color-secondary: #BBC7DB;
-  --md-sys-color-on-secondary: #253140;
-  --md-sys-color-secondary-container: #3B4758;
-  --md-sys-color-on-secondary-container: #D7E3F7;
-  
-  --md-sys-color-surface: #0F0F11;
-  --md-sys-color-on-surface: #E2E2E5;
-  --md-sys-color-surface-container-lowest: #0A0A0C;
-  --md-sys-color-surface-container-low: #131316;
-  --md-sys-color-surface-container: #1A1C1E;
-  --md-sys-color-surface-container-high: #24262A;
-  --md-sys-color-surface-container-highest: #2E3035;
-  
-  --md-sys-color-on-surface-variant: #C7C9CD;
-  --md-sys-color-outline: #8F939B;
-  --md-sys-color-outline-variant: #44474E;
+[data-theme="dark"] {
+  /* 深色：defaultScheme(true)，同一个种子色的深色方案 */
+  --md-sys-color-primary: #b1c8ec;
+  --md-sys-color-on-primary: #2b415f;
+  --md-sys-color-primary-container: #3d5472;
+  --md-sys-color-on-primary-container: #d5e4ff;
+  --md-sys-color-secondary: #bcc7db;
+  --md-sys-color-on-secondary: #364151;
+  --md-sys-color-secondary-container: #313c4c;
+  --md-sys-color-on-secondary-container: #b5c0d4;
+  --md-sys-color-surface: #0c0e12;
+  --md-sys-color-on-surface: #e2e5ef;
+  --md-sys-color-surface-container-lowest: #000000;
+  --md-sys-color-surface-container-low: #111318;
+  --md-sys-color-surface-container: #161a1f;
+  --md-sys-color-surface-container-high: #1c2026;
+  --md-sys-color-surface-container-highest: #22262d;
+  --md-sys-color-on-surface-variant: #a7abb4;
+  --md-sys-color-outline: #71757e;
+  --md-sys-color-outline-variant: #444850;
   --md-sys-color-scrim: rgba(0, 0, 0, 0.85);
-  --md-sys-color-error: #FFB4AB;
-  --md-sys-color-on-error: #690005;
+  --md-sys-color-error: #fa746f;
+  --md-sys-color-on-error: #490006;
 }
-系统适配逻辑：Windows 平台适配：当设置中开启“使用系统强调色”时，动态读取 Windows 主题色。亮色模式下将主色替换为 #0078D4，暗色模式下替换为 #4CC2FF，并重新生成 Container 色阶。播放器特判：全屏音乐播放器视图强行覆写变量系统为 .dark-theme，且大背景定义为 #0F0F11，不受系统自适应影响。1.2 字体排印 (Type Scale & Variable Axes)全应用采用 Google Sans Flex 可变字体（Variable Font），在缺少该字体的系统上回退至 Roboto Flex 和系统默认无衬线字体。CSSbody {
+```
+
+> 上面只是**默认种子 `#1A5C9E` 的静态兜底**。运行时整套 56 个角色由 MCU 现算并内联写入，
+> 口径为 **Tonal Spot · M3 Expressive color spec 2025 · phone · 标准对比度（0）**。
+> 完整令牌清单、生成方式、与皮肤的边界见 [M3配色系统.md](../M3配色系统.md)。
+
+系统适配逻辑：
+
+- **跟随系统强调色**：设置里 `seedSource = system` 时读平台强调色（Windows DWM AccentColor / GNOME accent-color），
+  拿不到就静默回落用户手动选的种子色（UDA 文档约定「没有强调色」是正常状态）。
+  强调色同样只是一个**种子**，喂给同一套 Tonal Spot 算法现算整套 56 个角色
+  —— 不再有「主色换掉、容器色阶另算」这种特判。
+- **深浅模式**：由 `settings.theme`（system / light / dark）解析成 `<html data-theme>`，
+  随后整套令牌重算，而不是只换背景。单模式皮肤（`modes: ["dark"]`）会临时锁定解析结果。
+- **写入顺序**：清种子残留 → 皮肤令牌/CSS → 种子色（最后写、行内覆盖）。顺序不能调换，详见 `doc/M3配色系统.md`。
+- **播放器特判**：全屏音乐播放器仍强行使用深色背景，这是**内容语境**（看封面/歌词要黑场），
+  不是主题色，故不参与令牌系统。
+
+1.2 字体排印 (Type Scale & Variable Axes)
   font-family: "Google Sans Flex", "Roboto Flex", Roboto, -apple-system, 
                BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   font-optical-sizing: auto;

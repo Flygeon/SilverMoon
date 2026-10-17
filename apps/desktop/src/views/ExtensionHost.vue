@@ -226,9 +226,9 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #1b1d22;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
+  background: var(--md-sys-color-surface-container-low);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-small);
   overflow: hidden;
 }
 .bar {
@@ -237,7 +237,7 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   height: 34px;
   padding: 0 10px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--md-sys-color-surface-container);
   user-select: none;
   flex-shrink: 0;
   /* 本窗口无系统标题栏（frame: false），这一条即是拖拽区。
@@ -246,34 +246,34 @@ onBeforeUnmount(() => {
 }
 .title {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.65);
+  color: var(--md-sys-color-on-surface-variant);
 }
 .close {
   -webkit-app-region: no-drag;
   border: none;
   background: transparent;
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--md-sys-color-on-surface-variant);
   cursor: pointer;
   font-size: 13px;
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: var(--md-sys-shape-corner-extra-small);
 }
 .close:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
 }
 .ext-frame {
   flex: 1;
   border: none;
   width: 100%;
-  background: #1b1d22;
+  background: var(--md-sys-color-surface-container-low);
 }
 .err {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--md-sys-color-on-surface-variant);
   font-size: 13px;
 }
 </style>

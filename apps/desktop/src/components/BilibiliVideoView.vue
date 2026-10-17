@@ -29,6 +29,7 @@ import {
 } from "@/utils/bilibili";
 import { BiliDashSession } from "@/utils/biliDash";
 import { applyTimeOffset, type ArtDanmu } from "@/utils/danmaku";
+import { readPrimaryHex } from "@/utils/dynamicTheme";
 import { useAmbilight } from "@/composables/useAmbilight";
 import { useSponsorSkip } from "@/composables/useSponsorSkip";
 import { SB_CATEGORY_MAP } from "@/utils/sponsorBlock";
@@ -188,20 +189,8 @@ function seekTo(seconds: number): void {
   art.currentTime = Math.max(0, seconds);
 }
 
-function readThemeColor(): string {
-  const v = getComputedStyle(document.documentElement)
-    .getPropertyValue("--md-sys-color-primary")
-    .trim();
-  if (v.startsWith("#")) return v;
-  const m = v.match(/rgb[a]?\(([^)]+)\)/);
-  if (!m) return "#1A5C9E";
-  const partsRgb = m[1].split(",").map((x) => Number(x.trim()));
-  if (partsRgb.length < 3) return "#1A5C9E";
-  return `#${partsRgb
-    .slice(0, 3)
-    .map((n) => Math.round(n).toString(16).padStart(2, "0"))
-    .join("")}`;
-}
+/** artplayer 只吃具体色值（拿不到 CSS 变量），从当前生效令牌里读主色 */
+const readThemeColor = () => readPrimaryHex();
 
 /** 弹幕加载：按当前 cid 拉取 + 应用时间轴偏移。切 P 时通过 danmakuGen 作废旧请求。 */
 async function loadDanmaku(): Promise<ArtDanmu[]> {

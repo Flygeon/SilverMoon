@@ -184,7 +184,8 @@ export const messages = {
       light: "浅色",
       dark: "深色",
       colorScheme: "配色方案",
-      colorSchemeHint: "以一个种子色实时生成整套 Material You 配色，深色 / 浅色自动适配。",
+      colorSchemeHint:
+        "以一个种子色实时生成整套 Material You 配色（Tonal Spot · M3 Expressive，标准对比度），深色 / 浅色各自成表。色板显示的是点下去**实际得到**的主色。",
       colorCustom: "自定义",
       colorSeed_blue: "海蓝",
       colorSeed_teal: "青碧",
@@ -1424,7 +1425,7 @@ export const messages = {
       dark: "Dark",
       colorScheme: "Color Scheme",
       colorSchemeHint:
-        "Generates the full Material You palette from one seed color; light / dark adapt automatically.",
+        "Generates the full Material You palette from one seed color (Tonal Spot · M3 Expressive, standard contrast), with separate light and dark tables. Swatches show the primary you'll actually get.",
       colorCustom: "Custom",
       colorSeed_blue: "Ocean",
       colorSeed_teal: "Teal",

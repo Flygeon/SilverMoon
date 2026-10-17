@@ -411,6 +411,10 @@ export const useSettingsStore = defineStore("settings", () => {
   // 不反向依赖，避免与桌面能力探测形成环。
   const desktop = useDesktopStore();
   const theme = ref<ThemeMode>(DEFAULTS.theme);
+  /** 当前解析出的明暗（含「跟随系统」与皮肤锁定）。resolveTheme() 每次都会同步它，
+   *  供需要「按模式给色」的地方（设置页色板预览）读取 —— 直接读 <html data-theme>
+   *  拿到的是普通属性、不是响应式的，切换主题后 computed 不会重算。 */
+  const resolvedDark = ref(false);
   const seedColor = ref(DEFAULTS.seedColor);
   const seedSource = ref<SeedSource>(DEFAULTS.seedSource);
   const activeSkin = ref(DEFAULTS.activeSkin);
@@ -788,6 +792,7 @@ export const useSettingsStore = defineStore("settings", () => {
       : theme.value === "dark" ||
         (theme.value === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
     document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+    resolvedDark.value = dark;
     // 令牌写入顺序（§3 层次）：清种子残留 → 皮肤令牌/CSS → 种子色（最后写入，
     // 同为内联样式时后者覆盖前者；clearSeedTokens 必须先于 applySkin，否则会抹掉皮肤颜色）
     const skin = activeSkinDoc.value;
@@ -860,6 +865,7 @@ export const useSettingsStore = defineStore("settings", () => {
 
   return {
     ...fields,
+    resolvedDark,
     enabledServers,
     loaded,
     load,

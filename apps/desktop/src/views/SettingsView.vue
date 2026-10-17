@@ -36,6 +36,7 @@ import {
 import { formatSize } from "@/utils/format";
 import { activeSkinDoc, skinModeLock, skinSafeMode } from "@/utils/skinRuntime";
 import { SB_CATEGORIES } from "@/utils/sponsorBlock";
+import { primaryOfSeed } from "@shared/m3-theme";
 import { translate } from "@shared/i18n";
 import { SETTINGS_INDEX } from "@/views/settingsIndex.generated";
 import { matchSettings, type SettingsHit } from "@/views/settingsSearch";
@@ -320,6 +321,12 @@ function setTheme(mode: ThemeMode) {
 }
 
 // ---- 配色方案（Material You 种子色）----
+//
+// 色板展示**由该种子实际生成的主色**（Tonal Spot 的 primary），而不是用户的原始输入色。
+// 原因：Tonal Spot 会把任意种子收敛到固定的彩度/明度档位，铺原色会让「色板」与
+// 「点下去之后看到的主色」不一致 —— 例如琥珀 #8F4C00 实际生成的是 #865327（更闷的赭），
+// 玫瑰 #B3261E 生成的是 #8c4e46（偏砖）。这里用 primaryOfSeed() 现算，色板即所得；
+// 深浅各取各的（深色 tone 80），所以切换主题时色板会跟着变一变，这是预期行为。
 const COLOR_SEEDS = [
   { key: "blue", hex: "#1A5C9E" },
   { key: "teal", hex: "#00696E" },
@@ -329,6 +336,13 @@ const COLOR_SEEDS = [
   { key: "rose", hex: "#B3261E" },
   { key: "pink", hex: "#8B4A6C" },
 ] as const;
+
+/** 种子 → 该种子在当前模式下的实际主色（非法/未加载时退回原值）。
+ *  明暗取自 store 的 resolvedDark（响应式），不读 <html data-theme> ——
+ *  那是普通属性，切主题后 computed 不会重算。 */
+function seedPreview(hex: string): string {
+  return primaryOfSeed(hex, settings.resolvedDark) ?? hex;
+}
 
 const isCustomSeed = computed(
   () => !COLOR_SEEDS.some((c) => c.hex.toLowerCase() === settings.seedColor.toLowerCase()),
@@ -872,7 +886,7 @@ onBeforeUnmount(() => {
                 :key="c.key"
                 class="swatch"
                 :class="{ active: settings.seedColor.toLowerCase() === c.hex.toLowerCase() }"
-                :style="{ '--sw': c.hex }"
+                :style="{ '--sw': seedPreview(c.hex) }"
                 :title="t('settings.colorSeed_' + c.key)"
                 :aria-label="t('settings.colorSeed_' + c.key)"
                 :disabled="seedLocked"
@@ -883,7 +897,7 @@ onBeforeUnmount(() => {
               <label
                 class="swatch custom"
                 :class="{ active: isCustomSeed && settings.seedSource !== 'system' }"
-                :style="{ '--sw': settings.seedColor }"
+                :style="{ '--sw': seedPreview(settings.seedColor) }"
                 :title="t('settings.colorCustom')"
               >
                 <span class="material-symbols-outlined">{{
@@ -901,7 +915,7 @@ onBeforeUnmount(() => {
                 v-if="systemAccentHex"
                 class="swatch"
                 :class="{ active: settings.seedSource === 'system' }"
-                :style="{ '--sw': systemAccentHex }"
+                :style="{ '--sw': seedPreview(systemAccentHex ?? '#1A5C9E') }"
                 :title="t('settings.system')"
                 :aria-label="t('settings.system')"
                 :disabled="seedLocked"
@@ -2881,9 +2895,10 @@ onBeforeUnmount(() => {
   border: none;
   border-radius: 50%;
   background: var(--sw, var(--md-sys-color-primary));
-  color: #fff;
+  /* 勾选标记压在主色圆点上：用 on-primary 而不是写死白（浅色种子下白勾会糊） */
+  color: var(--md-sys-color-on-primary);
   cursor: pointer;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--md-sys-color-on-surface) 12%, transparent);
   transition:
     transform 160ms var(--md-sys-motion-spring),
     box-shadow 160ms var(--md-sys-motion-spring-effects-fast);

@@ -142,9 +142,10 @@ watch(
 <style scoped>
 .ext-embed {
   width: 100%;
-  background: #1b1d22;
-  border: 1px solid var(--md-sys-color-outline-variant, rgba(255, 255, 255, 0.08));
-  border-radius: 12px;
+  /* 底色跟表面令牌走：扩展 iframe 加载前是这张底，写死深色会在浅色主题下闪黑 */
+  background: var(--md-sys-color-surface-container-low);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-medium);
   overflow: hidden;
   margin-bottom: 16px;
 }
@@ -153,14 +154,14 @@ watch(
   height: 100%;
   border: none;
   display: block;
-  background: #1b1d22;
+  background: var(--md-sys-color-surface-container-low);
 }
 .err {
   height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--md-sys-color-on-surface-variant, rgba(255, 255, 255, 0.5));
+  color: var(--md-sys-color-on-surface-variant);
   font-size: 13px;
   padding: 12px;
   text-align: center;

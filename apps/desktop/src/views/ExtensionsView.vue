@@ -183,7 +183,7 @@ onActivated(load);
   cursor: default;
 }
 .toast {
-  color: #4a90d9;
+  color: var(--md-sys-color-primary);
   font-size: 13px;
   margin: 4px 0;
 }
@@ -219,31 +219,32 @@ onActivated(load);
   border-radius: 10px;
   font-size: 11px;
 }
+/* 状态徽标全部走 M3 语义角色（原来写死一组蓝/灰/红，换种子色后不跟随） */
 .state.on {
-  background: rgba(74, 144, 217, 0.15);
-  color: #4a90d9;
+  background: color-mix(in srgb, var(--md-sys-color-success) 15%, transparent);
+  color: var(--md-sys-color-success);
 }
 .state.off {
-  background: rgba(128, 128, 128, 0.15);
-  color: rgba(128, 128, 128, 0.9);
+  background: color-mix(in srgb, var(--md-sys-color-on-surface-variant) 15%, transparent);
+  color: var(--md-sys-color-on-surface-variant);
 }
 .state.bad {
-  background: rgba(220, 80, 80, 0.15);
-  color: #d05050;
+  background: color-mix(in srgb, var(--md-sys-color-error) 15%, transparent);
+  color: var(--md-sys-color-error);
 }
 .state.plain {
-  background: rgba(128, 128, 128, 0.12);
-  color: rgba(128, 128, 128, 0.9);
+  background: color-mix(in srgb, var(--md-sys-color-on-surface-variant) 12%, transparent);
+  color: var(--md-sys-color-on-surface-variant);
 }
 .warn {
   margin-top: 6px;
   font-size: 12px;
-  color: #d05050;
+  color: var(--md-sys-color-error);
 }
 .perms {
   margin-top: 6px;
   font-size: 12px;
-  color: rgba(128, 128, 128, 0.95);
+  color: var(--md-sys-color-on-surface-variant);
 }
 .perm {
   display: inline-block;
@@ -268,7 +269,7 @@ onActivated(load);
   background: transparent;
 }
 .ops .danger:hover {
-  background: rgba(220, 80, 80, 0.12);
-  border-color: rgba(220, 80, 80, 0.5);
+  background: color-mix(in srgb, var(--md-sys-color-error) 12%, transparent);
+  border-color: color-mix(in srgb, var(--md-sys-color-error) 50%, transparent);
 }
 </style>

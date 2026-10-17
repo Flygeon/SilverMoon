@@ -80,6 +80,12 @@ jobs:
         working-directory: apps/desktop
         run: npm run check:icon-font
 
+      # 配色令牌是**生成**的（shared/m3-theme.ts → src/tokens/theme.css）。
+      # 改了内核却忘了重跑生成器时，这里会红 —— 与单测里的逐令牌比对互为双保险。
+      - name: M3 color tokens in sync with kernel
+        working-directory: apps/desktop
+        run: npm run verify:m3-tokens
+
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:

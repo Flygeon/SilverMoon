@@ -1,62 +1,18 @@
 /**
- * 动态配色：由一个种子色（seed）实时生成整套 Material Design 3 颜色令牌，
+ * 动态配色：由一个种子色实时生成整套 Material Design 3 颜色令牌，
  * 以内联样式写到 <html> 上，从而覆盖 tokens/theme.css 里的静态默认值
  * （行内样式优先级高于任何选择器，浅色/深色两套 [data-theme] 规则都会被盖住）。
  *
- * 使用 @material/material-color-utilities 的 SchemeTonalSpot，随浅/深色切换重算。
+ * 算法本身在 `@shared/m3-theme.ts`（浏览器与 Electron 主进程共用），这里只负责
+ * 「写进 DOM」这一层：设置页改种子色 / 切换深浅 / 跟随系统强调色都走这里。
  */
-import {
-  Hct,
-  SchemeTonalSpot,
-  MaterialDynamicColors,
-  argbFromHex,
-  hexFromArgb,
-  type DynamicColor,
-} from "@material/material-color-utilities";
+import { M3_COLOR_ROLES, cssTokensFromSeed, normalizeSeedHex } from "@shared/m3-theme";
 
-/** CSS 变量 ↔ MD3 动态颜色角色映射（与 theme.css 中定义的令牌一一对应）。
- *  故意不含 --md-sys-color-scrim：它在 theme.css 里是半透明 rgba，
- *  若替换成不透明色会让所有蒙层变实心，故保留原值。 */
-const TOKEN_MAP: Array<[string, DynamicColor]> = [
-  ["--md-sys-color-primary", MaterialDynamicColors.primary],
-  ["--md-sys-color-on-primary", MaterialDynamicColors.onPrimary],
-  ["--md-sys-color-primary-container", MaterialDynamicColors.primaryContainer],
-  ["--md-sys-color-on-primary-container", MaterialDynamicColors.onPrimaryContainer],
-  ["--md-sys-color-secondary", MaterialDynamicColors.secondary],
-  ["--md-sys-color-on-secondary", MaterialDynamicColors.onSecondary],
-  ["--md-sys-color-secondary-container", MaterialDynamicColors.secondaryContainer],
-  ["--md-sys-color-on-secondary-container", MaterialDynamicColors.onSecondaryContainer],
-  ["--md-sys-color-tertiary", MaterialDynamicColors.tertiary],
-  ["--md-sys-color-on-tertiary", MaterialDynamicColors.onTertiary],
-  ["--md-sys-color-tertiary-container", MaterialDynamicColors.tertiaryContainer],
-  ["--md-sys-color-on-tertiary-container", MaterialDynamicColors.onTertiaryContainer],
-  ["--md-sys-color-error", MaterialDynamicColors.error],
-  ["--md-sys-color-on-error", MaterialDynamicColors.onError],
-  ["--md-sys-color-error-container", MaterialDynamicColors.errorContainer],
-  ["--md-sys-color-on-error-container", MaterialDynamicColors.onErrorContainer],
-  ["--md-sys-color-surface", MaterialDynamicColors.surface],
-  ["--md-sys-color-on-surface", MaterialDynamicColors.onSurface],
-  ["--md-sys-color-surface-dim", MaterialDynamicColors.surfaceDim],
-  ["--md-sys-color-surface-bright", MaterialDynamicColors.surfaceBright],
-  ["--md-sys-color-surface-container-lowest", MaterialDynamicColors.surfaceContainerLowest],
-  ["--md-sys-color-surface-container-low", MaterialDynamicColors.surfaceContainerLow],
-  ["--md-sys-color-surface-container", MaterialDynamicColors.surfaceContainer],
-  ["--md-sys-color-surface-container-high", MaterialDynamicColors.surfaceContainerHigh],
-  ["--md-sys-color-surface-container-highest", MaterialDynamicColors.surfaceContainerHighest],
-  ["--md-sys-color-on-surface-variant", MaterialDynamicColors.onSurfaceVariant],
-  ["--md-sys-color-outline", MaterialDynamicColors.outline],
-  ["--md-sys-color-outline-variant", MaterialDynamicColors.outlineVariant],
-  ["--md-sys-color-inverse-surface", MaterialDynamicColors.inverseSurface],
-  ["--md-sys-color-inverse-on-surface", MaterialDynamicColors.inverseOnSurface],
-  ["--md-sys-color-inverse-primary", MaterialDynamicColors.inversePrimary],
-  ["--md-sys-color-on-background", MaterialDynamicColors.onBackground],
-  ["--md-sys-color-background", MaterialDynamicColors.background],
-];
-
-function normalizeHex(seed: string): string | null {
-  if (!/^#?[0-9a-fA-F]{6}$/.test(seed)) return null;
-  return seed.startsWith("#") ? seed : `#${seed}`;
-}
+/**
+ * 已写入过的令牌名。clearSeedTokens() 据此精确清除，**不**按当前内核列表重算
+ * ——否则内核升级/回滚后旧键会残留在行内样式里，永久盖住 theme.css。
+ */
+let appliedTokens: string[] = [];
 
 /**
  * 依据种子色与深/浅模式，把整套 MD3 颜色令牌写到 documentElement 上。
@@ -64,13 +20,13 @@ function normalizeHex(seed: string): string | null {
  */
 export function applySeedColor(seed: string, dark: boolean): void {
   if (typeof document === "undefined") return;
-  const hex = normalizeHex(seed);
-  if (!hex) return;
-  const scheme = new SchemeTonalSpot(Hct.fromInt(argbFromHex(hex)), dark, 0);
+  if (!normalizeSeedHex(seed)) return;
+  const tokens = cssTokensFromSeed(seed, dark);
   const root = document.documentElement;
-  for (const [cssVar, role] of TOKEN_MAP) {
-    root.style.setProperty(cssVar, hexFromArgb(role.getArgb(scheme)));
+  for (const [cssVar, value] of Object.entries(tokens)) {
+    root.style.setProperty(cssVar, value);
   }
+  appliedTokens = Object.keys(tokens);
 }
 
 /** 清除 applySeedColor 写入的内联颜色令牌。
@@ -78,7 +34,37 @@ export function applySeedColor(seed: string, dark: boolean): void {
  *  不会盖住皮肤令牌（内联样式优先级高于一切选择器）。 */
 export function clearSeedTokens(): void {
   if (typeof document === "undefined") return;
-  for (const [cssVar] of TOKEN_MAP) {
-    document.documentElement.style.removeProperty(cssVar);
+  const root = document.documentElement;
+  // 没写过任何令牌时退化为「按内核当前角色全清一遍」，兜住热更新等非常规路径
+  const names = appliedTokens.length
+    ? appliedTokens
+    : M3_COLOR_ROLES.map((name) => `--md-sys-color-${name}`);
+  for (const cssVar of names) root.style.removeProperty(cssVar);
+  appliedTokens = [];
+}
+
+/**
+ * 读取当前生效的主色（`#rrggbb`）。供 canvas / SVG / 第三方播放器这类
+ * **拿不到 CSS 变量**的地方取主题色，避免各处再写死 `#1A5C9E`。
+ *
+ * 令牌值可能是 `#rgb` / `#rrggbb` / `rgb(a)`（皮肤可写任意合法 CSS 颜色），
+ * 统一归一成 hex；都解析不出时返回 fallback。
+ */
+export function readPrimaryHex(fallback = "#426089"): string {
+  if (typeof document === "undefined") return fallback;
+  const raw = getComputedStyle(document.documentElement)
+    .getPropertyValue("--md-sys-color-primary")
+    .trim();
+  if (!raw) return fallback;
+  if (raw.startsWith("#")) {
+    return raw.length === 4 ? `#${raw[1]}${raw[1]}${raw[2]}${raw[2]}${raw[3]}${raw[3]}` : raw;
   }
+  const m = raw.match(/rgba?\(([^)]+)\)/);
+  if (!m) return fallback;
+  const parts = m[1].split(",").map((x) => Number.parseFloat(x.trim()));
+  if (parts.length < 3 || parts.slice(0, 3).some((n) => Number.isNaN(n))) return fallback;
+  return `#${parts
+    .slice(0, 3)
+    .map((n) => Math.round(n).toString(16).padStart(2, "0"))
+    .join("")}`;
 }

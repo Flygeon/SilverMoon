@@ -468,14 +468,15 @@ function typeOf(entry: WebDavEntry) {
     "FILL" 1,
     "wght" 400;
 }
+/* 文件类型图标：走 M3 语义角色，换种子色/深浅都自动适配 */
 .tile-icon.video {
-  color: #d98b4a;
+  color: var(--md-sys-color-tertiary);
 }
 .tile-icon.audio {
-  color: #4aa8d9;
+  color: var(--md-sys-color-primary);
 }
 .tile-icon.book {
-  color: #7d9a5a;
+  color: var(--md-sys-color-secondary);
 }
 .tile-thumb {
   width: 100%;

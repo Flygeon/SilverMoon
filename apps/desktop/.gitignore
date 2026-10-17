@@ -3,6 +3,10 @@ node_modules/
 
 # front-end build output
 dist/
+# Electron 主进程构建产物（scripts/build-electron.mjs）
+dist-electron/
+# 构建期临时目录（本机 TEMP 若被沙箱禁用，用 TEMP=$(pwd)/.tmpbuild 绕过）
+.tmpbuild/
 
 # ⚠️ 例外：示例扩展的 web/dist 是**交付物**，不是构建产物。
 # 扩展以成品分发（安装即用，用户侧不构建），所以它的预构建前端必须入库；

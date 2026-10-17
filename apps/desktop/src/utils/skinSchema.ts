@@ -69,44 +69,87 @@ export interface SkinValidation {
 
 /** ---- 结构化令牌白名单（§4.3）：与 tokens/theme.css 保持同步 ---- */
 
-const COLOR_TOKENS = new Set([
-  "--md-sys-color-primary",
-  "--md-sys-color-on-primary",
-  "--md-sys-color-primary-container",
-  "--md-sys-color-on-primary-container",
-  "--md-sys-color-secondary",
-  "--md-sys-color-on-secondary",
-  "--md-sys-color-secondary-container",
-  "--md-sys-color-on-secondary-container",
-  "--md-sys-color-tertiary",
-  "--md-sys-color-on-tertiary",
-  "--md-sys-color-tertiary-container",
-  "--md-sys-color-on-tertiary-container",
-  "--md-sys-color-error",
-  "--md-sys-color-on-error",
-  "--md-sys-color-error-container",
-  "--md-sys-color-on-error-container",
-  "--md-sys-color-surface",
-  "--md-sys-color-on-surface",
-  "--md-sys-color-surface-dim",
-  "--md-sys-color-surface-bright",
-  "--md-sys-color-surface-container-lowest",
-  "--md-sys-color-surface-container-low",
-  "--md-sys-color-surface-container",
-  "--md-sys-color-surface-container-high",
-  "--md-sys-color-surface-container-highest",
-  "--md-sys-color-on-surface-variant",
-  "--md-sys-color-outline",
-  "--md-sys-color-outline-variant",
-  "--md-sys-color-inverse-surface",
-  "--md-sys-color-inverse-on-surface",
-  "--md-sys-color-inverse-primary",
-  "--md-sys-color-on-background",
-  "--md-sys-color-background",
-  // scrim 故意不在白名单：半透明蒙层不能被不透明色顶掉（同 dynamicTheme.ts 的取舍）
-  "--lm-scrim-surface",
-  "--lm-hairline",
-]);
+/**
+ * M3 颜色角色按**语义分组**列出（与 theme.css 的生成分组同序）。
+ * 分组只为人读；校验时会被摊平成 Set。
+ *
+ * 与 `@shared/m3-theme.ts` 的 M3_COLOR_ROLES 对齐（守卫测试会比对），
+ * 差异只有两处**有意**取舍：
+ * 1. `shadow` / `scrim` 不在白名单 —— 它们是「蒙层/投影」用途的固定黑，
+ *    皮肤改成别的颜色只会让界面糊掉（scrim 还被项目语义改成半透明，见内核 TOKEN_OVERRIDES）；
+ * 2. `--lm-scrim-surface` / `--lm-hairline` 是应用级令牌，皮肤可覆盖。
+ */
+const COLOR_TOKEN_GROUPS: Record<string, string[]> = {
+  primary: [
+    "--md-sys-color-primary",
+    "--md-sys-color-primary-dim",
+    "--md-sys-color-on-primary",
+    "--md-sys-color-primary-container",
+    "--md-sys-color-on-primary-container",
+    "--md-sys-color-inverse-primary",
+  ],
+  secondary: [
+    "--md-sys-color-secondary",
+    "--md-sys-color-secondary-dim",
+    "--md-sys-color-on-secondary",
+    "--md-sys-color-secondary-container",
+    "--md-sys-color-on-secondary-container",
+  ],
+  tertiary: [
+    "--md-sys-color-tertiary",
+    "--md-sys-color-tertiary-dim",
+    "--md-sys-color-on-tertiary",
+    "--md-sys-color-tertiary-container",
+    "--md-sys-color-on-tertiary-container",
+  ],
+  error: [
+    "--md-sys-color-error",
+    "--md-sys-color-error-dim",
+    "--md-sys-color-on-error",
+    "--md-sys-color-error-container",
+    "--md-sys-color-on-error-container",
+  ],
+  surface: [
+    "--md-sys-color-background",
+    "--md-sys-color-on-background",
+    "--md-sys-color-surface",
+    "--md-sys-color-surface-dim",
+    "--md-sys-color-surface-bright",
+    "--md-sys-color-surface-container-lowest",
+    "--md-sys-color-surface-container-low",
+    "--md-sys-color-surface-container",
+    "--md-sys-color-surface-container-high",
+    "--md-sys-color-surface-container-highest",
+    "--md-sys-color-surface-variant",
+    "--md-sys-color-on-surface",
+    "--md-sys-color-on-surface-variant",
+    "--md-sys-color-outline",
+    "--md-sys-color-outline-variant",
+    "--md-sys-color-inverse-surface",
+    "--md-sys-color-inverse-on-surface",
+    "--md-sys-color-surface-tint",
+  ],
+  fixed: [
+    "--md-sys-color-primary-fixed",
+    "--md-sys-color-primary-fixed-dim",
+    "--md-sys-color-on-primary-fixed",
+    "--md-sys-color-on-primary-fixed-variant",
+    "--md-sys-color-secondary-fixed",
+    "--md-sys-color-secondary-fixed-dim",
+    "--md-sys-color-on-secondary-fixed",
+    "--md-sys-color-on-secondary-fixed-variant",
+    "--md-sys-color-tertiary-fixed",
+    "--md-sys-color-tertiary-fixed-dim",
+    "--md-sys-color-on-tertiary-fixed",
+    "--md-sys-color-on-tertiary-fixed-variant",
+  ],
+  // 语义扩展色（M3 角色表之外、产品语义固定下来的颜色）
+  semantic: ["--md-sys-color-success", "--md-sys-color-warning", "--md-sys-color-link"],
+  app: ["--lm-scrim-surface", "--lm-hairline"],
+};
+
+/** 摊平后的白名单（校验用） */
+export const COLOR_TOKENS = new Set(Object.values(COLOR_TOKEN_GROUPS).flat());
 
 const LENGTH_TOKENS = new Set([
   "--md-sys-shape-corner-none",

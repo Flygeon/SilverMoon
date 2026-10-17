@@ -10,10 +10,11 @@
  * 关闭语义：一旦渲染进程注册过 `onCloseRequested`，该窗口的关闭就
  * 变成「先问渲染进程」——`preventDefault()` 即保留窗口，否则稍后真正关闭。
  */
-import { BrowserWindow, screen, type WebContents } from "electron";
+import { BrowserWindow, nativeTheme, screen, type WebContents } from "electron";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 
+import { defaultScheme } from "../shared/m3-theme";
 import { config, ensureDir, iconPath, isDev, rendererUrl } from "./config";
 import { log } from "./log";
 import { handshakeWithSplash, splashPipeName } from "./splash";
@@ -146,6 +147,19 @@ interface CreateOptions {
   minimizable?: boolean;
 }
 
+/**
+ * 主窗口首帧前的底色。
+ *
+ * 这一段必须与渲染层的 `--md-sys-color-background` 对齐，否则启动时会看到
+ * 一帧不匹配的底色（原来是写死的 #121212，浅色主题下就是一道黑闪）。
+ * 取颜色走 `shared/m3-theme.ts` —— 与渲染层同一份算法、同一个默认种子，
+ * 深浅按系统偏好猜（渲染层拿到设置后会再切，但首帧至少同一个家族）。
+ */
+function bootBackground(): string {
+  const dark = nativeTheme.shouldUseDarkColors;
+  return defaultScheme(dark)["--md-sys-color-background"] ?? (dark ? "#0c0e12" : "#f9f9fe");
+}
+
 /** 主窗口。 */
 export function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -159,7 +173,7 @@ export function createMainWindow(): BrowserWindow {
     center: config.window.center,
     resizable: config.window.resizable,
     show: false,
-    backgroundColor: "#121212",
+    backgroundColor: bootBackground(),
     icon: iconPath(),
     webPreferences: {
       preload: preloadPath,

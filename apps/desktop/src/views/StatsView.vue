@@ -291,13 +291,19 @@ const trendData = computed(() =>
 
 const hasTrendData = computed(() => trendData.value.some((d) => d.plays > 0));
 
+/**
+ * 数据源配色：三种来源各占一个 M3 语义色角色，换种子色时整个图表跟着走。
+ * （原来写死 #5b8def / #8b5cf6，在非蓝色种子下会和主色打架。）
+ */
+const SOURCE_COLORS: Record<string, string> = {
+  local: "var(--md-sys-color-primary)",
+  online: "var(--md-sys-color-tertiary)",
+  webdav: "var(--md-sys-color-secondary)",
+};
+
 const sourceData = computed(() => {
   const total = sources.value.reduce((s, r) => s + r.playCount, 0);
-  const colors: Record<string, string> = {
-    local: "var(--md-sys-color-primary)",
-    online: "#5b8def",
-    webdav: "#8b5cf6",
-  };
+  const colors = SOURCE_COLORS;
   return sources.value.map((r) => ({
     source: r.source,
     name: t(`stats.source${r.source.charAt(0).toUpperCase() + r.source.slice(1)}`),
@@ -315,11 +321,7 @@ const donutSegments = computed(() => {
   const total = sources.value.reduce((s, r) => s + r.playCount, 0);
   if (total === 0) return [];
   let start = 0;
-  const colors: Record<string, string> = {
-    local: "var(--md-sys-color-primary)",
-    online: "#5b8def",
-    webdav: "#8b5cf6",
-  };
+  const colors = SOURCE_COLORS;
   return sources.value.map((r) => {
     const angle = (r.playCount / total) * 360;
     const seg = { source: r.source, start, end: start + angle, color: colors[r.source] ?? "#666" };
@@ -1168,12 +1170,12 @@ function piePath(cx: number, cy: number, r: number, startAngle: number, endAngle
   color: var(--md-sys-color-primary);
 }
 .source-online {
-  background: color-mix(in srgb, #5b8def 15%, transparent);
-  color: #5b8def;
+  background: color-mix(in srgb, var(--md-sys-color-tertiary) 15%, transparent);
+  color: var(--md-sys-color-tertiary);
 }
 .source-webdav {
-  background: color-mix(in srgb, #8b5cf6 15%, transparent);
-  color: #8b5cf6;
+  background: color-mix(in srgb, var(--md-sys-color-secondary) 15%, transparent);
+  color: var(--md-sys-color-secondary);
 }
 .track-plays {
   font-size: 13px;
