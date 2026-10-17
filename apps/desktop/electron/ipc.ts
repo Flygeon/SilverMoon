@@ -27,6 +27,7 @@ import { clearCoverCache } from "./protocols";
 import { checkForUpdates, getUpdateState, quitAndInstall } from "./updater";
 import { log } from "./log";
 import { callSidecar, callSidecarBatch } from "./main-bridge";
+import { getFqapiManager } from "./fqapi";
 import { BenchSession, DEFAULT_INTERVAL_MS } from "./bench";
 
 export interface BridgeReply {
@@ -599,6 +600,27 @@ const handlers: Record<string, Handler> = {
     const error = await shell.openPath(target);
     if (error) throw new Error(error);
     return null;
+  },
+
+  // -------------------------------------------------------------------------
+  // 番茄内容源 sidecar
+  //
+  // 它**不在** Rust 命令表里：那是 backend sidecar 的地盘（HTTP + SSE）。
+  // 这个是独立的进程（stdin/stdout 行 JSON），所以单独一条通道。
+  // -------------------------------------------------------------------------
+  fqapi: async (payload) => {
+    // main.ts 已执行 `app.setPath("userData", DATA_DIR)`，所以这里拿到的
+    // 就是 Rust 侧 app_data_dir() 的同一个目录。
+    const manager = getFqapiManager(app.getPath("userData"));
+    const request = {
+      op: payload.op ? String(payload.op) : undefined,
+      path: payload.path ? String(payload.path) : undefined,
+      query: payload.query ? String(payload.query) : undefined,
+      method: payload.method ? String(payload.method) : undefined,
+      itemId: payload.itemId ? String(payload.itemId) : undefined,
+    };
+    const timeout = typeof payload.timeoutMs === "number" ? payload.timeoutMs : undefined;
+    return manager.request(request, timeout);
   },
 
   // -------------------------------------------------------------------------

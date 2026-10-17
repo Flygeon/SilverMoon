@@ -247,6 +247,7 @@ jobs:
           workspaces: |
             apps/desktop/backend -> target
             apps/desktop/splash -> target
+            apps/desktop/fqapi -> target
           prefix-key: release
 
       # @electron/get 与 electron-builder 的工具链下载不在 npm 缓存范围内，
@@ -277,6 +278,11 @@ jobs:
       - name: Build splash launcher
         if: runner.os == 'Windows'
         run: cargo build --release --manifest-path apps/desktop/splash/Cargo.toml
+
+      # 番茄内容源 sidecar：electron-builder 会把它作为 extraResources 打进包。
+      # 缺了它打包会因「文件不存在」直接失败，所以必须在上一步打包前产出。
+      - name: Build fqapi sidecar (release)
+        run: cargo build --release --manifest-path apps/desktop/fqapi/Cargo.toml
 
       - name: Build renderer + electron main
         working-directory: apps/desktop

@@ -12,6 +12,18 @@ import { writeFile } from "@/ipc/fs";
 import { clearCoverCache as clearCoverCacheIpc } from "@/ipc/app";
 import type { ArtDanmu } from "@/utils/danmaku";
 
+/** 番茄内容源 sidecar 的请求形状（stdio 行 JSON 协议）。 */
+export interface FqapiRequest {
+  /** 非路由命令：ping / selftest / chapter */
+  op?: string;
+  /** 路由路径，如 /api/v1/books/<id> */
+  path?: string;
+  query?: string;
+  method?: string;
+  /** op=chapter 时的章节 id */
+  itemId?: string;
+}
+
 /** 单个 Electron 进程的内存快照（见 `app.getAppMetrics()`）。 */
 export interface MemoryProcessMetrics {
   pid: number;
@@ -1539,5 +1551,31 @@ export const capabilities = {
   /** 在线：补齐原始标签快照（只填缺的字段，不覆盖已有值） */
   cacheOnlineMusicTagOriginal(key: string, fields: Partial<MusicTagFields>): Promise<void> {
     return musicTagCall("writeOriginal", { key, fields });
+  },
+
+  // ---- 番茄内容源（独立 sidecar）----
+  //
+  // 它**不走 Rust 命令表**（那是 backend sidecar 的地盘），而是主进程拉起的
+  // 另一个进程（stdin/stdout 行 JSON）。因此单独一条 `fqapi` 通道。
+  // 懒启动：第一次调用才拉起进程 —— 不用这个源的用户不为此付常住进程的代价。
+  fqapi<T = unknown>(payload: FqapiRequest & { timeoutMs?: number }): Promise<T> {
+    if (!isDesktop) return Promise.reject(new Error("番茄内容源仅在桌面端可用"));
+    return callBridge<T>("fqapi", payload as Record<string, unknown>);
+  },
+  /** 自检：设备池 → 搜索 → 详情 → 解一章正文。返回逐步结果，用于排障。 */
+  fqapiSelftest(timeoutMs = 180000): Promise<unknown> {
+    return capabilities.fqapi({ op: "selftest", timeoutMs });
+  },
+  /**
+   * 取一章正文（已解析成段落）。
+   *
+   * 上游给的是 HTML 富文本，解析在 Rust 侧完成 —— 前端拿到的是可直接渲染的
+   * `paragraphs`，不必自己再洗一遍标签。
+   */
+  fqapiChapter(
+    itemId: string,
+    timeoutMs = 60000,
+  ): Promise<{ itemId: string; title?: string; paragraphs: string[]; chars: number }> {
+    return capabilities.fqapi({ op: "chapter", itemId, timeoutMs });
   },
 };

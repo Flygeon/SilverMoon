@@ -99,6 +99,10 @@ win:
     # 构建前请先执行 npm run build:backend:release。
     - from: backend/target/release/silvermoon.exe
       to: bin/silvermoon-server.exe
+    # 番茄内容源（独立 sidecar，stdio 行 JSON；见 electron/fqapi.ts）。
+    # 与后端同一目录落地。构建前需 cargo build --manifest-path fqapi/Cargo.toml。
+    - from: fqapi/target/release/silvermoon-fqapi.exe
+      to: bin/silvermoon-fqapi.exe
     - from: node_modules/taglib-wasm/dist/taglib-wasi.wasm
       to: taglib-wasm/taglib-wasi.wasm
     # 原生启动器（Rust + Win32，MD3 自绘 splash，约 0.3MB）。
@@ -129,6 +133,8 @@ mac:
       to: icon.png
     - from: backend/target/release/silvermoon
       to: bin/silvermoon-server
+    - from: fqapi/target/release/silvermoon-fqapi
+      to: bin/silvermoon-fqapi
     - from: node_modules/taglib-wasm/dist/taglib-wasi.wasm
       to: taglib-wasm/taglib-wasi.wasm
 
@@ -142,5 +148,7 @@ linux:
       to: icon.png
     - from: backend/target/release/silvermoon
       to: bin/silvermoon-server
+    - from: fqapi/target/release/silvermoon-fqapi
+      to: bin/silvermoon-fqapi
     - from: node_modules/taglib-wasm/dist/taglib-wasi.wasm
       to: taglib-wasm/taglib-wasi.wasm
