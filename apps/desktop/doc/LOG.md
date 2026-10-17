@@ -33,7 +33,7 @@
 
 ## 2026-10-17 · 文档真源重建（AGENTS / SPEC / LOG / README）
 
-- **commit**: `pending`（本轮 docs-only 提交；提交后回填 hash。基线 `596e4f5`）
+- **commit**: `35f50f8`（本轮 docs-only；基线 `596e4f5`）
 - **status**: 未验证（文档改动，无运行时行为；由用户人眼确认）
 - **做了什么**：
   1. **`doc/AGENTS.md` 整体重写**（121 行 → 237 行）：从 Tauri 单进程基线改为 Electron 三进程基线
