@@ -18,6 +18,7 @@
 // - m3e-nav-menu / m3e-nav-menu-item / m3e-nav-menu-item-group：层级导航菜单（设置页左侧分类）
 // - m3e-snackbar：底部短提示（创作页保存/导出反馈）
 // - m3e-search-bar：搜索栏（在线小说三个源共用，见 NovelSearchBar.vue）
+// - m3e-select / m3e-option：下拉选择（小说源渠道切换）；须与 form-field 搭配
 import "@m3e/web/bottom-sheet";
 import "@m3e/web/button";
 import "@m3e/web/button-group";
@@ -33,6 +34,8 @@ import "@m3e/web/menu";
 import "@m3e/web/nav-menu";
 import "@m3e/web/progress-indicator";
 import "@m3e/web/search";
+import "@m3e/web/select";
+import "@m3e/web/option";
 import "@m3e/web/slider";
 import "@m3e/web/snackbar";
 import "@m3e/web/switch";

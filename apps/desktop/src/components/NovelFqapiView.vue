@@ -521,9 +521,25 @@ onMounted(async () => {
   gap: 16px;
 }
 
+/* 返回按钮必须贴左：父级是 flex column（align-items 默认 stretch），
+   不写这条按钮会被拉满整行 —— 正是用户看到的「返回占一整条」。 */
+.back {
+  align-self: flex-start;
+}
+
 .detail-head {
   display: flex;
   gap: 16px;
+  align-items: flex-start;
+}
+
+/* 详情页的纵向节奏：封面区 → 标签 → 简介 → 目录。
+   原来全靠 .detail 的 gap 撑，标签行会紧贴封面底边（图里那种「贴着」）。
+   这里给每一段明确的上边距，让层次读得出来。 */
+.detail > .tag-row,
+.detail > .introduce,
+.detail > .section {
+  margin-top: 4px;
 }
 
 .cover {

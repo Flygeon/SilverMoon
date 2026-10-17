@@ -1,31 +1,44 @@
 <script setup lang="ts">
 /**
- * 在线小说源的标签条（MD3 筛选 chip）。
+ * 在线小说源的标签条（MD3 chip）。
  *
- * 为什么单独抽：番茄小说页要显示详情里的分类，而图三那种「圆角胶囊 +
- * 描边」的样式是本项目其它地方（番剧信息面板）已经确立的视觉语言。
- * 用 m3e-filter-chip 而不是手写 span，才能拿到 MD3 的选中态与无障碍语义。
+ * ## ⚠️ 标签文字必须作为**子内容**，不能用 `label` 属性
  *
- * 这里的 chip **不可点选**（纯展示）：`m3e-filter-chip` 的 selected 是给
- * 筛选用的，展示型标签用 assist chip 更准确。
+ * `m3e-chip` 的 `label` 是 **只读 getter**（读的是默认插槽的文本），
+ * 没有 setter。写 `:label="tag"` 不会渲染任何文字 —— 实测结果是一排
+ * 空心圆圈。正确写法是把文字放进默认插槽：
+ *
+ * ```html
+ * <m3e-assist-chip>武侠</m3e-assist-chip>
+ * ```
+ *
+ * ## 为什么用 assist 而不是 filter chip
+ *
+ * filter chip 的 `selected` 是筛选语义；这里只是展示分类，点了也没筛选
+ * 行为，用 assist 更准确。
+ *
+ * ## 为什么要 m3e-chip-set 包一层
+ *
+ * 组件的文档要求 chip 集合放进 `m3e-chip-set`（带 `role="group"`），
+ * 否则无障碍读屏无法把它们读成一组。
  */
-defineProps<{
-  tags: string[];
-}>();
+defineProps<{ tags: string[] }>();
 
 const emit = defineEmits<{ (e: "pick", tag: string): void }>();
 </script>
 
 <template>
-  <div v-if="tags.length" class="tag-row">
+  <m3e-chip-set v-if="tags.length" class="tag-row" role="group" aria-label="分类">
     <m3e-assist-chip
       v-for="tag in tags"
       :key="tag"
       class="tag"
-      :label="tag"
+      variant="outlined"
       @click="emit('pick', tag)"
-    ></m3e-assist-chip>
-  </div>
+    >
+      {{ tag }}
+    </m3e-assist-chip>
+  </m3e-chip-set>
 </template>
 
 <style scoped>
@@ -35,7 +48,7 @@ const emit = defineEmits<{ (e: "pick", tag: string): void }>();
   gap: 8px;
 }
 
-/* 统一尺寸：默认 chip 在列表里偏大，压成与图三接近的紧凑胶囊 */
+/* 统一尺寸：默认 chip 在列表里偏大，压成与信息面板接近的紧凑胶囊 */
 .tag {
   --m3e-chip-container-height: 32px;
   --m3e-chip-container-shape: var(--md-sys-shape-corner-full);

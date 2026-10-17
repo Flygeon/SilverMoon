@@ -23,13 +23,15 @@ import type { NovelCover, NovelDetail, NovelChapter, NovelVolume } from "@shared
 interface RawSearchItem {
   book_id?: string | number;
   title?: string;
+  /** 推荐/榜接口的书名用这个字段（搜索接口用 title） */
+  book_name?: string;
   author?: string;
   thumb_url?: string;
   abstract?: string;
   category?: string;
   creation_status?: string | number;
   score?: string;
-  tags?: string[];
+  tags?: string;
   word_number?: string | number;
   last_chapter_title?: string;
 }
@@ -145,9 +147,12 @@ function coverUrl(raw: string | undefined): string {
 }
 
 function itemToCover(item: RawSearchItem): NovelCover {
+  // 搜索接口给 `title`，推荐/榜接口给 `book_name` —— 两者都要认，
+  // 否则推荐流整页「（无标题）」。
+  const rawTitle = item.title ?? item.book_name ?? "";
   return {
     aid: toStr(item.book_id),
-    title: stripHighlight(toStr(item.title)) || "（无标题）",
+    title: stripHighlight(toStr(rawTitle)) || "（无标题）",
     imageUrl: coverUrl(item.thumb_url),
     author: stripHighlight(toStr(item.author)) || null,
   };
