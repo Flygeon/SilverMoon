@@ -908,10 +908,11 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
           v-for="(song, i) in detail.songs"
           :key="song.id"
           class="song-card"
+          data-hero-source
           @click="playOnlineSongs(detail.songs, i)"
           @contextmenu="onSongContext($event, song)"
         >
-          <div class="thumb">
+          <div class="thumb" data-hero-cover>
             <CachedCover v-if="song.pic" :url="song.pic" :alt="song.name" />
             <span v-else class="placeholder material-symbols-outlined">music_note</span>
           </div>
@@ -932,10 +933,11 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
           v-for="(song, i) in detail.songs"
           :key="song.id"
           class="online-row"
+          data-hero-source
           @click="playOnlineSongs(detail.songs, i)"
           @contextmenu="onSongContext($event, song)"
         >
-          <div class="o-thumb">
+          <div class="o-thumb" data-hero-cover>
             <CachedCover v-if="song.pic" :url="song.pic" :alt="song.name" />
             <span v-else class="material-symbols-outlined">music_note</span>
           </div>

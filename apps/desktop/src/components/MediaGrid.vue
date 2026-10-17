@@ -298,6 +298,7 @@ function subtitleOf(item: MediaEntry): string {
           v-for="v in visible"
           :key="v.item.id"
           class="cell"
+          data-hero-source
           :style="cellStyle(v.index)"
           tabindex="0"
           @click="emit('open', v.item, v.index)"
@@ -305,7 +306,7 @@ function subtitleOf(item: MediaEntry): string {
           @keydown.enter="emit('open', v.item, v.index)"
           @keydown.space.prevent="emit('open', v.item, v.index)"
         >
-          <div class="thumb" :style="{ aspectRatio: aspect }">
+          <div class="thumb" data-hero-cover :style="{ aspectRatio: aspect }">
             <img
               v-if="thumbOf(v.item)"
               :src="thumbOf(v.item)"
@@ -321,7 +322,7 @@ function subtitleOf(item: MediaEntry): string {
               {{ formatDuration(v.item.durationMs) }}
             </span>
 
-            <div class="overlay" :class="{ pinned: v.item.favorite }">
+            <div class="overlay" :class="{ pinned: v.item.favorite }" data-hero-skip>
               <button
                 class="fav"
                 :class="{ on: v.item.favorite }"

@@ -122,6 +122,20 @@ function markFlying(on: boolean): void {
   document.documentElement.classList.toggle(FLYING_CLASS, on);
 }
 
+/**
+ * 读取元素**左上角**的圆角半径（px）。
+ *
+ * getComputedStyle().borderRadius 在四角不同时会返回 "8px 8px 0px 0px" 这种缩写，
+ * 直接 parseFloat 会拿到 8 —— 对本项目够用（封面四角一致），但要在解析前把多值
+ * 拆开取第一个，避免以后有人给封面加「上圆下方」时静默取错。
+ */
+function radiusOf(el: HTMLElement): number {
+  const raw = getComputedStyle(el).borderRadius || "0px";
+  const first = raw.split(/\s+/)[0] ?? "0px";
+  const n = Number.parseFloat(first);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export function startHeroFlight(srcEl: HTMLElement | null | undefined): HeroFlight | null {
   if (!srcEl?.isConnected) return null;
   const from = srcEl.getBoundingClientRect();
@@ -187,10 +201,27 @@ export function startHeroFlight(srcEl: HTMLElement | null | undefined): HeroFlig
       const dy = to.top - from.top;
       const sx = to.width / from.width;
       const sy = to.height / from.height;
+      /*
+       * 圆角也要一起补间。
+       *
+       * 克隆层继承的是**源**的圆角（卡片 20px / 迷你条 8px），而播放器封面用的是
+       * `calc(min(42vw, 52vh) * 0.14)`（360px 封面对应 50px）。只补 transform 的话，
+       * 克隆层被放大时圆角同比放大（20px × 放大倍数），落位瞬间再切成目标的 50px ——
+       * 肉眼看到的就是「卡片一下变大/变形」，也就是「封面大小不一致」的观感来源。
+       *
+       * border-radius 在 transform 之后仍按元素自身坐标系计算，所以终点值要写成
+       * `目标圆角 / 缩放倍数`，最终视觉上才等于目标的圆角。
+       */
+      const fromRadius = radiusOf(srcEl);
+      const toRadius = radiusOf(dest);
+      const endRadius = sx > 0 ? toRadius / sx : toRadius;
       const anim = clone.animate(
         [
-          { transform: "translate(0px, 0px) scale(1, 1)" },
-          { transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})` },
+          { transform: "translate(0px, 0px) scale(1, 1)", borderRadius: `${fromRadius}px` },
+          {
+            transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`,
+            borderRadius: `${endRadius}px`,
+          },
         ],
         { duration: HERO_DURATION_MS, easing: HERO_EASING, fill: "forwards" },
       );
@@ -200,6 +231,63 @@ export function startHeroFlight(srcEl: HTMLElement | null | undefined): HeroFlig
     },
     cancel: restore,
   };
+}
+
+// ---- 声明式源标记：任何「点卡片进播放器」的入口自动获得 hero ----
+
+/**
+ * 源卡片 / 源封面的标记属性。
+ *
+ * 用**声明式属性 + 全局 capture 监听**而不是「每个入口自己调起飞函数」：
+ * SilverMoon 里进播放器有 8 个入口（MediaGrid / TrackList / 在线歌单 / 文件夹 /
+ * WebDAV / 收藏 / 历史 / 迷你条），逐个改 handler 必然漏，而且以后新增入口
+ * 又会忘。属性方案只要在模板上标一次，任何点击都自动生效。
+ *
+ * - `data-hero-source`：可点击容器（判断「这次点击属于哪个 hero 源」）
+ * - `data-hero-cover`：真正要飞的元素（封面），必须是 source 的后代
+ *
+ * 分两级是因为点击往往落在标题 / 播放数上，那时 `closest("[data-hero-cover]")`
+ * 找不到封面（封面是兄弟节点）；只能先定位 source，再在其内部找封面。
+ */
+export const HERO_SOURCE_ATTR = "data-hero-source";
+export const HERO_COVER_ATTR = "data-hero-cover";
+
+/**
+ * 从一次点击事件里找出源封面并起飞。
+ *
+ * 找不到 source / 封面 / 封面没有尺寸时返回 null（调用方按无动画处理）。
+ * 这里**只管起飞**，不管导航 —— 由调用方在确认要跳转后再 `holdHeroFlight`，
+ * 否则「点了卡片但播放失败、没跳转」会留下一条飞在半空的残影。
+ */
+/**
+ * 标记「这个子区域不要触发 hero」。
+ *
+ * 卡片里往往还嵌着播放 / 收藏 / 菜单按钮，它们用 `@click.stop` 阻止了冒泡，
+ * 但全局监听挂在 **capture** 阶段 —— 冒泡还没开始它就已经跑了，`.stop` 挡不住。
+ * 若不排除，点「暂停」也会让封面飞出去，然后因为没导航、900ms 后才被超时收回，
+ * 期间封面一直是隐藏的（肉眼可见的故障）。
+ */
+export const HERO_SKIP_ATTR = "data-hero-skip";
+
+/**
+ * 记录「这次点击对应的封面元素」，**不立即起飞**。
+ *
+ * 为什么不在 pointerdown 就 startHeroFlight：很多入口的点击处理是 async 的
+ * （`playOnline` 要先解析播放地址、可能还带网络请求），从点击到 `router.push`
+ * 有几百毫秒。若那时就起飞，源封面会立刻被隐藏、克隆层停在原地不动 ——
+ * 用户看到的是「封面消失，过了半秒才飞」，比没有动画更糟。
+ *
+ * 真正起飞放在 router.afterEach：那时路由已确认、DOM 尚未替换，元素还在文档里，
+ * 量到的 rect 与导航前完全一致。
+ */
+export function recordHeroSource(ev: Event): HTMLElement | null {
+  const target = ev.target;
+  if (!(target instanceof Element)) return null;
+  // 卡片内的次级操作（播放 / 收藏 / 更多）不触发 hero
+  if (target.closest("[" + HERO_SKIP_ATTR + "]")) return null;
+  const source = target.closest<HTMLElement>("[" + HERO_SOURCE_ATTR + "]");
+  if (!source) return null;
+  return source.querySelector<HTMLElement>("[" + HERO_COVER_ATTR + "]");
 }
 
 // ---- 跨路由传递：起飞与降落不在同一个组件里时用这一对 ----
@@ -217,17 +305,48 @@ export function startHeroFlight(srcEl: HTMLElement | null | undefined): HeroFlig
  */
 let pendingFlight: HeroFlight | null = null;
 
+/**
+ * 飞行未降落时的兜底超时（ms）。
+ *
+ * 典型场景：用户点了歌卡片，起飞了，但 `playOnline` 抛错 / 版权不可播 →
+ * 路由根本没跳 → 没人来 release → 克隆层永远钉在屏幕上。
+ * 这里给一个略大于「点击→挂载」的窗口，超时未降落就取消。
+ */
+const PENDING_TIMEOUT_MS = 900;
+/*
+ * 用 `ReturnType<typeof setTimeout>` 而不是 number：本工具在浏览器里跑（number），
+ * 但单测跑在 node 环境（Timeout 对象）。写死 number 会让测试里的 clearTimeout 类型不符，
+ * 也会掩盖「这里其实是环境无关代码」这个事实。
+ */
+let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearPendingTimer(): void {
+  if (pendingTimer !== null) {
+    clearTimeout(pendingTimer);
+    pendingTimer = null;
+  }
+}
+
 /** 起飞后寄存，等目标组件挂载时取走 */
 export function holdHeroFlight(flight: HeroFlight): void {
   // 上一次没被取走（目标路由没挂载就退出了）的飞行要先收掉，否则会留下克隆层
   pendingFlight?.cancel();
+  clearPendingTimer();
   pendingFlight = flight;
+  pendingTimer = setTimeout(() => {
+    pendingTimer = null;
+    if (pendingFlight === flight) {
+      pendingFlight = null;
+      flight.cancel();
+    }
+  }, PENDING_TIMEOUT_MS);
 }
 
 /** 取走并清空。没有待降落飞行时返回 null（调用方按无动画处理）。 */
 export function releaseHeroFlight(): HeroFlight | null {
   const flight = pendingFlight;
   pendingFlight = null;
+  clearPendingTimer();
   return flight;
 }
 

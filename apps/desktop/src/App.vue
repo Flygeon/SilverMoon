@@ -19,6 +19,7 @@ import { useDesktopChrome } from "@/composables/useDesktopChrome";
 import { activeSkinDoc, skinBgActive, skinSafeMode } from "@/utils/skinRuntime";
 import { markBoot } from "@/utils/bootTiming";
 import { armAppReadyFallback, signalAppReady } from "@/utils/appReady";
+import { holdHeroFlight, recordHeroSource, startHeroFlight } from "@/utils/heroTransition";
 import ExtensionEmbed from "@/components/ExtensionEmbed.vue";
 import type { ExtUiSurface } from "@shared/types";
 import { translate } from "@shared/i18n";
@@ -248,6 +249,31 @@ function t(key: string) {
 }
 
 const isPlayerPage = computed(() => route.path === "/music/player");
+
+/**
+ * 全局 hero 起飞。
+ *
+ * 挂在 document 的 **capture** 阶段：业务代码的 @click 在冒泡阶段才跑，
+ * 那时可能已经 `router.push` 了（DOM 即将被替换），量 rect 会拿到中间态。
+ * capture 阶段先于一切业务 handler，能拿到点击瞬间的真实布局。
+ *
+ * 只负责「起飞」：真正要等目标路由确认后才 hold —— 见 onHeroNavigate 注释。
+ */
+/**
+ * 本次点击命中的源封面（可能为空）。
+ *
+ * 只记录元素、**不立即起飞** —— 很多入口的处理是 async 的（先解析播放地址再
+ * `router.push`），提前起飞会让封面先消失、克隆层停着不动，等几百毫秒才开始飞。
+ * 真正起飞放在 router.afterEach（路由已确认、DOM 未替换，rect 与点击瞬间一致）。
+ */
+let heroSourceEl: HTMLElement | null = null;
+
+function onHeroPointerDown(ev: PointerEvent) {
+  heroSourceEl = recordHeroSource(ev);
+}
+
+document.addEventListener("pointerdown", onHeroPointerDown, true);
+onBeforeUnmount(() => document.removeEventListener("pointerdown", onHeroPointerDown, true));
 const isDesktopLyricsPage = computed(() => route.path === "/desktop-lyrics");
 const isExtensionHostPage = computed(() => route.path === "/extension-host");
 /**
@@ -414,6 +440,28 @@ router.beforeEach((_to, from) => {
   }
 });
 router.afterEach((to) => {
+  /*
+   * 把「点击时起飞的那条飞行」交给目标页。
+   *
+   * 为什么不直接在 pointerdown 里 hold：那时还不知道这次点击会不会真的跳转。
+   * 用户点了一首歌、`playOnline` 报「版权不可播」，路由不动，飞行就会孤零零
+   * 停在半空。放到 afterEach 才 hold，能保证「只有真的跳了才让它等降落」。
+   *
+   * 代价是飞行层在 pointerdown 到路由切换之间是「已创建但未托管」的，
+   * 所以 holdHeroFlight 里有 900ms 兜底超时。
+   */
+  /*
+   * 路由已确认，这里才真正起飞。
+   *
+   * 此刻 DOM 还没被替换（Vue 的异步渲染在 afterEach 之后），源元素仍在文档里，
+   * `getBoundingClientRect()` 与点击瞬间完全一致。
+   */
+  if (heroSourceEl) {
+    const flight = startHeroFlight(heroSourceEl);
+    heroSourceEl = null;
+    if (flight) holdHeroFlight(flight);
+  }
+
   const saved = scrollMemory.get(to.path);
   if (saved === undefined) return;
   // 等路由过渡（180ms）+ 内容重插入完成后再恢复
@@ -908,10 +956,28 @@ router.afterEach((to) => {
   opacity: 0.6;
 }
 
-/* hero 飞行期间：播放器路由过渡只淡入，不做整页位移 */
-:global(html.lm-hero-flying) .player-enter-from,
-:global(html.lm-hero-flying) .player-leave-to {
-  transform: none;
+/* hero 飞行期间：播放器路由过渡**整体停用**。
+ *
+ * 只把 transform 去掉是不够的 —— `mode="out-in"` 会先等离场动画走完再挂载新页，
+ * 而离场仍有 420ms 的 opacity 过渡（0.6）。那 420ms 里旧页已经淡掉、新页还没出现，
+ * 屏幕上什么都没有 —— 就是用户看到的「点迷你条黑一下」。
+ *
+ * 这里连 transition 一起关掉：Vue 检测不到过渡会立刻结束离场、直接挂载目标页，
+ * 全部视觉过渡交给 hero 飞行层。 */
+/*
+ * 用「时长令牌」而不是 transition:none。
+ *
+ * Vue 判断过渡是否结束时读的是 **getComputedStyle 里的 transition-duration**。
+ * 直接写 `transition: none` 会让 duration 变成 0s，Vue 确实会立刻结束 —— 但这条
+ * 规则同时作用于 enter-active，入场也会瞬间完成（等于没有过渡）。
+ * 这里把两段时长都归零，语义更明确：hero 期间路由切换**不做**任何 CSS 过渡，
+ * 新旧页面瞬切，视觉全部由飞行层承担。
+ */
+:global(html.lm-hero-flying) .player-enter-active,
+:global(html.lm-hero-flying) .player-leave-active,
+:global(html.lm-hero-flying) .page-enter-active,
+:global(html.lm-hero-flying) .page-leave-active {
+  transition-duration: 0s !important;
 }
 
 /* 全局回退提示 toast */

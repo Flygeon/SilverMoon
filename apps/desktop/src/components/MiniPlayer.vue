@@ -5,13 +5,7 @@ import { usePlayerStore } from "@/stores/player";
 import { useNeteaseStore } from "@/stores/netease";
 import PlayerControlIcon from "@/components/PlayerControlIcon.vue";
 import { formatTime } from "@/utils/format";
-import {
-  hasPendingHero,
-  holdHeroFlight,
-  landHeroFlight,
-  releaseHeroFlight,
-  startHeroFlight,
-} from "@/utils/heroTransition";
+import { hasPendingHero, landHeroFlight, releaseHeroFlight } from "@/utils/heroTransition";
 
 const player = usePlayerStore();
 const netease = useNeteaseStore();
@@ -51,13 +45,12 @@ onMounted(() => {
 /**
  * 展开到完整播放器。
  *
- * 顺序很重要：**先量封面、起飞、寄存，再导航**。
- * 反过来的话，导航一发生 isPlayerPage 就变 true，MiniPlayer 立刻被 v-if 销毁，
- * 此时再 startHeroFlight 拿到的 rect 已经是空的（元素已脱离文档）。
+ * 起飞**不在这里做**：App.vue 在 document 的 capture 阶段统一监听
+ * `[data-hero-source]` 上的点击并起飞，再由 router.afterEach 交给 PlayerView。
+ * 这里只负责导航 —— 保证「点卡片进播放器」与「点迷你条进播放器」走同一条时序，
+ * 不会出现两套逻辑各自算一遍的情况。
  */
 function expandToPlayer(): void {
-  const flight = startHeroFlight(coverEl.value);
-  if (flight) holdHeroFlight(flight);
   void router.push("/music/player");
 }
 
@@ -97,9 +90,9 @@ function seek(e: MouseEvent) {
       </div>
     </div>
 
-    <div class="body" @click="expandToPlayer">
+    <div class="body" data-hero-source @click="expandToPlayer">
       <!-- 起飞点：hero 飞行层从这里克隆，见 utils/heroTransition -->
-      <div ref="coverEl" class="cover">
+      <div ref="coverEl" class="cover" data-hero-cover>
         <img v-if="player.song?.cover" :src="player.song.cover" alt="" />
         <span v-else class="material-symbols-outlined">music_note</span>
       </div>

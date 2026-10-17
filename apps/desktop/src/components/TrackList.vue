@@ -122,13 +122,14 @@ function onRowContext(e: MouseEvent, item: MediaEntry, index: number) {
     <template #default="{ item, index }">
       <div
         class="track-row"
+        data-hero-source
         tabindex="0"
         @click="emit('open', item, index)"
         @contextmenu="onRowContext($event, item, index)"
         @keydown.enter="emit('open', item, index)"
         @keydown.space.prevent="emit('open', item, index)"
       >
-        <div class="r-cover">
+        <div class="r-cover" data-hero-cover>
           <img
             v-if="thumbOf(item)"
             :src="thumbOf(item)"
@@ -144,7 +145,7 @@ function onRowContext(e: MouseEvent, item: MediaEntry, index: number) {
           <div class="r-sub" :title="subtitleOf(item)">{{ subtitleOf(item) }}</div>
         </div>
 
-        <div class="r-actions">
+        <div class="r-actions" data-hero-skip>
           <m3e-icon-button
             class="r-action"
             size="small"
