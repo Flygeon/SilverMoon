@@ -28,7 +28,6 @@ import { checkForUpdates, getUpdateState, quitAndInstall } from "./updater";
 import { log } from "./log";
 import { callSidecar, callSidecarBatch } from "./main-bridge";
 import { BenchSession, DEFAULT_INTERVAL_MS } from "./bench";
-import { lyricsWindow } from "./lyrics-window";
 
 export interface BridgeReply {
   ok: boolean;
@@ -333,50 +332,6 @@ const handlers: Record<string, Handler> = {
   // -------------------------------------------------------------------------
   // 文件对话框
   // -------------------------------------------------------------------------
-  /**
-   * 桌面歌词（Rust 原生窗口进程）。
-   *
-   * 渲染进程不直接碰子进程：它只推「状态 / 频谱 / 设置」，由主进程转成
-   * 行分隔 JSON 写进歌词进程的 stdin（见 electron/lyrics-window.ts）。
-   * 播放控制（上一首等）由歌词进程回传，主进程再派发事件给渲染进程。
-   */
-  lyrics: async (payload) => {
-    const op = String(payload.op ?? "");
-    switch (op) {
-      case "start": {
-        const info = await lyricsWindow.start();
-        // 控制回调：歌词窗口点了上一首/下一首 → 广播给主窗口的 player store
-        lyricsWindow.setControlHandler((action) => {
-          if (action === "close") {
-            void lyricsWindow.stop();
-            dispatchEvent({ event: "lyrics:closed", target: null, payload: null });
-            return;
-          }
-          dispatchEvent({ event: "lyrics:control", target: "main", payload: { action } });
-        });
-        return info;
-      }
-      case "stop":
-        await lyricsWindow.stop();
-        return null;
-      case "state":
-        lyricsWindow.pushState(payload.state as Parameters<typeof lyricsWindow.pushState>[0]);
-        return null;
-      case "spectrum":
-        lyricsWindow.pushSpectrum((payload.bins ?? []) as number[]);
-        return null;
-      case "settings":
-        lyricsWindow.pushSettings(
-          payload.settings as Parameters<typeof lyricsWindow.pushSettings>[0],
-        );
-        return null;
-      case "info":
-        return lyricsWindow.info;
-      default:
-        throw new Error(`未知歌词操作：${op}`);
-    }
-  },
-
   dialog: async (payload, sender) => {
     const op = String(payload.op ?? "");
     const options = (payload.options ?? {}) as {

@@ -477,8 +477,6 @@ type BoolSettingKey =
   | "detectInstrumental"
   | "loudnessNormalize"
   | "desktopLyricsEnabled"
-  | "taskbarLyricsEnabled"
-  | "taskbarLyricsShowTranslation"
   | "desktopLyricsShowNext"
   | "desktopLyricsShowTranslation"
   | "desktopLyricsLocked"
@@ -519,8 +517,6 @@ type SliderIntKey =
   | "lyricTranslationGap"
   | "desktopLyricsFontSize"
   | "desktopLyricsOpacity"
-  | "taskbarLyricsFontSize"
-  | "taskbarLyricsOpacity"
   | "desktopLyricsAnchorOffsetX"
   | "desktopLyricsAnchorOffsetY"
   | "danmakuOpacity"
@@ -656,11 +652,6 @@ const settingNav = [
       { id: "settings-playback", labelKey: "nav.settingsPlayback", icon: "play_circle" },
       { id: "settings-lyrics", labelKey: "nav.settingsLyrics", icon: "lyrics" },
       { id: "settings-dlyrics", labelKey: "nav.settingsDesktopLyrics", icon: "subtitles" },
-      {
-        id: "settings-taskbar-lyrics",
-        labelKey: "nav.settingsTaskbarLyrics",
-        icon: "dock_to_bottom",
-      },
       { id: "settings-effects", labelKey: "nav.settingsAudioEffects", icon: "equalizer" },
       { id: "settings-automix", labelKey: "nav.settingsAutoMix", icon: "shuffle" },
     ],
@@ -1580,64 +1571,21 @@ onBeforeUnmount(() => {
         </div>
       </m3e-card>
 
-      <!-- 任务栏歌词（独立业务：Rust 进程 + SetParent 进任务栏，与上面的桌面歌词无关） -->
-      <m3e-card v-if="activeSection === 'settings-taskbar-lyrics'" class="card" variant="outlined">
+      <!-- 任务栏歌词引导：本应用不做这件事，指路给原项目 -->
+      <m3e-card v-if="activeSection === 'settings-dlyrics'" class="card" variant="outlined">
         <div slot="content">
-          <h3>{{ t("settings.taskbarLyrics") }}</h3>
-          <p class="hint">{{ t("settings.taskbarLyricsHint") }}</p>
-
-          <SettingRow
-            :label="t('settings.taskbarLyricsEnable')"
-            setting-key="settings.taskbarLyricsEnable"
-            clickable
-          >
-            <m3e-switch
-              :checked="settings.taskbarLyricsEnabled"
-              @change="setSwitch('taskbarLyricsEnabled', $event)"
-            />
-          </SettingRow>
-          <p class="hint">{{ t("settings.taskbarLyricsEnableHint") }}</p>
-
-          <div class="row">
-            <div class="row-label">
-              <span>{{ t("settings.taskbarLyricsFontSize") }}</span>
-            </div>
-            <m3e-slider
-              :min="12"
-              :max="40"
-              :step="1"
-              @input="onSliderInt($event, 'taskbarLyricsFontSize')"
+          <h3>{{ t("settings.taskbarLyricsTitle") }}</h3>
+          <p class="hint">{{ t("settings.taskbarLyricsGuide") }}</p>
+          <div class="actions">
+            <m3e-button
+              variant="filled"
+              size="small"
+              @click="capabilities.openUrl('https://github.com/ANYNC/TaskbarLyrics')"
             >
-              <m3e-slider-thumb :value="settings.taskbarLyricsFontSize" />
-            </m3e-slider>
-            <span class="value tabular-nums">{{ settings.taskbarLyricsFontSize }}px</span>
+              {{ t("settings.taskbarLyricsDownload") }}
+            </m3e-button>
           </div>
-
-          <div class="row">
-            <div class="row-label">
-              <span>{{ t("settings.taskbarLyricsOpacity") }}</span>
-            </div>
-            <m3e-slider
-              :min="20"
-              :max="100"
-              :step="1"
-              @input="onSliderInt($event, 'taskbarLyricsOpacity')"
-            >
-              <m3e-slider-thumb :value="settings.taskbarLyricsOpacity" />
-            </m3e-slider>
-            <span class="value tabular-nums">{{ settings.taskbarLyricsOpacity }}%</span>
-          </div>
-
-          <SettingRow
-            :label="t('settings.taskbarLyricsShowTranslation')"
-            setting-key="settings.taskbarLyricsShowTranslation"
-            clickable
-          >
-            <m3e-switch
-              :checked="settings.taskbarLyricsShowTranslation"
-              @change="setSwitch('taskbarLyricsShowTranslation', $event)"
-            />
-          </SettingRow>
+          <p class="hint">{{ t("settings.taskbarLyricsNote") }}</p>
         </div>
       </m3e-card>
 

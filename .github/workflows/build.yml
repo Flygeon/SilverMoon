@@ -86,7 +86,6 @@ jobs:
           workspaces: |
             apps/desktop/backend -> target
             apps/desktop/splash -> target
-            apps/desktop/lyrics -> target
           prefix-key: clippy
 
       - name: Rustfmt check (backend)
@@ -110,14 +109,6 @@ jobs:
 
       - name: Unit tests (splash pure logic)
         run: cargo test --manifest-path apps/desktop/splash/Cargo.toml --lib
-
-      # 歌词窗口：纯逻辑（几何/动画/协议/逐字填充/路径）在 ubuntu 上真跑断言。
-      # 与 splash 同一布局：windows 与 wry 都在 target 段，宿主不需要它们。
-      - name: Rustfmt check (lyrics window)
-        run: cargo fmt --check --manifest-path apps/desktop/lyrics/Cargo.toml
-
-      - name: Unit tests (lyrics pure logic)
-        run: cargo test --manifest-path apps/desktop/lyrics/Cargo.toml --lib
 
   # ---------------------------------------------------------------------------
   # 安装包：Windows NSIS / Linux AppImage / macOS dmg
@@ -208,12 +199,6 @@ jobs:
       - name: Build splash launcher
         if: runner.os == 'Windows'
         run: cargo build --release --manifest-path apps/desktop/splash/Cargo.toml
-
-      # 桌面歌词窗口（仅 Windows）：Rust 原生窗口 + 任务栏真嵌入 + 内嵌 WebView2。
-      # 必须是 Windows 目标 —— 它依赖 windows crate 与 wry。
-      - name: Build lyrics window
-        if: runner.os == 'Windows'
-        run: cargo build --release --manifest-path apps/desktop/lyrics/Cargo.toml
 
       - name: Build renderer + electron main
         working-directory: apps/desktop

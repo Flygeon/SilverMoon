@@ -37,12 +37,6 @@ import {
 import type { DesktopLyricsBounds } from "@/stores/settings";
 import { startSpectrumPush, stopSpectrumPush } from "@/utils/desktopLyricsSpectrum";
 import { emitDesktopLyricsSettingsChanged } from "@/utils/desktopLyrics";
-import {
-  pushLyricsSettings,
-  pushLyricsState,
-  startLyricsWindow,
-  stopLyricsWindow,
-} from "@/utils/desktopLyricsNative";
 
 const settings = useSettingsStore();
 const player = usePlayerStore();
@@ -118,77 +112,6 @@ watch(
   },
 );
 
-// ---- 任务栏歌词（Rust 原生进程，与上面的桌面歌词**互相独立**）----
-//
-// 两套并存且互斥地各自起停：
-//   桌面歌词 = Electron BrowserWindow，浮在屏幕上，可拖动/可吸附
-//   任务栏歌词 = apps/desktop/lyrics 的 silvermoon-lyrics.exe，SetParent 进任务栏
-// 开关也各自独立，可以同时开启。
-
-/** 任务栏歌词进程是否已成功拉起（失败时不重复提示） */
-let taskbarLyricsAvailable = false;
-
-async function syncTaskbarLyrics(on: boolean): Promise<void> {
-  if (!isDesktop) return;
-  if (!on) {
-    await stopLyricsWindow();
-    return;
-  }
-  const info = await startLyricsWindow();
-  taskbarLyricsAvailable = info !== null;
-  if (!info) {
-    // 起不来就把开关关掉，别让用户对着一个永远不生效的开关发呆
-    settings.taskbarLyricsEnabled = false;
-    console.warn("[lyrics] 任务栏歌词不可用（silvermoon-lyrics 未构建或未打包）");
-    return;
-  }
-  pushTaskbarLyricsState();
-  pushTaskbarLyricsSettings();
-}
-
-/** 推歌词状态给任务栏歌词进程 */
-function pushTaskbarLyricsState(): void {
-  if (!settings.taskbarLyricsEnabled || !taskbarLyricsAvailable) return;
-  pushLyricsState({
-    lines: player.lyrics,
-    currentTime: player.currentTime,
-    playing: player.playing,
-    title: player.song?.title ?? "",
-    artist: player.song?.artist ?? "",
-    wordByWord: settings.desktopLyricsWordByWord,
-  });
-}
-
-/** 推外观设置给任务栏歌词进程 */
-function pushTaskbarLyricsSettings(): void {
-  if (!taskbarLyricsAvailable) return;
-  pushLyricsSettings({
-    fontSize: settings.taskbarLyricsFontSize,
-    opacity: settings.taskbarLyricsOpacity,
-    showTranslation: settings.taskbarLyricsShowTranslation,
-    showNext: false,
-    wordByWord: settings.desktopLyricsWordByWord,
-    align: "left",
-    offsetX: 0,
-    offsetY: 0,
-  });
-}
-
-watch(
-  () => settings.taskbarLyricsEnabled,
-  (on) => void syncTaskbarLyrics(on),
-);
-
-watch(
-  () => [
-    settings.taskbarLyricsFontSize,
-    settings.taskbarLyricsOpacity,
-    settings.taskbarLyricsShowTranslation,
-    settings.desktopLyricsWordByWord,
-  ],
-  () => pushTaskbarLyricsSettings(),
-);
-
 watch(
   () => [settings.desktopLyricsIdleMode, player.audioEl] as const,
   () => syncSpectrumPush(),
@@ -258,25 +181,6 @@ onMounted(async () => {
     } catch {
       /* 宿主不可用或权限不足时静默 */
     }
-
-    // ⚠️ 启动兜底：**必须**在这里补一次开窗。
-    //
-    // 上面那个 watch 只在 desktopLyricsEnabled **变化**时触发。而应用重启后
-    // 设置里这个值本来就是 true（上次开着），值没有变化 → watch 不触发 →
-    // openDesktopLyricsWindow 永远不被调用 → 窗口不出现，而设置页开关却是开着的。
-    //
-    // 实测症状：用户勾着「启用桌面歌词」，重启后桌面歌词完全不见了，
-    // 手动开关一次才出来。这个兜底就是为这条路径存在的。
-    if (settings.desktopLyricsEnabled) {
-      await openDesktopLyricsWindow(settings.desktopLyricsBounds).catch(() => undefined);
-      window.setTimeout(() => pushDesktopLyricsState(), 400);
-      syncSpectrumPush();
-    }
-
-    // 任务栏歌词同样需要启动兜底（同理：watch 不会因为初始值就触发）
-    if (settings.taskbarLyricsEnabled) {
-      void syncTaskbarLyrics(true);
-    }
   }
 });
 
@@ -284,7 +188,6 @@ onBeforeUnmount(() => {
   dlUnlisteners.forEach((un) => un());
   dlUnlisteners = [];
   stopSpectrumPush();
-  void stopLyricsWindow();
 });
 const library = useLibraryStore();
 const audioEffects = useAudioEffectsStore();

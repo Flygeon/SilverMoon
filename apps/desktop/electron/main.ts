@@ -43,7 +43,6 @@ import {
 import { installBiliMediaHeaders } from "./net-headers";
 import { Sidecar, type EventFrame } from "./sidecar";
 import { setSidecar, getSidecar } from "./main-bridge";
-import { lyricsWindow } from "./lyrics-window";
 import { registerIpc, setDataDirs, setQuitHandler } from "./ipc";
 import {
   startHostServer,
@@ -355,8 +354,6 @@ async function shutdown(code: number): Promise<void> {
 
   destroyTray();
   flushAllStores();
-  // 歌词进程先关：它是个带 WebView2 的常驻窗口，不主动收会留下孤儿进程
-  await lyricsWindow.stop();
   await getSidecar()?.stop();
   hostServer?.close();
 

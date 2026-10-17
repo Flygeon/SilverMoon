@@ -15,7 +15,6 @@ export const messages = {
       settingsPlayback: "播放行为",
       settingsLyrics: "歌词",
       settingsDesktopLyrics: "桌面歌词",
-      settingsTaskbarLyrics: "任务栏歌词",
       settingsAudioEffects: "音效",
       settingsAutoMix: "自动混音",
       settingsOnlineMusic: "在线音乐",
@@ -175,16 +174,11 @@ export const messages = {
     },
     settings: {
       title: "设置",
-      taskbarLyrics: "任务栏歌词",
-      taskbarLyricsEnable: "启用任务栏歌词",
-      taskbarLyricsHint:
-        "把歌词嵌进 Windows 任务栏内部（真正成为任务栏的一部分），而不是浮在屏幕上。",
-      taskbarLyricsEnableHint:
-        "开启后会在任务栏左侧显示歌词条。与「桌面歌词」是两个独立功能，可以同时开。",
-      taskbarLyricsFontSize: "字号",
-      taskbarLyricsOpacity: "不透明度",
-      taskbarLyricsShowTranslation: "显示中文翻译",
-      taskbarLyricsUnavailable: "任务栏歌词当前不可用（未找到歌词组件）",
+      taskbarLyricsTitle: "想要任务栏内的歌词？",
+      taskbarLyricsGuide:
+        "本应用内置的桌面歌词是浮在屏幕上的独立窗口（支持拖动与吸附任务栏上方）。若你想要歌词真正嵌进 Windows 任务栏内部，可以用专门做这件事的原项目 TaskbarLyrics —— 它会读取本应用注册的系统媒体会话（SMTC），显示同一首歌的歌词。",
+      taskbarLyricsDownload: "前往 TaskbarLyrics（GitHub）",
+      taskbarLyricsNote: "独立程序，与本应用并行运行，互不干扰。",
       theme: "主题",
       system: "跟随系统",
       light: "浅色",
@@ -1260,7 +1254,6 @@ export const messages = {
       settingsPlayback: "Playback behaviour",
       settingsLyrics: "Lyrics",
       settingsDesktopLyrics: "Desktop lyrics",
-      settingsTaskbarLyrics: "Taskbar lyrics",
       settingsAudioEffects: "Audio effects",
       settingsAutoMix: "AutoMix",
       settingsOnlineMusic: "Online music",
@@ -1420,16 +1413,11 @@ export const messages = {
     },
     settings: {
       title: "Settings",
-      taskbarLyrics: "Taskbar lyrics",
-      taskbarLyricsEnable: "Enable taskbar lyrics",
-      taskbarLyricsHint:
-        "Embed lyrics inside the Windows taskbar itself, instead of floating on screen.",
-      taskbarLyricsEnableHint:
-        "Shows a lyric strip on the left of the taskbar. Independent from Desktop lyrics; both can run at once.",
-      taskbarLyricsFontSize: "Font size",
-      taskbarLyricsOpacity: "Opacity",
-      taskbarLyricsShowTranslation: "Show translation",
-      taskbarLyricsUnavailable: "Taskbar lyrics unavailable (component not found)",
+      taskbarLyricsTitle: "Want lyrics inside the taskbar?",
+      taskbarLyricsGuide:
+        "The built-in desktop lyrics here is a floating window (draggable, can snap above the taskbar). If you want lyrics embedded inside the Windows taskbar itself, use the original TaskbarLyrics project — it reads this app's system media session (SMTC) and shows lyrics for the same track.",
+      taskbarLyricsDownload: "Open TaskbarLyrics on GitHub",
+      taskbarLyricsNote: "A separate program, runs alongside this app without interference.",
       theme: "Theme",
       system: "System",
       light: "Light",
