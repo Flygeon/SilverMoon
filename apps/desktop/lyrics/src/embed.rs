@@ -200,16 +200,48 @@ pub fn window_rect(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
 /// 不用硬编码：任务栏高度随「任务栏图标大小」设置变化（小/中/大各不相同），
 /// 用户改过就对不上了。拿不到时返回 None，调用方退化到 40。
 pub fn taskbar_client_height() -> Option<i32> {
+    let taskbar = find_primary_taskbar()?;
+    taskbar_client_size(taskbar).map(|(_, h)| h)
+}
+
+/// 任务栏客户区尺寸（**窗口客户区坐标**，与 SetWindowPos 对 WS_CHILD 子窗口
+/// 使用的坐标系一致）。
+///
+/// ## 为什么必须用 GetClientRect（而不是 GetWindowRect 再折算）
+///
+/// 我们的进程是 PerMonitor DPI 感知的，任务栏属于系统进程、在自己的 DPI 上下文中。
+/// 对 **WS_CHILD 子窗口**调 SetWindowPos 时，坐标与尺寸是**相对父窗口客户区**的，
+/// 而父窗口（任务栏）的客户区坐标系就是 GetClientRect 给出的那一套 ——
+/// 两者天然一致，不需要任何 DPI 换算。
+///
+/// 之前的 bug 正出在这里：我拿 GetClientRect 的值当"物理像素"用，
+/// 又去和屏幕坐标混算，结果高度算成 76（真实 40）、y 算成 1746（真实应在 872 附近）。
+/// 取「本窗口的父窗口（任务栏）」客户区尺寸。
+/// 父窗口不是任务栏时退化到主任务栏。
+pub fn taskbar_client_size_of(hwnd: HWND) -> Option<(i32, i32)> {
+    use windows::Win32::UI::WindowsAndMessaging::GetParent;
+    unsafe {
+        let parent = GetParent(hwnd).ok()?;
+        if !parent.0.is_null() {
+            if let Some(size) = taskbar_client_size(parent) {
+                return Some(size);
+            }
+        }
+    }
+    find_primary_taskbar().and_then(taskbar_client_size)
+}
+
+pub fn taskbar_client_size(taskbar: HWND) -> Option<(i32, i32)> {
     use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
-    let taskbar = find_primary_taskbar()?;
     unsafe {
         let mut rect = RECT::default();
         GetClientRect(taskbar, &mut rect).ok()?;
+        let w = rect.right - rect.left;
         let h = rect.bottom - rect.top;
-        if h > 0 {
-            Some(h)
+        if w > 0 && h > 0 {
+            Some((w, h))
         } else {
             None
         }

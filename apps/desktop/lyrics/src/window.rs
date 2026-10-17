@@ -136,24 +136,30 @@ pub fn run(
         let result = embed::embed_into_taskbar(hwnd);
         let embedded = result == EmbedResult::Embedded;
         if embedded {
-            // 贴合任务栏内高。**实测**任务栏客户区高度，不用硬编码 40 ——
-            // 任务栏高度随「小/中/大图标」设置变化（实测 40 也可能不是真实值，
-            // 用户改过图标大小就是别的数）。算错的话窗口会被压扁或溢出。
-            let tb_height = embed::taskbar_client_height().unwrap_or(40);
-            let h = (tb_height - 4).max(24);
-            embed::place_in_taskbar(hwnd, 8, 2, width, h);
-            // ⚠️ 必须**再设一次**尺寸。
+            // 贴合任务栏：用**任务栏客户区坐标系**换算，不做任何 DPI 折算。
             //
-            // 实测：wry 的 build_as_child 会创建自己的容器 HWND，并**顺手改小
-            // 父窗口**（传 560x40 进去，父窗口变成 280x38 —— 正好按 DPI 192/96
-            // 折算成逻辑尺寸）。而 SetWindowPos 本身不缩放（已实测：请求 560
-            // 就得到 560），所以不是我们算错，是**它覆盖了我们的尺寸**。
+            // 关键认识（前几版都错在这里）：
+            // 对 WS_CHILD 子窗口调 SetWindowPos 时，x/y/w/h 都是**相对父窗口客户区**的。
+            // 父窗口是任务栏，所以 GetClientRect(任务栏) 给出的就是这套坐标系的尺寸 ——
+            // 两者天然一致，**不需要也不应该**再按 DPI 折算或与屏幕坐标混算。
             //
-            // 放在 WebView2 建好之后再设一次，它就改不动了。
-            embed::place_in_taskbar(hwnd, 8, 2, width, h);
+            // 之前把 GetClientRect 的值当"物理像素"、又拿去和屏幕坐标算，结果
+            // 高度 40 被算成 76、y 从 872 变成 1746（跑到屏幕外，用户在任务栏
+            // 左侧只看到一小截文字）。
+            let (tb_w, tb_h) = embed::taskbar_client_size_of(hwnd).unwrap_or((width, 40));
+            // 宽度不超过任务栏长度的 90%，高度填满（上下各留 2px）
+            let w = width.min((tb_w as f64 * 0.9) as i32).max(120);
+            let h = (tb_h - 4).max(20);
+            embed::place_in_taskbar(hwnd, 8, 2, w, h);
+            // ⚠️ 再设一次：wry 的 build_as_child 建容器时会顺手改小父窗口
+            // （实测传 560x40 进去、父窗口变成 280x38）。放在 WebView2 建好
+            // 之后再设一次，它就改不动了。
+            embed::place_in_taskbar(hwnd, 8, 2, w, h);
             eprintln!(
-                "[lyrics] 已嵌入任务栏：请求 {}x{}，实际 {:?}",
-                width,
+                "[lyrics] 已嵌入任务栏：任务栏客户区 {}x{}，请求 {}x{}，实际 {:?}",
+                tb_w,
+                tb_h,
+                w,
                 h,
                 embed::window_rect(hwnd)
             );
