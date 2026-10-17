@@ -21,8 +21,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetSystemMetrics,
     PeekMessageW, RegisterClassW, SetTimer, SetWindowPos, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
     HWND_TOPMOST, MSG, PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SWP_NOSIZE,
-    SWP_NOZORDER, SWP_SHOWWINDOW, WM_DESTROY, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    SWP_NOZORDER, SWP_SHOWWINDOW, WM_DESTROY, WM_QUIT, WM_TIMER, WNDCLASSW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
 use crate::embed::{self, EmbedResult};
@@ -158,14 +158,35 @@ pub fn run(
         // 16ms 节拍：驱动动画、轮询宿主消息、刷新 WebView
         SetTimer(Some(hwnd), 1, TICK_MS, None);
 
-        // 消息循环
+        // ---- 主消息循环 ----
+        //
+        // ⚠️ 必须是「外层 loop + 内层 PeekMessageW 抽干队列 + sleep」。
+        //
+        // PeekMessageW 是**非阻塞**的：队列空时它立刻返回 false。
+        // 只写一层 while 的话，创建完窗口、队列一空循环就结束，run() 返回，
+        // main 结束 —— 进程以 code=0「正常」退出。
+        //
+        // 实测症状（这就是「开了桌面歌词什么都不显示」的根因）：
+        //   [INFO] 歌词窗口就绪：hwnd=198842 嵌入=true
+        //   [WARN] 歌词进程退出：code=0 signal=null      ← 200ms 后
+        // 窗口一闪即没，用户看不到任何东西。
+        //
+        // 对**常驻**窗口尤其致命：它大部分时间没有消息，队列几乎总是空的。
+        // 用 sleep 让出 CPU，而不是自旋（自旋会占满一个核）。
         let mut msg = MSG::default();
-        while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-            if msg.message == WM_DESTROY {
-                break;
+        'outer: loop {
+            unsafe {
+                while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                    // WM_QUIT 由 DestroyWindow → PostQuitMessage 投递
+                    if msg.message == WM_QUIT {
+                        break 'outer;
+                    }
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
             }
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+            // 16ms：SetTimer 的 WM_TIMER 会在这段时间里进队列，下一轮被抽干处理
+            std::thread::sleep(std::time::Duration::from_millis(16));
         }
         Ok(())
     }

@@ -51,11 +51,19 @@ export function startLyricsWindow(): Promise<LyricsNativeInfo | null> {
   startPromise = invoke<LyricsNativeInfo | null>("start")
     .then((info) => {
       available = info !== null;
+      // ⚠️ 失败时**必须清掉缓存**。
+      //
+      // 否则一次失败会被永久记住：之后每次调用都直接返回那个缓存的 null，
+      // 用户把开关关了又开也救不回来（除非显式走 stopLyricsWindow 清缓存）。
+      // 表现就是「第一次没起来，之后再怎么点都没反应」。
+      if (info === null) startPromise = null;
       return info;
     })
     .catch(() => {
-      // 启动失败不能让播放流程崩掉 —— 歌词是锦上添花
+      // 启动失败不能让播放流程崩掉 —— 歌词是锦上添花。
+      // 同样要清缓存，让用户能够重试。
       available = false;
+      startPromise = null;
       return null;
     });
   return startPromise;
