@@ -196,40 +196,25 @@ function radiusOf(el: HTMLElement): number {
  * `border-radius` / `object-fit` 全部丢失。属性清单没法穷举（每个入口的封面结构
  * 都不一样），所以这里走「整棵树抄计算值」的通用解法。
  */
-const FROZEN_PROPS = [
-  "width",
-  "height",
-  "min-width",
-  "min-height",
-  "max-width",
-  "max-height",
-  "aspect-ratio",
-  "padding",
-  "margin",
-  "border-radius",
-  "overflow",
-  "object-fit",
-  "object-position",
-  "background-color",
-  "background-image",
-  "background-size",
-  "background-position",
-  "background-repeat",
-  "box-shadow",
-  "display",
-  "align-items",
-  "justify-content",
-  "flex",
-  "flex-direction",
-  "color",
-  "font-size",
-  "font-weight",
-  "font-family",
-  "line-height",
-  "text-align",
-  "white-space",
-  "opacity",
-] as const;
+/*
+ * ⚠️ **必须写成「空格分隔的单个字符串」再 split，不能写成字符串数组。**
+ *
+ * `scripts/fetch-icon-font.mjs` 会把源码里所有「整段只由小写字母/数字/下划线组成」的
+ * 带引号字面量当作候选图标名（图标名常以动态取值出现，它只能这样扫）。而
+ * `width` / `height` / `margin` / `opacity` 恰好都是合法的 Material Symbols 图标名 ——
+ * 写成数组会让它白烘四个用不到的图标，并让 CI 的 `check:icon-font` 变红。
+ *
+ * 单字符串里含空格，正则 `["']([a-z][a-z0-9_]{1,40})["']` 就匹配不上了。
+ * 这与本文件里 `LAYOUT_PROP_RE` 用正则字面量是同一类规避手段。
+ */
+const FROZEN_PROP_LIST =
+  "width height min-width min-height max-width max-height aspect-ratio " +
+  "padding margin border-radius overflow object-fit object-position " +
+  "background-color background-image background-size background-position background-repeat " +
+  "box-shadow display align-items justify-content flex flex-direction " +
+  "color font-size font-weight font-family line-height text-align white-space opacity";
+
+const FROZEN_PROPS = FROZEN_PROP_LIST.split(" ");
 
 function freezeCloneStyles(src: HTMLElement, clone: HTMLElement): void {
   // src 与 clone 是同构克隆，子节点顺序一一对应，按索引并行走
