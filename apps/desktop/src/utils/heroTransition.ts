@@ -165,6 +165,106 @@ function radiusOf(el: HTMLElement): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/**
+ * 把源元素整棵子树的**计算样式**固化到克隆层的内联样式上。
+ *
+ * ## 为什么必须做
+ *
+ * 飞行层是 `srcEl.cloneNode(true)` 挂到 `<body>` 上的 —— **祖先链就此断开**。
+ * 而 Vue 的 scoped CSS 大量使用「祖先 + 后代」选择器，构建产物里长这样：
+ *
+ *     .song-card .thumb[data-v-f581c470]{ width:100%; aspect-ratio:1; overflow:hidden }
+ *     .song-card .thumb img[data-v-f581c470]{ width:100%; height:100%; object-fit:cover }
+ *
+ * 克隆层脱离 `.song-card` 之后这两条**一条都不再匹配**：
+ * `.thumb` 失去宽高与 `overflow:hidden`，里面的 `<img>` 失去 `object-fit:cover`，
+ * 于是图片按**原始分辨率**直接铺开 —— 观感就是「飞出来一块巨大封面盖住半屏」。
+ *
+ * 对照：迷你条的 `.cover`、列表的 `.o-thumb`、网格的 `.thumb` 都写成单选择器，
+ * 所以历史上只有**卡片入口**会坏，迷你条入口一直正常。
+ *
+ * ## 怎么固化
+ *
+ * 逐层递归（源元素 → 子元素），把「与视觉相关且继承链会断」的属性抄成内联样式，
+ * 只抄非默认值，避免内联样式膨胀。**不抄 transform / transition / animation** ——
+ * 飞行层由 WAAPI 统一补间，抄进去会和 transform 补间打架（卡片 hover 的
+ * `scale(1.015)` 就是这么污染起点的）。
+ *
+ * ## 为什么不能只写死几个属性
+ *
+ * 第一版只写死了 position/width/height，于是 `aspect-ratio` / `overflow` /
+ * `border-radius` / `object-fit` 全部丢失。属性清单没法穷举（每个入口的封面结构
+ * 都不一样），所以这里走「整棵树抄计算值」的通用解法。
+ */
+const FROZEN_PROPS = [
+  "width",
+  "height",
+  "min-width",
+  "min-height",
+  "max-width",
+  "max-height",
+  "aspect-ratio",
+  "padding",
+  "margin",
+  "border-radius",
+  "overflow",
+  "object-fit",
+  "object-position",
+  "background-color",
+  "background-image",
+  "background-size",
+  "background-position",
+  "background-repeat",
+  "box-shadow",
+  "display",
+  "align-items",
+  "justify-content",
+  "flex",
+  "flex-direction",
+  "color",
+  "font-size",
+  "font-weight",
+  "font-family",
+  "line-height",
+  "text-align",
+  "white-space",
+  "opacity",
+] as const;
+
+function freezeCloneStyles(src: HTMLElement, clone: HTMLElement): void {
+  // src 与 clone 是同构克隆，子节点顺序一一对应，按索引并行走
+  const pairs: [Element, Element][] = [[src, clone]];
+  for (let i = 0; i < pairs.length; i++) {
+    const [from, to] = pairs[i];
+    const fromKids = Array.from(from.children);
+    const toKids = Array.from(to.children);
+    const n = Math.min(fromKids.length, toKids.length);
+    for (let k = 0; k < n; k++) pairs.push([fromKids[k], toKids[k]]);
+  }
+
+  for (const [from, to] of pairs) {
+    if (!(to instanceof HTMLElement)) continue;
+    let cs: CSSStyleDeclaration;
+    try {
+      cs = getComputedStyle(from);
+    } catch {
+      continue;
+    }
+    const parts: string[] = [];
+    for (const prop of FROZEN_PROPS) {
+      const v = cs.getPropertyValue(prop);
+      if (!v || v === "none" || v === "normal" || v === "auto") continue;
+      parts.push(`${prop}:${v}`);
+    }
+    // inline 元素（<img> 的祖先链上偶有）width/height 是 auto，上面的过滤会跳过，
+    // 但 <img> 本身必须显式撑满 —— 否则脱离 object-fit 规则后按原始尺寸渲染。
+    if (to.tagName === "IMG") {
+      parts.push("width:100%", "height:100%", "object-fit:cover", "display:block");
+    }
+    if (parts.length) to.style.cssText = `${to.style.cssText};${parts.join(";")}`;
+  }
+}
+
 export function startHeroFlight(srcEl: HTMLElement | null | undefined): HeroFlight | null {
   if (!srcEl?.isConnected) return null;
   const from = srcEl.getBoundingClientRect();
@@ -173,9 +273,17 @@ export function startHeroFlight(srcEl: HTMLElement | null | undefined): HeroFlig
 
   const clone = srcEl.cloneNode(true) as HTMLElement;
   clone.removeAttribute("id");
-  // 克隆层：脱离文档流钉在源 rect 上；清掉继承的过渡/动画/变换，
-  // 保证起点状态干净（卡片 hover 的 scale 等不会带进飞行层）
-  clone.style.cssText += [
+  // 先把源元素整棵子树的**计算样式**固化到克隆层上。这一步不是优化，是必须的 ——
+  // 克隆层挂到 body 之后祖先链就断了，而卡片封面的尺寸 / 裁切 / 圆角全都写在
+  // 「祖先 + 后代」的选择器里（见 freezeCloneStyles 上的长注释）。
+  freezeCloneStyles(srcEl, clone);
+  // 再覆盖成飞行层自己的定位：钉在源 rect 上，并清掉过渡 / 动画 / 变换，
+  // 保证起点状态干净（卡片 hover 的 scale 等不会带进飞行层）。
+  //
+  // ⚠️ **不要给克隆层写死 box-shadow**。卡片封面的阴影是 `inset 0 0 0 1px` 发丝线，
+  // 播放页封面是两段外投影；写死成 `--md-elevation-3` 会让封面在起飞瞬间"浮起来"、
+  // 落地又突然变平 —— 这正是"飞行动画不对"的另一半。阴影跟源走，上面已经抄过来了。
+  const pin = [
     "position:fixed",
     `left:${from.left}px`,
     `top:${from.top}px`,
@@ -190,8 +298,8 @@ export function startHeroFlight(srcEl: HTMLElement | null | undefined): HeroFlig
     "transform-origin:top left",
     "visibility:visible",
     "opacity:1",
-    "box-shadow:var(--md-elevation-3), inset 0 0 0 1px var(--lm-hairline)",
   ].join(";");
+  clone.style.cssText = `${clone.style.cssText};${pin}`;
   document.body.appendChild(clone);
   srcEl.style.visibility = "hidden";
 
@@ -257,12 +365,29 @@ export function startHeroFlight(srcEl: HTMLElement | null | undefined): HeroFlig
       const fromRadius = radiusOf(srcEl);
       const toRadius = radiusOf(dest);
       const endRadius = sx > 0 ? toRadius / sx : toRadius;
+      /*
+       * 阴影也要补间。
+       *
+       * 克隆层的 box-shadow 已经从源元素抄过来了（freezeCloneStyles），而播放页封面
+       * 是「两段外投影 + 无发丝线」。不补间的话，动画最后一帧阴影会**硬切**——
+       * 观感是「落地那一下封面材质变了」，用户说的"飞行动画不对"里有一半是这个。
+       *
+       * 注意两端都必须是合法值：源是 `inset 0 0 0 1px ...`，目标是两段投影，
+       * 浏览器可以在这两种 shadow 列表之间插值（长度不同时按缺省补 transparent 0）。
+       */
+      const fromShadow = getComputedStyle(clone).boxShadow;
+      const toShadow = getComputedStyle(dest).boxShadow;
       const anim = clone.animate(
         [
-          { transform: "translate(0px, 0px) scale(1, 1)", borderRadius: `${fromRadius}px` },
+          {
+            transform: "translate(0px, 0px) scale(1, 1)",
+            borderRadius: `${fromRadius}px`,
+            boxShadow: fromShadow,
+          },
           {
             transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`,
             borderRadius: `${endRadius}px`,
+            boxShadow: toShadow,
           },
         ],
         { duration: HERO_DURATION_MS, easing: HERO_EASING, fill: "forwards" },

@@ -251,6 +251,33 @@ function t(key: string) {
 const isPlayerPage = computed(() => route.path === "/music/player");
 
 /**
+ * 外壳（导航栏 / 标题栏 / 迷你条）是否可见。
+ *
+ * ⚠️ **不能直接用 `!isPlayerPage`**：`isPlayerPage` 在路由变化那一 tick 就翻转，
+ * 于是导航栏（88px）与标题栏被 `v-if` 立刻卸载，而 `<transition mode="out-in">`
+ * 还要先等旧页离场、再挂新页 —— 中间这一两帧里内容区**向左展开 88px**，
+ * 页面看起来"先抖一下再进播放器"。这就是用户反复报的「先触发界面重排」。
+ *
+ * 解法：进播放页时**延后**收外壳，等播放页挂载完（它 `position:fixed; inset:0`，
+ * 完全不透明，把下面的外壳盖住）再收 —— 收的动作发生在看不见的地方，零观感成本。
+ * 反过来（播放页 → 列表）必须**立刻**把外壳放回来：那时播放页正在滑走，
+ * 下面露出来的必须是完整的外壳，晚一帧就会露出空白。
+ */
+const shellChromeVisible = ref(true);
+watch(isPlayerPage, (nowPlayer) => {
+  if (nowPlayer) {
+    // 等播放页真正挂上（两帧足够：enter 类切换 + 首帧绘制）
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        if (route.path === "/music/player") shellChromeVisible.value = false;
+      }),
+    );
+  } else {
+    shellChromeVisible.value = true;
+  }
+});
+
+/**
  * 全局 hero 起飞。
  *
  * 挂在 document 的 **capture** 阶段：业务代码的 @click 在冒泡阶段才跑，
@@ -488,7 +515,7 @@ router.afterEach((to) => {
     class="app-shell"
     data-lm-region="shell"
     :class="{
-      'has-player': player.song && !isPlayerPage,
+      'has-player': player.song && shellChromeVisible,
       'desktop-lyrics-page': isDesktopLyricsPage,
       'extension-host-page': isExtensionHostPage,
       'settings-page': isSettingsPage,
@@ -502,15 +529,17 @@ router.afterEach((to) => {
     ></div>
 
     <!-- Windows 自定义标题栏（仅桌面端，播放页/桌面歌词页/扩展宿主页隐藏） -->
+    <!-- 收外壳用 shellChromeVisible 而不是 !isPlayerPage：见 script 里的注释，
+         直接跟随路由会在播放页挂载前把导航栏拆掉，内容区左移 88px = 可见的重排 -->
     <WindowTitleBar
-      v-if="isDesktop && !isPlayerPage && !isDesktopLyricsPage && !isExtensionHostPage"
+      v-if="isDesktop && shellChromeVisible && !isDesktopLyricsPage && !isExtensionHostPage"
     />
 
     <!-- 主体：左侧导航 + 内容区 -->
     <div class="app-body">
       <!-- 左侧导航 Rail -->
       <nav
-        v-if="!isPlayerPage && !isDesktopLyricsPage && !isExtensionHostPage"
+        v-if="shellChromeVisible && !isDesktopLyricsPage && !isExtensionHostPage"
         class="nav-rail lm-glass"
         data-lm-region="nav"
       >
@@ -633,7 +662,7 @@ router.afterEach((to) => {
     </div>
 
     <MiniPlayer
-      v-if="player.song && !isPlayerPage && !isDesktopLyricsPage && !isExtensionHostPage"
+      v-if="player.song && shellChromeVisible && !isDesktopLyricsPage && !isExtensionHostPage"
     />
 
     <!-- 全局 M3 右键菜单、文本输入框与写标签对话框（Teleport 到 body） -->

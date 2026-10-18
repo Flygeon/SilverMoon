@@ -30,6 +30,40 @@
 > ```
 
 ---
+## 2026-10-18 · hero 飞行层样式失效（卡片入口）+ 进播放器重排
+
+- **commit**: 见本轮提交（基线 `0cffbd9`）
+- **status**: 未实机验证（typecheck / eslint / prettier / heroTransition 单测 9 项全过；**观感需人眼**）
+- **做了什么**：
+  1. **`heroTransition.ts`：新增 `freezeCloneStyles()`** —— 克隆飞行层时，逐层把源元素整棵子树的
+     `getComputedStyle` 固化到内联样式（尺寸 / `aspect-ratio` / `overflow` / `border-radius` /
+     `object-fit` / 背景 / 阴影 / 字体），并给 `<img>` 强制 `width:100%;height:100%;object-fit:cover`。
+  2. **移除写死的 `box-shadow: var(--md-elevation-3)`**，阴影改为跟随源元素；
+     `land()` 的 WAAPI 补间加入 `boxShadow`，终点取目标元素计算值。
+  3. **`App.vue`：新增 `shellChromeVisible`** —— 进播放页时延后两帧再收导航栏 / 标题栏 / 迷你条，
+     离开时立刻恢复；`has-player` padding 同步改用该标志。
+- **为什么**：
+  - 用户回「**B，飞行动画不对**」——封面确实在飞，但姿态不对，排除「没飞」与「落点偏」。
+    从构建产物 `dist/assets/MusicView-*.css` 反查：卡片封面样式全是**后代选择器**
+    ``.song-card .thumb[data-v-x]{width:100%;aspect-ratio:1;overflow:hidden}`` 与
+    ``.song-card .thumb img[data-v-x]{object-fit:cover}``。飞行层是 `cloneNode` 后挂到 `<body>`，
+    **祖先链断开 → 两条规则一条都不匹配**，于是 `.thumb` 失去尺寸与 `overflow:hidden`、
+    `<img>` 失去 `object-fit` → 图片按原始分辨率铺开，正是用户截图里那块盖住半屏的大白图。
+    对照迷你条 `.cover`、列表 `.o-thumb`、网格 `.thumb` 都是单选择器，所以历史上**只有卡片入口坏**，
+    与「从卡片样式进入 hero 不对」精确吻合。
+  - 重排的根因：`isPlayerPage` 在路由变化那一 tick 就翻转 → 导航栏（88px）被 `v-if` 立刻卸载，
+    而 `<transition mode="out-in">` 还要等旧页离场、新页挂载 —— 中间一两帧内容区**向左展开 88px**。
+    播放页是 `position:fixed; inset:0` 不透明遮住的，所以**延后收外壳**零观感成本。
+- **教训**：
+  1. **给 hero 源标属性的那张封面，样式必须写成单选择器**；否则克隆层脱离祖先即失效。
+     这条已写入 `heroTransition.ts` 与 `AGENTS.md` 相关的 hero 约定。
+  2. **祖先 + 后代的 scoped 选择器 = 不可移植**。任何「把元素搬到别处去」的动效
+     （hero / 拖拽预览 / 跨容器 portal）都必须先固化计算样式。
+  3. 写死阴影是错的：克隆层应该继承源元素的视觉，而不是套一层通用的 elevation。
+
+---
+
+
 
 ## 2026-10-17 · 文档真源重建（AGENTS / SPEC / LOG / README）
 
