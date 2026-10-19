@@ -460,11 +460,92 @@ onBeforeUnmount(() => {
 // scrollTop 钳制回顶部，返回时位置已丢失。这里在切换前记录、返回后恢复。
 const scrollMemory = new Map<string, number>();
 const mainEl = ref<HTMLElement | null>(null);
-let scrollRestoreTimer: number | null = null;
+/**
+ * 待恢复的滚动位置。
+ *
+ * 恢复时机必须是「新页面 DOM 已插回、但这一帧还没绘制」——见下方
+ * onRouteEnter 的长注释。这里用模块内的普通变量而不是 ref：
+ * 它只在帧内被读写，不该触发任何组件重渲染。
+ */
+let pendingScrollTop: number | null = null;
+let scrollRestoreRaf: number | null = null;
+let scrollRestoreTries = 0;
+
+/** 最多重试多少帧（约 0.5s）。覆盖「返回的页面数据异步到达、高度晚一截」的情况。 */
+const SCROLL_RESTORE_MAX_FRAMES = 30;
+
+function cancelScrollRestore(): void {
+  if (scrollRestoreRaf !== null) {
+    cancelAnimationFrame(scrollRestoreRaf);
+    scrollRestoreRaf = null;
+  }
+  scrollRestoreTries = 0;
+}
+
+/** 立即尝试恢复；内容高度还不够时返回 false（由调用方下一帧重试）。 */
+function applyPendingScroll(): boolean {
+  if (pendingScrollTop === null) return true;
+  const el = mainEl.value;
+  if (!el) {
+    pendingScrollTop = null;
+    return true;
+  }
+  el.scrollTop = pendingScrollTop;
+  // 高度不足时浏览器会把 scrollTop 钳到更小的值 —— 不能直接清掉待办
+  if (Math.abs(el.scrollTop - pendingScrollTop) > 1) return false;
+  pendingScrollTop = null;
+  return true;
+}
+
+/**
+ * 恢复返回页面的滚动位置。
+ *
+ * ⚠️ 不要再用 setTimeout(260ms) 兜底：那是旧实现的写法，等 260ms 期间
+ * 歌单已经插回并在顶部绘制了好几帧，用户看到的就是「先闪回歌单顶部，
+ * 再跳回点击时停留的位置」。返回列表比进去更常发生，这个闪回非常显眼。
+ *
+ * 正确时机是路由 transition 的 enter 钩子：此时新页面的 DOM 已经插回
+ * （keep-alive 的缓存子树是整棵搬回来的，高度立刻恢复），而浏览器还没绘制这一帧。
+ * 在这里同步写 scrollTop，用户从第一帧看到的就是正确位置。
+ *
+ * 兜底重试只服务「异步数据还没到、高度暂时不够」的页面：逐帧重试直到设置成功，
+ * 命中即停。keep-alive 场景第一次就会成功，不会产生任何可见跳动。
+ */
+function restoreScrollForRoute(): void {
+  cancelScrollRestore();
+  if (pendingScrollTop === null) return;
+  if (applyPendingScroll()) return;
+  const tick = () => {
+    scrollRestoreRaf = null;
+    if (pendingScrollTop === null) return;
+    if (applyPendingScroll()) return;
+    if (++scrollRestoreTries > SCROLL_RESTORE_MAX_FRAMES) {
+      pendingScrollTop = null;
+      return;
+    }
+    scrollRestoreRaf = requestAnimationFrame(tick);
+  };
+  scrollRestoreRaf = requestAnimationFrame(tick);
+}
+
+/**
+ * 路由 transition 的 enter 钩子：新页面已插入、尚未绘制。
+ *
+ * 这里只负责把滚动位置放回去，不掺和任何动画 —— 它和 hero 飞行、
+ * 页面入场过渡互不依赖。
+ */
+function onRouteEnter(): void {
+  restoreScrollForRoute();
+}
+
 router.beforeEach((_to, from) => {
   if (mainEl.value) {
     scrollMemory.set(from.path, mainEl.value.scrollTop);
   }
+});
+onBeforeUnmount(() => {
+  cancelScrollRestore();
+  pendingScrollTop = null;
 });
 router.afterEach((to) => {
   /*
@@ -489,13 +570,15 @@ router.afterEach((to) => {
     if (flight) holdHeroFlight(flight);
   }
 
+  /*
+   * 记录这次导航要恢复的滚动位置。真正写入放在 onRouteEnter（enter 钩子）
+   * 里，那里有逐帧兜底 —— 这里先标记，别在 DOM 还没换的时候就写。
+   */
   const saved = scrollMemory.get(to.path);
-  if (saved === undefined) return;
-  // 等路由过渡（180ms）+ 内容重插入完成后再恢复
-  if (scrollRestoreTimer) clearTimeout(scrollRestoreTimer);
-  scrollRestoreTimer = window.setTimeout(() => {
-    if (mainEl.value) mainEl.value.scrollTop = saved;
-  }, 260);
+  pendingScrollTop = saved !== undefined && saved > 0 ? saved : null;
+  // ⚠️ 这里不能立刻写 scrollTop：afterEach 时 DOM 还是旧页面，
+  // 在新 DOM 插回之前写等于把旧页面滚到目标位置，随后内容高度塌缩又被打回 0。
+  // 真正的恢复点只有 onRouteEnter（transition 的 enter 钩子）。
 });
 </script>
 
@@ -615,7 +698,11 @@ router.afterEach((to) => {
           />
 
           <router-view v-slot="{ Component }">
-            <transition :name="isPlayerPage ? 'player' : 'page'" mode="out-in">
+            <transition
+              :name="isPlayerPage ? 'player' : 'page'"
+              mode="out-in"
+              @enter="onRouteEnter"
+            >
               <!--
                 keep-alive 的取舍（内存相关，改之前先读这段）：
 

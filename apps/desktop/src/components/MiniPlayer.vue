@@ -40,6 +40,20 @@ onMounted(() => {
    * 没有待降落飞行时 releaseHeroFlight() 返回 null，landHeroFlight 直接返回。
    */
   landHeroFlight(releaseHeroFlight(), () => coverEl.value);
+
+  /*
+   * 预热播放页 chunk。
+   *
+   * 迷你条出现 = 用户随时可能展开播放器，而 /music/player 是动态 import 的路由。
+   * 若等到点击那一刻才去加载，飞行层已经挂在迷你条原位，却要等 chunk 到达才能
+   * 量到目标并开始补间 —— 观感就是「封面先顿一下再飞」。
+   *
+   * 用 setTimeout 而不是 requestIdleCallback：后者在后台标签页可能长期不触发，
+   * 这里只需要把网络/解析排到当前这批渲染之后，400ms 足够。
+   */
+  window.setTimeout(() => {
+    void import("@/views/PlayerView.vue");
+  }, 400);
 });
 
 /**

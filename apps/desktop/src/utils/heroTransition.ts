@@ -254,6 +254,25 @@ export function startHeroFlight(srcEl: HTMLElement | null | undefined): HeroFlig
   if (!srcEl?.isConnected) return null;
   const from = srcEl.getBoundingClientRect();
   if (!from.width || !from.height) return null;
+  /*
+   * ⚠️ 源元素的**视觉参数必须在起飞瞬间（还在文档里）就读完**。
+   *
+   * 起飞之后源封面随时可能被销毁：迷你条是英雄入口，进播放页两帧后
+   * `shellChromeVisible` 就会把它 v-if 掉（见 App.vue）。而降落发生在
+   * PlayerView 的 onMounted 之后 —— 那时源元素**已经脱离文档**。
+   * 对游离元素调用 `getComputedStyle()` 会得到一份**全为空值**的声明
+   * （Chromium 实测），于是：
+   *
+   *   - `radiusOf(srcEl)` 解析出 0 → 飞行层第一帧变成**直角**，
+   *     用户看到的是「迷你条封面突然失去圆角」；
+   *   - 阴影同理，会硬切成透明。
+   *
+   * 历史上这段逻辑只在卡片入口验证过（卡片在列表页，导航后仍被 keep-alive
+   * 保留在文档里），所以一直没暴露。修法：起飞时把圆角 / 阴影快照进闭包，
+   * `land()` 只用快照，不再回头读源元素。
+   */
+  const fromRadius = radiusOf(srcEl);
+  const fromShadow = getComputedStyle(srcEl).boxShadow;
   markFlying(true);
 
   const clone = srcEl.cloneNode(true) as HTMLElement;
@@ -347,7 +366,6 @@ export function startHeroFlight(srcEl: HTMLElement | null | undefined): HeroFlig
        * border-radius 在 transform 之后仍按元素自身坐标系计算，所以终点值要写成
        * `目标圆角 / 缩放倍数`，最终视觉上才等于目标的圆角。
        */
-      const fromRadius = radiusOf(srcEl);
       const toRadius = radiusOf(dest);
       const endRadius = sx > 0 ? toRadius / sx : toRadius;
       /*
@@ -360,7 +378,6 @@ export function startHeroFlight(srcEl: HTMLElement | null | undefined): HeroFlig
        * 注意两端都必须是合法值：源是 `inset 0 0 0 1px ...`，目标是两段投影，
        * 浏览器可以在这两种 shadow 列表之间插值（长度不同时按缺省补 transparent 0）。
        */
-      const fromShadow = getComputedStyle(clone).boxShadow;
       const toShadow = getComputedStyle(dest).boxShadow;
       const anim = clone.animate(
         [
@@ -547,6 +564,16 @@ export function landHeroFlight(
 ): void {
   if (!flight) return;
   let tries = 0;
+  /*
+   * 先**同步**试一次降落，而不是永远等一帧 rAF。
+   *
+   * 飞行期间 `html.lm-hero-flying` 会把路由过渡的位移与时长都压平，所以
+   * 目标在 `onMounted` 里通常已经处在最终位置上 —— 这一帧就能量对并向目标
+   * 开始补间。多等一个 rAF 意味着克隆层在迷你条原位**静止**一帧（约 16ms），
+   * 与前面路由切换的几帧加起来，肉眼就是「封面先顿一下再飞」。
+   *
+   * 目标还没出现 / 仍在屏幕外时行为不变：退回到逐帧轮询（最多 MAX_LAND_FRAMES 帧）。
+   */
   const tick = () => {
     const dest = getDest();
     // 元素还没出现：继续等（可能是异步组件仍在挂载）
@@ -566,5 +593,5 @@ export function landHeroFlight(
     }
     if (!flight.land(dest)) flight.cancel();
   };
-  requestAnimationFrame(tick);
+  tick();
 }

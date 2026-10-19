@@ -30,6 +30,41 @@
 > ```
 
 ---
+## 2026-10-19 · 返回列表闪回顶部 + 迷你条 hero 首帧直角 / 顿挫
+
+- **commit**: 见本轮提交（基线 `825744e`）
+- **status**: 已用 Chromium + CDP 复现与回归（滚动：内容插回的第一帧 `scrollTop` 即为 600；飞行层：动画首帧圆角 8px，起飞延迟约 13ms）；typecheck / eslint / prettier / heroTransition 单测 9 项全过；**真实窗口观感需人眼**
+- **做了什么**：
+  1. **`App.vue`：滚动恢复从 `setTimeout(260ms)` 改为路由 transition 的 `@enter` 钩子** ——
+     该钩子在「新页面 DOM 已插入、这一帧尚未绘制」时同步执行；同步写 `scrollTop`，
+     用户从第一帧看到的就是原位置。另保留逐帧兜底（最多 30 帧），只服务「数据异步到达、
+     高度晚一截」的页面，命中即停。
+  2. **`heroTransition.ts`：起飞瞬间快照源封面的 `border-radius` / `box-shadow`**，
+     `land()` 不再回头读源元素；`landHeroFlight()` 改为先**同步**试一次降落，
+     不再固定等一帧 rAF。
+  3. **`MiniPlayer.vue`：挂载 400ms 后预热 `PlayerView` chunk**，避免首次展开播放器时
+     飞行层在迷你条原位等动态 import。
+- **为什么**：
+  - 返回列表闪回顶部：旧实现等 260ms 才写回 `scrollTop`。实测（CDP 采样）：歌单内容在
+    `t=1016ms` 已经插回，`scrollTop=0`；直到 `t=1198ms` 才跳到 600 —— 中间约 11 帧停在顶部，
+    正是用户截图里的一瞬。改为 `@enter` 后，内容插回的那一帧 `scrollTop` 已经是 600。
+  - 迷你条封面变直角：`land()` 里的 `radiusOf(srcEl)` 在**降落时**才执行，而进播放页两帧后
+    `shellChromeVisible` 已把迷你条 `v-if` 卸载。对脱离文档的元素调用 `getComputedStyle()`
+    得到的是空值声明，`parseFloat("")` → `NaN` → 圆角 0；WAAPI 首帧 `borderRadius: 0px`
+    覆盖了克隆层已经固化的 8px。实测动画开始那一帧圆角由 8px 突变为 0px。
+  - 「顿一下」：克隆层 `t=6ms` 出现、动画 `t=66ms` 才开始，期间静止在迷你条原位（等路由挂载 +
+    一帧 rAF）。同步降落 + chunk 预热后，动画在 `t≈20ms` 就已起跑。
+- **教训**：
+  1. **飞行层的起点视觉参数必须在起飞瞬间快照**（此时源元素必然还在文档里），
+     不能等降落时回头读 —— 跨路由动画的源随时可能被 `v-if` 卸载。
+  2. **`getComputedStyle()` 对脱离文档的元素返回空值，且失败是静默的**：
+     `parseFloat("")` 得到 `NaN`，再被 `Number.isFinite` 兜成 0。这类「看起来有兜底」的代码
+     最容易把错误藏起来，量不到值时应显式回退到目标值，而不是 0。
+  3. **滚动恢复只能发生在「新 DOM 已插入、绘制之前」**：Vue 的 transition `before-enter`
+     是插入**之前**，`enter` 才是插入之后（且在 post-render 队列里，仍早于绘制）。
+     用 `setTimeout` 猜时长必然闪一帧甚至多帧。
+
+---
 ## 2026-10-18 · hero 飞行层样式失效（卡片入口）+ 进播放器重排
 
 - **commit**: 见本轮提交（基线 `0cffbd9`）
