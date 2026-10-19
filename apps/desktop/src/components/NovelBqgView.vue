@@ -9,6 +9,10 @@ import type { NovelCover, NovelDetail, NovelVolume } from "@shared/types";
 
 const BASE = "https://www.bqg413.cc";
 
+/** 从共享书架跳进来时直接打开指定书目（见 BooksView 的 openFromShelf）。 */
+const props = defineProps<{ openAid?: string; openTitle?: string }>();
+const emit = defineEmits<{ (e: "opened"): void }>();
+
 const view = ref<"home" | "detail" | "reader">("home");
 const selected = ref<{ aid: string; title: string }>({ aid: "", title: "" });
 const readerInit = ref<{ cid?: string; chapterTitle?: string }>({});
@@ -23,6 +27,9 @@ const homeLoading = ref(false);
 const homeError = ref("");
 
 const detail = ref<NovelDetail | null>(null);
+/** 是否已在共享书架里（书架统一在「书架」页，本页只保留加入/移出按钮） */
+const inShelf = ref(false);
+const shelfBusy = ref(false);
 const detailLoading = ref(false);
 const detailError = ref("");
 const volumes = ref<NovelVolume[]>([]);
@@ -83,6 +90,34 @@ function openNovel(item: NovelCover) {
   void openDetail();
 }
 
+async function refreshShelf() {
+  try {
+    const list = await capabilities.novelShelfList();
+    inShelf.value = list.some((s) => s.aid === selected.value.aid && s.source === "bqg");
+  } catch {
+    inShelf.value = false;
+  }
+}
+
+async function toggleShelf() {
+  const d = detail.value;
+  if (!d || shelfBusy.value) return;
+  shelfBusy.value = true;
+  try {
+    if (inShelf.value) {
+      await capabilities.novelShelfRemove(d.aid);
+      inShelf.value = false;
+    } else {
+      await capabilities.novelShelfAdd(d.aid, d.title, d.author, coverUrl(d.imgUrl), "bqg");
+      inShelf.value = true;
+    }
+  } catch (e) {
+    log(`书架操作失败：${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    shelfBusy.value = false;
+  }
+}
+
 async function openDetail() {
   view.value = "detail";
   detailLoading.value = true;
@@ -90,6 +125,7 @@ async function openDetail() {
   detail.value = null;
   volumes.value = [];
   chapters.value = [];
+  inShelf.value = false;
   log(`openDetail aid=${selected.value.aid}`);
   try {
     const [d, vols] = await Promise.all([
@@ -102,6 +138,7 @@ async function openDetail() {
     for (const v of vols) list.push(...v.chapters);
     chapters.value = list;
     log(`openDetail OK chapters=${list.length}`);
+    void refreshShelf();
   } catch (e) {
     detailError.value = e instanceof Error ? e.message : String(e);
     log(`openDetail ERR: ${detailError.value}`);
@@ -124,7 +161,13 @@ function onDetailBack() {
   view.value = "home";
 }
 
-onMounted(loadHome);
+onMounted(() => {
+  void loadHome();
+  if (props.openAid) {
+    openNovel({ aid: props.openAid, title: props.openTitle ?? "", imageUrl: "" });
+    emit("opened");
+  }
+});
 </script>
 
 <template>
@@ -162,6 +205,14 @@ onMounted(loadHome);
             <p v-if="detail.status" class="line">状态：{{ detail.status }}</p>
             <p v-if="detail.finUpdate" class="line">更新：{{ detail.finUpdate }}</p>
             <p v-if="detail.tags.length" class="line">分类：{{ detail.tags.join(" / ") }}</p>
+            <div class="actions">
+              <m3e-button variant="tonal" size="small" :disabled="shelfBusy" @click="toggleShelf">
+                <span slot="icon" class="material-symbols-outlined">{{
+                  inShelf ? "bookmark_remove" : "bookmark_add"
+                }}</span>
+                {{ inShelf ? "移出书架" : "加入书架" }}
+              </m3e-button>
+            </div>
           </div>
         </div>
 
@@ -282,6 +333,11 @@ onMounted(loadHome);
   margin: 0;
   font-size: var(--md-sys-typescale-body-small-size);
   color: var(--md-sys-color-on-surface-variant);
+}
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
 }
 .introduce {
   margin: 0;

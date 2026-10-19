@@ -65,7 +65,7 @@ impl ScanJobInfo {
 }
 
 /// 当前 schema 版本。递增后在 `migrate` 中追加对应分支。
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// 建表 + 版本化迁移。对已存在的库是幂等的。
 pub fn init_db(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
@@ -315,7 +315,51 @@ fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         }
         conn.pragma_update(None, "user_version", 5)?;
     }
+    // v5 -> v6：书籍改为「手动导入」+ 共享书架记录来源
+    if current < 6 {
+        // files.imported：1 = 导入项。扫描从此不再收录书籍，且软删除会跳过
+        // 导入项，避免一次「重新扫描」把书清掉。
+        if !has_column(conn, "files", "imported")? {
+            conn.execute(
+                "ALTER TABLE files ADD COLUMN imported INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+            // 升级时把已有书籍**保留**为导入项：它们本来就是用户库里的书，
+            // 不该因为改版突然消失。此后的扫描既不会新增也不会删除它们。
+            conn.execute("UPDATE files SET imported = 1 WHERE type = 'book'", [])?;
+        }
+        // novel_shelf.source：共享书架要知道书属于哪个源，点击时才能打开正确的详情页。
+        if !has_column(conn, "novel_shelf", "source")? {
+            conn.execute(
+                "ALTER TABLE novel_shelf ADD COLUMN source TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
+        }
+        // 老库的书架没有来源：番茄的 aid 是十几位长 id，文库8 / 笔趣阁是短数字。
+        // 这个回填只影响 v6 之前的旧数据；之后新增的一律带 source。
+        conn.execute(
+            "UPDATE novel_shelf SET source = CASE WHEN length(aid) >= 10 THEN 'fqapi' ELSE 'wenku8' END WHERE source = ''",
+            [],
+        )?;
+        conn.pragma_update(None, "user_version", 6)?;
+    }
     Ok(())
+}
+
+/// 表里是否已有某列。
+///
+/// SQLite 的 `ALTER TABLE ADD COLUMN` 不支持 `IF NOT EXISTS`，而迁移可能跑在
+/// 全新库（建表已包含该列）或旧库（需要补列）上，所以必须先探列名。
+/// 表名来自本文件的静态字面量，不存在注入面。
+fn has_column(conn: &rusqlite::Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        if row.get::<_, String>(1)? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// 当前 Unix 秒

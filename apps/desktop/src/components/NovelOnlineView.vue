@@ -8,14 +8,19 @@ import NovelCard from "@/components/NovelCard.vue";
 import NovelSearchBar from "@/components/NovelSearchBar.vue";
 import NovelDetailPanel from "@/components/NovelDetailPanel.vue";
 import BookReader from "@/components/BookReader.vue";
-import { openWenku8Login, isLoginRequiredError } from "@/novel/wenku8Login";
+import { openWenku8Login } from "@/novel/wenku8Login";
 import { reloginRequested, clearRelogin } from "@/novel/wenku8Auth";
-import type {
-  NovelCover,
-  NovelRecommendBlock,
-  NovelShelfItem,
-  Wenku8LoginStatus,
-} from "@shared/types";
+import type { NovelCover, NovelRecommendBlock, Wenku8LoginStatus } from "@shared/types";
+
+/**
+ * 从共享书架跳进来时，直接打开指定书目的详情。
+ *
+ * 书架页拿到 `source=wenku8` 的条目后把 BooksView 的 activeView 切到本组件，
+ * 并把 aid/title 通过这两个 prop 传进来；本组件挂载时打开详情并通知父级清空，
+ * 避免下次重新挂载时又自动打开同一本。
+ */
+const props = defineProps<{ openAid?: string; openTitle?: string }>();
+const emit = defineEmits<{ (e: "opened"): void }>();
 
 const settings = useSettingsStore();
 const t = (key: string) => translate(settings.lang, key);
@@ -35,7 +40,6 @@ const rankLoading = ref(false);
 const homeError = ref("");
 
 const recommend = ref<NovelRecommendBlock[]>([]);
-const shelf = ref<NovelShelfItem[]>([]);
 
 // ---- Wenku8 登录态 ----
 const loginStatus = ref<Wenku8LoginStatus>({ loggedIn: false });
@@ -57,7 +61,6 @@ async function doLogin() {
   try {
     const status = await openWenku8Login();
     loginStatus.value = status;
-    await loadShelf(); // 登录后立即刷新在线书架
   } catch (e) {
     loginBanner.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -69,23 +72,8 @@ async function doLogout() {
   try {
     await capabilities.wenku8Logout();
     loginStatus.value = { loggedIn: false };
-    await loadShelf();
   } catch (e) {
     console.warn("[Novel] 退出登录失败:", e);
-  }
-}
-
-async function loadShelf() {
-  try {
-    shelf.value = await capabilities.novelShelfList();
-    // 若抓取结果提示需要重新登录（在线书架被拦截），给出重登提示
-  } catch (e) {
-    if (isLoginRequiredError(e)) {
-      loginBanner.value = "登录态已失效，请重新登录以同步书架。";
-      await refreshLoginStatus();
-    } else {
-      console.warn("[Novel] 书架加载失败:", e);
-    }
   }
 }
 
@@ -119,7 +107,7 @@ async function loadRecommend() {
 
 async function loadHome() {
   homeError.value = "";
-  await Promise.all([loadShelf(), loadRank(), loadRecommend()]);
+  await Promise.all([loadRank(), loadRecommend()]);
 }
 
 /** 适配共享搜索栏：它回传关键词，本页的 doSearch 读的是 searchQuery ref。 */
@@ -158,7 +146,7 @@ async function doSearch() {
   }
 }
 
-function openNovel(item: NovelCover | NovelShelfItem) {
+function openNovel(item: NovelCover) {
   selected.value = { aid: item.aid, title: item.title };
   view.value = "detail";
 }
@@ -174,12 +162,10 @@ function openReader(cid: string, chapterTitle: string) {
 
 function onReaderClose() {
   view.value = "detail";
-  void loadShelf();
 }
 
 function onDetailBack() {
   view.value = "home";
-  void loadShelf();
 }
 
 function pickRank(sort: string) {
@@ -190,6 +176,10 @@ function pickRank(sort: string) {
 onMounted(() => {
   void refreshLoginStatus();
   void loadHome();
+  if (props.openAid) {
+    openNovel({ aid: props.openAid, title: props.openTitle ?? "", imageUrl: "" });
+    emit("opened");
+  }
 });
 </script>
 
@@ -213,6 +203,7 @@ onMounted(() => {
       v-else-if="view === 'detail'"
       :aid="selected.aid"
       :initial-title="selected.title"
+      source="wenku8"
       @back="onDetailBack"
       @read="openReader"
     />
@@ -240,20 +231,6 @@ onMounted(() => {
           {{ t("novel.relogin") }}
         </m3e-button>
       </div>
-
-      <!-- 书架（置顶） -->
-      <section v-if="shelf.length" class="section">
-        <h3 class="section-title">{{ t("novel.shelf") }}</h3>
-        <div class="novel-grid">
-          <NovelCard
-            v-for="n in shelf"
-            :key="n.aid"
-            :item="n"
-            :subtitle="n.author"
-            @open="openNovel(n)"
-          />
-        </div>
-      </section>
 
       <!-- 搜索：与另外两个在线源共用同一个组件，保证视觉一致 -->
       <NovelSearchBar
@@ -317,8 +294,7 @@ onMounted(() => {
           !homeError &&
           !searchResults.length &&
           !rankResults.length &&
-          !recommend.length &&
-          !shelf.length
+          !recommend.length
         "
         class="state"
       >

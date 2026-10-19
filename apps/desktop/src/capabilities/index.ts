@@ -792,12 +792,19 @@ export const capabilities = {
   novelShelfList(): Promise<NovelShelfItem[]> {
     return safeInvoke("novel_shelf_list");
   },
-  novelShelfAdd(aid: string, title: string, author?: string, cover?: string): Promise<void> {
+  novelShelfAdd(
+    aid: string,
+    title: string,
+    author?: string,
+    cover?: string,
+    source?: string,
+  ): Promise<void> {
     return safeInvoke("novel_shelf_add", {
       aid,
       title,
       author: author ?? null,
       cover: cover ?? null,
+      source: source ?? null,
     });
   },
   novelShelfRemove(aid: string): Promise<void> {
@@ -1376,6 +1383,34 @@ export const capabilities = {
       return (result as { path: string }).path;
     }
     return null;
+  },
+
+  /**
+   * 选择要导入的书籍文件（可多选），取消返回空数组。
+   *
+   * 书籍从 v0.x 起**不再参与媒体扫描**：扫描会把未见到的条目软删除，
+   * 用户手动挑的书不该被一次「重新扫描」清掉。导入走独立的 `book_import` 命令，
+   * 在 files 表里写 `imported=1`，扫描的软删除会跳过这些行。
+   */
+  async pickBookFiles(): Promise<string[]> {
+    if (!isDesktop) return [];
+    const result = await dialogOpen({
+      multiple: true,
+      title: "导入书籍",
+      filters: [
+        {
+          name: "电子书",
+          extensions: ["epub", "pdf", "mobi", "azw3", "fb2", "cbz", "cbr", "txt"],
+        },
+      ],
+    });
+    if (Array.isArray(result)) return result.filter((p): p is string => typeof p === "string");
+    if (typeof result === "string") return [result];
+    return [];
+  },
+  /** 批量导入书籍；返回成功导入的条数 */
+  importBooks(paths: string[]): Promise<number> {
+    return safeInvoke("book_import", { paths });
   },
 
   /** 选择 osu 谱面归档文件（.osz），返回路径或 null */

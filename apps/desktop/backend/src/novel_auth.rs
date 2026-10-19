@@ -658,6 +658,7 @@ fn parse_bookcase(html: &str) -> Vec<NovelShelfItem> {
                 cover: String::new(),
                 added_at: crate::commands::now_ms(),
                 online: true,
+                source: "wenku8".to_string(),
             });
         }
     }

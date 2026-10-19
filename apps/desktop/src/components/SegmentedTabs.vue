@@ -20,6 +20,14 @@ const props = defineProps<{
   bare?: boolean;
   /** 整组禁用（如皮肤锁定时的主题切换） */
   disabled?: boolean;
+  /**
+   * 只渲染内容面板与方向感知滑动过渡，不渲染按钮组。
+   *
+   * 书籍 / 图片 / 视频页把一级选项收进了 PageHeader 的标题下拉里，按钮组不再出现；
+   * 但内容切换仍需要这套「旧内容左移淡出、新内容从右滑入」的过渡与 keep-alive 包装，
+   * 所以保留本组件、只隐藏按钮。
+   */
+  hideTabs?: boolean;
 }>();
 
 const emit = defineEmits<{ "update:modelValue": [value: T] }>();
@@ -59,6 +67,7 @@ const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() 
  * 每次都在「确认 shadowRoot 与内部 <slot> 就绪」后，多时机重派发 slotchange。
  */
 async function syncConnected() {
+  if (props.hideTabs) return;
   const group = groupRef.value as M3eGroup | null;
   if (!group) return;
   if (!customElements.get("m3e-button-group")) {
@@ -101,7 +110,13 @@ watch(
 
 <template>
   <div class="seg-wrap" :class="{ bare }">
-    <m3e-button-group ref="groupRef" class="online-tabs" variant="connected" size="medium">
+    <m3e-button-group
+      v-if="!hideTabs"
+      ref="groupRef"
+      class="online-tabs"
+      variant="connected"
+      size="medium"
+    >
       <m3e-button
         v-for="tab in tabs"
         :key="tab.value"

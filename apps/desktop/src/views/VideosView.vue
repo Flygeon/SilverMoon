@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onActivated, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import PageHeader from "@/components/PageHeader.vue";
+import PageHeader, { type PageMenuItem } from "@/components/PageHeader.vue";
 import LibraryToolbar from "@/components/LibraryToolbar.vue";
 import MediaGrid from "@/components/MediaGrid.vue";
 import MediaViewer from "@/components/MediaViewer.vue";
@@ -26,17 +26,15 @@ const bannerDismissed = ref(false);
 /** 详情查看器当前索引；-1 表示未打开 */
 const viewerIndex = ref(-1);
 /**
- * 本地 / 动漫 / B站 分段。
+ * 本地 / 动漫 / B站。
  *
- * 对齐 ImagesView 的动态多 tab 范式：本地常驻，动漫与 B站 各自随设置开关出现；
+ * 一级选项已收进标题下拉；动漫与 B站 各自随设置开关出现，
  * 开关关掉时若还停在该页，`activeTab` 回落到本地（否则内容区会空白）。
  */
 type VideoTab = "local" | "anime" | "bilibili";
 const videosTab = ref<VideoTab>("local");
-const videoTabs = computed<{ value: VideoTab; label: string; icon: string }[]>(() => {
-  const tabs: { value: VideoTab; label: string; icon: string }[] = [
-    { value: "local", label: t("videos.local"), icon: "movie" },
-  ];
+const videoTabs = computed<PageMenuItem[]>(() => {
+  const tabs: PageMenuItem[] = [{ value: "local", label: t("videos.local"), icon: "movie" }];
   if (settings.onlineAnimeEnabled) {
     tabs.push({ value: "anime", label: t("videos.online"), icon: "public" });
   }
@@ -54,6 +52,10 @@ const activeTab = computed<VideoTab>(() => {
 
 function t(key: string) {
   return translate(settings.lang, key);
+}
+
+function selectTab(value: string) {
+  videosTab.value = value as VideoTab;
 }
 
 function load() {
@@ -86,10 +88,20 @@ function clearSearch() {
 
 <template>
   <div class="view">
-    <PageHeader :title="t('nav.videos')" :description="t('navDesc.videos')" />
+    <PageHeader
+      :title="t('nav.videos')"
+      :description="t('navDesc.videos')"
+      :menu-items="videoTabs"
+      :menu-value="activeTab"
+      @update:menu-value="selectTab"
+    />
 
-    <!-- 本地 / 动漫 / B站 分段（在线开关全关时不渲染分段条） -->
-    <SegmentedTabs v-model="videosTab" :tabs="videoTabs.length > 1 ? videoTabs : []">
+    <!-- 本地 / 动漫 / B站：一级选项已收进标题下拉，这里只保留内容切换过渡 -->
+    <SegmentedTabs
+      :model-value="activeTab"
+      :tabs="videoTabs.map((o) => ({ value: o.value, label: o.label, icon: o.icon }))"
+      hide-tabs
+    >
       <!-- 本地视频 -->
       <template v-if="activeTab === 'local'">
         <LibraryToolbar :count="library.totalFor('video')" @changed="load" />

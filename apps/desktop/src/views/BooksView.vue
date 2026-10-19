@@ -1,81 +1,90 @@
 <script setup lang="ts">
 import { computed, onActivated, onMounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
-import PageHeader from "@/components/PageHeader.vue";
+import PageHeader, { type PageMenuItem } from "@/components/PageHeader.vue";
 import LibraryToolbar from "@/components/LibraryToolbar.vue";
 import MediaGrid from "@/components/MediaGrid.vue";
 import BookReader from "@/components/BookReader.vue";
 import NovelOnlineView from "@/components/NovelOnlineView.vue";
 import NovelBqgView from "@/components/NovelBqgView.vue";
 import NovelFqapiView from "@/components/NovelFqapiView.vue";
+import NovelShelfView from "@/components/NovelShelfView.vue";
 import WritingStudio from "@/components/WritingStudio.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import SegmentedTabs from "@/components/SegmentedTabs.vue";
-import NovelChannelBar from "@/components/NovelChannelBar.vue";
 import { useLibraryStore } from "@/stores/library";
 import { useSettingsStore } from "@/stores/settings";
+import { showAppToast } from "@/components/AppToast.vue";
 import { capabilities } from "@/capabilities";
 import { translate } from "@shared/i18n";
-import type { MediaEntry } from "@shared/types";
+import type { MediaEntry, NovelShelfItem } from "@shared/types";
 
 const library = useLibraryStore();
 const settings = useSettingsStore();
-const router = useRouter();
 
 const items = computed(() => library.entries("book"));
-const hasScanDirs = computed(() => settings.scanDirs.length > 0);
 /** 正在阅读的书；null 表示未打开阅读器 */
 const reading = ref<MediaEntry | null>(null);
-/** 一级导航：本地 / 在线 / 创作。三个在线源不再平铺，收进二级的下拉。 */
-const topTab = ref<"local" | "online" | "write">("local");
 
-/** 在线渠道（对应某个具体的源）。默认取第一个已启用的。 */
-const onlineChannels = computed(() => {
-  const list: { value: string; label: string; icon: string }[] = [];
+/**
+ * 书籍页的内容域。
+ *
+ * 原来的「本地 / 在线 / 创作」分段 + 二级渠道下拉，现在全部收进标题下拉：
+ * 书架 / 本地 / 轻小说 / 网络小说 / 番茄小说 / 创作。
+ */
+type BookView = "shelf" | "local" | "wenku8" | "bqg" | "fq" | "write";
+const activeView = ref<BookView>("shelf");
+
+/** 从共享书架跳转到某个源时，把要打开的书带过去（源组件挂载时读取） */
+const pendingOpen = ref<{ aid: string; title: string } | null>(null);
+
+const viewOptions = computed<PageMenuItem[]>(() => {
+  const list: PageMenuItem[] = [
+    { value: "shelf", label: t("books.shelf"), icon: "bookmarks" },
+    { value: "local", label: t("books.local"), icon: "folder_open" },
+  ];
   if (settings.onlineNovelEnabled) {
-    list.push({ value: "online", label: "轻小说（文库8）", icon: "public" });
+    list.push({ value: "wenku8", label: t("books.wenku8"), icon: "public" });
   }
   if (settings.bqgNovelEnabled) {
-    list.push({ value: "bqg", label: "网络小说（笔趣阁）", icon: "auto_stories" });
+    list.push({ value: "bqg", label: t("books.bqg"), icon: "auto_stories" });
   }
   if (settings.fqNovelEnabled) {
-    list.push({ value: "fq", label: "番茄小说", icon: "local_library" });
+    list.push({ value: "fq", label: t("books.fq"), icon: "local_library" });
   }
+  list.push({ value: "write", label: t("write.tab"), icon: "edit_note" });
   return list;
 });
-
-const onlineChannel = ref("");
-
-/** 一级分段：本地常驻；有任一在线源才显示「在线」；创作常驻。 */
-const topTabs = computed(() => {
-  const tabs: { value: string; label: string; icon: string }[] = [
-    { value: "local", label: t("books.local"), icon: "menu_book" },
-  ];
-  if (onlineChannels.value.length) {
-    tabs.push({ value: "online", label: "在线", icon: "public" });
-  }
-  tabs.push({ value: "write", label: t("write.tab"), icon: "edit_note" });
-  return tabs;
-});
-
-// 渠道列表变化（用户开/关某个源）时，保证当前选中项仍然有效
-watch(
-  onlineChannels,
-  (list) => {
-    if (!list.length) return;
-    if (!list.some((c) => c.value === onlineChannel.value)) {
-      onlineChannel.value = list[0].value;
-    }
-  },
-  { immediate: true },
-);
-
-/** 应用内可阅读的格式，其余仍交系统程序 */
-const READABLE = ["epub", "pdf"];
 
 function t(key: string) {
   return translate(settings.lang, key);
 }
+
+/**
+ * 仅在「用户关掉某个在线源」时把当前页回落，不要用 viewOptions 做通用 watch：
+ * 从书架打开一本已关闭源的书时，该源不在 options 里，通用 watch 会立刻把用户踢回书架。
+ */
+watch(
+  () => [settings.onlineNovelEnabled, settings.bqgNovelEnabled, settings.fqNovelEnabled],
+  () => {
+    if (!viewOptions.value.some((o) => o.value === activeView.value)) activeView.value = "shelf";
+  },
+);
+
+function selectView(value: string) {
+  pendingOpen.value = null;
+  activeView.value = value as BookView;
+}
+
+/** 点击书架条目：切到对应源的详情页 */
+function openFromShelf(item: NovelShelfItem) {
+  const source = item.source || "wenku8";
+  const view: BookView = source === "fqapi" ? "fq" : source === "bqg" ? "bqg" : "wenku8";
+  pendingOpen.value = { aid: item.aid, title: item.title };
+  activeView.value = view;
+}
+
+/** 应用内可阅读的格式，其余仍交系统程序 */
+const READABLE = ["epub", "pdf"];
 
 function load() {
   return library.refresh("book");
@@ -98,73 +107,114 @@ function clearSearch() {
   library.search = "";
   void load();
 }
+
+// ---- 导入（书籍不再走扫描）----
+const importing = ref(false);
+
+async function importBooks() {
+  if (importing.value) return;
+  importing.value = true;
+  try {
+    const paths = await capabilities.pickBookFiles();
+    if (!paths.length) return;
+    const count = await capabilities.importBooks(paths);
+    if (count > 0) {
+      await load();
+      await library.refreshCounts();
+      showAppToast(t("books.importDone").replace("{n}", String(count)));
+    } else {
+      showAppToast(t("books.importNone"), { tone: "error" });
+    }
+  } catch (e) {
+    showAppToast(e instanceof Error ? e.message : String(e), { tone: "error" });
+  } finally {
+    importing.value = false;
+  }
+}
 </script>
 
 <template>
   <div class="view">
-    <PageHeader :title="t('nav.books')" :description="t('navDesc.books')" />
-
-    <!-- 一级：本地 / 在线（渠道走下拉） / 创作 -->
-    <div class="lv1">
-      <SegmentedTabs v-model="topTab" :tabs="topTabs" />
-    </div>
-
-    <!-- 在线：渠道下拉。三个在线源不再平铺成胶囊，避免横条越加越挤。 -->
-    <NovelChannelBar
-      v-if="topTab === 'online'"
-      v-model="onlineChannel"
-      :channels="onlineChannels"
+    <PageHeader
+      :title="t('nav.books')"
+      :description="t('navDesc.books')"
+      :menu-items="viewOptions"
+      :menu-value="activeView"
+      @update:menu-value="selectView"
     />
 
-    <!-- 本地书籍 -->
-    <template v-if="topTab === 'local'">
-      <LibraryToolbar :count="library.totalFor('book')" @changed="load" />
+    <!-- hide-tabs：按钮组已经收进标题下拉，这里只保留方向感知的内容切换过渡 -->
+    <SegmentedTabs
+      :model-value="activeView"
+      :tabs="viewOptions.map((o) => ({ value: o.value, label: o.label, icon: o.icon }))"
+      hide-tabs
+    >
+      <!-- 共享书架：番茄 / 轻小说 / 网络小说 的书汇总在这里 -->
+      <NovelShelfView v-if="activeView === 'shelf'" @open="openFromShelf" />
 
-      <MediaGrid
-        v-if="library.loading || items.length"
-        :items="items"
-        :loading="library.loading"
-        aspect="3/4"
-        :min-width="150"
-        subtitle="size"
-        @open="open"
-        @favorite="library.toggleFavorite"
+      <!-- 本地：只显示手动导入的书，不参与媒体扫描 -->
+      <template v-else-if="activeView === 'local'">
+        <LibraryToolbar
+          :count="library.totalFor('book')"
+          :import-label="t('books.import')"
+          :importing="importing"
+          @changed="load"
+          @import="importBooks"
+        />
+
+        <MediaGrid
+          v-if="library.loading || items.length"
+          :items="items"
+          :loading="library.loading"
+          aspect="3/4"
+          :min-width="150"
+          subtitle="size"
+          @open="open"
+          @favorite="library.toggleFavorite"
+        />
+
+        <EmptyState
+          v-else-if="library.search"
+          icon="search_off"
+          :title="`未找到与「${library.search}」匹配的书籍`"
+          description="试试其它关键词，或清除搜索条件。"
+          action-label="清除搜索"
+          @action="clearSearch"
+        />
+
+        <EmptyState
+          v-else
+          icon="menu_book"
+          :title="t('books.importEmptyTitle')"
+          :description="t('books.importEmptyHint')"
+          :action-label="t('books.import')"
+          @action="importBooks"
+        />
+      </template>
+
+      <!-- 三个在线源：各自不再渲染书架，书架统一在上面 -->
+      <NovelOnlineView
+        v-else-if="activeView === 'wenku8'"
+        :open-aid="pendingOpen?.aid"
+        :open-title="pendingOpen?.title"
+        @opened="pendingOpen = null"
+      />
+      <NovelBqgView
+        v-else-if="activeView === 'bqg'"
+        :open-aid="pendingOpen?.aid"
+        :open-title="pendingOpen?.title"
+        @opened="pendingOpen = null"
+      />
+      <NovelFqapiView
+        v-else-if="activeView === 'fq'"
+        :open-aid="pendingOpen?.aid"
+        :open-title="pendingOpen?.title"
+        @opened="pendingOpen = null"
       />
 
-      <EmptyState
-        v-else-if="library.search"
-        icon="search_off"
-        :title="`未找到与「${library.search}」匹配的书籍`"
-        description="试试其它关键词，或清除搜索条件。"
-        action-label="清除搜索"
-        @action="clearSearch"
-      />
-
-      <EmptyState
-        v-else
-        icon="menu_book"
-        :title="t('library.empty')"
-        :description="
-          hasScanDirs
-            ? '已配置扫描目录，点击开始扫描以建立书籍索引。支持 EPUB / PDF / MOBI 等格式。'
-            : '尚未配置扫描目录。请先在设置中添加要索引的文件夹。'
-        "
-        :action-label="hasScanDirs ? t('actions.scan') : ''"
-        secondary-label="前往设置"
-        @action="library.startScan()"
-        @secondary="router.push('/settings')"
-      />
-    </template>
-
-    <!-- 在线：按当前渠道渲染对应的源视图 -->
-    <template v-else-if="topTab === 'online'">
-      <NovelOnlineView v-if="onlineChannel === 'online'" />
-      <NovelBqgView v-else-if="onlineChannel === 'bqg'" />
-      <NovelFqapiView v-else-if="onlineChannel === 'fq'" />
-    </template>
-
-    <!-- 创作（本地 Markdown 写作工作台） -->
-    <WritingStudio v-else-if="topTab === 'write'" />
+      <!-- 创作（本地 Markdown 写作工作台） -->
+      <WritingStudio v-else-if="activeView === 'write'" />
+    </SegmentedTabs>
 
     <BookReader v-if="reading" :item="reading" @close="reading = null" />
   </div>
@@ -173,9 +223,5 @@ function clearSearch() {
 <style scoped>
 .view {
   min-height: 100%;
-}
-
-.lv1 {
-  margin-bottom: 12px;
 }
 </style>

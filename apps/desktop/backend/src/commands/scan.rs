@@ -16,7 +16,7 @@ use silvermoon_ipc::{EventEmitter, HostApi, State};
 use walkdir::WalkDir;
 
 use crate::commands::{init_db, now_secs, DbState, JobState, ScanJob, ScanJobInfo};
-use crate::media::{classify, ext_of};
+use crate::media::{classify, ext_of, MediaKind};
 
 /// 扫描范围模式。
 ///
@@ -271,6 +271,12 @@ fn run_scan(
             let path = entry.path();
             let ext = ext_of(path);
             let Some(kind) = classify(&ext) else { continue };
+            // 书籍只走「手动导入」（book_import）：扫描不再收录。
+            // 否则一次误扫就会把用户没挑过的书塞进本地书库，而导入的书又会被
+            // 「本次未见」的软删除清掉 —— 两个方向都不对。
+            if kind == MediaKind::Book {
+                continue;
+            }
 
             // 一次 stat 拿到 size 与 mtime，避免旧实现的两次系统调用
             let Ok(md) = entry.metadata() else { continue };
@@ -389,9 +395,11 @@ fn run_scan(
         tx.commit().map_err(|e| e.to_string())?;
 
         // ---- 阶段 3：软删除本次未见到的条目 ----
+        // 只软删除「扫描发现」的条目：imported=1 是用户手动导入的书，
+        // 它们本来就不在扫描范围内，不能被一次重新扫描清掉。
         removed = conn
             .execute(
-                "UPDATE files SET deleted=1 WHERE deleted=0 AND scanned_at < ?1",
+                "UPDATE files SET deleted=1 WHERE deleted=0 AND imported=0 AND scanned_at < ?1",
                 rusqlite::params![scanned_at],
             )
             .map_err(|e| e.to_string())?;
@@ -557,6 +565,11 @@ fn list_filter(q: &ListQuery) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
     if let Some(t) = q.kind.as_deref().filter(|t| !t.is_empty()) {
         where_sql.push_str(" AND f.type = ?");
         params.push(Box::new(t.to_string()));
+        // 书籍只认导入项：扫描不再收录书籍；升级时旧书已回填为 imported=1，
+        // 这里再兜一道，避免任何 imported=0 的书籍记录漏进本地书库。
+        if t == "book" {
+            where_sql.push_str(" AND f.imported = 1");
+        }
     }
     if let Some(min) = q.min_size.filter(|m| *m > 0) {
         where_sql.push_str(" AND f.size >= ?");
@@ -694,7 +707,12 @@ pub fn library_counts(
     let db = app.state::<DbState>();
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT type, COUNT(*) FROM files WHERE deleted=0 AND size >= ?1 GROUP BY type")
+        // 书籍只统计导入项，与列表口径一致（历史扫描残留不算）。
+        .prepare(
+            "SELECT type, COUNT(*) FROM files
+             WHERE deleted=0 AND size >= ?1 AND (type <> 'book' OR imported = 1)
+             GROUP BY type",
+        )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(rusqlite::params![min_size.unwrap_or(0).max(0)], |r| {

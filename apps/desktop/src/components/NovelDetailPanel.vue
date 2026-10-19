@@ -8,7 +8,12 @@ import { requestRelogin } from "@/novel/wenku8Auth";
 import { isLoginRequiredError } from "@/novel/wenku8Login";
 import type { NovelDetail, NovelVolume } from "@shared/types";
 
-const props = defineProps<{ aid: string; initialTitle?: string }>();
+const props = defineProps<{
+  aid: string;
+  initialTitle?: string;
+  /** 书架来源：共享书架按这个字段决定点击后打开哪个源的详情 */
+  source: "wenku8" | "bqg";
+}>();
 const emit = defineEmits<{
   (e: "back"): void;
   (e: "read", cid: string, title: string): void;
@@ -33,7 +38,7 @@ onMounted(async () => {
     ]);
     detail.value = d;
     volumes.value = vols;
-    inShelf.value = shelf.some((s) => s.aid === props.aid);
+    inShelf.value = shelf.some((s) => s.aid === props.aid && s.source === props.source);
   } catch (e) {
     if (isLoginRequiredError(e)) {
       requestRelogin();
@@ -59,6 +64,7 @@ async function toggleShelf() {
         detail.value.title,
         detail.value.author,
         detail.value.imgUrl,
+        props.source,
       );
       inShelf.value = true;
     }

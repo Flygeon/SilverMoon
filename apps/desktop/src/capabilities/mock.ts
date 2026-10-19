@@ -399,7 +399,20 @@ export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case "empty_trash":
     case "clear_thumbnail_cache":
       return as(0);
+    case "book_import": {
+      // 浏览器预览没有真实文件系统；按传入路径数量返回，界面能走完导入流程
+      const paths = (args?.paths as string[]) ?? [];
+      return as(paths.length);
+    }
     case "get_book_progress":
+      return as(null);
+    // ---- 在线小说共享书架（浏览器预览给空书架，避免模板拿到 null）----
+    case "novel_shelf_list":
+      return as([]);
+    case "novel_shelf_add":
+    case "novel_shelf_remove":
+      return as(undefined);
+    case "novel_progress_get":
       return as(null);
     case "save_book_progress":
       return as(undefined);

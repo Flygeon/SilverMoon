@@ -6,8 +6,8 @@
  * 字段归一化成与文库8 / 笔趣阁一致的 `Novel*` 形状，因此复用同一套
  * `NovelCard` / `BookReader` —— 不另造阅读器。
  *
- * 四个视图：
- *   home    推荐流（按模块分组）+ 排行榜 + 我的书架
+ * 三个视图（书架已统一到 BooksView 的「书架」页）：
+ *   home    推荐流（按模块分组）+ 排行榜
  *   detail  书籍详情（标签用 MD3 chip）
  *   reader  阅读器（正文由 sidecar 解析成段落）
  *
@@ -30,7 +30,11 @@ import {
   fqapiSelftest,
   type FqapiFeedSection,
 } from "@/utils/fqapiNovel";
-import type { NovelCover, NovelDetail, NovelProgress, NovelVolume } from "@shared/types";
+import type { NovelCover, NovelDetail, NovelShelfItem, NovelVolume } from "@shared/types";
+
+/** 从共享书架跳进来时直接打开指定书目（见 BooksView 的 openFromShelf）。 */
+const props = defineProps<{ openAid?: string; openTitle?: string }>();
+const emit = defineEmits<{ (e: "opened"): void }>();
 
 const view = ref<"home" | "detail" | "reader">("home");
 const selected = ref<{ aid: string; title: string }>({ aid: "", title: "" });
@@ -56,20 +60,21 @@ const rankTitle = ref("排行榜");
 const rankLoading = ref(false);
 const rankError = ref("");
 
-/** 我的书架（与另外两个源共用同一张 Rust 表） */
-const shelf = ref<NovelCover[]>([]);
-const progressMap = ref<Record<string, NovelProgress>>({});
+/** 当前书是否已在共享书架里（书架页负责展示，本页只保留详情页的加入/移出按钮） */
+const shelf = ref<NovelShelfItem[]>([]);
 
 const detail = ref<NovelDetail | null>(null);
 const detailLoading = ref(false);
 const detailError = ref("");
 const chapters = ref<{ cid: string; title: string }[]>([]);
-const inShelf = computed(() => shelf.value.some((b) => b.aid === selected.value.aid));
+const inShelf = computed(() =>
+  shelf.value.some((b) => b.aid === selected.value.aid && b.source === "fqapi"),
+);
 
 const selftestError = ref("");
 const selftestOk = ref<boolean | null>(null);
 
-const homeTab = ref<"recommend" | "rank" | "shelf">("recommend");
+const homeTab = ref<"recommend" | "rank">("recommend");
 
 function log(msg: string) {
   void capabilities.appLog(`[novel-fqapi] ${msg}`).catch(() => {});
@@ -135,21 +140,8 @@ async function loadRank() {
 // ---- 书架 ----
 async function loadShelf() {
   try {
-    const items = await capabilities.novelShelfList();
-    // NovelShelfItem 用 `cover`，卡片组件要 `imageUrl`：这里做一次映射，
-    // 避免为了对齐字段去改三处共用的类型。
-    shelf.value = items.map((it) => ({
-      aid: it.aid,
-      title: it.title,
-      imageUrl: it.cover,
-      author: it.author || null,
-    }));
-    const map: Record<string, NovelProgress> = {};
-    for (const b of shelf.value) {
-      const p = await capabilities.novelProgressGet(b.aid).catch(() => null);
-      if (p) map[b.aid] = p;
-    }
-    progressMap.value = map;
+    // 只需要 aid + source 来判断「当前书是否已在书架」；展示交给共享书架页。
+    shelf.value = (await capabilities.novelShelfList()) ?? [];
   } catch (e) {
     log(`书架读取失败：${errText(e)}`);
   }
@@ -162,7 +154,7 @@ async function toggleShelf() {
     if (inShelf.value) {
       await capabilities.novelShelfRemove(d.aid);
     } else {
-      await capabilities.novelShelfAdd(d.aid, d.title, d.author, d.imgUrl);
+      await capabilities.novelShelfAdd(d.aid, d.title, d.author, d.imgUrl, "fqapi");
     }
     await loadShelf();
   } catch (e) {
@@ -240,13 +232,16 @@ function onDetailBack() {
   view.value = "home";
 }
 
-function switchHomeTab(tab: "recommend" | "rank" | "shelf") {
+function switchHomeTab(tab: "recommend" | "rank") {
   homeTab.value = tab;
   if (tab === "rank") void loadRank();
-  if (tab === "shelf") void loadShelf();
 }
 
 onMounted(async () => {
+  if (props.openAid) {
+    void openDetail({ aid: props.openAid, title: props.openTitle ?? "", imageUrl: "" });
+    emit("opened");
+  }
   await runSelftest();
   if (!selftestOk.value) return;
   void loadFeed();
@@ -384,13 +379,6 @@ onMounted(async () => {
             >
               排行榜
             </m3e-button>
-            <m3e-button
-              :variant="homeTab === 'shelf' ? 'filled' : 'outlined'"
-              size="small"
-              @click="switchHomeTab('shelf')"
-            >
-              我的书架（{{ shelf.length }}）
-            </m3e-button>
           </m3e-button-group>
         </div>
 
@@ -430,23 +418,6 @@ onMounted(async () => {
             </div>
           </template>
           <div v-else-if="!rankError" class="state">暂无榜单</div>
-        </div>
-
-        <!-- 书架 -->
-        <div v-else>
-          <div v-if="shelf.length" class="grid">
-            <NovelCard
-              v-for="novel in shelf"
-              :key="novel.aid"
-              :item="novel"
-              :subtitle="progressMap[novel.aid]?.chapterTitle"
-              @open="openDetail(novel)"
-            />
-          </div>
-          <div v-else class="empty-hint">
-            <span class="material-symbols-outlined">bookmark_border</span>
-            <p>书架是空的。在书籍详情页点「加入书架」</p>
-          </div>
         </div>
       </template>
     </div>

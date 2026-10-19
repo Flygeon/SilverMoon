@@ -5,9 +5,18 @@ import { useLibraryStore, type SortKey } from "@/stores/library";
 import { useSettingsStore } from "@/stores/settings";
 import { translate } from "@shared/i18n";
 
-const props = defineProps<{ count: number }>();
+const props = defineProps<{
+  count: number;
+  /**
+   * 传入后把右侧的「重新扫描」换成导入按钮，并隐藏扫描进度 / 取消。
+   *
+   * 书籍页用它：书籍从「扫描索引」改为「手动导入」，扫描按钮在那里没有意义。
+   */
+  importLabel?: string;
+  importing?: boolean;
+}>();
 
-const emit = defineEmits<{ (e: "changed"): void }>();
+const emit = defineEmits<{ (e: "changed"): void; (e: "import"): void }>();
 
 const library = useLibraryStore();
 const settings = useSettingsStore();
@@ -81,24 +90,38 @@ function clearSearch() {
 
     <div class="spacer"></div>
 
-    <!-- 扫描中显示进度与取消，否则显示扫描按钮 -->
-    <div v-if="library.scanning" class="scan-progress">
-      <!-- 枚举阶段总数未知 -> indeterminate；否则按百分比显示 -->
-      <m3e-linear-progress-indicator
-        class="scan-bar"
-        :indeterminate="!library.progress?.total"
-        :max="100"
-        :value="library.progress?.percent ?? 0"
-      ></m3e-linear-progress-indicator>
-      <span class="scan-text">{{ library.scanLabel }}</span>
-      <m3e-button variant="text" size="small" @click="library.cancelScan()">
-        {{ t("actions.cancel") }}
-      </m3e-button>
-    </div>
-    <m3e-button v-else variant="tonal" size="small" @click="library.startScan()">
-      <span slot="icon" class="material-symbols-outlined">refresh</span>
-      {{ t("actions.rescan") }}
+    <!-- 书籍页：导入按钮替代扫描 -->
+    <m3e-button
+      v-if="importLabel"
+      variant="filled"
+      size="small"
+      :disabled="importing"
+      @click="emit('import')"
+    >
+      <span slot="icon" class="material-symbols-outlined">add</span>
+      {{ importing ? t("books.importing") : importLabel }}
     </m3e-button>
+
+    <template v-else>
+      <!-- 扫描中显示进度与取消，否则显示扫描按钮 -->
+      <div v-if="library.scanning" class="scan-progress">
+        <!-- 枚举阶段总数未知 -> indeterminate；否则按百分比显示 -->
+        <m3e-linear-progress-indicator
+          class="scan-bar"
+          :indeterminate="!library.progress?.total"
+          :max="100"
+          :value="library.progress?.percent ?? 0"
+        ></m3e-linear-progress-indicator>
+        <span class="scan-text">{{ library.scanLabel }}</span>
+        <m3e-button variant="text" size="small" @click="library.cancelScan()">
+          {{ t("actions.cancel") }}
+        </m3e-button>
+      </div>
+      <m3e-button v-else variant="tonal" size="small" @click="library.startScan()">
+        <span slot="icon" class="material-symbols-outlined">refresh</span>
+        {{ t("actions.rescan") }}
+      </m3e-button>
+    </template>
   </div>
 </template>
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onActivated, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import PageHeader from "@/components/PageHeader.vue";
+import PageHeader, { type PageMenuItem } from "@/components/PageHeader.vue";
 import LibraryToolbar from "@/components/LibraryToolbar.vue";
 import MediaGrid from "@/components/MediaGrid.vue";
 import MediaViewer from "@/components/MediaViewer.vue";
@@ -21,11 +21,10 @@ const items = computed(() => library.entries("image"));
 const hasScanDirs = computed(() => settings.scanDirs.length > 0);
 /** 详情查看器当前索引；-1 表示未打开 */
 const viewerIndex = ref(-1);
-/** 本地 / Pixiv / 绘画 分段（Pixiv 仅在线图片开关开启时出现） */
+/** 本地 / Pixiv / 绘画（Pixiv 仅在线图片开关开启时出现在标题下拉里） */
 const imagesTab = ref<"local" | "pixiv" | "draw">("local");
-/** 在线图片未启用时不传 tab，组件只渲染内容、不显示分段条 */
-const imageTabs = computed(() => {
-  const tabs = [{ value: "local", label: t("pixiv.local"), icon: "photo_library" }];
+const imageTabs = computed<PageMenuItem[]>(() => {
+  const tabs: PageMenuItem[] = [{ value: "local", label: t("pixiv.local"), icon: "photo_library" }];
   if (settings.onlinePixivEnabled) {
     tabs.push({ value: "pixiv", label: t("pixiv.online"), icon: "public" });
   }
@@ -40,6 +39,10 @@ const activeTab = computed(() =>
 
 function t(key: string) {
   return translate(settings.lang, key);
+}
+
+function selectTab(value: string) {
+  imagesTab.value = value as "local" | "pixiv" | "draw";
 }
 
 function load() {
@@ -64,10 +67,20 @@ function clearSearch() {
 
 <template>
   <div class="view">
-    <PageHeader :title="t('nav.images')" :description="t('navDesc.images')" />
+    <PageHeader
+      :title="t('nav.images')"
+      :description="t('navDesc.images')"
+      :menu-items="imageTabs"
+      :menu-value="activeTab"
+      @update:menu-value="selectTab"
+    />
 
-    <!-- 本地 / Pixiv 分段 -->
-    <SegmentedTabs v-model="imagesTab" :tabs="imageTabs">
+    <!-- 本地 / Pixiv / 绘画：一级选项已收进标题下拉，这里只保留内容切换过渡 -->
+    <SegmentedTabs
+      :model-value="activeTab"
+      :tabs="imageTabs.map((o) => ({ value: o.value, label: o.label, icon: o.icon }))"
+      hide-tabs
+    >
       <!-- 本地图片 -->
       <template v-if="activeTab === 'local'">
         <LibraryToolbar :count="library.totalFor('image')" @changed="load" />

@@ -386,6 +386,14 @@ export interface NovelShelfItem {
   addedAt: number;
   /** true=来自 Wenku8 在线账号书架，false=本地收藏 */
   online: boolean;
+  /**
+   * 收藏来源：`wenku8` / `bqg` / `fqapi`。
+   *
+   * 共享书架把三个源的书放在同一张表里，点击时必须知道该打开哪个源的详情页。
+   * 老库（schema v6 之前）没有这一列，迁移时按 aid 长度回填；仍为空时按
+   * `wenku8` 兜底。
+   */
+  source: string;
 }
 
 export interface Wenku8LoginStatus {

@@ -107,6 +107,8 @@ export default [
       "src/components/BilibiliSearchHistory.vue",
       "src/components/AudioEffectsPanel.vue",
       "src/components/LibraryToolbar.vue",
+      // 页面标题下拉：m3e-menu-item 的 icon / trailing-icon 槽
+      "src/components/PageHeader.vue",
       "src/components/NovelBqgView.vue",
       "src/components/NovelDetailPanel.vue",
       "src/components/NovelOnlineView.vue",

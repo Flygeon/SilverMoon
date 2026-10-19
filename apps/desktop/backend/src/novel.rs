@@ -85,6 +85,8 @@ pub struct NovelShelfItem {
     pub added_at: i64,
     /// true 表示来自 Wenku8 在线账号书架，false 为本地收藏
     pub online: bool,
+    /// 来源：`wenku8` / `bqg` / `fqapi`。共享书架据此打开正确的详情页。
+    pub source: String,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -707,7 +709,8 @@ pub async fn novel_shelf_list(
         let conn = state.0.lock().map_err(|_| "db lock".to_string())?;
         let mut stmt = conn
             .prepare(
-                "SELECT aid, title, author, cover, added_at FROM novel_shelf ORDER BY added_at DESC",
+                "SELECT aid, title, author, cover, added_at, source
+                 FROM novel_shelf ORDER BY added_at DESC",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
@@ -719,6 +722,7 @@ pub async fn novel_shelf_list(
                     cover: row.get(3)?,
                     added_at: row.get(4)?,
                     online: false,
+                    source: row.get(5)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -756,17 +760,25 @@ pub fn novel_shelf_add(
     title: String,
     author: Option<String>,
     cover: Option<String>,
+    source: Option<String>,
 ) -> Result<(), String> {
+    // 老的调用方不传 source：按文库8 兜底（共享书架上线前的加书架入口只有
+    // 文库8 详情面板与番茄详情页；番茄侧已同步传 `fqapi`）。
+    let source = source
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "wenku8".to_string());
     let conn = state.0.lock().map_err(|_| "db lock".to_string())?;
     conn.execute(
-        "INSERT OR REPLACE INTO novel_shelf (aid, title, author, cover, added_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT OR REPLACE INTO novel_shelf (aid, title, author, cover, added_at, source)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         rusqlite::params![
             aid,
             title,
             author.unwrap_or_default(),
             cover.unwrap_or_default(),
-            now_ms()
+            now_ms(),
+            source
         ],
     )
     .map_err(|e| e.to_string())?;

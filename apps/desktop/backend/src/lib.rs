@@ -165,6 +165,7 @@ pub fn run() {
             commands::desktop::desktop_wakelock_status,
             commands::book::get_book_progress,
             commands::book::save_book_progress,
+            commands::book::book_import,
             commands::scan::scan_start,
             commands::scan::scan_cancel,
             commands::scan::scan_status,
