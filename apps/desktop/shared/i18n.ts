@@ -853,13 +853,12 @@ export const messages = {
       fq: "番茄小说",
       import: "导入书籍",
       importing: "导入中…",
-      importEmptyTitle: "还没有导入书籍",
-      importEmptyHint:
-        "支持 EPUB / PDF / MOBI / AZW3 / TXT 等格式。导入的书籍独立于媒体扫描，不会被扫描清理。",
       importDone: "已导入 {n} 本书",
       importNone: "没有可导入的书籍文件",
       shelfEmptyTitle: "书架还是空的",
-      shelfEmptyHint: "在书籍详情页点「加入书架」，三个在线源的书都会汇总到这里。",
+      shelfEmptyHint:
+        "在书籍详情页点「加入书架」，三个在线源的书会汇总到这里；也可以直接导入本地书籍。",
+      loadMore: "加载更多",
     },
     write: {
       tab: "创作",
@@ -2019,14 +2018,12 @@ export const messages = {
       fq: "Fanqie",
       import: "Import books",
       importing: "Importing…",
-      importEmptyTitle: "No imported books yet",
-      importEmptyHint:
-        "EPUB / PDF / MOBI / AZW3 / TXT are supported. Imported books live outside media scanning and are never cleaned up by it.",
       importDone: "{n} books imported",
       importNone: "No importable book files selected",
       shelfEmptyTitle: "Your bookshelf is empty",
       shelfEmptyHint:
-        "Tap “Add to bookshelf” on a book's detail page; books from all three online sources show up here.",
+        "Tap “Add to bookshelf” on a book's detail page; books from all three online sources show up here. You can also import local book files here.",
+      loadMore: "Load more",
     },
     write: {
       tab: "Write",

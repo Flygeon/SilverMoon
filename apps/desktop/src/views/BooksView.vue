@@ -1,15 +1,12 @@
 <script setup lang="ts">
 import { computed, onActivated, onMounted, ref, watch } from "vue";
 import PageHeader, { type PageMenuItem } from "@/components/PageHeader.vue";
-import LibraryToolbar from "@/components/LibraryToolbar.vue";
-import MediaGrid from "@/components/MediaGrid.vue";
 import BookReader from "@/components/BookReader.vue";
 import NovelOnlineView from "@/components/NovelOnlineView.vue";
 import NovelBqgView from "@/components/NovelBqgView.vue";
 import NovelFqapiView from "@/components/NovelFqapiView.vue";
 import NovelShelfView from "@/components/NovelShelfView.vue";
 import WritingStudio from "@/components/WritingStudio.vue";
-import EmptyState from "@/components/EmptyState.vue";
 import SegmentedTabs from "@/components/SegmentedTabs.vue";
 import { useLibraryStore } from "@/stores/library";
 import { useSettingsStore } from "@/stores/settings";
@@ -21,27 +18,23 @@ import type { MediaEntry, NovelShelfItem } from "@shared/types";
 const library = useLibraryStore();
 const settings = useSettingsStore();
 
-const items = computed(() => library.entries("book"));
 /** 正在阅读的书；null 表示未打开阅读器 */
 const reading = ref<MediaEntry | null>(null);
 
 /**
  * 书籍页的内容域。
  *
- * 原来的「本地 / 在线 / 创作」分段 + 二级渠道下拉，现在全部收进标题下拉：
- * 书架 / 本地 / 轻小说 / 网络小说 / 番茄小说 / 创作。
+ * 「本地」不再有独立页：本地导入的书和三个在线源的书架书统一显示在「书架」里，
+ * 导入按钮也放在书架页标题右侧。原来的「本地 / 在线 / 创作」分段全部收进标题下拉。
  */
-type BookView = "shelf" | "local" | "wenku8" | "bqg" | "fq" | "write";
+type BookView = "shelf" | "wenku8" | "bqg" | "fq" | "write";
 const activeView = ref<BookView>("shelf");
 
 /** 从共享书架跳转到某个源时，把要打开的书带过去（源组件挂载时读取） */
 const pendingOpen = ref<{ aid: string; title: string } | null>(null);
 
 const viewOptions = computed<PageMenuItem[]>(() => {
-  const list: PageMenuItem[] = [
-    { value: "shelf", label: t("books.shelf"), icon: "bookmarks" },
-    { value: "local", label: t("books.local"), icon: "folder_open" },
-  ];
+  const list: PageMenuItem[] = [{ value: "shelf", label: t("books.shelf"), icon: "bookmarks" }];
   if (settings.onlineNovelEnabled) {
     list.push({ value: "wenku8", label: t("books.wenku8"), icon: "public" });
   }
@@ -92,7 +85,7 @@ function load() {
 
 onMounted(load);
 onActivated(() => {
-  if (!items.value.length) void load();
+  if (!library.entries("book").length) void load();
 });
 
 function open(item: MediaEntry) {
@@ -101,11 +94,6 @@ function open(item: MediaEntry) {
   } else {
     void capabilities.openFile(item.path);
   }
-}
-
-function clearSearch() {
-  library.search = "";
-  void load();
 }
 
 // ---- 导入（书籍不再走扫描）----
@@ -141,7 +129,19 @@ async function importBooks() {
       :menu-items="viewOptions"
       :menu-value="activeView"
       @update:menu-value="selectView"
-    />
+    >
+      <!-- 导入入口放在书架页标题右侧：本地书和在线书架书在同一个界面里 -->
+      <m3e-button
+        v-if="activeView === 'shelf'"
+        variant="filled"
+        size="small"
+        :disabled="importing"
+        @click="importBooks"
+      >
+        <span slot="icon" class="material-symbols-outlined">add</span>
+        {{ importing ? t("books.importing") : t("books.import") }}
+      </m3e-button>
+    </PageHeader>
 
     <!-- hide-tabs：按钮组已经收进标题下拉，这里只保留方向感知的内容切换过渡 -->
     <SegmentedTabs
@@ -149,48 +149,13 @@ async function importBooks() {
       :tabs="viewOptions.map((o) => ({ value: o.value, label: o.label, icon: o.icon }))"
       hide-tabs
     >
-      <!-- 共享书架：番茄 / 轻小说 / 网络小说 的书汇总在这里 -->
-      <NovelShelfView v-if="activeView === 'shelf'" @open="openFromShelf" />
-
-      <!-- 本地：只显示手动导入的书，不参与媒体扫描 -->
-      <template v-else-if="activeView === 'local'">
-        <LibraryToolbar
-          :count="library.totalFor('book')"
-          :import-label="t('books.import')"
-          :importing="importing"
-          @changed="load"
-          @import="importBooks"
-        />
-
-        <MediaGrid
-          v-if="library.loading || items.length"
-          :items="items"
-          :loading="library.loading"
-          aspect="3/4"
-          :min-width="150"
-          subtitle="size"
-          @open="open"
-          @favorite="library.toggleFavorite"
-        />
-
-        <EmptyState
-          v-else-if="library.search"
-          icon="search_off"
-          :title="`未找到与「${library.search}」匹配的书籍`"
-          description="试试其它关键词，或清除搜索条件。"
-          action-label="清除搜索"
-          @action="clearSearch"
-        />
-
-        <EmptyState
-          v-else
-          icon="menu_book"
-          :title="t('books.importEmptyTitle')"
-          :description="t('books.importEmptyHint')"
-          :action-label="t('books.import')"
-          @action="importBooks"
-        />
-      </template>
+      <!-- 共享书架：本地导入 + 番茄 / 轻小说 / 网络小说，统一在这里 -->
+      <NovelShelfView
+        v-if="activeView === 'shelf'"
+        @open="openFromShelf"
+        @open-local="open"
+        @import="importBooks"
+      />
 
       <!-- 三个在线源：各自不再渲染书架，书架统一在上面 -->
       <NovelOnlineView

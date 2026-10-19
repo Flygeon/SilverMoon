@@ -109,6 +109,8 @@ export default [
       "src/components/LibraryToolbar.vue",
       // 页面标题下拉：m3e-menu-item 的 icon / trailing-icon 槽
       "src/components/PageHeader.vue",
+      // 书籍页：书架标题右侧的导入按钮用 m3e-button 的 icon 槽
+      "src/views/BooksView.vue",
       "src/components/NovelBqgView.vue",
       "src/components/NovelDetailPanel.vue",
       "src/components/NovelOnlineView.vue",

@@ -65,7 +65,7 @@ impl ScanJobInfo {
 }
 
 /// 当前 schema 版本。递增后在 `migrate` 中追加对应分支。
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// 建表 + 版本化迁移。对已存在的库是幂等的。
 pub fn init_db(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
@@ -153,6 +153,10 @@ pub fn init_db(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     )?;
 
     migrate(conn)?;
+    // 兜底：不能只信 user_version —— 不同分支 / 旧构建可能已经把它推到当前版本，
+    // 却没有后加的列（实测用户的库就是 version=6 但 files / novel_shelf 都缺列）。
+    // 这里每次启动都做一次幂等检查，缺列就补，保证查询不会撞上 no such column。
+    ensure_added_columns(conn)?;
     Ok(())
 }
 
@@ -317,31 +321,17 @@ fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     }
     // v5 -> v6：书籍改为「手动导入」+ 共享书架记录来源
     if current < 6 {
-        // files.imported：1 = 导入项。扫描从此不再收录书籍，且软删除会跳过
-        // 导入项，避免一次「重新扫描」把书清掉。
-        if !has_column(conn, "files", "imported")? {
-            conn.execute(
-                "ALTER TABLE files ADD COLUMN imported INTEGER NOT NULL DEFAULT 0",
-                [],
-            )?;
-            // 升级时把已有书籍**保留**为导入项：它们本来就是用户库里的书，
-            // 不该因为改版突然消失。此后的扫描既不会新增也不会删除它们。
-            conn.execute("UPDATE files SET imported = 1 WHERE type = 'book'", [])?;
-        }
-        // novel_shelf.source：共享书架要知道书属于哪个源，点击时才能打开正确的详情页。
-        if !has_column(conn, "novel_shelf", "source")? {
-            conn.execute(
-                "ALTER TABLE novel_shelf ADD COLUMN source TEXT NOT NULL DEFAULT ''",
-                [],
-            )?;
-        }
-        // 老库的书架没有来源：番茄的 aid 是十几位长 id，文库8 / 笔趣阁是短数字。
-        // 这个回填只影响 v6 之前的旧数据；之后新增的一律带 source。
-        conn.execute(
-            "UPDATE novel_shelf SET source = CASE WHEN length(aid) >= 10 THEN 'fqapi' ELSE 'wenku8' END WHERE source = ''",
-            [],
-        )?;
+        ensure_added_columns(conn)?;
         conn.pragma_update(None, "user_version", 6)?;
+    }
+    // v6 -> v7：修复「user_version 已经是 6、但新列不存在」的库。
+    //
+    // 不能假定版本号一定由本分支写入：不同分支 / 旧构建可能已经占用过 6。
+    // 用户实测的库正是 version=6 且 files/novel_shelf 都没有新列，直接查询会报
+    // `no such column: source`。v7 再做一次幂等补列，让这类库自愈。
+    if current < 7 {
+        ensure_added_columns(conn)?;
+        conn.pragma_update(None, "user_version", 7)?;
     }
     Ok(())
 }
@@ -360,6 +350,38 @@ fn has_column(conn: &rusqlite::Connection, table: &str, column: &str) -> rusqlit
         }
     }
     Ok(false)
+}
+
+/// 保证「后加列」存在，并回填可推导的默认值（幂等，可每次启动调用）。
+///
+/// 为什么不能只放在版本迁移里：`user_version` 是**整个库全局的一个数字**，
+/// 不同分支或旧构建可能已经把它推到当前版本，却没有这些列。实测用户库里
+/// `user_version=6`，但 `files.imported` / `novel_shelf.source` 都不存在，
+/// 新查询直接报 `no such column`。所以列的存在性必须由列本身判断。
+fn ensure_added_columns(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    // files.imported：1 = 导入项。扫描不再收录书籍，软删除也会跳过导入项。
+    // 旧库里的书籍是用户书库的一部分，补列时保留为导入项，避免升级后突然消失。
+    if !has_column(conn, "files", "imported")? {
+        conn.execute(
+            "ALTER TABLE files ADD COLUMN imported INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+        conn.execute("UPDATE files SET imported = 1 WHERE type = 'book'", [])?;
+    }
+    // novel_shelf.source：共享书架要知道书属于哪个源，点击时才能打开正确的详情页。
+    if !has_column(conn, "novel_shelf", "source")? {
+        conn.execute(
+            "ALTER TABLE novel_shelf ADD COLUMN source TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+    // 老库的书架没有来源：番茄的 aid 是十几位长 id，文库8 / 笔趣阁是短数字。
+    // 每次启动都回填空值，半迁移的库也能自愈；已有来源的行不受影响。
+    conn.execute(
+        "UPDATE novel_shelf SET source = CASE WHEN length(aid) >= 10 THEN 'fqapi' ELSE 'wenku8' END WHERE source = ''",
+        [],
+    )?;
+    Ok(())
 }
 
 /// 当前 Unix 秒

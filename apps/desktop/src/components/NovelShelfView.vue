@@ -1,28 +1,74 @@
 <script setup lang="ts">
 /**
- * 三个在线小说源共用的书架。
+ * 书籍页的共享书架。
  *
- * 书架数据本来就在同一张 `novel_shelf` 表里（`novel_shelf_list`），
- * 但过去是每个源各自渲染一遍：番茄页的「我的书架」、文库8 页顶部的书架区。
- * 结果同一本书会在三个入口重复出现，而且从番茄页点文库8 的书会打开错误的详情。
+ * 这里同时承载两类内容：
+ *   1. **本地导入**的书籍（`book_import` 写进 files(imported=1)，EPUB / PDF …）；
+ *   2. 番茄 / 轻小说（文库8）/ 网络小说（笔趣阁）加入书架的书。
  *
- * 现在书架集中到这里，按 `source` 分组；点击后由 BooksView 切到对应源并打开详情。
- * 三个源自己的页面不再显示书架。
+ * 书籍页不再有独立的「本地」选项卡；导入按钮在书架页标题右侧，导入后的书直接出现在
+ * 本页的「本地」分组里。
+ *
+ * 在线书架数据来自 `novel_shelf` 表，按 `source` 分组；点击后由 BooksView 切到对应
+ * 源并打开详情。本地书点击后直接进 BookReader（或交系统程序）。
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { capabilities } from "@/capabilities";
+import { useLibraryStore } from "@/stores/library";
 import { useSettingsStore } from "@/stores/settings";
 import { translate } from "@shared/i18n";
+import { formatSize } from "@/utils/format";
 import NovelCard from "@/components/NovelCard.vue";
 import EmptyState from "@/components/EmptyState.vue";
-import type { NovelShelfItem } from "@shared/types";
+import type { MediaEntry, NovelCover, NovelShelfItem } from "@shared/types";
 
-const emit = defineEmits<{ (e: "open", item: NovelShelfItem): void }>();
+const emit = defineEmits<{
+  (e: "open", item: NovelShelfItem): void;
+  (e: "open-local", item: MediaEntry): void;
+  (e: "import"): void;
+}>();
 
+const library = useLibraryStore();
 const settings = useSettingsStore();
+
 const items = ref<NovelShelfItem[]>([]);
 const loading = ref(true);
 const error = ref("");
+
+/**
+ * 本地导入的书。
+ *
+ * 全量渲染会同时挂几百张卡片、请求几百张缩略图；首屏只渲染前
+ * LOCAL_PAGE_SIZE 本，用户点「加载更多」再增量渲染。
+ */
+const LOCAL_PAGE_SIZE = 48;
+const localLimit = ref(LOCAL_PAGE_SIZE);
+const localBooks = computed(() => library.entries("book"));
+const visibleLocal = computed(() => localBooks.value.slice(0, localLimit.value));
+const hasMoreLocal = computed(() => localBooks.value.length > visibleLocal.value.length);
+
+/** 只给当前可见的本地书拉缩略图；加载更多后再增量请求 */
+watch(
+  visibleLocal,
+  (books) => {
+    const ids = books.map((b) => b.id);
+    if (ids.length) void library.loadThumbnails(ids);
+  },
+  { immediate: true },
+);
+
+function localCard(book: MediaEntry): NovelCover {
+  return {
+    aid: book.id,
+    title: book.title || book.name,
+    imageUrl: library.getThumb(book.id) ?? "",
+    author: formatSize(book.size),
+  };
+}
+
+function loadMoreLocal() {
+  localLimit.value += LOCAL_PAGE_SIZE;
+}
 
 /** 分组顺序固定：番茄在最前（用户最常用），其次文库8、笔趣阁。 */
 const SOURCE_ORDER = ["fqapi", "wenku8", "bqg"] as const;
@@ -79,12 +125,38 @@ onMounted(load);
 
 <template>
   <div class="novel-shelf">
+    <p v-if="error" class="state shelf-error">
+      <span>{{ error }}</span>
+      <m3e-button variant="text" size="small" @click="load">重试</m3e-button>
+    </p>
+
+    <!-- 本地导入的书（书籍页不再有独立「本地」页） -->
+    <section v-if="localBooks.length" class="section">
+      <div class="section-head">
+        <h3 class="section-title">{{ t("books.local") }}</h3>
+        <span class="count tabular-nums">{{ localBooks.length }}</span>
+      </div>
+      <div class="grid">
+        <NovelCard
+          v-for="book in visibleLocal"
+          :key="'local:' + book.id"
+          :item="localCard(book)"
+          @open="emit('open-local', book)"
+        />
+      </div>
+      <div v-if="hasMoreLocal" class="more">
+        <m3e-button variant="tonal" size="small" @click="loadMoreLocal">
+          {{ t("books.loadMore") }}（{{ localBooks.length - visibleLocal.length }}）
+        </m3e-button>
+      </div>
+    </section>
+
     <div v-if="loading" class="state">
       <m3e-loading-indicator class="lm-loading" />
       {{ t("novel.loading") }}
     </div>
-    <p v-else-if="error" class="state error">{{ error }}</p>
 
+    <!-- 在线书架：按来源分组 -->
     <template v-else-if="items.length">
       <section v-for="group in groups" :key="group.key" class="section">
         <div class="section-head">
@@ -104,10 +176,12 @@ onMounted(load);
     </template>
 
     <EmptyState
-      v-else
+      v-if="!loading && !error && !items.length && !localBooks.length"
       icon="bookmarks"
       :title="t('books.shelfEmptyTitle')"
       :description="t('books.shelfEmptyHint')"
+      :action-label="t('books.import')"
+      @action="emit('import')"
     />
   </div>
 </template>
@@ -143,13 +217,22 @@ onMounted(load);
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 16px;
 }
+.more {
+  display: flex;
+  justify-content: center;
+}
 .state {
   padding: 24px 0;
   text-align: center;
   font-size: var(--md-sys-typescale-body-small-size);
   color: var(--md-sys-color-on-surface-variant);
 }
-.error {
+.shelf-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
   color: var(--md-sys-color-error);
 }
 </style>
