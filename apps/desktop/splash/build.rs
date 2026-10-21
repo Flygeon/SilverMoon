@@ -30,7 +30,7 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=../src-tauri/icons/icon.ico");
+    println!("cargo:rerun-if-changed=../backend/icons/icon.ico");
 
     // 非 Windows 目标（宿主上跑纯逻辑测试）直接跳过，
     // 否则会因为没有资源编译器而报错。
@@ -39,7 +39,11 @@ fn main() {
     }
 
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
-    let icon = manifest.join("../src-tauri/icons/icon.ico");
+    // 图标真源是 backend/icons/（electron-builder.yml 的打包图标也读这里）。
+    // 曾指向 src-tauri/icons/icon.ico —— 那是 Tauri 遗留树的副本，
+    // 2026-10-22 删树后 CI 的 Windows 构建直接 panic。两份文件内容完全相同，
+    // 改指 backend 即可，语义也更对（只有一份真源）。
+    let icon = manifest.join("../backend/icons/icon.ico");
     if !icon.is_file() {
         require_icon(format!("找不到图标文件 {}", icon.display()));
         return;

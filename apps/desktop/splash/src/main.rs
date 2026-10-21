@@ -38,7 +38,7 @@ use handshake::{Handshake, CONNECT_TIMEOUT, FADE_MS, READY_TIMEOUT};
 
 use pathfind::{pick_electron, ELECTRON_EXE};
 
-/// 应用数据目录名（与 `src-tauri/silvermoon.config.json` 的 identifier 一致）。
+/// 应用数据目录名（与 `backend/silvermoon.config.json` 的 identifier 一致）。
 /// 用于定位 `%APPDATA%\<identifier>\settings.json`。
 const APP_IDENTIFIER: &str = "cn.cool.silvermoon";
 
