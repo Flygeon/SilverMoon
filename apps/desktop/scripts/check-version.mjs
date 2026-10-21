@@ -29,24 +29,6 @@ const sources = [
     read: () => JSON.parse(read("backend/silvermoon.config.json")).version,
   },
   {
-    /**
-     * Tauri 时代的遗留副本。
-     *
-     * 现在没有任何构建步骤读它，但它**曾经被 vite.config.ts 误当成真源**
-     * 来注入 `__APP_VERSION__`，导致改了版本号界面仍显示旧值、而 CI 全绿。
-     * 留着校验它有两个作用：① 万一将来又被引用，不会静默漂移；
-     * ② 提醒读者这里有一份该清理的历史包袱。
-     */
-    label: "src-tauri/silvermoon.config.json（遗留副本，可选）",
-    read: () =>
-      matchOptional(
-        readOptional("src-tauri/silvermoon.config.json") ?? "",
-        // 用 {2} 而不是两个空格：eslint 的 no-regex-spaces 会拦下后者
-        // （连续空格在正则里数不清，容易看错成 1 个或 3 个）。
-        /^ {2}"version": "([^"]+)"/m,
-      ),
-  },
-  {
     label: "package.json",
     read: () => JSON.parse(read("package.json")).version,
   },

@@ -28,13 +28,7 @@ splash/target/
 # 番茄内容源 sidecar 的构建产物
 fqapi/target/
 
-# 启动器产物：CI 打包前从 splash/target 拷进来（见 .github/workflows/build.yml）
-src-tauri/splash-bin/
-
-# rust / tauri
-src-tauri/target/
-src-tauri/gen/schemas/
-src-tauri/.tauri/
+# rust（Tauri 遗留树的忽略规则已在 2026-10-22 随 src-tauri/ 删除一并清掉）
 
 # logs
 *.log
@@ -77,5 +71,3 @@ ECHO播放器参考/
 # Flutter WebView �õ��ƶ��� Web ���WebView ���Ƴ�����Ҫ���ύ��
 dist-mobile/
 
-# 嵌套的 path 依赖 crate 会各自生成 target/（上面的规则不覆盖子目录）
-src-tauri/crates/*/target/

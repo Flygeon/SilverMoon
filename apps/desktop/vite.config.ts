@@ -42,14 +42,14 @@ export default defineConfig(async () => ({
       "@shared": fileURLToPath(new URL("./shared", import.meta.url)),
     },
   },
-  // 渲染进程走本地 dev server；端口与 tauri.conf.json 的 build.devUrl 保持一致
+  // 渲染进程走本地 dev server
   clearScreen: false,
   server: {
     port: 1420,
     strictPort: true,
     watch: {
-      // 后端与 Electron 主进程都不参与前端热更
-      ignored: ["**/src-tauri/**"],
+      // 后端代码不参与前端热更（体积大、改了也不需要 HMR）
+      ignored: ["**/backend/**"],
     },
   },
   build: {

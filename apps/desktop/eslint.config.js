@@ -10,10 +10,11 @@ export default [
   {
     ignores: [
       "dist/**",
-      "src-tauri/target/**",
+      // esbuild 产物（scripts/build-electron.mjs）。此前没列，是因为它只在构建后出现、
+      // 且基线检出里没有；一旦本地跑过 build:main，它就会被打进 lint。
+      "dist-electron/**",
       "release/**",
       "node_modules/**",
-      "src-tauri/**",
       "public/**",
       "*.config.*",
       "coverage/**",
