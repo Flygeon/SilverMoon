@@ -38,6 +38,7 @@ import {
   handleAppProtocol,
   handleAssetProtocol,
   handleCoverProtocol,
+  handleExtProtocol,
   registerSchemes,
 } from "./protocols";
 import { installBiliMediaHeaders } from "./net-headers";
@@ -98,6 +99,8 @@ const localAppDataRoot =
 // 数据目录用 `<appData>/<identifier>`，并与后端进程共用同一份
 const DATA_DIR = dataDir(appDataRoot);
 const CACHE_DIR = cacheDir(localAppDataRoot);
+/** 扩展安装目录 —— 必须与 Rust 侧 `app_data_dir().join("extensions")` 一致。 */
+const EXTENSIONS_DIR = path.join(DATA_DIR, "extensions");
 
 // 首次运行：把旧项目 LumiLuna 的数据整份搬过来（只读旧目录）
 // 第二个实例不碰迁移：否则会与正在运行的第一个实例争抢同一份数据目录
@@ -158,6 +161,8 @@ async function bootstrap(): Promise<void> {
   handleAppProtocol();
   handleAssetProtocol();
   handleCoverProtocol(path.join(CACHE_DIR, "covers"));
+  // 扩展 UI：独立 origin，只服务 <app_data_dir>/extensions/ 之内（扩展由后端装到那）
+  handleExtProtocol(EXTENSIONS_DIR);
   // B 站视频 CDN 防盗链：为 <video> 请求自动补 Referer（仅限 B 站域名）
   installBiliMediaHeaders();
 

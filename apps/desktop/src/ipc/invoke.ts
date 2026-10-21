@@ -37,8 +37,11 @@ export function invokeBatch<T = unknown>(
  */
 export function toAssetUrl(filePath: string, protocol = "asset"): string {
   if (!filePath) return "";
-  // 已是 URL 则原样返回，避免二次包装
-  if (/^(https?:|data:|blob:|asset:|app:)/i.test(filePath)) return filePath;
+  // 已是 URL 则原样返回，避免二次包装。
+  // `ext:` 必须在这个白名单里： ExtensionEmbed / ExtensionHost 用
+  // `toAssetUrl(dir, "ext")` 生成 ext:// 串，若这里漏判，已经带协议的路径
+  // 会被再包一层变成 `ext://localhost/ext%3A%2F%2F...`，iframe 直接白屏。
+  if (/^(https?:|data:|blob:|asset:|app:|ext:)/i.test(filePath)) return filePath;
 
   // 移动端：Flutter 侧起了一个 loopback HTTP 服务来承载本地文件，
   // 它支持 Range 请求（音视频拖动进度必需），比 WebView 里读 file:// 可靠得多。

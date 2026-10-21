@@ -39,8 +39,10 @@ import {
   ASSET_SCHEME,
   COVER_SCHEME,
   DEV_SERVER_URL,
+  EXT_SCHEME,
   projectRoot,
 } from "./config";
+import { extIsServable } from "./extPathGuard";
 import { log } from "./log";
 
 /** 必须在 `app.whenReady()` **之前**调用。 */
@@ -78,6 +80,22 @@ export function registerSchemes(): void {
         // 封面可能被 canvas 取主色，同样放行跨源读像素
         corsEnabled: true,
         bypassCSP: true,
+      },
+    },
+    {
+      // 扩展 UI 的独立 origin —— 见 config.ts 里 EXT_SCHEME 的注释。
+      // 刻意**不开** corsEnabled / bypassCSP：
+      //   · corsEnabled 会让 ext:// 的响应带上通配 CORS 头，正好抵消了
+      //     「用不同 origin 隔离扩展与 asset://」这个设计目的；
+      //   · bypassCSP 同理，没理由让扩展页无视宿主下发的 CSP。
+      // 扩展产物是标准静态站点（html/js/css/字体/图片），stream 与
+      // supportFetchAPI 足够。
+      scheme: EXT_SCHEME,
+      privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+        stream: true,
       },
     },
   ]);
@@ -207,6 +225,46 @@ export function handleAssetProtocol(): void {
       return serveFile(target, request.headers.get("range"), corsAllowOrigin(request));
     } catch (error) {
       log.error("asset:// 处理失败：", error);
+      return new Response("internal error", { status: 500 });
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// `ext://` —— 扩展 UI 的独立 origin
+//
+// 语义照搬 Tauri 时代的 `src-tauri/src/ext_protocol.rs`（迁回 Electron 时漏搬，
+// 见 config.ts 里 EXT_SCHEME 的注释与 doc/AGENTS.md 的 Gotchas）。
+// 路径判定的纯函数在 `extPathGuard.ts`（不 import electron，单测可直接覆盖）；
+// 这里只做「取 URL → 交给判定 → 读文件」。
+// ---------------------------------------------------------------------------
+
+/**
+ * 注册 `ext://` —— 只服务 `<app_data_dir>/extensions/` 之内的文件。
+ *
+ * `extensionsRoot` 由调用方传入（`path.join(DATA_DIR, "extensions")`），
+ * 与 Rust 侧 `app_data_dir()/extensions` 指向同一处 —— 扩展由后端安装到那里。
+ */
+export function handleExtProtocol(extensionsRoot: string): void {
+  protocol.handle(EXT_SCHEME, async (request) => {
+    try {
+      const url = new URL(request.url);
+      // 与 asset:// 一样：host 段（localhost）已被解析掉，绝对路径落在 pathname 上。
+      const decoded = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
+
+      const target = extIsServable(extensionsRoot, decoded);
+      if (!target) {
+        log.warn(`ext:// 拒绝越权或非法路径：${decoded}`);
+        return new Response("forbidden", { status: 403 });
+      }
+
+      if (!existsSync(target) || !statSync(target).isFile()) {
+        return new Response("not found", { status: 404 });
+      }
+      // 刻意不传 CORS origin：ext:// 的响应不该被别的 origin 读到。
+      return serveFile(target, request.headers.get("range"));
+    } catch (error) {
+      log.error("ext:// 处理失败：", error);
       return new Response("internal error", { status: 500 });
     }
   });

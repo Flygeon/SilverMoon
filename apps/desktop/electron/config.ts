@@ -58,6 +58,25 @@ export const ASSET_SCHEME = "asset";
  */
 export const COVER_SCHEME = "app-cover";
 
+/**
+ * 扩展 UI 专用协议：`ext://localhost/<encoded path>`。
+ *
+ * ## 为什么不能复用 `asset://`
+ *
+ * `asset:` 服务**任意本地文件**（媒体库根是用户运行时增删的，无法静态收窄）。
+ * 如果扩展 UI 也用 `asset:` 加载，它自己就站在 `asset://localhost` 这个 origin 上，
+ * 与**任意** asset URL 同源 —— 扩展页里的脚本可以直接 `fetch()` 读本机任意文件，
+ * 把 `capabilities/extension.json` 里「只允许读 extensions/**」那条限制整个绕开。
+ *
+ * 换成独立的 `ext:` 之后，扩展 UI 的 origin 是 `ext://localhost`，与
+ * `asset://localhost` **不同源**；它再去 fetch asset 资源就是跨源请求，会被
+ * asset 协议那套「ACAO = 窗口 origin」的判据挡下。
+ *
+ * 语义照搬 Tauri 时代的 `src-tauri/src/ext_protocol.rs`（迁回 Electron 时漏搬了，
+ * 见 `doc/AGENTS.md` 的 Gotchas 与 `doc/LOG.md` 待办）。
+ */
+export const EXT_SCHEME = "ext";
+
 /** 工程根目录。 */
 export const projectRoot = path.resolve(__dirname, "..");
 

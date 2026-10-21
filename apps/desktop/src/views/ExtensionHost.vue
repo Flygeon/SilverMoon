@@ -70,10 +70,9 @@ async function navigateTo(ext: string, route: string) {
     const htmlPath = await join(dir, "index.html");
     // ⚠️ 必须走 ext: 而不是 asset:。
     // 扩展 UI 若用 asset: 加载，自己就站在 asset.localhost 上，与**任意**
-    // asset URL 同源（assetProtocol.scope 是 **），能直接 fetch 本机任意文件，
-    // 绕过 capabilities/extension.json 里那条限 extensions/** 的 fs:read。
-    // ext: 是独立 origin（http://ext.localhost），跨源读取会被 asset 协议的
-    // 「ACAO=窗口 origin」判据挡下。见 src-tauri/src/ext_protocol.rs。
+    // asset URL 同源，能直接 fetch 本机任意文件，绕开「扩展只能读自己目录」这条约束。
+    // ext: 是独立 origin，跨源读取会被 asset 协议的「ACAO=窗口 origin」判据挡下。
+    // 宿主实现见 electron/protocols.ts 的 handleExtProtocol + extPathGuard.ts。
     iframeSrc.value = `${toAssetUrl(htmlPath, "ext")}?ext=${encodeURIComponent(ext)}&route=${encodeURIComponent(effRoute)}`;
   } catch (e) {
     current.value = { ext, route };
