@@ -430,8 +430,8 @@ Electron 版是相对 Tauri 版的重构分支，版本号从 1.2.1 **回落到 
 
 | 项 | 来源 | 状态 |
 |---|---|---|
-| 注册 `ext:` 协议（补第 4 个 scheme + handler） | 2026-10-17 文档轮发现 | **未做** |
-| 加 `scripts/verify-docs.mjs` 守卫 README 与 AGENTS | 2026-10-17 文档轮 | **未做** |
-| `verify-ext-slots` / `verify-capability-scopes` / `verify-splash-*` 接入 CI | 2026-10-17 盘点 | **未做**（手动可跑） |
-| 清理 `src-tauri/` 遗留树（192 文件 / 7.6MB） | 2026-09-24 遗留 | **未做** |
+| 注册 `ext:` 协议（补第 4 个 scheme + handler） | 2026-10-17 文档轮发现 | **已完成**（2026-10-22，见本节下方「屎山报告 P0/P1 落地」） |
+| 加 `scripts/verify-docs.mjs` 守卫 README 与 AGENTS | 2026-10-17 文档轮 | **已完成**（35f50f8，接入 `npm run lint` 与 CI） |
+| `verify-ext-slots` / `verify-splash-*` 接入 CI | 2026-10-17 盘点 | **未做**（手动可跑）；`verify-capability-scopes` 已随 `src-tauri/` 删除 |
+| 清理 `src-tauri/` 遗留树（192 文件 / 7.6MB） | 2026-09-24 遗留 | **已完成**（2026-10-22，整树删除，基线 `c9cee4b`） |
 | 设置页 19 个分类的 IA 收敛 | `_review/11-settings-ia-plan.md` | 部分完成 |

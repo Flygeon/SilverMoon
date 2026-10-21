@@ -7,3 +7,6 @@
 _diag/
 _pyerr.txt
 _pyout.txt
+
+# 本地审阅留档：整份文档/脚本的抄本（如 _i18n_tmp.cjs），只供个人查阅，不入仓库
+_review/

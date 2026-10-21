@@ -17,8 +17,13 @@
  *
  * ## 覆盖范围
  *
- * 只覆盖「无外部依赖的纯逻辑」——目前是封面 Referer 伪装、封面扩展名推断、
- * 路径规范化。异步 / 网络 / 数据库路径仍需 CI 的 `cargo test`。
+ * 只覆盖「无外部依赖的纯逻辑」——目前是扩展启动策略、引擎握手行解析、
+ * 封面扩展名推断三项。异步 / 网络 / 数据库路径仍需 CI 的 `cargo test`。
+ *
+ * 注意：只收 **`backend/src` 里真实存在**的文件。Tauri 时代留在 `src-tauri/src/` 的
+ * 同名实现（`cover.rs` / `ext_protocol.rs` / `commands/host.rs`）迁回 Electron 后
+ * 从未搬回 `backend/src`，不能作为目标 —— 否则 extractFn() 的 readFileSync 会直接
+ * ENOENT，整个脚本一上来就崩，连一条断言都跑不到。
  *
  * ## 用法
  *
@@ -86,109 +91,6 @@ function extractFn(relFile, fnName) {
 
 /** 待验证的纯函数：源文件 → 函数名 → 该函数需要的 use。 */
 const TARGETS = [
-  {
-    file: "cover.rs",
-    fn: "referer_for",
-    uses: [],
-    wrapper: `
-#[no_mangle]
-pub extern "C" fn referer_kind(ptr: *const u8, len: usize) -> u32 {
-    let h = unsafe { std::slice::from_raw_parts(ptr, len) };
-    let owned = String::from_utf8_lossy(h);
-    match referer_for(&owned) {
-        Some("https://music.163.com/") => 1,
-        Some("https://www.kugou.com/") => 2,
-        Some("https://y.qq.com/") => 3,
-        Some(_) => 9,
-        None => 0,
-    }
-}`,
-    run: (ex) => {
-      const call = (host) => {
-        const b = enc.encode(host);
-        const ptr = base(ex) + 1024;
-        mem(ex).set(b, ptr);
-        return ex.referer_kind(ptr, b.length);
-      };
-      console.log("\n[referer_for] 防盗链 Referer 按域名分流（0=不伪装 1=网易云 2=酷狗 3=QQ）");
-      // 期望值对齐 Electron 版 electron/protocols.ts 的 coverRefererRules
-      const cases = [
-        ["p1.music.126.net", 1],
-        ["music.163.com", 1],
-        ["imge.kugou.com", 2],
-        ["www.kugou.com", 2],
-        ["kglink.com", 2],
-        ["m.kugou.cn", 2],
-        ["u.y.qq.com", 3],
-        ["y.qq.com", 3],
-        // 不得误伤：第三方 / 仿冒域名
-        ["i0.hdslb.com", 0],
-        ["example.com", 0],
-        ["notkugou.com", 0],
-        ["kglink.com.evil.net", 0],
-        ["notqq.com", 0],
-      ];
-      for (const [host, want] of cases) check(`  ${host}`, call(host), want);
-    },
-  },
-  // ---- ext: 协议：路径逃逸防护（扩展 UI 的安全边界）----
-  //
-  // 这是扩展框架里**安全性最关键**的一段：`ext:` 协议给扩展自带 UI 提供文件服务，
-  // 一旦判断写漏，扩展就能读到扩展目录以外的任意文件。
-  // 因此这里真的把 is_servable 编出来，喂各种逃逸尝试跑断言。
-  {
-    file: "ext_protocol.rs",
-    fn: "is_servable",
-    extraFns: ["starts_with_ci"],
-    uses: ["std::path::{Component, Path, PathBuf}"],
-    wrapper: `
-#[no_mangle]
-pub extern "C" fn servable(root_ptr: *const u8, root_len: usize,
-                           path_ptr: *const u8, path_len: usize) -> u32 {
-    let root = unsafe { std::slice::from_raw_parts(root_ptr, root_len) };
-    let p = unsafe { std::slice::from_raw_parts(path_ptr, path_len) };
-    let root = PathBuf::from(String::from_utf8_lossy(root).into_owned());
-    let p = String::from_utf8_lossy(p);
-    match is_servable(&root, &p) {
-        Some(_) => 1,
-        None => 0,
-    }
-}`,
-    run: (ex) => {
-      const call = (root, p) => {
-        const rb = enc.encode(root);
-        const pb = enc.encode(p);
-        const rp = base(ex) + 20000;
-        const pp = base(ex) + 22000;
-        mem(ex).set(rb, rp);
-        mem(ex).set(pb, pp);
-        return ex.servable(rp, rb.length, pp, pb.length) === 1;
-      };
-      const ROOT = "C:/Users/x/AppData/Roaming/cn.cool.silvermoon/extensions";
-      const D = "C:/Users/x/AppData/Roaming/cn.cool.silvermoon/extensions";
-      console.log("\n[is_servable] ext: 协议路径逃逸防护（1=放行，0=拒绝）");
-      check("  扩展目录内的正常产物", call(ROOT, `${D}/miaohui/web/dist/index.html`), true);
-      check("  扩展目录内的大小写不同", call(ROOT, `${D}/MiaoHui/web/dist/index.html`), true);
-      check("  反斜杠路径", call(ROOT, `${D}\\\\miaohui\\\\web\\\\dist\\\\index.html`), true);
-      check("  .. 逐段逃逸", call(ROOT, `${D}/miaohui/../../../Windows/win.ini`), false);
-      check(
-        "  .. 后仍回到根内（也拒绝）",
-        call(ROOT, `${D}/miaohui/../miaohui/web/dist/a.js`),
-        false,
-      );
-      check(
-        "  完全在根的兄弟目录",
-        call(ROOT, "C:/Users/x/AppData/Roaming/cn.cool.silvermoon/skins/x/skin.json"),
-        false,
-      );
-      check("  前缀相同的兄弟目录（extensions-evil）", call(ROOT, `${D}-evil/x/a.js`), false);
-      check("  绝对路径直指系统文件", call(ROOT, "C:/Windows/win.ini"), false);
-      check("  空路径", call(ROOT, ""), false);
-      check("  仅斜杠", call(ROOT, "/"), false);
-      check("  相对路径（非绝对）", call(ROOT, "miaohui/web/dist/a.js"), false);
-      check("  编码过的 ..（解码后的形态）", call(ROOT, D + "/miaohui/../Windows/win.ini"), false);
-    },
-  },
   // ---- activationEvents：启动时是否该拉起引擎 ----
   //
   // 这条决定"装了 10 个扩展会不会开机全拉起"。旧包（不声明该字段）必须
@@ -266,40 +168,6 @@ pub extern "C" fn ready_custom(ptr: *const u8, len: usize, pp: *const u8, pl: us
       check("  自定义模式不匹配", call("READY 12345", "listening on <port>"), 0);
       check("  段数不同不匹配", call("READY 12345 extra", "READY <port>"), 0);
       check("  端口超 u16 上限", call("READY 70000"), 0);
-    },
-  },
-  {
-    file: path.join("commands", "host.rs"),
-    fn: "normalize_str",
-    uses: [],
-    wrapper: `
-#[no_mangle]
-pub extern "C" fn normalize_write(ptr: *const u8, len: usize, out: *mut u8) -> usize {
-    let s = unsafe { std::slice::from_raw_parts(ptr, len) };
-    let r = normalize_str(&String::from_utf8_lossy(s));
-    unsafe { std::ptr::copy_nonoverlapping(r.as_ptr(), out, r.len()) };
-    r.len()
-}`,
-    run: (ex) => {
-      const call = (s) => {
-        const b = enc.encode(s);
-        const ptr = base(ex) + 4096;
-        const outPtr = base(ex) + 8192;
-        mem(ex).set(b, ptr);
-        const n = ex.normalize_write(ptr, b.length, outPtr);
-        return dec.decode(mem(ex).subarray(outPtr, outPtr + n));
-      };
-      console.log("\n[normalize_str] 路径规范化（对齐 Node path.normalize）");
-      const cases = [
-        ["a\\b\\c", "a/b/c"],
-        ["C:\\blog\\SilverMoon", "C:/blog/SilverMoon"],
-        ["/a/./b/../c", "/a/c"],
-        ["a//b", "a/b"],
-        ["../x", "x"],
-        ["/", "/"], // Node 的 path.normalize("/") 就是 "/"
-        ["/a/../", "/"],
-      ];
-      for (const [input, want] of cases) check(`  ${JSON.stringify(input)}`, call(input), want);
     },
   },
   {

@@ -76,7 +76,7 @@ npm run lint                       # check-version.mjs && eslint .
 npm run format:check               # prettier（src / shared / scripts / electron）
 npm run typecheck                  # vue-tsc --noEmit && tsc -p tsconfig.electron.json
 npm test                           # vitest run
-npm run verify:rust-pure           # wasm 旁路真实执行 Rust 纯逻辑（见下）
+npm run verify:rust-pure           # wasm 旁路真实执行 Rust 纯逻辑（扩展启动策略 / 握手行 / 封面扩展名，见下）
 npm run verify:mock-coverage       # mock 与后端路由表漂移
 npm run verify:m3-tokens           # 颜色令牌与 shared/m3-theme.ts 是否一致
 npm run verify:settings-index      # 设置项索引是否过期
@@ -120,9 +120,11 @@ npm run check:icon-font            # 图标字体子集是否与源码一致
   （设计边界与验收标准）与 [`LOG.md`](LOG.md)（逐轮施工记录 + 决策原因）。
   `REWRITE_PROMPT_TAURI2.md` 是历史归档，**不要照着它建 Tauri 项目**；
   `TAURI-MIGRATION.md` 记录的是**上一轮**迁回 Tauri 的过程，也不是当前架构。
-- ⚠️ `apps/desktop/src-tauri/` 是 **Tauri 时代的遗留树**（192 文件），CI、npm scripts、
-  eslint 均不参与构建。除了 `check-version.mjs` 里那条「遗留副本」校验，**没有任何东西读它**。
-  不要在里面改代码，也不要按它推断当前架构。
+- ✅ `apps/desktop/src-tauri/`（Tauri 时代遗留树，192 文件 / 7.6MB）**已于 2026-10-22 整树删除**，
+  连同 `check-version.mjs` 的「遗留副本」校验、`verify-capability-scopes.mjs`、`.gitignore`
+  与 `eslint.config.js` 的对应规则一并清掉。要取回历史：`git show c9cee4b:apps/desktop/src-tauri/<path>`。
+  **现在仓库里只有一棵 Rust 业务树（`backend/`）**；仍看到 `src-tauri` 字样时那是历史注释，
+  不是可编译的代码。
 
 ## Key Conventions
 
@@ -156,17 +158,18 @@ npm run check:icon-font            # 图标字体子集是否与源码一致
 - **远程页窗口只允许白名单命令**：Pixiv / 文库8 / 番剧取流窗口的预加载跑在**页面世界**且
   `contextIsolation: false`，`electron/ipc.ts` 的 `REMOTE_WINDOW_ALLOWED_COMMANDS` 是唯一的收敛点。
   **新增注入脚本调用必须同步加进这张表**（历史上漏掉 `wenku8_login_submit` 会让登录静默失效）。
-- **⚠️ `ext:` 协议当前未注册（实测缺陷，待修）**：`ExtensionEmbed.vue` / `ExtensionHost.vue`
-  用 `toAssetUrl(dir, "ext")` 生成 `ext://localhost/...`，但 `electron/protocols.ts` 的
-  `registerSchemes()` 与 `protocol.handle()` **只有 `app` / `asset` / `app-cover` 三个**，
-  全仓 grep 不到 `ext` scheme。Tauri 时代实现在 `src-tauri/src/ext_protocol.rs`
-  （7.7KB，最后改动是 `ee88689` 2026-10-11），迁回 Electron 后**没人碰过它、也没搬回来**；
-  那份实现可直接照抄的语义是「只服务 `extensions/<id>/` 之内的文件、拒绝含 `..` 的路径、
-  Windows 前缀比较忽略大小写」。
-  症状：扩展 UI 的 iframe 加载不出来（导航到未注册协议直接失败）。
-  **验证方法**：装一个带 `contributes.ui` 的扩展，看 iframe 是否白屏 + DevTools 是否报
-  unknown scheme。修法是在 `protocols.ts` 补第四个 scheme + handler（路径与 `asset:` 同构，
-  但根目录锁在 `app_data_dir/extensions/<id>/`）。
+- **`ext:` 协议（2026-10-22 已补齐）**：`ExtensionEmbed.vue` / `ExtensionHost.vue`
+  用 `toAssetUrl(dir, "ext")` 生成 `ext://localhost/...`，对应 `electron/protocols.ts` 的
+  `registerSchemes()` 第四个 scheme 与 `handleExtProtocol()`，根目录锁在
+  `<app_data_dir>/extensions`（与 Rust 侧 `app_data_dir().join("extensions")` 同处）。
+  - 路径判定是**安全边界**，抽在 `electron/extPathGuard.ts` 的 `extIsServable()`，
+    由 `electron/__tests__/extProtocol.test.ts` 的 14 条用例守着（`..` 逃逸、
+    `extensions-evil` 前缀混淆、大小写、反斜杠形态）。
+  - ⚠️ **不要给 `ext:` 开 `corsEnabled` / `bypassCSP`**：它存在的意义就是用独立 origin
+    隔离扩展 UI 与 `asset://`（否则扩展页与任意本地文件同源，能直接 fetch 本机任意文件），
+    开了就白做。
+  - ⚠️ `src/ipc/invoke.ts` 的 `toAssetUrl()` 幂等白名单必须含 `ext:`，否则已带协议的串
+    会被二次包装成 `ext://localhost/ext%3A%2F%2F...`，iframe 白屏。
 - **二进制过桥**：`invoke` 原生支持 `Uint8Array`，`toCloneablePayload()` 会原样透传 ——
   **不要转成 JSON 数组**（写大文件会膨胀数倍）。
 - **Map / Set 必须显式降级**：JSON 没有原生表示，`toCloneablePayload()` 会把 Map 展开成对象、
@@ -210,9 +213,14 @@ npm run verify:rust-pure
 **不带外部依赖的纯函数按原文抽出来**编成 wasm，在 Node 里真跑断言（改名会直接报错，
 不会静默失效）。新增纯逻辑时把它加进 `scripts/verify-rust-pure.mjs` 的 `TARGETS`。
 
-- **能覆盖**：封面 Referer 伪装、扩展名推断、路径规范化等纯逻辑。
+- **能覆盖**：`TARGETS` 里当前这 3 项 —— 扩展启动策略（`wants_startup`）、引擎握手行解析
+  （`parse_ready_line`）、封面扩展名推断（`cover_ext`）。**不是「Rust 纯逻辑都能覆盖」**：
+  只收 `backend/src` 里**确实存在**且不带外部依赖的函数，加一项就得实际跑通一次。
 - **不能覆盖**：任何带 build script 的 crate（`serde` 等会拖进来），网络 / 数据库 /
   宿主 API 路径仍必须走 CI。
+- **只认 `backend/src`**：Tauri 时代的 `src-tauri/src/`（`cover.rs` / `ext_protocol.rs` /
+  `commands/host.rs`）迁回 Electron 后从未搬回来，**不能当目标** —— `extractFn()` 直读源文件，
+  路径不存在会让脚本一上来就 ENOENT，一条断言都跑不到。
 - `cargo generate-lockfile` / `cargo fetch` **不需要链接器**，可用于验证依赖声明是否自洽。
 
 ## Build CI
@@ -232,10 +240,12 @@ npm run verify:rust-pure
 ## 版本号与提交
 
 - **版本号分散在多处，单一真源是 `backend/silvermoon.config.json`**（vite 与 Rust 两侧都读它）。
-  `node scripts/check-version.mjs`（挂在 `npm run lint` 里）会校验：单一真源、
-  `src-tauri/silvermoon.config.json`（遗留副本，可选）、`package.json`、`backend/Cargo.toml`、
-  `backend/Cargo.lock`（可选）、仓库根 `README.md` / `README_en.md`（可选）、
-  `apps/desktop/README.md` / `README_zh.md`。
+  `node scripts/check-version.mjs`（挂在 `npm run lint` 里）实测校验 **6 处**：单一真源、
+  `package.json`、`backend/Cargo.toml`、`backend/Cargo.lock`（可选）、
+  `apps/desktop/README.md`、`apps/desktop/README_zh.md`。
+  仓库根 `README.md` / `README_en.md` 也在清单里但**是可选的**（写了才校验），当前不含版本号。
+  （`src-tauri/silvermoon.config.json` 那条「遗留副本」校验已随整树删除一并移除，
+  所以处数从 7 降到 6。）
   **⚠️ 脚本不覆盖 `fqapi/`** —— `fqapi/Cargo.toml` 与 `fqapi/Cargo.lock` 要**手动**
   一起改，否则「关于」页版本与 fqapi 自报版本（它用 `env!("CARGO_PKG_VERSION")`）对不上。
 - **禁止 `git add -A`**：仓库根常驻大量未跟踪的参考项目与 `.local/state` 里的敏感文件。

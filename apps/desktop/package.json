@@ -43,7 +43,6 @@
     "@applemusic-like-lyrics/core": "^0.6.0",
     "@m3e/web": "^2.8.2",
     "@material/material-color-utilities": "^0.4.0",
-    "@material/web": "^2.2.0",
     "artplayer": "^5.4.0",
     "artplayer-plugin-danmuku": "^5.3.0",
     "dompurify": "^3.4.16",

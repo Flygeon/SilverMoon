@@ -73,8 +73,10 @@
    横跨 133 个提交无人发现。
 2. **生成物与真源分离**：版本号真源 `backend/silvermoon.config.json`（9 处校验）、
    配色真源 `shared/m3-theme.ts`、设置索引真源 `SettingsView.vue`。
-3. **本机无 MSVC 时的验证链**：能用 `verify:rust-pure`（wasm 旁路真跑断言）覆盖纯逻辑；
-   其余走 CI。**不得把「本机编不了」当成不验证的理由。**
+3. **本机无 MSVC 时的验证链**：`verify:rust-pure`（wasm 旁路真跑断言）**只覆盖
+   `TARGETS` 里显式列出的少数纯函数**（当前 3 项：扩展启动策略、引擎握手行解析、
+   封面扩展名推断），**不等于 Rust 侧已验证**；其余一律走 CI。
+   **不得把「本机编不了」当成不验证的理由**，也不得把「verify:rust-pure 绿了」当成全覆盖。
 4. **提交信息只写定位**；**决策原因写 LOG / CHANGELOG**。
 
 ---
@@ -103,7 +105,7 @@
 | # | 项 | 判据 |
 |---|---|---|
 | 1 | 本地可跑的校验全绿 | `npm run lint` / `format:check` / `typecheck` / `test` 全部通过 |
-| 2 | Rust 侧 | `verify:rust-pure` 通过；改动涉及编译路径则推 CI |
+| 2 | Rust 侧 | `verify:rust-pure` 通过（仅证明 `TARGETS` 内那几项纯逻辑）；改动涉及编译路径则推 CI |
 | 3 | 生成物同步 | 改了配色/设置项/图标 → 对应 `gen:*` 已重跑，`verify:*` 通过 |
 | 4 | 提交 | 显式列路径（禁 `add -A`），提交信息写清定位 |
 | 5 | CI | 推送后确认 **Clippy 与 Rust 单测是 success，而非 skipped** |
@@ -127,11 +129,11 @@
 
 | 项 | 状态 |
 |---|---|
-| `ext:` 协议未注册 → 扩展 UI 加载不出来 | **缺陷，待修**（`electron/protocols.ts` 补第 4 个 scheme） |
+| `ext:` 协议未注册 → 扩展 UI 加载不出来 | **已修复（2026-10-22）**：`protocols.ts` 补第 4 个 scheme + `handleExtProtocol()`，路径判定抽在 `extPathGuard.ts` 并由 14 条单测守着；`invoke.ts` 幂等白名单同步补 `ext:` |
 | 四份 README 曾长期描述 Tauri 架构 | 已于 2026-10-17 全部重写为 Electron 基线 |
 | `REWRITE_PROMPT_TAURI2.md` 等历史文档未加弃用标注 | 部分标注，`TAURI-MIGRATION.md` 是上一轮迁移记录（历史） |
-| 部分 `verify:*` 脚本未接入 CI（`verify-ext-slots` / `verify-capability-scopes` / `verify-splash-*` 等） | 手动可跑，CI 不拦 |
-| `src-tauri/` 遗留树（192 文件，7.6MB） | 未清理，仅 `check-version` 校验其副本 |
+| 部分 `verify:*` 脚本未接入 CI（`verify-ext-slots` / `verify-splash-*` 等） | 手动可跑，CI 不拦。`verify-capability-scopes` 已删（其数据源 `src-tauri/capabilities` 随遗留树消失） |
+| `src-tauri/` 遗留树（192 文件，7.6MB） | **已清理（2026-10-22）**：整树删除，连带 `check-version` 的遗留副本校验、`verify-capability-scopes.mjs`、`.gitignore` 与 `eslint.config.js` 的对应规则。基线 commit `c9cee4b` 可取回 |
 
 ---
 
