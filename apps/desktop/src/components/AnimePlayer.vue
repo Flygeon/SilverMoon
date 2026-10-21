@@ -800,11 +800,6 @@ onBeforeUnmount(() => {
 .spin {
   animation: lm-spin 1s linear infinite;
 }
-@keyframes lm-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 @keyframes lm-fade-in {
   from {
     opacity: 0;

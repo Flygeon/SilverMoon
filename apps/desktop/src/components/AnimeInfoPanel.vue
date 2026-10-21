@@ -385,11 +385,6 @@ const metaParts = computed(() => {
 .status-chip .spin {
   animation: lm-spin 1s linear infinite;
 }
-@keyframes lm-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 .collect-hint {
   margin: 0;
   font-size: var(--md-sys-typescale-body-small-size);

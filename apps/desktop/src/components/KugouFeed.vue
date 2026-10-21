@@ -267,22 +267,6 @@ watch(
   gap: 12px;
 }
 
-.feed-hero {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 18px 20px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-extra-large);
-  background: var(--md-sys-color-surface-container);
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition:
-    transform 220ms var(--md-sys-motion-spring-spatial-fast),
-    box-shadow 180ms;
-}
 .feed-hero:hover:not(:disabled) {
   transform: translateY(-2px);
   box-shadow: var(--md-elevation-2);
@@ -291,18 +275,7 @@ watch(
   opacity: 0.6;
   cursor: default;
 }
-.hero-icon {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  font-size: 26px;
-  background: var(--md-sys-color-primary-container);
-  color: var(--md-sys-color-on-primary-container);
-}
+
 .hero-main {
   flex: 1;
   min-width: 0;

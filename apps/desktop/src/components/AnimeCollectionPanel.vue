@@ -263,11 +263,6 @@ async function disconnect() {
 .spin {
   animation: lm-spin 1s linear infinite;
 }
-@keyframes lm-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 
 /* 授权卡片：三阶取色——容器层用 tertiary 家族与主列表区分 */
 .auth-card {

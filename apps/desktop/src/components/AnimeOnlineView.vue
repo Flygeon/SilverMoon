@@ -641,11 +641,6 @@ function backFromEpisodes() {
 .spin {
   animation: lm-spin 1s linear infinite;
 }
-@keyframes lm-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 /* chip 本体交给 m3e-filter-chip / m3e-assist-chip（选中态即 M3 规范：secondary-container 底 +
    on-secondary-container 文字 + 无描边，与改造前 .chip.active 一致）；
    下面把度量对齐改造前的 .chip（含选中时组件会占用 icon 槽展示勾选标记所需的 with-icon 内边距） */

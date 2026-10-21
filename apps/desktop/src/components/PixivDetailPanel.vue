@@ -672,11 +672,6 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 .spin {
   animation: lm-spin 1s linear infinite;
 }
-@keyframes lm-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 @media (max-width: 720px) {
   .detail-body {
     grid-template-columns: 1fr;

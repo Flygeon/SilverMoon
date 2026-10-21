@@ -365,11 +365,6 @@ onMounted(() => {
 .spin {
   animation: lm-spin 1s linear infinite;
 }
-@keyframes lm-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 .section-head {
   display: flex;
   align-items: center;

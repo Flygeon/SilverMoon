@@ -475,11 +475,6 @@ function requestClose() {
 .spin {
   animation: lm-spin 1s linear infinite;
 }
-@keyframes lm-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 .result-row {
   display: flex;
   align-items: center;

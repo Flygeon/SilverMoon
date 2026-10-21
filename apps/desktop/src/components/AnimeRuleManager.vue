@@ -425,11 +425,6 @@ textarea:focus {
 .spin {
   animation: lm-spin 1s linear infinite;
 }
-@keyframes lm-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 .repo-row {
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--lm-hairline);

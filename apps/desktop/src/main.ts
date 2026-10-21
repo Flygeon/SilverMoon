@@ -6,6 +6,8 @@ import { markBoot, markFirstPaint } from "@/utils/bootTiming";
 // 字体声明必须先于主题令牌引入：theme.css 只声明字体栈，字形由 fonts.css 提供
 import "@/tokens/fonts.css";
 import "@/tokens/theme.css";
+// 跨组件共用的提取样式（lm-spin 等），必须排在 theme.css 之后以取到主题令牌
+import "@/tokens/components.css";
 // @m3e/web 原生组件按需注册（连通按钮组 / 连通列表）
 import "@/m3e";
 
