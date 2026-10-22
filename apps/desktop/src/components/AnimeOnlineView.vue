@@ -18,7 +18,7 @@ import SourceSheet from "@/components/SourceSheet.vue";
 import AnimeEpisodesPanel from "@/components/AnimeEpisodesPanel.vue";
 import AnimePlayer from "@/components/AnimePlayer.vue";
 import AnimeRuleManager from "@/components/AnimeRuleManager.vue";
-import { fetchSubjectDetail, searchSubjects } from "@/utils/bangumiApi";
+import { searchSubjects } from "@/utils/bangumiApi";
 import { landHeroFlight, startHeroFlight, type HeroFlight } from "@/utils/heroTransition";
 import type { AnimeHistoryItem, AnimeSearchItem, BangumiSubject } from "@shared/types";
 
@@ -201,6 +201,15 @@ async function onPickSource(pluginName: string, item: AnimeSearchItem) {
 // ---- 选集 / 播放 / 历史 ----
 
 function playEpisode(roadIndex: number, episodeIndex: number, initialSeekMs?: number) {
+  /*
+   * 守卫：索引必须真的指向一集。
+   *
+   * 之前没有这道检查，而 openHistory 的兜底会无条件调 `playEpisode(0, 0)`。
+   * 当源没解析出任何线路时，AnimePlayer 的 `episode` computed 拿到 undefined，
+   * 播放器照样挂载但没有任何流 —— 表现就是**整页黑屏**，且点哪都没反应。
+   * 所以宁可不进播放器，也不要进一个空播放器。
+   */
+  if (!anime.selectedRoads[roadIndex]?.episodes[episodeIndex]) return;
   anime.clearStream();
   playing.value = { roadIndex, episodeIndex, initialSeekMs };
   view.value = "player";
@@ -223,19 +232,34 @@ function onPlayerSwitch(roadIndex: number, episodeIndex: number) {
  */
 async function openHistory(h: AnimeHistoryItem, ev?: MouseEvent) {
   const numericId = /^\d+$/.test(h.animeId) ? Number(h.animeId) : 0;
-  try {
-    if (numericId) {
-      const full = await fetchSubjectDetail(numericId);
-      if (full) {
-        // 详情已拉全：直接展示，不再让详情页重复请求
-        heroTakeoff(ev);
-        currentSubject.value = full;
-        view.value = "info";
-        anime.showSubject(full);
-        await heroLand();
-        return;
-      }
-    } else if (h.title) {
+  if (numericId) {
+    /*
+     * ⚠️ 不要在这里 await 网络。
+     *
+     * Bangumi 请求经 Rust 后端发出（前端 fetch 设不了 User-Agent），所以：
+     *   1. 它**不会**出现在 DevTools 的 Network 面板里 —— 看起来像"点了没发请求"；
+     *   2. 默认超时 15s，网络慢或断时点击会十几秒毫无反应，用户只会反复点。
+     *
+     * 正确顺序：先用历史里已有的轻量数据（标题/封面）**立刻**进详情页，
+     * 详情由 fetchBangumiInfo 在后台补齐。这与主页卡片 openInfo 的行为一致。
+     */
+    const seed: BangumiSubject = {
+      id: numericId,
+      name: h.title,
+      nameCn: h.title,
+      images: h.cover ? { large: h.cover } : undefined,
+    };
+    heroTakeoff(ev);
+    currentSubject.value = seed;
+    view.value = "info";
+    void anime.fetchBangumiInfo(seed);
+    await heroLand();
+    return;
+  }
+
+  // 非数字 id（"s:标题" 兜底键）：只有这条路还需要先搜一次
+  if (h.title) {
+    try {
       const page = await searchSubjects(h.title, "match", 1);
       const hit = page.items[0];
       if (hit) {
@@ -246,10 +270,11 @@ async function openHistory(h: AnimeHistoryItem, ev?: MouseEvent) {
         await heroLand();
         return;
       }
+    } catch {
+      /* 搜索失败走下方续播兜底 */
     }
-  } catch {
-    /* 网络失败走下方续播兜底 */
   }
+
   // 兜底：找不到 Bangumi 条目时按旧逻辑回查该源线路续播
   if (picking) return;
   picking = true;
@@ -258,16 +283,20 @@ async function openHistory(h: AnimeHistoryItem, ev?: MouseEvent) {
     if (!ok) {
       // 源可能被删/失效，回详情页让用户换源
       if (anime.bangumiDetail) {
+        currentSubject.value = anime.bangumiDetail;
         view.value = "info";
       }
       return;
     }
-    const road = anime.selectedRoads[h.roadIndex];
-    const target = road?.episodes[h.episodeIndex];
-    if (target) {
+    if (anime.selectedRoads[h.roadIndex]?.episodes[h.episodeIndex]) {
       playEpisode(h.roadIndex, h.episodeIndex, h.progressMs || undefined);
-    } else {
+    } else if (anime.selectedRoads[0]?.episodes[0]) {
       playEpisode(0, 0);
+    } else if (anime.bangumiDetail) {
+      // 源没给出任何可用剧集：**不要**进播放器（空流会是一片黑屏），
+      // 回详情页让用户手动换源。playEpisode 自身也有同样的守卫。
+      currentSubject.value = anime.bangumiDetail;
+      view.value = "info";
     }
   } finally {
     picking = false;
@@ -364,7 +393,16 @@ function backFromEpisodes() {
           {{ t("anime.loading") }}
         </div>
         <div v-else-if="anime.trendingError && !anime.trending.length" class="state list-error">
-          {{ anime.trendingError }}
+          <p class="state-msg">{{ anime.trendingError }}</p>
+          <!--
+            失败要给出口。此前只有一行错误文字、没有任何重试手段，
+            用户只能重启应用；而这条请求经 Rust 后端发出（超时 15s），
+            网络抖动一次就得重启，体验很差。
+          -->
+          <m3e-button variant="tonal" size="small" @click="anime.fetchTrendingList()">
+            <span slot="icon" class="material-symbols-outlined">refresh</span>
+            {{ t("anime.retry") }}
+          </m3e-button>
         </div>
         <div v-else-if="anime.trending.length" class="anime-grid">
           <AnimeCard
@@ -637,6 +675,10 @@ function backFromEpisodes() {
   line-height: 1.6;
   max-width: 640px;
   margin-inline: auto;
+}
+/* 错误文案与「重试」按钮之间留出行距（外层的 white-space:pre-line 会吃掉普通换行） */
+.list-error .state-msg {
+  margin: 0 0 12px;
 }
 .spin {
   animation: lm-spin 1s linear infinite;

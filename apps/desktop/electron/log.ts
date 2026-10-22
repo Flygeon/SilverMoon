@@ -76,6 +76,18 @@ function write(level: string, args: unknown[]): void {
 }
 
 function safeStringify(value: unknown): string {
+  /*
+   * Error 必须单独处理。
+   *
+   * `JSON.stringify(new Error("boom"))` 是 `"{}"` —— Error 的 message / stack
+   * 都不是**可枚举自有属性**。于是 `log.error("命令 x 调用异常：", err)` 在日志里
+   * 只留下一行 `… 调用异常： {}`，真实原因彻底丢失（本项目实测踩过：
+   * anime_fetch 报错持续多日，日志里全是空对象，无法定位）。
+   */
+  if (value instanceof Error) {
+    const detail = value.stack ?? `${value.name}: ${value.message}`;
+    return value.cause === undefined ? detail : `${detail}\n[cause] ${String(value.cause)}`;
+  }
   try {
     return JSON.stringify(value);
   } catch {

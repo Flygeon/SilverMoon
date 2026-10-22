@@ -119,6 +119,16 @@ export function fromV0(raw: unknown): BangumiSubject | null {
   };
 }
 
+/**
+ * 单次 Bangumi 请求超时。
+ *
+ * Rust 侧默认 15s，而番剧页的这几次请求是**用户点击后要等**的（详情页 / 热播榜）：
+ * 后端 HTTP 客户端按设计走系统代理（见 backend/src/anime.rs 的 http_client），
+ * 代理没开或半死时就会一路耗到超时——点一下卡片要干等 15 秒，像"卡死了"。
+ * 实测国内直连 api.bgm.tv 约 1s，8s 足够覆盖慢线路。
+ */
+const BANGUMI_TIMEOUT_MS = 8_000;
+
 /** 经 Rust anime_fetch 发请求并解析 JSON（只用于 Bangumi 域名） */
 async function getJson(
   url: string,
@@ -133,6 +143,7 @@ async function getJson(
     includeCookies: false,
     referer: "https://bgm.tv/",
     userAgent: BANGUMI_UA,
+    timeoutMs: BANGUMI_TIMEOUT_MS,
   });
   return JSON.parse(res.html);
 }

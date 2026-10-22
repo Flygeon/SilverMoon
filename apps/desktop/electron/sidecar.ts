@@ -232,7 +232,17 @@ export class Sidecar extends EventEmitter {
       return { ok: false, error: "后端未启动：后端进程不可用，请检查是否已构建 backend" };
     }
     try {
-      return await this.post("/cmd", { cmd, args: args ?? {} });
+      const reply = await this.post("/cmd", { cmd, args: args ?? {} });
+      /*
+       * 成功返回的 `ok: false` 也要落日志。
+       *
+       * 这类失败（典型：anime_fetch 的「网络请求失败（超时）」）是**后端的正常回包**，
+       * 不走 catch 分支；以前只在界面上显示一句错误、主进程日志里一个字都没有，
+       * 于是"日志干净但界面报错"，问题没法定位。用 warn 而非 error：有些命令
+       * 把"未登录 / 无结果"也表达成 ok:false，那不属于故障。
+       */
+      if (!reply.ok) log.warn(`命令 ${cmd} 返回失败：${reply.error ?? "(无错误信息)"}`);
+      return reply;
     } catch (error) {
       log.error(`命令 ${cmd} 调用异常：`, error);
       return { ok: false, error: `命令 ${cmd} 调用失败：${(error as Error).message}` };

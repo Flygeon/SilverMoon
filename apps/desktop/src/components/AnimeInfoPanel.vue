@@ -198,6 +198,13 @@ const metaParts = computed(() => {
         </m3e-button>
       </div>
     </template>
+
+    <!--
+      兜底：既没在加载、也没报错、但 subject 为空。
+      此前这个组合会**一个分支都不命中**，整页只剩左上角返回按钮 ——
+      深色主题下看起来就是"点了卡片之后一片黑"。
+    -->
+    <div v-else class="state">{{ t("anime.searchNoResult") }}</div>
   </div>
 </template>
 
