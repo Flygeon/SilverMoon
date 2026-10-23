@@ -11,6 +11,9 @@
 //!   且 WebView/CSP 无法逐图设 Referer，故图片统一走 Rust 代理 `pixiv_image`。
 //! - 登录用 PKCE + 隐藏/显式 WebView：打开登录页 → 拦截回调 `?code=` → 换 token。
 
+// `Read` 是 `ZipFile::read_to_end`（解包 Pixiv 的 zip 动图）所需要的 trait；
+// `Write` 已随「手写明文落盘」一并移除（现在经宿主加密写入）。
+use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
