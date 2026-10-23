@@ -72,12 +72,6 @@ fn state() -> &'static Mutex<KugouPersist> {
     STATE.get_or_init(|| Mutex::new(KugouPersist::default()))
 }
 
-fn persist_path(app: &silvermoon_ipc::Host) -> Result<std::path::PathBuf, String> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建数据目录失败：{e}"))?;
-    Ok(dir.join(PERSIST_FILE))
-}
-
 /// 首次调用时载入落盘状态，并初始化酷狗设备身份（device_info.json）。
 fn ensure_loaded(app: &silvermoon_ipc::Host) {
     LOADED.call_once(|| {
@@ -87,9 +81,8 @@ fn ensure_loaded(app: &silvermoon_ipc::Host) {
             // /register/dev 拿到的 dfid 无法落盘，每次启动都会注册成新设备。
             kugou_server::bridge::init(&dir.to_string_lossy());
         }
-        let loaded = persist_path(app)
-            .ok()
-            .and_then(|p| std::fs::read_to_string(p).ok())
+        // 登录态里的 cookie 等价于账号凭据，走宿主加密读写（历史明文会自动迁移）
+        let loaded = crate::secure_cred::read(app, PERSIST_FILE)
             .and_then(|s| serde_json::from_str::<KugouPersist>(&s).ok())
             .unwrap_or_default();
         *state().lock().unwrap() = loaded;
@@ -99,10 +92,8 @@ fn ensure_loaded(app: &silvermoon_ipc::Host) {
 /// 落盘（best-effort，失败不影响当前会话）
 fn save_persist(app: &silvermoon_ipc::Host) {
     let snapshot = state().lock().unwrap().clone();
-    if let Ok(path) = persist_path(app) {
-        if let Ok(text) = serde_json::to_string_pretty(&snapshot) {
-            let _ = std::fs::write(path, text);
-        }
+    if let Ok(text) = serde_json::to_string_pretty(&snapshot) {
+        let _ = crate::secure_cred::write(app, PERSIST_FILE, &text);
     }
 }
 

@@ -187,33 +187,24 @@ fn ensure_loaded(app: &silvermoon_ipc::Host) {
     });
 }
 
-fn persist_path(app: &silvermoon_ipc::Host) -> Result<std::path::PathBuf, String> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建数据目录失败：{e}"))?;
-    Ok(dir.join(PERSIST_FILE))
-}
-
+/// 载入登录态（宿主导出明文；历史明文文件会被就地迁移为加密格式）。
 fn load_persist(app: &silvermoon_ipc::Host) -> NeteasePersist {
-    let Ok(path) = persist_path(app) else {
+    let Some(text) = crate::secure_cred::read(app, PERSIST_FILE) else {
         return NeteasePersist::default();
     };
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<NeteasePersist>(&s).ok())
-        .unwrap_or_default()
+    serde_json::from_str::<NeteasePersist>(&text).unwrap_or_default()
 }
 
+/// 保存登录态（加密落盘）。
 fn save_persist(app: &silvermoon_ipc::Host, p: &NeteasePersist) -> Result<(), String> {
-    let path = persist_path(app)?;
     let json = serde_json::to_string_pretty(p).map_err(|e| e.to_string())?;
-    std::fs::write(path, json).map_err(|e| format!("保存网易云登录态失败：{e}"))
+    crate::secure_cred::write(app, PERSIST_FILE, &json)
+        .map_err(|e| format!("保存网易云登录态失败：{e}"))
 }
 
 fn clear_persist(app: &silvermoon_ipc::Host) {
     *state().lock().unwrap() = NeteasePersist::default();
-    if let Ok(path) = persist_path(app) {
-        let _ = std::fs::remove_file(path);
-    }
+    crate::secure_cred::remove(app, PERSIST_FILE);
 }
 
 // ---- 共享 HTTP 客户端 ----

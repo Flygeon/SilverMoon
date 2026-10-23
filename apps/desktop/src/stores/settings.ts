@@ -226,7 +226,7 @@ const DEFAULTS = {
   webdavUrl: "",
   /** WebDAV 用户名 */
   webdavUser: "",
-  /** WebDAV 密码（明文存 settings.json，与现有配置项一致） */
+  /** WebDAV 密码（落在 settings.json 内，由宿主 `safeStorage` 整文件加密） */
   webdavPass: "",
   /**
    * 网络代理模式（设置 → 网络）。

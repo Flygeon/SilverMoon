@@ -62,6 +62,14 @@ pub enum HostOp {
     OpenerOpenPath,
     /// 在文件管理器中定位
     OpenerReveal,
+    /// 读取加密凭据文件（历史明文会被就地迁移为加密）
+    SecureRead,
+    /// 写入加密凭据文件
+    SecureWrite,
+    /// 删除凭据文件
+    SecureRemove,
+    /// 系统加密是否可用
+    SecureAvailable,
 }
 
 impl HostOp {
@@ -88,6 +96,10 @@ impl HostOp {
             HostOp::ShortcutUnregister => "shortcut.unregister",
             HostOp::OpenerOpenPath => "opener.openPath",
             HostOp::OpenerReveal => "opener.reveal",
+            HostOp::SecureRead => "secure.read",
+            HostOp::SecureWrite => "secure.write",
+            HostOp::SecureRemove => "secure.remove",
+            HostOp::SecureAvailable => "secure.available",
         }
     }
 }

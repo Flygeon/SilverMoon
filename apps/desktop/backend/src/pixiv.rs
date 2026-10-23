@@ -11,7 +11,6 @@
 //!   且 WebView/CSP 无法逐图设 Referer，故图片统一走 Rust 代理 `pixiv_image`。
 //! - 登录用 PKCE + 隐藏/显式 WebView：打开登录页 → 拦截回调 `?code=` → 换 token。
 
-use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -272,22 +271,18 @@ fn ensure_loaded(app: &silvermoon_ipc::Host) {
     }
 }
 
-fn persist_path(app: &silvermoon_ipc::Host) -> Result<std::path::PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("获取应用数据目录失败：{e}"))?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建数据目录失败：{e}"))?;
-    Ok(dir.join("pixiv.json"))
-}
+/// 凭据文件名。路径与加解密都由宿主负责（见 `secure_cred`）。
+const PERSIST_FILE: &str = "pixiv.json";
 
+/// 载入登录态。
+///
+/// 历史版本是明文 JSON；宿主读到没有加密信封的旧文件时会返回原文并**就地**
+/// 加密写回，所以这里不需要单独的迁移分支。
 fn load_persist(app: &silvermoon_ipc::Host) -> PixivState {
-    let Ok(path) = persist_path(app) else {
+    let Some(text) = crate::secure_cred::read(app, PERSIST_FILE) else {
         return PixivState::default();
     };
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<PixivPersist>(&s).ok())
+    serde_json::from_str::<PixivPersist>(&text)
         .map(|p| PixivState {
             access_token: p.access_token,
             refresh_token: p.refresh_token,
@@ -297,18 +292,11 @@ fn load_persist(app: &silvermoon_ipc::Host) -> PixivState {
         .unwrap_or_default()
 }
 
+/// 保存登录态（加密落盘）。
 fn save_persist(app: &silvermoon_ipc::Host, p: &PixivPersist) -> Result<(), String> {
-    let path = persist_path(app)?;
     let json = serde_json::to_string_pretty(p).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("tmp");
-    {
-        let mut f = std::fs::File::create(&tmp).map_err(|e| format!("写入临时文件失败：{e}"))?;
-        f.write_all(json.as_bytes())
-            .map_err(|e| format!("写入登录态失败：{e}"))?;
-    }
-    // 原子替换：同目录 rename 在大多数文件系统上是原子操作
-    std::fs::rename(&tmp, &path).map_err(|e| format!("保存登录态失败：{e}"))?;
-    Ok(())
+    crate::secure_cred::write(app, PERSIST_FILE, &json)
+        .map_err(|e| format!("保存 Pixiv 登录态失败：{e}"))
 }
 
 fn persist_current(app: &silvermoon_ipc::Host) -> Result<(), String> {
@@ -845,8 +833,7 @@ pub async fn pixiv_login_submit(
 #[silvermoon_ipc::command]
 pub async fn pixiv_logout(app: silvermoon_ipc::Host) -> Result<(), String> {
     *state().lock().unwrap() = PixivState::default();
-    let path = persist_path(&app)?;
-    let _ = std::fs::remove_file(path);
+    crate::secure_cred::remove(&app, PERSIST_FILE);
     Ok(())
 }
 

@@ -394,6 +394,53 @@ impl Host {
     pub fn default_window_icon(&self) -> Option<&'static crate::image::Image> {
         crate::image::app_icon()
     }
+
+    // ------------------------------------------------------------------
+    // 凭据文件（经宿主 `safeStorage` 加密）
+    //
+    // 密钥由操作系统托管，只有主进程能访问，所以加解密必须回到宿主做。
+    // 这里把「按文件名读写应用数据目录下的加密文件」收敛成三个方法，
+    // 业务模块不关心信封格式，也不需要拼路径。
+    // ------------------------------------------------------------------
+
+    /// 读取 `app_data_dir/<file>` 并解密；不存在或解密失败返回 `None`。
+    ///
+    /// 历史明文文件会被宿主**就地**迁移为加密格式，调用方拿到的仍是原文。
+    pub fn secure_read(&self, file: &str) -> Option<String> {
+        let data = host::op(
+            &self.inner,
+            HostOp::SecureRead,
+            serde_json::json!({ "path": file }),
+        )?;
+        data.get("text").and_then(|v| v.as_str()).map(str::to_owned)
+    }
+
+    /// 把 `text` 加密写入 `app_data_dir/<file>`。
+    pub fn secure_write(&self, file: &str, text: &str) -> Result<(), String> {
+        host::op(
+            &self.inner,
+            HostOp::SecureWrite,
+            serde_json::json!({ "path": file, "text": text }),
+        )
+        .map(|_| ())
+        .ok_or_else(|| format!("保存凭据失败：{file}"))
+    }
+
+    /// 删除 `app_data_dir/<file>`（不存在视为成功）。
+    pub fn secure_remove(&self, file: &str) {
+        let _ = host::op(
+            &self.inner,
+            HostOp::SecureRemove,
+            serde_json::json!({ "path": file }),
+        );
+    }
+
+    /// 宿主是否支持加密（不可用时凭据会以 `plain` 信封降级保存）。
+    pub fn secure_available(&self) -> bool {
+        host::op(&self.inner, HostOp::SecureAvailable, serde_json::Value::Null)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
 }
 
 impl HostApi for Host {

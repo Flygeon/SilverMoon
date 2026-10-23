@@ -6,11 +6,22 @@
  *
  * 写盘是**显式**的（渲染进程调 `save()`），另外在进程退出前做一次兜底落盘，
  * 避免「改了设置但没点保存就直接退出」丢数据。
+ *
+ * ## 全部落盘文件都加密
+ *
+ * 这些文件里有真实凭据：`settings.json` 存 WebDAV 密码、Bangumi / Pixiv token、
+ * 弹弹 AppSecret；`bilibili.json` 存 SESSDATA 等 cookie。历史上它们是明文 JSON，
+ * 任何能读数据目录的人都能直接冒用账号（见 `secure-store.ts` 的说明）。
+ *
+ * 现在读写统一走 `readEncryptedFile` / `writeEncryptedFile`：
+ * - 首次读到**历史明文**时会就地加密写回（用户升级后无需任何操作）；
+ * - 加密不可用时降级为 `plain` 信封，并在日志里显式告警，绝不静默。
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
 import { log } from "./log";
+import { readEncryptedFile, writeEncryptedFile } from "./secure-store";
 
 interface StoreFile {
   data: Record<string, unknown>;
@@ -44,8 +55,9 @@ function load(file: string): StoreFile {
   let entry: StoreFile = { data: {}, dirty: false };
   try {
     if (existsSync(key)) {
-      const raw = readFileSync(key, "utf8");
-      if (raw.trim()) {
+      // 自动识别信封 / 历史明文；明文会被就地加密写回（一次性迁移）
+      const raw = readEncryptedFile(key);
+      if (raw && raw.trim()) {
         const parsed = JSON.parse(raw) as unknown;
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
           entry = { data: parsed as Record<string, unknown>, dirty: false };
@@ -60,15 +72,13 @@ function load(file: string): StoreFile {
   return entry;
 }
 
-/** 原子写盘（临时文件 + rename），避免断电/崩溃写出半截 JSON。 */
+/** 原子写盘（先写加密信封到临时文件，再 rename），避免断电/崩溃写出半截文件。 */
 function persist(file: string): void {
   const key = resolveFile(file);
   const entry = files.get(key);
   if (!entry) return;
-  const tmp = `${key}.tmp`;
   try {
-    writeFileSync(tmp, JSON.stringify(entry.data, null, 2), "utf8");
-    renameSync(tmp, key);
+    writeEncryptedFile(key, JSON.stringify(entry.data, null, 2));
     entry.dirty = false;
   } catch (error) {
     log.error(`写入 store ${key} 失败：`, error);

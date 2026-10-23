@@ -8,6 +8,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
+import path from "node:path";
 import { shell } from "electron";
 import { globalShortcut } from "electron";
 
@@ -20,6 +21,12 @@ import {
 } from "./windows";
 import { createTray, setTrayVisible } from "./tray";
 import { log } from "./log";
+import {
+  encryptionAvailable,
+  readEncryptedFile,
+  removeFile,
+  writeEncryptedFile,
+} from "./secure-store";
 
 /**
  * Host 必须是环回地址。
@@ -66,6 +73,32 @@ export function setExitHandler(handler: () => void): void {
 
 /** 已注册的全局热键（accelerator → 解绑函数）。 */
 const registeredShortcuts = new Map<string, () => void>();
+
+/**
+ * 凭据文件路径约束。
+ *
+ * 侧车只会传「应用数据目录下的文件名」，但它是**不可信输入**：一旦被规则或注入
+ * 脚本影响，就可能传 `../../somewhere`。这里把路径解析后强制校验它落在数据目录内，
+ * 与 `extPathGuard` 的思路一致 —— 路径校验是安全边界，不靠调用方自觉。
+ */
+let secureDataRoot: string | null = null;
+
+/** 由 `main.ts` 注入应用数据目录（`safeStorage` 相关操作的作用域）。 */
+export function setSecureDataRoot(root: string): void {
+  secureDataRoot = root;
+}
+
+function resolveSecurePath(raw: string): string {
+  if (!secureDataRoot) throw new Error("应用数据目录尚未初始化");
+  if (!raw) throw new Error("缺少文件路径");
+  // 只接受纯文件名：不允许侧车指定目录层级
+  const base = path.basename(raw);
+  if (!base || base === "." || base === "..") throw new Error(`非法文件名：${raw}`);
+  const resolved = path.resolve(secureDataRoot, base);
+  const rootPrefix = path.resolve(secureDataRoot) + path.sep;
+  if (!resolved.startsWith(rootPrefix)) throw new Error(`拒绝访问数据目录之外的文件：${raw}`);
+  return resolved;
+}
 
 function buildOps(): Record<string, HostOpHandler> {
   return {
@@ -224,6 +257,33 @@ function buildOps(): Record<string, HostOpHandler> {
       shell.showItemInFolder(String(args.path ?? ""));
       return null;
     },
+
+    // -------------------------------------------------------------------
+    // 凭据文件加解密（供 Rust 侧持久化使用）
+    //
+    // `safeStorage` 只能在主进程调用，而 kugou / netease / pixiv 的登录态由
+    // Rust 持有并落盘。这里把「按路径读写加密文件」收敛成两个最小操作：
+    // 读端自动识别历史明文并就地加密（一次性迁移），写端一律加密。
+    // 路径被限制在应用数据目录内 —— 侧车不得借此读写任意文件。
+    // -------------------------------------------------------------------
+    "secure.read": (args) => {
+      const file = resolveSecurePath(String(args.path ?? ""));
+      return { text: readEncryptedFile(file) };
+    },
+
+    "secure.write": (args) => {
+      const file = resolveSecurePath(String(args.path ?? ""));
+      writeEncryptedFile(file, String(args.text ?? ""));
+      return null;
+    },
+
+    "secure.remove": (args) => {
+      const file = resolveSecurePath(String(args.path ?? ""));
+      removeFile(file);
+      return null;
+    },
+
+    "secure.available": () => encryptionAvailable(),
   };
 }
 

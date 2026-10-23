@@ -50,6 +50,7 @@ import {
   startHostServer,
   setExitHandler,
   setSidecarNotifier,
+  setSecureDataRoot,
   type HostServer,
 } from "./host-server";
 import { destroyTray, setTrayCallback } from "./tray";
@@ -181,6 +182,8 @@ async function bootstrap(): Promise<void> {
 
   hostServer = await startHostServer();
   mark("宿主服务器就绪");
+  // 凭据加解密（secure.* 宿主操作）只能作用于应用数据目录
+  setSecureDataRoot(DATA_DIR);
   registerIpc();
   hardenSession();
   // CSP 默认只上报不阻断（见 electron/csp.ts 的「为什么分两步走」）。

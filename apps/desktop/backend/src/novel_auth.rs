@@ -71,26 +71,20 @@ fn ensure_loaded(app: &silvermoon_ipc::Host) {
     }
 }
 
-fn persist_path(app: &silvermoon_ipc::Host) -> Result<std::path::PathBuf, String> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建数据目录失败：{e}"))?;
-    Ok(dir.join(PERSIST_FILE))
-}
-
+/// 载入文库8 登录态（宿主导出明文；历史明文文件会被就地迁移为加密格式）。
+///
+/// 存的是 `jieqiUserInfo` 等 cookie，等价于登录凭据，不能明文落盘。
 fn load_persist(app: &silvermoon_ipc::Host) -> Wenku8Persist {
-    let Ok(path) = persist_path(app) else {
+    let Some(text) = crate::secure_cred::read(app, PERSIST_FILE) else {
         return Wenku8Persist::default();
     };
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<Wenku8Persist>(&s).ok())
-        .unwrap_or_default()
+    serde_json::from_str::<Wenku8Persist>(&text).unwrap_or_default()
 }
 
 fn save_persist(app: &silvermoon_ipc::Host, p: &Wenku8Persist) -> Result<(), String> {
-    let path = persist_path(app)?;
     let json = serde_json::to_string_pretty(p).map_err(|e| e.to_string())?;
-    std::fs::write(path, json).map_err(|e| format!("保存 Wenku8 登录态失败：{e}"))
+    crate::secure_cred::write(app, PERSIST_FILE, &json)
+        .map_err(|e| format!("保存 Wenku8 登录态失败：{e}"))
 }
 
 /// 校验提交上来的 cookie 是否包含登录所需字段。

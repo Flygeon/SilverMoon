@@ -13,6 +13,7 @@ pub mod novel_auth;
 pub mod novel_bqg;
 pub mod osu;
 pub mod pixiv;
+pub mod secure_cred;
 pub mod tray;
 pub mod webdav;
 
