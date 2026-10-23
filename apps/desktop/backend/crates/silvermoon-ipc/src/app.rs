@@ -416,7 +416,10 @@ impl Host {
     }
 
     /// 把 `text` 加密写入 `app_data_dir/<file>`。
-    pub fn secure_write(&self, file: &str, text: &str) -> Result<(), String> {
+    ///
+    /// 显式写 `std::result::Result`：本 crate 的 `Result<T>` 只收一个参数
+    /// （错误类型固定为 `Error`），而这里要回传可读字符串给调用方拼提示。
+    pub fn secure_write(&self, file: &str, text: &str) -> std::result::Result<(), String> {
         host::op(
             &self.inner,
             HostOp::SecureWrite,
