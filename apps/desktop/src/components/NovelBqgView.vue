@@ -194,7 +194,11 @@ onMounted(() => {
       </m3e-button>
 
       <p v-if="detailError" class="error">{{ detailError }}</p>
-      <div v-else-if="detailLoading" class="state">加载中……</div>
+      <!-- 加载态：M3E 加载指示器 + 文案，与其它在线源的 .state 结构保持一致 -->
+      <div v-else-if="detailLoading" class="state">
+        <m3e-loading-indicator class="lm-loading" />
+        加载中……
+      </div>
 
       <template v-else-if="detail">
         <div class="detail-head">
@@ -243,16 +247,19 @@ onMounted(() => {
 
       <div v-if="searchResults.length" class="search-results">
         <h3 class="section-title">搜索结果</h3>
-        <div class="novel-grid">
+        <div class="lm-novel-grid">
           <NovelCard v-for="n in searchResults" :key="n.aid" :item="n" @open="openNovel(n)" />
         </div>
       </div>
 
       <section class="section">
         <h3 class="section-title">热门小说</h3>
-        <div v-if="homeLoading" class="state">加载中……</div>
+        <div v-if="homeLoading" class="state">
+          <m3e-loading-indicator class="lm-loading" />
+          加载中……
+        </div>
         <p v-else-if="homeError" class="error">{{ homeError }}</p>
-        <div v-else class="novel-grid">
+        <div v-else class="lm-novel-grid">
           <NovelCard v-for="n in homeCovers" :key="n.aid" :item="n" @open="openNovel(n)" />
         </div>
       </section>
@@ -289,11 +296,7 @@ onMounted(() => {
   font-size: var(--md-sys-typescale-title-medium-size);
   font-weight: 500;
 }
-.novel-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 16px;
-}
+/* 书籍卡片网格统一走全局 .lm-novel-grid（src/tokens/theme.css），此处不再重复定义 */
 .state {
   padding: 24px 0;
   text-align: center;

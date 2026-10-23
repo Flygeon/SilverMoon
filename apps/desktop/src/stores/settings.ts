@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
 import { JsonStore } from "@/ipc/store";
+import { configureHostProxy } from "@/ipc/net";
 import { capabilities } from "@/capabilities";
 import { applySeedColor, clearSeedTokens } from "@/utils/dynamicTheme";
 import { applySkin } from "@/utils/skinLoader";
@@ -227,6 +228,26 @@ const DEFAULTS = {
   webdavUser: "",
   /** WebDAV 密码（明文存 settings.json，与现有配置项一致） */
   webdavPass: "",
+  /**
+   * 网络代理模式（设置 → 网络）。
+   *
+   * - system：跟随系统代理（默认）；
+   * - custom：使用下面 `networkProxyUrl` 填写的代理；
+   * - none：强制直连。
+   *
+   * 同时推给 Electron session 与 Rust 抓取通道：两边网络栈互不相通，
+   * 只推一边会出现「一部分请求走代理、一部分直连」。
+   */
+  networkProxyMode: "system" as "system" | "custom" | "none",
+  /** 自定义代理地址，如 http://127.0.0.1:7890 / socks5://127.0.0.1:7891 */
+  networkProxyUrl: "",
+  /**
+   * Bangumi 镜像（api.kazumi.fyi）。
+   *
+   * 官方 api.bgm.tv 在某些网络下不可达时，用 Kazumi 的缓存接口取热播榜；
+   * 镜像接口只覆盖热播/季表，搜索与详情仍走官方（失败会回退）。
+   */
+  bangumiMirrorEnabled: false,
   /** 实验性：网易云账号（扫码登录，我的歌单 + 云盘） */
   neteaseEnabled: false,
   /** 实验性：酷狗账号（扫码/手机号登录，每日推荐 + 排行榜） */
@@ -333,6 +354,14 @@ const DEFAULTS = {
   biliPlaybackRate: 1,
   /** B 站播放器是否上报观看进度（对标 PiliPlus 的「暂停观看记录」） */
   biliHistoryEnabled: true,
+  /**
+   * B 站默认播放画质。
+   *
+   * 0 = 自动（取该视频可用的最高档）；>0 时是期望的清晰度 id（如 80=1080P、
+   * 64=720P、32=480P），实际会按账号权限回退到不超过它的最高可用档。
+   * 用户在本次播放中手动切过清晰度后，以手动选择为准（qualityPinned）。
+   */
+  biliDefaultQuality: 0,
   /**
    * B 站播放器「氛围光」（ambient light / 环境光晕）。
    *
@@ -466,6 +495,9 @@ export const useSettingsStore = defineStore("settings", () => {
   const webdavUrl = ref(DEFAULTS.webdavUrl);
   const webdavUser = ref(DEFAULTS.webdavUser);
   const webdavPass = ref(DEFAULTS.webdavPass);
+  const networkProxyMode = ref(DEFAULTS.networkProxyMode);
+  const networkProxyUrl = ref(DEFAULTS.networkProxyUrl);
+  const bangumiMirrorEnabled = ref(DEFAULTS.bangumiMirrorEnabled);
   const neteaseEnabled = ref(DEFAULTS.neteaseEnabled);
   const kugouEnabled = ref(DEFAULTS.kugouEnabled);
   const kugouAutoSignIn = ref(DEFAULTS.kugouAutoSignIn);
@@ -518,6 +550,7 @@ export const useSettingsStore = defineStore("settings", () => {
   const biliVolume = ref(DEFAULTS.biliVolume);
   const biliPlaybackRate = ref(DEFAULTS.biliPlaybackRate);
   const biliHistoryEnabled = ref(DEFAULTS.biliHistoryEnabled);
+  const biliDefaultQuality = ref(DEFAULTS.biliDefaultQuality);
   const ambilightEnabled = ref(DEFAULTS.ambilightEnabled);
   const ambilightBlur = ref(DEFAULTS.ambilightBlur);
   const ambilightSpread = ref(DEFAULTS.ambilightSpread);
@@ -605,6 +638,9 @@ export const useSettingsStore = defineStore("settings", () => {
     webdavUrl,
     webdavUser,
     webdavPass,
+    networkProxyMode,
+    networkProxyUrl,
+    bangumiMirrorEnabled,
     neteaseEnabled,
     kugouEnabled,
     kugouAutoSignIn,
@@ -657,6 +693,7 @@ export const useSettingsStore = defineStore("settings", () => {
     biliVolume,
     biliPlaybackRate,
     biliHistoryEnabled,
+    biliDefaultQuality,
     ambilightEnabled,
     ambilightBlur,
     ambilightSpread,
@@ -678,6 +715,40 @@ export const useSettingsStore = defineStore("settings", () => {
     osuMirror,
     osuOutDir,
   } as const;
+
+  /**
+   * 把网络设置同时推给两条互不相通的网络栈：
+   * - Electron session（Chromium：图片 / 视频 / net.fetch）；
+   * - Rust 抓取通道（番剧 / Bangumi / 规则下载）。
+   *
+   * 任意一条失败都只记日志：浏览器预览没有宿主桥，不能因此让设置页报错。
+   */
+  async function applyNetworkSettings(): Promise<void> {
+    const mode = networkProxyMode.value;
+    const url = networkProxyUrl.value.trim();
+    const calls: Promise<unknown>[] = [configureHostProxy(mode, url)];
+    // 浏览器预览 / 单测里的 capabilities 是空壳，缺这个方法时跳过而不报错
+    if (typeof capabilities.networkConfigure === "function") {
+      calls.push(capabilities.networkConfigure(mode, url));
+    }
+    const results = await Promise.allSettled(calls);
+    for (const result of results) {
+      if (result.status === "rejected") {
+        console.warn("[网络] 代理配置推送失败：", result.reason);
+      }
+    }
+  }
+
+  /** 代理设置变更的防抖句柄：逐键输入地址时不能每个字符都重建一次网络栈。 */
+  let networkApplyTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function scheduleApplyNetworkSettings(delayMs = 350): void {
+    if (networkApplyTimer !== null) clearTimeout(networkApplyTimer);
+    networkApplyTimer = setTimeout(() => {
+      networkApplyTimer = null;
+      void applyNetworkSettings();
+    }, delayMs);
+  }
 
   async function load() {
     try {
@@ -701,6 +772,8 @@ export const useSettingsStore = defineStore("settings", () => {
       (p) => p.server === "netease" || p.server === "kugou",
     );
     loaded.value = true;
+    // 启动时按持久化配置应用一次（主进程启动期已应用过一次，这里兜住热重载与预览）
+    void applyNetworkSettings();
   }
 
   /**
@@ -832,6 +905,13 @@ export const useSettingsStore = defineStore("settings", () => {
     },
     { deep: true },
   );
+
+  // 网络代理：设置一改就同时通知 Electron session 与 Rust 抓取通道。
+  // 防抖 350ms：逐键输入代理地址时避免每敲一个字符就重建网络栈 / 断开连接。
+  watch([() => networkProxyMode.value, () => networkProxyUrl.value], () => {
+    if (!loaded.value) return;
+    scheduleApplyNetworkSettings();
+  });
 
   // WebDAV 配置推送到 Rust（凭据只在 Rust 侧；代理/列举命令读取它）
   watch(

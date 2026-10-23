@@ -22,7 +22,7 @@ import {
 import { fetchSubjectDetail, fetchTrending, searchSubjects } from "@/utils/bangumiApi";
 import { animeFetchCacheStats, fetchAnimeHtml } from "@/utils/animeFetcher";
 import { animeLog } from "@/utils/animeLog";
-import { extractStaticStream } from "@/utils/animeStream";
+import { extractStaticStreamDeep } from "@/utils/animeStream";
 import type {
   AnimeEpisode,
   AnimeFavoriteItem,
@@ -45,6 +45,8 @@ import type {
 const SEARCH_TIMEOUT_MS = 10_000;
 const DETAIL_TIMEOUT_MS = 15_000;
 const PLAY_PAGE_TIMEOUT_MS = 15_000;
+/** iframe 内层播放页：通常只是播放器壳，给更短超时，避免多层 iframe 把取流拖到分钟级 */
+const IFRAME_PAGE_TIMEOUT_MS = 8_000;
 
 export const useAnimeStore = defineStore("anime", () => {
   // ---- 规则源（播放源） ----
@@ -508,7 +510,22 @@ export const useAnimeStore = defineStore("anime", () => {
         const res = await fetchAnimeHtml(rule.name, spec, {
           timeoutMs: PLAY_PAGE_TIMEOUT_MS,
         });
-        const hit = extractStaticStream(res.html, rule, rule.baseURL);
+        // 外层壳页把播放器放进 iframe 时，静态页本身没有媒体地址。这里跟一层
+        // iframe（同一规则的头/Cookie，referer 用当前播放页），内层页面再提取。
+        const fetchPage = async (url: string): Promise<string | null> => {
+          try {
+            const child = await fetchAnimeHtml(
+              rule.name,
+              { ...spec, url, referer: episode.url },
+              { timeoutMs: IFRAME_PAGE_TIMEOUT_MS },
+            );
+            return child.html;
+          } catch (e) {
+            void animeLog(`[${rule.name}] iframe 播放页抓取失败 ${url}: ${(e as Error).message}`);
+            return null;
+          }
+        };
+        const hit = await extractStaticStreamDeep(res.html, rule, rule.baseURL, fetchPage);
         if (hit) staticHit = hit.url;
         void animeLog(
           `[${rule.name}] 播放页静态取流 ${hit ? `命中(${hit.method})` : "未命中"}` +

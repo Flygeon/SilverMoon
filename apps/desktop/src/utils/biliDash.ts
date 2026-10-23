@@ -163,6 +163,31 @@ export function isTimeBuffered(buffered: TimeRanges, t: number): boolean {
   return false;
 }
 
+/**
+ * 从 `t` 开始**连续**可播到的时间上限；`t` 不在任何缓冲区内时返回 `t`。
+ *
+ * 这是「要不要继续拉分片」的核心判据。**不能**用缓冲区最远末端：
+ * 用户回拖到已被 evict 丢弃的位置后，末端仍远在前方，旧判据会永远认为
+ * 「缓冲够了」，于是一片都不拉，播放器无限转圈。
+ */
+export function contiguousBufferedEnd(buffered: TimeRanges, t: number): number {
+  let end = t;
+  let found = false;
+  for (let i = 0; i < buffered.length; i++) {
+    if (t >= buffered.start(i) - 0.5 && t <= buffered.end(i) + 0.5) {
+      end = buffered.end(i);
+      found = true;
+      break;
+    }
+  }
+  if (!found) return t;
+  // remove() 之后 Chromium 可能留下首尾相接的多段，合并成连续水位
+  for (let i = 0; i < buffered.length; i++) {
+    if (buffered.start(i) <= end + 0.1 && buffered.end(i) > end) end = buffered.end(i);
+  }
+  return end;
+}
+
 /** 单路轨道（视频或音频）的拉取 / 喂给 `SourceBuffer` 状态机。 */
 class TrackFeeder {
   /** 下一个待拉取的分片下标（测试需要断言，故为包可见） */
@@ -173,6 +198,16 @@ class TrackFeeder {
   private stopped = false;
   /** 连续重试计数（成功后清零），仅在拉取内部使用 */
   private retries = 0;
+  /**
+   * 因 SourceBuffer 正忙而暂缓的重定位目标。
+   *
+   * 回拖进度条时很可能正好有 append / remove 在途，此时不能直接丢弃这次
+   * 重定位（旧实现就是直接 return）——否则游标仍停在远端，用户回拖后
+   * 永远等不到数据。
+   */
+  private pendingSeek: number | null = null;
+  /** 是否已经通知过「全部喂完」，避免每一轮 pump 重复触发 endOfStream 逻辑 */
+  private drainedNotified = false;
   /** 本轨道全部喂完时回调（由会话注入） */
   onDrained?: () => void;
   /** 提前缓冲的秒数：太小容易卡顿，太大则白拉流量 */
@@ -203,6 +238,8 @@ class TrackFeeder {
   private onUpdateEnd = (): void => {
     this.appending = false;
     this.pending = false;
+    // append / remove 结束后补做一次被推迟的重定位，再继续按新位置补数据。
+    this.flushPendingSeek();
     void this.pump();
   };
 
@@ -227,10 +264,51 @@ class TrackFeeder {
    * 播放点，造成反复重拉同一批分片（表现为播放抖动、流量翻倍）。
    */
   resync(t: number): void {
-    // 有 append / fetch 在途时不能重定位：此刻 buffered 还没包含在途那一片，
+    // 有 append / fetch 在途时不能立刻重定位：此刻 buffered 还没包含在途那一片，
     // 会把 next 拽回它，与 append 完成后的 next += 1 相互覆盖，同一片被反复拉取。
-    if (this.appending || this.sb.updating) return;
+    // 但**也不能直接丢弃**：先记下来，等 updateend 后再补做（见 flushPendingSeek）。
+    if (this.appending || this.sb.updating) {
+      this.pendingSeek = t;
+      return;
+    }
     if (!isTimeBuffered(this.sb.buffered, t)) this.seekTo(t);
+  }
+
+  /** 处理被推迟的重定位；SourceBuffer 仍忙时保留到下一次 updateend。 */
+  private flushPendingSeek(): void {
+    if (this.pendingSeek === null) return;
+    if (this.appending || this.sb.updating) return;
+    const t = this.pendingSeek;
+    this.pendingSeek = null;
+    if (!isTimeBuffered(this.sb.buffered, t)) this.seekTo(t);
+  }
+
+  /**
+   * 从 `t` 开始**连续**可播到的时间上限；`t` 不在任何缓冲区内时返回 `t`。
+   *
+   * 不能再用 `bufferedEnd()`（缓冲区最远末端）判断水位：回拖到已被 evict
+   * 丢弃的位置后，末端仍远在前方 —— 旧条件会永远认为「缓冲够了」，于是
+   * 一片都不拉，播放器无限转圈（本次修复的核心根因）。
+   */
+  private contiguousEnd(t: number): number {
+    return contiguousBufferedEnd(this.sb.buffered, t);
+  }
+
+  /** 该分片是否已完整落在某个缓冲区内（回拖后据此跳过重复下载）。 */
+  private segmentBuffered(seg: DashSegment): boolean {
+    const b = this.sb.buffered;
+    const segEnd = seg.startTime + seg.duration;
+    for (let i = 0; i < b.length; i++) {
+      if (b.start(i) <= seg.startTime + 0.1 && b.end(i) >= segEnd - 0.1) return true;
+    }
+    return false;
+  }
+
+  /** 全部喂完后只通知一次。 */
+  private notifyDrained(): void {
+    if (this.drainedNotified) return;
+    this.drainedNotified = true;
+    this.onDrained?.();
   }
 
   /** 已缓冲到的时间上限（没有缓冲返回 0）。 */
@@ -248,11 +326,34 @@ class TrackFeeder {
       this.pending = true;
       return;
     }
-    if (this.next >= this.segments.length) return;
+    this.flushPendingSeek();
+    if (this.next >= this.segments.length) {
+      this.notifyDrained();
+      return;
+    }
 
     const t = this.getTime();
-    // 缓冲已经足够靠前就歇着，等 timeupdate 再唤醒
-    if (this.bufferedEnd() > t + this.ahead) return;
+    // 只有「播放点本身已缓冲，且从它开始连续可播的水位足够靠前」才歇着。
+    // 旧实现只比较缓冲末端，回拖到被丢弃区域后末端仍在前方 → 永久不补数据。
+    const coveredEnd = this.contiguousEnd(t);
+    if (coveredEnd > t + this.ahead) return;
+
+    // 播放点已缓冲、但前方还隔着一段空洞（evict 留下的多段缓冲区）：
+    // 把游标拉回空洞起点回填，否则 next 停在前方会一直补远端数据，
+    // 播放推进到空洞边界就卡住。
+    if (coveredEnd > t + 0.5) {
+      const head = this.segments[this.next];
+      if (head && head.startTime > coveredEnd + 1) this.seekTo(coveredEnd);
+    }
+
+    // 跳过已完整缓冲的分片：回拖后 next 会落在旧数据上，不跳过就会重复下载
+    while (this.next < this.segments.length && this.segmentBuffered(this.segments[this.next])) {
+      this.next += 1;
+    }
+    if (this.next >= this.segments.length) {
+      this.notifyDrained();
+      return;
+    }
 
     const seg = this.segments[this.next];
     this.appending = true;
@@ -270,7 +371,7 @@ class TrackFeeder {
       this.next += 1;
       this.retries = 0;
       // 全部喂完 → 通知会话收尾（endOfStream / 自动下一 P）
-      if (this.next >= this.segments.length) this.onDrained?.();
+      if (this.next >= this.segments.length) this.notifyDrained();
     } catch (e) {
       this.appending = false;
       // 被动中止（destroy / 切清晰度）不算错误
@@ -340,6 +441,13 @@ export interface DashLoadOptions {
   keepWindowSeconds?: number;
   /** 全部轨道喂完后回调（用来到点 endOfStream / 自动下一 P） */
   onEnded?: () => void;
+  /**
+   * MediaSource 已经结束、无法再 append，但用户又回拖到了未缓冲的位置时回调。
+   *
+   * `endOfStream()` 不可逆：之后 `appendBuffer` 会抛 InvalidStateError。宿主要
+   * 重挂一个全新的 MSE 会话（携带回调给出的目标秒数）才能继续播。
+   */
+  onNeedsReload?: (time: number) => void;
 }
 
 /**
@@ -365,6 +473,12 @@ export class BiliDashSession {
   private keepBehind = 30;
   /** 已缓冲长度超过该值才触发回收，避免频繁 remove 卡顿 */
   private keepWindow = 90;
+  /** endOfStream 因「还没播到片尾」被推迟，等 timeupdate 到片尾再收尾 */
+  private endPending = false;
+  /** 是否已调用过 endOfStream（不可逆，需避免重复调用） */
+  private ended = false;
+  /** 是否已请求宿主重挂会话，避免 ended 状态下每次事件都重复触发 */
+  private reloadRequested = false;
 
   /** 是否支持当前流（编码 / MSE 可用性）。 */
   static supported(track: BiliStream, fallback: "video/mp4" | "audio/mp4"): boolean {
@@ -496,11 +610,22 @@ export class BiliDashSession {
     // 5) 播放位置驱动：timeupdate / seeking 时补数据；顺带做缓冲区回收
     this.onTimeUpdate = () => {
       const t = video.currentTime;
+      const ms = this.media;
+      // MediaSource 已 ended / closed 后不能再 appendBuffer。用户在这之后
+      // 把进度条往回拉时，只能让宿主重挂一个新的 MSE 会话，否则永远转圈。
+      if (ms && ms.readyState !== "open") {
+        if (!this.reloadRequested && this.duration > 0 && t < this.duration - 1) {
+          this.reloadRequested = true;
+          this.opts?.onNeedsReload?.(t);
+        }
+        return;
+      }
       for (const f of this.feeders) {
         f.resync(t);
         void f.pump();
       }
       opts.onProgress?.(vFeeder.bufferedEnd());
+      if (this.endPending) this.maybeEndOfStream();
       this.evict();
     };
     video.addEventListener("timeupdate", this.onTimeUpdate);
@@ -557,17 +682,27 @@ export class BiliDashSession {
 
   /** 所有轨道都喂完了 → 收尾。只在 SourceBuffer 空闲时调用 endOfStream。 */
   private maybeEndOfStream(): void {
-    if (this.destroyed || !this.sourceOpen) return;
+    if (this.destroyed || !this.sourceOpen || this.ended) return;
     if (!this.feeders.length || !this.feeders.every((f) => f.finished)) return;
+    // 先记下「待收尾」：最后一片 append 的瞬间 SourceBuffer 往往还在 updating，
+    // 这次收不了尾，必须留一个标记让后续 timeupdate 再试；否则 ended 永远不触发。
+    this.endPending = true;
+    const v = this.video;
+    // endOfStream() 是不可逆的：之后回拖进度条会 appendBuffer 失败、再也补不上
+    // 数据。因此只有播放点确实到了片尾才结束流；否则等播放推进到片尾附近再收尾
+    //（时间轴数据此时已经全部在缓冲区里，不影响播放）。
+    if (!v || (this.duration > 0 && v.currentTime < this.duration - 2)) return;
     const ms = this.media;
     if (!ms || ms.readyState !== "open") return;
     // 有 append 在途时 endOfStream 会抛 InvalidStateError
     if (this.feeders.some((f) => f.sb.updating)) return;
     try {
       ms.endOfStream();
+      this.ended = true;
+      this.endPending = false;
       this.opts?.onEnded?.();
     } catch {
-      /* 已 endOfStream 或状态不允许：忽略，下次 updateend 还会再试 */
+      /* 已 endOfStream 或状态不允许：忽略，下次 timeupdate 还会再试 */
     }
   }
 

@@ -37,16 +37,12 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 /// 解压 + 转码 + 落库是重 I/O，串行化避免临时文件互相踩踏
 static IMPORT_LOCK: Mutex<()> = Mutex::new(());
 
-fn http_client() -> &'static reqwest::blocking::Client {
-    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::blocking::Client::builder()
-            // 与 anime 一致：保留系统代理（GFW 环境下 osu.ppy.sh 常需代理）
-            .connect_timeout(CONNECT_TIMEOUT)
-            .pool_max_idle_per_host(8)
-            .build()
-            .expect("osu http client")
-    })
+fn http_client() -> reqwest::blocking::Client {
+    // 境外站点：跟随「设置 → 网络」的代理配置（系统 / 自定义 / 直连）。
+    let builder = reqwest::blocking::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .pool_max_idle_per_host(8);
+    crate::net_proxy::client("osu", builder)
 }
 
 // ---- 响应结构（与前端 @shared/types 对应）----

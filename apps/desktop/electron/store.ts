@@ -89,8 +89,19 @@ export function flushAllStores(): void {
   }
 }
 
-/** 处理来自渲染进程的 store 操作。 */
-export async function handleStore(payload: Record<string, unknown>): Promise<unknown> {
+/**
+ * 同步读取某个 store 的键值（主进程启动期用）。
+ *
+ * 渲染进程还没加载时就要应用网络代理，不能走异步 IPC；store 本身就是
+ * 「整文件 JSON + 内存缓存」，直接读缓存即可。
+ */
+export function readStoreValue(file: string, key: string): unknown {
+  return load(file).data[key] ?? null;
+}
+
+/** 处理来自渲染进程的 store 操作。 */ export async function handleStore(
+  payload: Record<string, unknown>,
+): Promise<unknown> {
   const file = String(payload.file ?? "store.json");
   const op = String(payload.op ?? "");
   const entry = load(file);

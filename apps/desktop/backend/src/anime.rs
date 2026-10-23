@@ -148,19 +148,17 @@ fn proxy_config() -> &'static Mutex<Option<AnimeProxyConfig>> {
     PROXY_CONFIG.get_or_init(|| Mutex::new(None))
 }
 
-fn http_client() -> &'static reqwest::blocking::Client {
-    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::blocking::Client::builder()
-            // 不复用 webdav/novel 的 .no_proxy()：reqwest 0.12 默认 auto_sys_proxy
-            // 会读 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY 环境变量 + Windows 系统代理，
-            // 在 GFW 环境下直连 raw.githubusercontent.com 会失败（拉不到规则）。
-            .connect_timeout(CONNECT_TIMEOUT)
-            // 连接复用：同一站点（搜索页 → 详情页 → 播放页）省掉重复的 TLS 握手
-            .pool_max_idle_per_host(8)
-            .build()
-            .expect("anime http client")
-    })
+fn http_client() -> reqwest::blocking::Client {
+    // 客户端要跟着「设置 → 网络」里的代理配置走：reqwest 的 Proxy 只能在 build
+    // 时确定，所以交给 `net_proxy::client` 按配置键缓存、变化时重建。
+    let builder = reqwest::blocking::Client::builder()
+        // 默认不写死代理：`net_proxy::apply` 会按设置选「系统 / 自定义 / 直连」。
+        // system 模式下 reqwest 自己读 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY 与
+        // Windows 系统代理，GFW 环境下取规则与 Bangumi 都能走代理。
+        .connect_timeout(CONNECT_TIMEOUT)
+        // 连接复用：同一站点（搜索页 → 详情页 → 播放页）省掉重复的 TLS 握手
+        .pool_max_idle_per_host(8);
+    crate::net_proxy::client("anime", builder)
 }
 
 /// 加入头部时过滤非法头名/值，避免恶意规则让整个请求 build 失败
@@ -1132,9 +1130,22 @@ const INIT_SCRIPT: &str = r#"(function () {
   function isVideo(u) {
     return typeof u === 'string' && (/\.m3u8(\?|$)/i.test(u) || /\.(mp4|flv)(\?|$)/i.test(u));
   }
+  // iframe 播放器：每个子 frame 有独立的 window，钩子抓到的地址留在子 frame 里，
+  // Rust 只轮询顶层 `__animeCollect`，看不到子 frame 的数组。跨域 iframe 又不能
+  // 直接读写 top 的变量，所以用 postMessage 把命中的地址汇总到顶层。
+  function notifyTop(u) {
+    try {
+      if (window.top && window.top !== window) {
+        window.top.postMessage({ __silvermoonAnimeStream: u }, '*');
+      }
+    } catch (e) {}
+  }
   function push(u) {
     try {
-      if (isVideo(u) && window.__animeStreams.indexOf(u) < 0) { window.__animeStreams.push(u); }
+      if (isVideo(u)) {
+        notifyTop(u);
+        if (window.__animeStreams.indexOf(u) < 0) { window.__animeStreams.push(u); }
+      }
     } catch (e) {}
   }
   // 内容确认是 m3u8（响应体前段含 #EXTM3U）→ 直接收录，不受 URL 后缀限制。
@@ -1142,7 +1153,23 @@ const INIT_SCRIPT: &str = r#"(function () {
   // 「参考项目能解析、这里解析不了」的主因（Kazumi 靠响应体判定，此前我们只看后缀）。
   function pushStream(u) {
     try {
-      if (typeof u === 'string' && u && window.__animeStreams.indexOf(u) < 0) { window.__animeStreams.push(u); }
+      if (typeof u === 'string' && u) {
+        notifyTop(u);
+        if (window.__animeStreams.indexOf(u) < 0) { window.__animeStreams.push(u); }
+      }
+    } catch (e) {}
+  }
+  // 顶层接收子 frame 汇总来的地址
+  if (window.top === window) {
+    try {
+      window.addEventListener('message', function (ev) {
+        try {
+          var d = ev && ev.data;
+          if (d && typeof d === 'object' && typeof d.__silvermoonAnimeStream === 'string') {
+            pushStream(d.__silvermoonAnimeStream);
+          }
+        } catch (e) {}
+      });
     } catch (e) {}
   }
   function isM3u8Body(t) {
@@ -1233,7 +1260,14 @@ const INIT_SCRIPT: &str = r#"(function () {
     function add(u) {
       try { if (isVideo(u) && out.indexOf(u) < 0) { out.push(u); } } catch (e) {}
     }
-    try { (window.__animeStreams || []).forEach(add); } catch (e) {}
+    // __animeStreams 里的地址已经过两道校验之一：URL 像媒体，或响应体确认是
+    // #EXTM3U（含 iframe 子 frame 汇总来的）。这里不能再按 isVideo 过滤——
+    // 无后缀清单（/api/proxy?token=... 之类）会被重新丢掉，响应体检测就白做了。
+    try {
+      (window.__animeStreams || []).forEach(function (u) {
+        try { if (typeof u === 'string' && u && out.indexOf(u) < 0) { out.push(u); } } catch (e) {}
+      });
+    } catch (e) {}
     // 站点播放器（hls.js/ckplayer 等）常经 XHR/fetch 拉清单，不经过 src setter；
     // Resource Timing 的 name 对跨域资源同样可见，是补抓的关键来源。
     try {
@@ -1388,6 +1422,14 @@ fn pick_stream(urls: &[String]) -> Option<String> {
         .or_else(|| {
             urls.iter()
                 .find(|u| u.to_ascii_lowercase().contains("m3u8"))
+        })
+        // 连 m3u8 字样都没有的无后缀清单：优先于 mp4/flv 直链
+        // （页面里的 mp4/flv 更可能是预告片/广告，而清单是播放器真正在拉的）
+        .or_else(|| {
+            urls.iter().find(|u| {
+                let lower = u.to_ascii_lowercase();
+                !lower.contains(".mp4") && !lower.contains(".flv")
+            })
         })
         .or_else(|| urls.first())
         .cloned()

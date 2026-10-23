@@ -325,13 +325,10 @@ fn persist_current(app: &silvermoon_ipc::Host) -> Result<(), String> {
 // 请求头 / 哈希 / PKCE
 // =====================================================================
 
-fn http_client() -> &'static reqwest::blocking::Client {
-    static C: OnceLock<reqwest::blocking::Client> = OnceLock::new();
-    C.get_or_init(|| {
-        reqwest::blocking::Client::builder()
-            .build()
-            .expect("构建 reqwest 客户端失败")
-    })
+fn http_client() -> reqwest::blocking::Client {
+    // 境外站点：必须跟随「设置 → 网络」的代理配置（系统 / 自定义 / 直连），
+    // 否则用户填了自定义代理，Pixiv 依旧直连超时。
+    crate::net_proxy::client("pixiv", reqwest::blocking::Client::builder())
 }
 
 /// UTC ISO8601：`yyyy-MM-ddTHH:mm:ss+00:00`

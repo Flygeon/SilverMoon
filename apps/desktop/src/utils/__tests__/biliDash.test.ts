@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  contiguousBufferedEnd,
   isTimeBuffered,
   mseMime,
   parseByteRange,
@@ -188,5 +189,52 @@ describe("拉取游标决策", () => {
     const b = ranges([[7.5, 10]]);
     expect(isTimeBuffered(b, 0)).toBe(false);
     expect(segmentIndexAt(segs, 0)).toBe(0);
+  });
+});
+
+/**
+ * 「回拖到已驱逐区域后无限转圈」的回归测试。
+ *
+ * 旧实现的补数据判据是 `bufferedEnd() > t + ahead`：缓冲区**最远末端**远在
+ * 播放点前方时就直接歇着。用户把进度条往回拉、而目标位置已被 evict 丢掉后，
+ * 末端仍停在旧位置 → 永远不补数据 → 播放器一直转圈。
+ * 正确判据必须是「从播放点开始**连续**可播到哪里」。
+ */
+describe("contiguousBufferedEnd（回拖补数据判据）", () => {
+  function ranges(list: [number, number][]): TimeRanges {
+    return {
+      length: list.length,
+      start: (i: number) => list[i][0],
+      end: (i: number) => list[i][1],
+    } as unknown as TimeRanges;
+  }
+
+  it("播放点已被 evict 丢弃时返回播放点本身，而不是远端末端", () => {
+    const b = ranges([[470, 530]]);
+    // 用户从 500s 回拖到 100s：该位置没有数据 → 水位只能是 100，
+    // 上层据此继续拉分片；若返回 530 就会错误地停止补数据。
+    expect(contiguousBufferedEnd(b, 100)).toBe(100);
+  });
+
+  it("播放点在缓冲内时返回该段连续末端", () => {
+    expect(contiguousBufferedEnd(ranges([[100, 130]]), 100)).toBe(130);
+    // 容差 0.5s：紧贴区间尾部也算覆盖
+    expect(contiguousBufferedEnd(ranges([[100, 130]]), 130.4)).toBe(130);
+  });
+
+  it("首尾相接的多段缓冲合并成连续水位", () => {
+    const b = ranges([
+      [100, 110],
+      [110.05, 140],
+    ]);
+    expect(contiguousBufferedEnd(b, 105)).toBe(140);
+  });
+
+  it("空洞后的远端数据不算连续", () => {
+    const b = ranges([
+      [0, 10],
+      [50, 60],
+    ]);
+    expect(contiguousBufferedEnd(b, 5)).toBe(10);
   });
 });

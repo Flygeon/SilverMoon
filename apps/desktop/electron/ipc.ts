@@ -8,7 +8,7 @@
  * 所有回复统一是 `{ ok, data?, error? }`：错误以**字符串**回传，
  * 由渲染进程的 `src/ipc/` 转成 `Promise.reject(字符串)`。
  */
-import { BrowserWindow, app, dialog, ipcMain, shell, screen } from "electron";
+import { BrowserWindow, app, dialog, ipcMain, net, shell, screen } from "electron";
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -29,6 +29,7 @@ import { log } from "./log";
 import { callSidecar, callSidecarBatch } from "./main-bridge";
 import { getFqapiManager } from "./fqapi";
 import { BenchSession, DEFAULT_INTERVAL_MS } from "./bench";
+import { applyNetworkProxy, normalizeProxyConfig } from "./net-proxy";
 
 export interface BridgeReply {
   ok: boolean;
@@ -624,6 +625,15 @@ const handlers: Record<string, Handler> = {
   },
 
   // -------------------------------------------------------------------------
+  // 网络代理（设置 → 网络）
+  // -------------------------------------------------------------------------
+  netProxy: async (payload) => {
+    // 非法值在 normalize 里统一退回系统代理；custom 但没填地址也退回系统代理
+    await applyNetworkProxy(normalizeProxyConfig(payload.mode, payload.url));
+    return null;
+  },
+
+  // -------------------------------------------------------------------------
   // 带 CORS 豁免的网络请求
   // -------------------------------------------------------------------------
   http: async (payload) => {
@@ -632,7 +642,16 @@ const handlers: Record<string, Handler> = {
     const headers = Object.fromEntries((payload.headers as [string, string][]) ?? []);
     const body = payload.body ? String(payload.body) : undefined;
 
-    const response = await fetch(url, { method, headers, body, redirect: "follow" });
+    // 必须用 Electron 的 `net.fetch`（Chromium 网络栈），不能用 Node 的全局
+    // `fetch`（undici）：后者**不读**系统代理，也不吃 `session.setProxy`。
+    // 这正是「用户开着代理、Bangumi / 音乐接口仍然超时」的根因。
+    // `net.fetch` 固定使用默认 session，代理已经由 `netProxy` 通道设到该 session。
+    const response = await net.fetch(url, {
+      method,
+      headers,
+      body,
+      redirect: "follow",
+    });
 
     // 响应体**统一**以字节过桥，不再区分文本 / 二进制。
     //

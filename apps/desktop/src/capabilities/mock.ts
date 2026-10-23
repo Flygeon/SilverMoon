@@ -600,6 +600,8 @@ export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return as(undefined);
 
     // ---- 在线番剧（演示规则 + 空抓取；浏览器预览不做真实网络）----
+    case "net_set_proxy":
+      return as(undefined);
     case "anime_rules_list":
       return as<AnimeRuleEntry[]>([
         {

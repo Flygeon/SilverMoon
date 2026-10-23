@@ -332,6 +332,11 @@ export function createRustWindow(payload: {
       contextIsolation: !needsInjection,
       nodeIntegration: false,
       sandbox: false,
+      // 隐藏取流 webview 的播放器可能嵌在 iframe 里（苹果CMS 壳页 + 播放器 iframe）。
+      // Electron 默认 preload 只在主 frame 跑，子 frame 里的 fetch/XHR/src 钩子
+      // 全部失效，导致这类源 30s 空手而归。只对带初始化脚本的取流窗口开启，
+      // 普通窗口/子窗口不开（子 frame 会把 preload 跑到每一个 iframe）。
+      nodeIntegrationInSubFrames: needsInjection,
       spellcheck: false,
       additionalArguments: [
         `--silvermoon-label=${label}`,

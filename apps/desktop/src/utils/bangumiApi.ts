@@ -16,11 +16,30 @@
  * 仅保留兼容，不要在新链路上依赖它。
  */
 import { capabilities } from "@/capabilities";
+import { useSettingsStore } from "@/stores/settings";
 import type { AnimeFetchSpec, BangumiSubject } from "@shared/types";
 
 const BANGUMI_UA = "SilverMoon/1.0 (Desktop; https://github.com/Flygeon/LumiLuna-Next)";
 const API = "https://api.bgm.tv";
 // next.bgm.tv 的 /p1/* 自 2026-08 起全线不响应，已不再请求。
+/**
+ * Kazumi 的 Bangumi 镜像（设置 → 网络可开关）。
+ *
+ * 注意它**不是**官方 API 的透明反代：`/calendar`、`/v0/*` 在镜像上都是 404，
+ * 只有 Kazumi 自己的缓存接口可用（`/kazumi/v1/popular/subjects` 等）。
+ * 因此这里只把「热播榜」切到镜像，搜索 / 详情仍走官方；官方不可达时由调用方
+ * 看到真实错误，而不是拿到空列表。
+ */
+const MIRROR = "https://api.kazumi.fyi";
+
+/** 镜像开关；Pinia 尚未初始化（单测 / 工具脚本）时按关闭处理。 */
+function mirrorEnabled(): boolean {
+  try {
+    return useSettingsStore().bangumiMirrorEnabled === true;
+  } catch {
+    return false;
+  }
+}
 
 /** 从 infobox 提取别名（照 Kazumi：key === '别名' 的 values） */
 function aliasFromInfobox(infobox: unknown): string[] {
@@ -180,14 +199,43 @@ export function fromCalendar(raw: unknown): BangumiSubject | null {
 }
 
 /**
+ * 镜像热播榜（Kazumi 缓存接口，字段是 camelCase，交给 `fromP1` 归一化）。
+ *
+ * 返回顺序就是上游的热度顺序；与官方 `/calendar` 相比少了 `doing`（在看人数），
+ * 但列表本身已按热度排好，足够首页展示。
+ */
+async function trendingFromMirror(limit: number): Promise<BangumiSubject[]> {
+  const data = await getJson(
+    `${MIRROR}/kazumi/v1/popular/subjects?limit=${Math.max(limit, 30)}&offset=0`,
+  );
+  const rows = Array.isArray(data) ? data : ((data as { data?: unknown[] } | null)?.data ?? []);
+  const out: BangumiSubject[] = [];
+  for (const raw of rows) {
+    const subj = fromP1(raw);
+    if (subj) out.push(subj);
+  }
+  return out.slice(0, limit);
+}
+
+/**
  * 热门番组（正在热播）。
  *
  * 原为 next.bgm.tv /p1/trending/subjects，该接口已死（见文件头说明），
  * 改用 api.bgm.tv/calendar（每日放送）：它给出当季**正在播**的全部条目
  * （实测 7 天合计 113 部），按 collection.doing 降序即等价于热度榜。
  * 顺带比原接口更贴「正在热播」的语义——原接口混入了已完结的热门老番。
+ *
+ * 开启 Bangumi 镜像时优先走镜像（官方被墙/超时的场景），失败自动回退官方。
  */
 export async function fetchTrending(limit = 30): Promise<BangumiSubject[]> {
+  if (mirrorEnabled()) {
+    try {
+      const mirrored = await trendingFromMirror(limit);
+      if (mirrored.length) return mirrored;
+    } catch (e) {
+      console.warn("[bangumi] 镜像热播榜失败，回退官方接口：", e);
+    }
+  }
   const data = (await getJson(`${API}/calendar`)) as
     { weekday?: unknown; items?: unknown }[] | null;
   const out: BangumiSubject[] = [];

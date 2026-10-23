@@ -26,6 +26,7 @@ export const messages = {
       settingsNovel: "小说",
       settingsPixiv: "Pixiv",
       settingsSync: "同步与网络",
+      settingsNetwork: "网络",
       settingsDeps: "外部依赖",
       settingsAbout: "关于与更新",
       images: "图片",
@@ -450,6 +451,10 @@ export const messages = {
       biliAntiGoodsPublish: "带商品卡的动态发布前二次确认",
       biliAntiGoodsPublishHint:
         "发布动态时若正文含商品链接，或即将发布的内容来自带货卡片，则先弹窗确认再发出。",
+      biliDefaultQuality: "默认播放画质",
+      biliDefaultQualityHint:
+        "未手动切换清晰度时使用。实际画质受账号权限限制：所选档位不可用时会自动降到最接近的较低档。",
+      biliQualityAuto: "自动（最高可用）",
       autoMix: "自动混音（AutoMix）",
       autoMixEnabled: "启用自动混音",
       autoMixHint:
@@ -522,6 +527,25 @@ export const messages = {
       webdavOk: "连接成功",
       webdavFail: "连接失败",
       webdavOpen: "打开 WebDAV",
+      network: "网络",
+      networkHint:
+        "控制应用的网络出口。代理设置会同时作用于界面资源（图片 / 视频）与番剧 / Bangumi 抓取。",
+      networkProxyMode: "代理模式",
+      networkProxySystem: "跟随系统",
+      networkProxyCustom: "自定义代理",
+      networkProxyNone: "不使用代理",
+      networkProxyUrl: "代理地址",
+      networkProxyUrlPlaceholder: "http://127.0.0.1:7890",
+      networkProxyHint:
+        "支持 HTTP / HTTPS / SOCKS5（如 socks5://127.0.0.1:7891）。修改后立即生效，无需重启。",
+      networkTest: "测试网络",
+      networkTesting: "正在测试…",
+      networkTestOk: "连接正常（获取到 {count} 部番剧）",
+      networkTestEmpty: "已连通，但没有返回数据",
+      networkTestFail: "测试失败",
+      bangumiMirror: "Bangumi 镜像",
+      bangumiMirrorHint:
+        "官方 api.bgm.tv 不可达时，改用 Kazumi 镜像获取热播榜（搜索与详情仍走官方接口）。",
       neteaseEnable: "网易云账号",
       neteaseHint: "启用后在音乐页可扫码登录，访问我的歌单与云盘歌曲。凭据仅保存在本机。",
       kugouEnable: "酷狗账号",
@@ -1280,6 +1304,7 @@ export const messages = {
       settingsNovel: "Novels",
       settingsPixiv: "Pixiv",
       settingsSync: "Sync & network",
+      settingsNetwork: "Network",
       settingsDeps: "External tools",
       settingsAbout: "About & updates",
       images: "Images",
@@ -1718,6 +1743,10 @@ export const messages = {
       biliAntiGoodsPublish: "Confirm before posting shopping dynamics",
       biliAntiGoodsPublishHint:
         "When a dynamic contains product links (or comes from a shopping card), ask for confirmation before it is published.",
+      biliDefaultQuality: "Default playback quality",
+      biliDefaultQualityHint:
+        "Used when you have not picked a quality manually for this video. Actual quality depends on your account; if the selected tier is unavailable it falls back to the closest lower tier.",
+      biliQualityAuto: "Auto (highest available)",
       autoMix: "AutoMix (automatic mixing)",
       autoMixEnabled: "Enable AutoMix",
       autoMixHint:
@@ -1791,6 +1820,25 @@ export const messages = {
       webdavOk: "Connected",
       webdavFail: "Connection failed",
       webdavOpen: "Open WebDAV",
+      network: "Network",
+      networkHint:
+        "Controls the app's network egress. Proxy settings apply to both UI assets (images/video) and anime / Bangumi fetching.",
+      networkProxyMode: "Proxy mode",
+      networkProxySystem: "Use system proxy",
+      networkProxyCustom: "Custom proxy",
+      networkProxyNone: "No proxy",
+      networkProxyUrl: "Proxy address",
+      networkProxyUrlPlaceholder: "http://127.0.0.1:7890",
+      networkProxyHint:
+        "Supports HTTP / HTTPS / SOCKS5 (e.g. socks5://127.0.0.1:7891). Changes take effect immediately without restarting.",
+      networkTest: "Test network",
+      networkTesting: "Testing…",
+      networkTestOk: "Connection OK ({count} anime fetched)",
+      networkTestEmpty: "Connected, but no data returned",
+      networkTestFail: "Test failed",
+      bangumiMirror: "Bangumi mirror",
+      bangumiMirrorHint:
+        "When api.bgm.tv is unreachable, fetch the trending list from the Kazumi mirror (search and details still use the official API).",
       neteaseEnable: "NetEase Account",
       neteaseHint:
         "When enabled, scan a QR code in the Music tab to access your playlists and cloud disk. Credentials stay on this device.",

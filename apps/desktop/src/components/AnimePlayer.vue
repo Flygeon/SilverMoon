@@ -178,12 +178,31 @@ function syncDanmakuVisibility() {
 }
 
 function isHlsSource(stream: { url: string; remoteUrl: string }): boolean {
-  return /\.m3u8(\?|#|$)/i.test(`${stream.remoteUrl} ${stream.url}`);
+  const probe = `${stream.remoteUrl} ${stream.url}`.toLowerCase();
+  if (/\.m3u8(\?|#|$)/.test(probe)) return true;
+  // Rust webview 兜底会按响应体 `#EXTM3U` 收录「无后缀清单」（/api/proxy?url=... 这类），
+  // remoteUrl 里没有 .m3u8。此前只看后缀 → 地址其实取到了，却按 auto 直链交给
+  // Chromium，而 Chromium 不会解 HLS，表现为黑屏/一直转圈。
+  // 没有 mp4/flv 后缀的媒体地址一律先按 HLS 试；真不是清单时 hls.js 会报
+  // manifest 解析失败，customType 里再回退到原生 <video>（兼容无后缀 mp4）。
+  if (/\.(mp4|flv)(\?|#|$)/.test(probe)) return false;
+  return true;
+}
+
+/** FLV 容器 Chromium 不能直接播，也没有 mpegts.js 依赖——提前给出可读原因，别让用户干等 */
+function isFlvSource(stream: { url: string; remoteUrl: string }): boolean {
+  return /\.flv(\?|#|$)/i.test(`${stream.remoteUrl} ${stream.url}`);
 }
 
 // ---- 切换剧集/换源后重挂 URL（ArtPlayer 的 switchUrl 走 m3u8 自定义类型）----
 function attachStream(stream: { url: string; remoteUrl: string }) {
   if (!art) return;
+  if (isFlvSource(stream)) {
+    art.pause();
+    anime.streamError = t("anime.streamFailed") + "（FLV 流暂不支持）";
+    void animeLog(`跳过 FLV 源: ${stream.remoteUrl}`);
+    return;
+  }
   destroyHls();
   // ArtPlayer 自带 m3u8 处理用其内置 hls.js，但保险起见我们也接管：若用户开启弹幕后
   // m3u8 必须稳定，先用自定义 customType（参照 播放器参考项目）。
@@ -336,6 +355,11 @@ async function createPlayer() {
 
   const stream = anime.stream;
   const theme = readThemeColor();
+  // FLV 没有可用解码器（未引入 mpegts.js）：构造前就给出可读原因，
+  // 避免 auto 直链失败后只剩一句泛泛的“取流失败”。
+  if (stream && isFlvSource(stream)) {
+    anime.streamError = t("anime.streamFailed") + "（FLV 流暂不支持）";
+  }
 
   const danmukuOpts: DanmukuOption = {
     danmuku: async () => loadDanmakuForEpisode(),
@@ -398,12 +422,52 @@ async function createPlayer() {
             enableWorker: true,
             lowLatencyMode: false,
           });
+          // manifest 是否成功解析：决定网络错误时是「重试拉清单」还是「这地址根本不是清单」
+          let manifestParsed = false;
+          let networkRetries = 0;
+          let mediaRecoveries = 0;
+          let fellBackToNative = false;
           hlsInstance.on(HlsCtor.Events.ERROR, (_evt, data) => {
             if (!data.fatal) return;
             void animeLog(`hls.js 致命错误 type=${data.type} details=${data.details}`);
+            // 1) 清单解析失败：地址不是 HLS（例如无后缀 mp4，或 hls.js 不认的
+            //    变体清单）。交给原生 <video> 再试一次，能播的直接救回来。
+            if (
+              !manifestParsed &&
+              !fellBackToNative &&
+              data.type === HlsCtor.ErrorTypes.NETWORK_ERROR &&
+              data.details === HlsCtor.ErrorDetails.MANIFEST_PARSING_ERROR
+            ) {
+              fellBackToNative = true;
+              try {
+                hlsInstance.destroy();
+                if (hls === hlsInstance) hls = null;
+                video.src = src;
+                void video.play().catch(() => {});
+                return;
+              } catch (e) {
+                void animeLog(`回退原生播放失败: ${(e as Error).message}`);
+              }
+            }
+            // 2) 网络错误（分片/清单拉取失败）：hls.js 会停掉加载，startLoad 续抓。
+            //    只重试有限次，避免站点彻底挂掉时无限转圈。
+            if (data.type === HlsCtor.ErrorTypes.NETWORK_ERROR && networkRetries < 2) {
+              networkRetries += 1;
+              void animeLog(`hls.js 网络错误，第 ${networkRetries} 次重试`);
+              hlsInstance.startLoad();
+              return;
+            }
+            // 3) 解码/缓冲错误：recoverMediaError 会重建 MediaSource 后重挂。
+            if (data.type === HlsCtor.ErrorTypes.MEDIA_ERROR && mediaRecoveries < 2) {
+              mediaRecoveries += 1;
+              void animeLog(`hls.js 媒体错误，第 ${mediaRecoveries} 次恢复`);
+              hlsInstance.recoverMediaError();
+              return;
+            }
             onError(`hls ${data.type}/${data.details}`);
           });
           hlsInstance.on(HlsCtor.Events.MANIFEST_PARSED, () => {
+            manifestParsed = true;
             if (props.initialSeekMs && Number.isFinite(video.duration)) {
               video.currentTime = Math.min(props.initialSeekMs / 1000, video.duration);
             }

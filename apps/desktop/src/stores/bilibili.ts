@@ -64,6 +64,7 @@ import { useSettingsStore } from "@/stores/settings";
 import { translate } from "@shared/i18n";
 import type { ArtDanmu } from "@/utils/danmaku";
 import { fetchSegments, type SbSegment, type SbStatus } from "@/utils/sponsorBlock";
+import { getLastCid, getLocalProgress, saveLocalProgress } from "@/utils/biliProgress";
 
 export type BiliStatus = "idle" | "loading" | "ready" | "error";
 
@@ -427,6 +428,8 @@ export const useBiliStore = defineStore("bilibili", () => {
    */
   let heartbeatTimer: number | null = null;
   let lastReported = -1;
+  /** 本地进度上次落盘时间（5s 节流，与 15s 心跳互不影响） */
+  let lastLocalSave = 0;
 
   function stopHeartbeat(): void {
     if (heartbeatTimer !== null) {
@@ -441,12 +444,16 @@ export const useBiliStore = defineStore("bilibili", () => {
     if (!useSettingsStore().biliHistoryEnabled) return;
     const v = current.value;
     const cid = activeCid.value;
-    // 用 cookie 判定而非 account.isLogin：-101 清凭据后 account 要等下次 nav
-    // 才更新，这段时间会出现「界面显示已登录、实际发必败请求」的不一致。
-    if (!v || !cid || !biliIsLoggedIn()) return;
+    if (!v || !cid) return;
     const t = Math.floor(seconds);
     if (t <= 0) return;
     lastReported = t;
+    // 本地进度先落盘：它不依赖登录态，未登录 / 风控失败时也能续播。
+    // 服务端 last_play 是另一条独立的恢复路径，两者在 loadResumePoint 取较大值。
+    saveLocalProgress(v.bvid, cid, seconds);
+    // 用 cookie 判定而非 account.isLogin：-101 清凭据后 account 要等下次 nav
+    // 才更新，这段时间会出现「界面显示已登录、实际发必败请求」的不一致。
+    if (!biliIsLoggedIn()) return;
     void biliHeartbeat(v.bvid, cid, t).catch(() => {
       // 风控 / 网络问题都吞掉：上报失败不影响播放
     });
@@ -454,6 +461,17 @@ export const useBiliStore = defineStore("bilibili", () => {
 
   /** 播放中按时长节流上报。 */
   function tickProgress(seconds: number): void {
+    // 本地进度与服务端心跳**解耦**：心跳节流 15s 不该让本地进度也变粗，
+    // 更不能因为未登录就完全不落盘（那样续播永远依赖登录）。
+    const now = Date.now();
+    if (now - lastLocalSave >= 5000) {
+      lastLocalSave = now;
+      const v = current.value;
+      const cid = activeCid.value;
+      if (v && cid && useSettingsStore().biliHistoryEnabled && seconds > 0) {
+        saveLocalProgress(v.bvid, cid, seconds);
+      }
+    }
     if (heartbeatTimer !== null) return;
     heartbeatTimer = window.setTimeout(() => {
       heartbeatTimer = null;
@@ -467,40 +485,93 @@ export const useBiliStore = defineStore("bilibili", () => {
   /**
    * 打开视频时读取「上次看到」，供播放器起播定位。
    *
-   * 两个要点：
-   * - 上游给的是「上次看到的分 P」（`last_play_cid`）。多分 P 的视频若只顾时间轴，
-   *   会拿 P1 的 cid 去 seek 到「P2 的第 10 分钟」，位置完全是错的。所以这里会先用
-   *   `last.cid` 反查并预选该分 P，反查不到就干脆不 seek。
-   * - 已看到 95% 以上视为看完，从头播（否则一进来就贴着结尾）。
+   * 两个数据源合并：
+   * - **本地存档**（`utils/biliProgress`）：不依赖登录态，未登录 / 风控 / 关闭
+   *   浮层前都会落盘；
+   * - **服务端 `last_play`**：登录后换设备也能接上。
+   * 两边都可能是更靠后的真实进度，同一个分 P 取较大值。
+   *
+   * 多分 P 的处理沿用旧逻辑：先反查「上次看的分 P」并预选，反查不到就干脆不
+   * seek —— 多分 P 视频若只顾时间轴，会拿 P1 的 cid 跳到 P2 的第 10 分钟。
+   * 已看到 95% 以上视为看完，从头播（否则一进来就贴着结尾）。
    */
-  async function loadResumePoint(bvid: string, cid: string): Promise<void> {
+  async function loadResumePoint(
+    bvid: string,
+    cid: string,
+    /**
+     * 是否允许自动切到「上次看的分 P」。
+     *
+     * 进入视频时为 true（续播上次那一集）；用户**手动点选集**时必须为 false，
+     * 否则会立刻被「上次观看的分 P」拽回去，选集点了没反应。
+     */
+    allowSwitchPart = true,
+  ): Promise<void> {
     resumeAt.value = 0;
     if (!useSettingsStore().biliHistoryEnabled || !cid) return;
-    if (!biliIsLoggedIn()) return;
-    try {
-      const last = await biliLastPlay(bvid, cid);
-      if (last.seconds <= 5) return;
 
-      // 上游记录了另一个分 P → 先切过去，再按那一分 P 的时长判断是否看完
-      const parts = detail.value?.parts ?? [];
-      if (last.cid && last.cid !== cid && parts.length) {
-        const target = parts.find((p) => p.cid === last.cid);
-        if (target) {
-          activeCid.value = target.cid;
-          const total = target.duration || 0;
-          if (!total || last.seconds < total * 0.95) resumeAt.value = last.seconds;
-          return;
-        }
-        // 反查不到（分 P 被删 / 数据不同步）：宁可从头播，也不要跳错位置
-        return;
+    const parts = detail.value?.parts ?? [];
+    const localLastCid = allowSwitchPart ? getLastCid(bvid) : "";
+    let localSeconds = getLocalProgress(bvid, cid);
+
+    // 服务端进度：未登录 / 风控失败只是少一路数据，不影响本地续播
+    let serverSeconds = 0;
+    let serverCid = "";
+    if (biliIsLoggedIn()) {
+      try {
+        const last = await biliLastPlay(bvid, cid);
+        serverSeconds = last.seconds;
+        serverCid = last.cid;
+      } catch (e) {
+        // 留日志：续播静默失效最难查
+        console.warn("[bilibili] 读取服务端续播点失败：", e);
       }
-
-      const total = detail.value?.duration ?? current.value?.duration ?? 0;
-      if (!total || last.seconds < total * 0.95) resumeAt.value = last.seconds;
-    } catch (e) {
-      // 读不到进度就从 0 播，但留一条日志便于排查（续播静默失效最难查）
-      console.warn("[bilibili] 读取续播点失败：", e);
     }
+
+    // 1) 决定看哪个分 P。优先级：本机最后看的分 P（最贴近用户最近一次操作），
+    //    其次服务端记录的分 P；必须能在当前详情里反查到，否则不切、也不 seek。
+    let targetCid = cid;
+    // 手动选集时不做「切到上次分 P」这一步；只有进入视频时才自动续上那一集
+    const candidates = allowSwitchPart
+      ? [localLastCid, serverCid].filter((c, i, arr) => !!c && c !== cid && arr.indexOf(c) === i)
+      : [];
+    for (const candidate of candidates) {
+      const candLocal = getLocalProgress(bvid, candidate);
+      const candServer = serverCid === candidate ? serverSeconds : 0;
+      if (Math.max(candLocal, candServer) <= 5) continue;
+      // 分 P 列表还没拿到，或记录的分 P 已被删除 / 数据不同步：宁可从头播
+      if (!parts.length) return;
+      if (!parts.some((p) => p.cid === candidate)) return;
+      targetCid = candidate;
+      activeCid.value = candidate;
+      localSeconds = candLocal;
+      break;
+    }
+
+    // 2) 合并同一分 P 的两路进度，取更靠后的一边
+    const seconds = Math.max(localSeconds, serverCid === targetCid ? serverSeconds : 0);
+    if (seconds <= 5) return;
+
+    const total =
+      parts.find((p) => p.cid === targetCid)?.duration ??
+      (targetCid === cid ? (detail.value?.duration ?? current.value?.duration ?? 0) : 0);
+    if (!total || seconds < total * 0.95) resumeAt.value = seconds;
+  }
+
+  /** 设置里的默认画质：0 = 自动（最高可用），>0 = 期望的清晰度 id。 */
+  function defaultQualityQn(): number {
+    const q = useSettingsStore().biliDefaultQuality;
+    return typeof q === "number" && Number.isFinite(q) && q > 0 ? q : 0;
+  }
+
+  /**
+   * 从可用清晰度里挑默认档：不超过期望值的最高档；若该视频全部高于期望，
+   * 取最低可用档（不能硬套一个上游根本没有的 qn）。
+   */
+  function pickDefaultQn(qualities: number[], preferred: number): number {
+    if (!qualities.length) return preferred || activeQn.value || 80;
+    if (!preferred) return qualities[0];
+    const notAbove = qualities.filter((q) => q <= preferred);
+    return notAbove.length ? notAbove[0] : qualities[qualities.length - 1];
   }
 
   async function resolvePlay(token: number, qn?: number): Promise<void> {
@@ -515,13 +586,16 @@ export const useBiliStore = defineStore("bilibili", () => {
     playStatus.value = "loading";
     playError.value = "";
     try {
-      const p = await biliPlayUrl(v.bvid, activeCid.value, qn ?? activeQn.value);
+      // 未手动选过清晰度时按「默认播放画质」请求：期望档位直接作为 qn 上限，
+      // 上游就不会返回更高的轨道；自动（0）沿用当前档位，响应回来后再挑最高可用。
+      const preferred = qualityPinned.value ? 0 : defaultQualityQn();
+      const p = await biliPlayUrl(v.bvid, activeCid.value, qn ?? (preferred || activeQn.value));
       // 两次校验：换视频（openToken）与同一视频内重复取流（playToken）都要拦
       if (token !== openToken || myPlay !== playToken) return;
       play.value = p;
-      // 用户没手动选过 → 直接落到最高档，避免被上游的默认 quality 拖回 720P
-      if (!qualityPinned.value && p.qualities.length) {
-        activeQn.value = p.qualities[0];
+      // 用户没手动选过 → 按设置的默认画质挑档，避免被上游的默认 quality 拖回 720P
+      if (!qualityPinned.value) {
+        activeQn.value = pickDefaultQn(p.qualities, preferred);
       } else if (p.quality) {
         activeQn.value = p.quality;
       }
@@ -593,7 +667,8 @@ export const useBiliStore = defineStore("bilibili", () => {
     lastReported = -1;
     // 必须先拿到续播点再取流：resolvePlay 会让 play.value 变化，播放器随即挂载
     // 并读 resumeAt；排在后面的话写回的值没人消费，切分 P 的断点必然丢失。
-    await loadResumePoint(current.value?.bvid ?? "", cid);
+    // allowSwitchPart=false：这是用户主动选集，不能再被「上次看的分 P」切走。
+    await loadResumePoint(current.value?.bvid ?? "", cid, false);
     if (token !== openToken) return;
     await resolvePlay(openToken);
     // 换分 P 要重新取片段（上游按 cid 过滤）

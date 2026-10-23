@@ -38,6 +38,7 @@ import { activeSkinDoc, skinModeLock, skinSafeMode } from "@/utils/skinRuntime";
 import { SB_CATEGORIES } from "@/utils/sponsorBlock";
 import { primaryOfSeed } from "@shared/m3-theme";
 import { translate } from "@shared/i18n";
+import { fetchTrending } from "@/utils/bangumiApi";
 import { SETTINGS_INDEX } from "@/views/settingsIndex.generated";
 import { matchSettings, type SettingsHit } from "@/views/settingsSearch";
 import type { FfmpegStatus } from "@shared/types";
@@ -48,6 +49,51 @@ const library = useLibraryStore();
 const router = useRouter();
 const bangumiCollect = useBangumiCollectStore();
 const bangumiTokenDraft = ref(settings.bangumiToken);
+
+/**
+ * B 站默认画质候选。
+ *
+ * qn 与上游清晰度 id 对齐（0 = 自动取最高可用）。实际可选档由账号权限决定，
+ * store 里按可用列表向下回退，绝不会硬塞一个上游没有的档位。
+ */
+const BILI_QUALITY_OPTIONS: { qn: number; label: string }[] = [
+  { qn: 0, label: "" },
+  { qn: 120, label: "4K" },
+  { qn: 116, label: "1080P60" },
+  { qn: 112, label: "1080P+" },
+  { qn: 80, label: "1080P" },
+  { qn: 74, label: "720P60" },
+  { qn: 64, label: "720P" },
+  { qn: 32, label: "480P" },
+  { qn: 16, label: "360P" },
+];
+
+/** 网络代理模式选项（设置 → 网络） */
+const PROXY_MODES: { value: "system" | "custom" | "none"; labelKey: string }[] = [
+  { value: "system", labelKey: "settings.networkProxySystem" },
+  { value: "custom", labelKey: "settings.networkProxyCustom" },
+  { value: "none", labelKey: "settings.networkProxyNone" },
+];
+
+/** 网络测试状态：直接复用真实抓取链路（含镜像与代理），比只 ping 域名更可信 */
+const netTesting = ref(false);
+const netTestResult = ref("");
+
+async function testNetwork(): Promise<void> {
+  if (netTesting.value) return;
+  netTesting.value = true;
+  netTestResult.value = "";
+  try {
+    const items = await fetchTrending(3);
+    netTestResult.value = items.length
+      ? t("settings.networkTestOk").replace("{count}", String(items.length))
+      : t("settings.networkTestEmpty");
+  } catch (e) {
+    netTestResult.value = `${t("settings.networkTestFail")}：${e instanceof Error ? e.message : String(e)}`;
+  } finally {
+    netTesting.value = false;
+  }
+}
 
 async function connectBangumi() {
   await bangumiCollect.init();
@@ -522,6 +568,7 @@ type BoolSettingKey =
   | "autoMixTrimSilence"
   | "sponsorBlockEnabled"
   | "sponsorBlockToast"
+  | "bangumiMirrorEnabled"
   | "webdavEnabled";
 
 /** 整数滑块对应的数值设置项键 */
@@ -688,6 +735,7 @@ const settingNav = [
     titleKey: "nav.settingsGroupSystem",
     items: [
       { id: "settings-sync", labelKey: "nav.settingsSync", icon: "cloud" },
+      { id: "settings-network", labelKey: "nav.settingsNetwork", icon: "lan" },
       { id: "settings-deps", labelKey: "nav.settingsDeps", icon: "extension" },
       { id: "settings-about", labelKey: "nav.settingsAbout", icon: "info" },
     ],
@@ -1961,6 +2009,25 @@ onBeforeUnmount(() => {
             <p class="hint">{{ t("settings.biliAntiGoodsPublishHint") }}</p>
           </template>
 
+          <!-- 默认播放画质：只在用户本次没手动切清晰度时生效 -->
+          <template v-if="settings.bilibiliEnabled">
+            <div class="row-label bili-quality-label">
+              {{ t("settings.biliDefaultQuality") }}
+            </div>
+            <div class="bili-quality-cats">
+              <m3e-filter-chip
+                v-for="q in BILI_QUALITY_OPTIONS"
+                :key="q.qn"
+                class="chip"
+                :selected="settings.biliDefaultQuality === q.qn"
+                @click.prevent="settings.biliDefaultQuality = q.qn"
+              >
+                {{ q.qn === 0 ? t("settings.biliQualityAuto") : q.label }}
+              </m3e-filter-chip>
+            </div>
+            <p class="hint">{{ t("settings.biliDefaultQualityHint") }}</p>
+          </template>
+
           <!-- 空降助手（SponsorBlock）：跳过赞助/广告段 -->
           <template v-if="settings.bilibiliEnabled">
             <SettingRow
@@ -2300,6 +2367,68 @@ onBeforeUnmount(() => {
               </SettingRow>
             </div>
           </template>
+        </div>
+      </m3e-card>
+
+      <!-- 网络：代理模式 + Bangumi 镜像 -->
+      <m3e-card
+        v-if="activeSection === 'settings-network'"
+        id="settings-network"
+        class="card"
+        variant="outlined"
+      >
+        <div slot="content">
+          <h3>{{ t("settings.network") }}</h3>
+          <p class="hint">{{ t("settings.networkHint") }}</p>
+
+          <div class="row-label net-label">{{ t("settings.networkProxyMode") }}</div>
+          <div class="net-chips">
+            <m3e-filter-chip
+              v-for="modeOption in PROXY_MODES"
+              :key="modeOption.value"
+              class="chip"
+              :selected="settings.networkProxyMode === modeOption.value"
+              @click.prevent="settings.networkProxyMode = modeOption.value"
+            >
+              {{ t(modeOption.labelKey) }}
+            </m3e-filter-chip>
+          </div>
+
+          <m3e-form-field
+            v-if="settings.networkProxyMode === 'custom'"
+            variant="filled"
+            class="field"
+          >
+            <label slot="label" for="network-proxy-url">{{ t("settings.networkProxyUrl") }}</label>
+            <input
+              id="network-proxy-url"
+              v-model="settings.networkProxyUrl"
+              type="text"
+              :placeholder="t('settings.networkProxyUrlPlaceholder')"
+              spellcheck="false"
+              autocomplete="off"
+            />
+          </m3e-form-field>
+          <p class="hint">{{ t("settings.networkProxyHint") }}</p>
+
+          <SettingRow
+            :label="t('settings.bangumiMirror')"
+            setting-key="settings.bangumiMirror"
+            clickable
+          >
+            <m3e-switch
+              :checked="settings.bangumiMirrorEnabled"
+              @change="setSwitch('bangumiMirrorEnabled', $event)"
+            />
+          </SettingRow>
+          <p class="hint">{{ t("settings.bangumiMirrorHint") }}</p>
+
+          <div class="net-test">
+            <m3e-button variant="tonal" size="small" :disabled="netTesting" @click="testNetwork">
+              {{ netTesting ? t("settings.networkTesting") : t("settings.networkTest") }}
+            </m3e-button>
+            <span v-if="netTestResult" class="hint net-test-result">{{ netTestResult }}</span>
+          </div>
         </div>
       </m3e-card>
 
@@ -2862,6 +2991,44 @@ onBeforeUnmount(() => {
 /* ---- 空降助手：分类勾选 ---- */
 .sponsor-cats-label {
   margin-top: 12px;
+}
+
+/* ---- B 站默认画质 ---- */
+.bili-quality-label {
+  margin-top: 12px;
+}
+.bili-quality-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+.bili-quality-cats .chip {
+  --m3e-chip-container-height: 32px;
+}
+
+/* ---- 网络 ---- */
+.net-label {
+  margin-top: 12px;
+}
+.net-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+.net-chips .chip {
+  --m3e-chip-container-height: 32px;
+}
+.net-test {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+.net-test-result {
+  margin: 0;
 }
 .sponsor-cats {
   display: flex;

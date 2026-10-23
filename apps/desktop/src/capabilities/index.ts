@@ -915,6 +915,14 @@ export const capabilities = {
   },
 
   // ---- 在线番剧（Kazumi 规则采集）----
+  /**
+   * 网络代理：只推给 Rust 抓取通道（Chromium 侧由 `src/ipc/net.ts` 单独推）。
+   *
+   * `url` 为空串时传 null，Rust 侧按「没有自定义地址」处理。
+   */
+  networkConfigure(mode: string, url: string): Promise<void> {
+    return safeInvoke("net_set_proxy", { mode, url: url || null });
+  },
   animeFetch(ruleName: string, spec: AnimeFetchSpec): Promise<AnimeFetchResult> {
     return safeInvoke("anime_fetch", { ruleName, spec });
   },

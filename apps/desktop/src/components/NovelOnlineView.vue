@@ -249,7 +249,7 @@ onMounted(() => {
       </div>
       <div v-if="searchResults.length" class="search-results">
         <h3 class="section-title">{{ t("novel.searchResults") }}</h3>
-        <div class="novel-grid">
+        <div class="lm-novel-grid">
           <NovelCard v-for="n in searchResults" :key="n.aid" :item="n" @open="openNovel(n)" />
         </div>
       </div>
@@ -274,7 +274,7 @@ onMounted(() => {
           <m3e-loading-indicator class="lm-loading" />
           {{ t("novel.loading") }}
         </div>
-        <div v-else class="novel-grid">
+        <div v-else class="lm-novel-grid">
           <NovelCard v-for="n in rankResults" :key="n.aid" :item="n" @open="openNovel(n)" />
         </div>
       </section>
@@ -282,7 +282,7 @@ onMounted(() => {
       <!-- 推荐 -->
       <section v-for="(block, i) in recommend" :key="i" class="section">
         <h3 class="section-title">{{ block.title }}</h3>
-        <div class="novel-grid">
+        <div class="lm-novel-grid">
           <NovelCard v-for="n in block.novels" :key="n.aid" :item="n" @open="openNovel(n)" />
         </div>
       </section>
@@ -381,11 +381,7 @@ onMounted(() => {
   display: flex;
   gap: 6px;
 }
-.novel-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 16px;
-}
+/* 书籍卡片网格统一走全局 .lm-novel-grid（src/tokens/theme.css），此处不再重复定义 */
 .state {
   padding: 24px 0;
   text-align: center;

@@ -6,6 +6,7 @@ pub mod commands;
 pub mod error;
 pub mod kugou;
 pub mod media;
+pub mod net_proxy;
 pub mod netease;
 pub mod novel;
 pub mod novel_auth;
@@ -283,6 +284,7 @@ pub fn run() {
             novel_auth::wenku8_login_poll,
             novel_auth::app_log,
             anime::anime_fetch,
+            net_proxy::net_set_proxy,
             anime::anime_media_url,
             anime::anime_webview_resolve,
             anime::anime_rules_list,

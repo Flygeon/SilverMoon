@@ -607,7 +607,54 @@ export const usePlayerStore = defineStore("player", () => {
         return false;
       }
 
-      await decks.crossfade(currentDeck, to, plan.durationSec * 1000);
+      /*
+       * 后台兜底：窗口进后台后，上面那个等待循环里的 setTimeout 会被节流
+       * （最快约 1 次/秒），等真正走到这里，旧 deck 可能已经自然播完（el.ended）。
+       * 此时若仍按完整时长淡入，就是「先静音几秒、再慢慢响起来」—— 用户听到的
+       * 正是那段无声。既然已经没有声音可淡出，淡化就没有意义，压成 200ms 的
+       * 短交叉（只为避免咔哒声），让新 deck 立刻接上。
+       */
+      const fadeMs = el.ended ? 200 : plan.durationSec * 1000;
+      if (el.ended) {
+        mixWarn("旧 deck 已播完（后台节流导致迟到），压缩为短交叉", { fadeMs });
+      }
+
+      await decks.crossfade(currentDeck, to, fadeMs);
+
+      /*
+       * 第二道中断闸：**淡入过程中**才发生的切歌/失效。
+       *
+       * invalidatePrepared 已经把 to 的源清掉（to 就是 preloadEl）。此时若照常提升，
+       * audioEl 会指到一个没有源的元素上 —— 界面在走、但完全没声音。更糟的是
+       * currentDeck 的增益这时已经被淡到 0，而用户刚切的新歌就播在它上面
+       * （playFromQueue → startPlayback 用的还是 audioEl），于是新歌也是静音的。
+       *
+       * 所以要：把增益还给 currentDeck（新歌立刻可闻），并把淡入 deck 彻底停下，
+       * 不留下「增益 0 却还在播」的元素。
+       */
+      if (myGen !== mixGeneration) {
+        decks.setGain(currentDeck, 1);
+        decks.stop(to.id);
+        mixWarn("淡入期间发生切歌/失效，放弃提升（已恢复当前 deck 增益并停掉淡入 deck）");
+        return false;
+      }
+
+      /*
+       * 提升前确认新 deck 真的在出声。
+       *
+       * play() 返回的 Promise 在后台 / 资源竞争时可能被拒，此时直接把 audioEl
+       * 提升到一个 paused 的元素，表现同样是「切歌后没声音」。补一次起播，
+       * 仍然不行就放弃本次过渡，把增益还给当前 deck，交给正常的 ended → next() 兜底。
+       */
+      if (to.el.paused) {
+        await to.el.play().catch(() => {});
+      }
+      if (to.el.paused) {
+        decks.setGain(currentDeck, 1);
+        decks.stop(to.id);
+        mixWarn("淡入 deck 无法起播，放弃本次过渡");
+        return false;
+      }
 
       // ---- deck 提升：把「下一曲」变成当前曲 ----
       // 顺序很重要：先让 to 成为 audioEl，再暂停旧元素。

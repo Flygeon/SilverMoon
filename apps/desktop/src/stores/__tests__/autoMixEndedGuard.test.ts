@@ -47,7 +47,10 @@ describe("AutoMix 过渡与曲尾的竞态守卫", () => {
   });
 
   it("runMix 在 crossfade 之前检查世代号，避免提升已清源的 deck", () => {
-    const b = from("const myGen = ++mixGeneration;", 3000);
+    // 窗口必须覆盖到 crossfade 那一行：这里从 myGen 一直截到淡入调用处，
+    // 中间任何注释/代码增长（例如后台节流兜底的说明）都要同步放大窗口，
+    // 否则守卫会因为「找不到 crossfade」而误报。
+    const b = from("const myGen = ++mixGeneration;", 8000);
     expect(b).not.toBe("");
     const check = b.indexOf("myGen !== mixGeneration");
     const fade = b.indexOf("decks.crossfade(");

@@ -429,6 +429,16 @@ body {
   -webkit-backdrop-filter: blur(var(--lm-surface-blur)) saturate(180%);
 }
 
+/* ---- 书籍卡片共享网格 ----
+ * 书籍页所有 NovelCard 容器的唯一度量来源：书架、在线阅读源、笔趣阁、番茄源都复用它。
+ * 历史问题：各组件各写一份网格，番茄源写成 132px，导致同一页里卡片大小不一。
+ * 组件内不要再重复声明 grid-template-columns / gap，统一挂 .lm-novel-grid。 */
+.lm-novel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 16px;
+}
+
 /* 填充态图标（导航选中项） */
 .material-symbols-outlined.filled {
   font-variation-settings:

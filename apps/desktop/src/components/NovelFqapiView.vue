@@ -273,7 +273,11 @@ onMounted(async () => {
       </m3e-button>
 
       <p v-if="detailError" class="error">{{ detailError }}</p>
-      <div v-else-if="detailLoading" class="state">加载中……</div>
+      <!-- 加载态：M3E 加载指示器 + 文案，与其它在线源的 .state 结构保持一致 -->
+      <div v-else-if="detailLoading" class="state">
+        <m3e-loading-indicator class="lm-loading" />
+        加载中……
+      </div>
 
       <template v-else-if="detail">
         <div class="detail-head">
@@ -345,7 +349,7 @@ onMounted(async () => {
           <m3e-button variant="text" size="small" @click="clearSearch">清除</m3e-button>
         </div>
         <p v-if="searchError" class="error">{{ searchError }}</p>
-        <div v-if="searchResults.length" class="grid">
+        <div v-if="searchResults.length" class="lm-novel-grid">
           <NovelCard
             v-for="novel in searchResults"
             :key="novel.aid"
@@ -358,7 +362,11 @@ onMounted(async () => {
             加载更多
           </m3e-button>
         </div>
-        <div v-if="searching" class="state">搜索中……</div>
+        <!-- 搜索同样属于加载态，补上指示器（搜索栏只禁用按钮，不显示动画） -->
+        <div v-if="searching" class="state">
+          <m3e-loading-indicator class="lm-loading" />
+          搜索中……
+        </div>
         <div v-else-if="!searchResults.length && !searchError" class="state">没有找到结果</div>
       </template>
 
@@ -385,10 +393,13 @@ onMounted(async () => {
         <!-- 推荐 -->
         <div v-if="homeTab === 'recommend'">
           <p v-if="feedError" class="error">{{ feedError }}</p>
-          <div v-if="feedLoading" class="state">加载推荐……</div>
+          <div v-if="feedLoading" class="state">
+            <m3e-loading-indicator class="lm-loading" />
+            加载推荐……
+          </div>
           <section v-for="sec in feedSections" :key="sec.title" class="feed-section">
             <h4 class="section-title">{{ sec.title }}</h4>
-            <div class="grid">
+            <div class="lm-novel-grid">
               <NovelCard
                 v-for="novel in sec.books"
                 :key="novel.aid"
@@ -405,10 +416,13 @@ onMounted(async () => {
         <!-- 排行榜 -->
         <div v-else-if="homeTab === 'rank'">
           <p v-if="rankError" class="error">{{ rankError }}</p>
-          <div v-if="rankLoading" class="state">加载排行榜……</div>
+          <div v-if="rankLoading" class="state">
+            <m3e-loading-indicator class="lm-loading" />
+            加载排行榜……
+          </div>
           <template v-else-if="rankBooks.length">
             <h4 class="section-title">{{ rankTitle }}</h4>
-            <div class="grid">
+            <div class="lm-novel-grid">
               <NovelCard
                 v-for="novel in rankBooks"
                 :key="novel.aid"
@@ -436,12 +450,7 @@ onMounted(async () => {
   margin-top: 4px;
 }
 
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
-  gap: 16px;
-}
-
+/* 书籍卡片网格统一走全局 .lm-novel-grid（src/tokens/theme.css），此处不再重复定义 */
 .feed-section {
   margin-top: 12px;
 }

@@ -33,7 +33,7 @@ import { installCsp } from "./csp";
 import { applyPerfSwitches, describePerfSwitches } from "./perf";
 import { initUpdater } from "./updater";
 import { initLog, log } from "./log";
-import { initStore, flushAllStores } from "./store";
+import { initStore, flushAllStores, readStoreValue } from "./store";
 import {
   handleAppProtocol,
   handleAssetProtocol,
@@ -42,6 +42,7 @@ import {
   registerSchemes,
 } from "./protocols";
 import { installBiliMediaHeaders } from "./net-headers";
+import { applyNetworkProxy, normalizeProxyConfig } from "./net-proxy";
 import { Sidecar, type EventFrame } from "./sidecar";
 import { setSidecar, getSidecar } from "./main-bridge";
 import { registerIpc, setDataDirs, setQuitHandler } from "./ipc";
@@ -165,6 +166,18 @@ async function bootstrap(): Promise<void> {
   handleExtProtocol(EXTENSIONS_DIR);
   // B 站视频 CDN 防盗链：为 <video> 请求自动补 Referer（仅限 B 站域名）
   installBiliMediaHeaders();
+
+  // 网络代理：必须在任何网络请求之前应用。渲染进程加载后还会按当前设置
+  // 再推一次（用户在设置页改代理不用重启）；这里先按持久化配置兜住启动窗口。
+  {
+    const saved = readStoreValue("settings.json", "settings") as Record<string, unknown> | null;
+    const proxy = normalizeProxyConfig(saved?.networkProxyMode, saved?.networkProxyUrl);
+    try {
+      await applyNetworkProxy(proxy);
+    } catch (error) {
+      log.warn("启动时应用网络代理失败：", error);
+    }
+  }
 
   hostServer = await startHostServer();
   mark("宿主服务器就绪");

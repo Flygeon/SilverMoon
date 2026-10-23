@@ -136,7 +136,7 @@ onMounted(load);
         <h3 class="section-title">{{ t("books.local") }}</h3>
         <span class="count tabular-nums">{{ localBooks.length }}</span>
       </div>
-      <div class="grid">
+      <div class="lm-novel-grid">
         <NovelCard
           v-for="book in visibleLocal"
           :key="'local:' + book.id"
@@ -163,7 +163,7 @@ onMounted(load);
           <h3 class="section-title">{{ group.label }}</h3>
           <span class="count tabular-nums">{{ group.books.length }}</span>
         </div>
-        <div class="grid">
+        <div class="lm-novel-grid">
           <NovelCard
             v-for="book in group.books"
             :key="group.key + ':' + book.aid"
@@ -212,11 +212,7 @@ onMounted(load);
   font-size: var(--md-sys-typescale-body-small-size);
   color: var(--md-sys-color-on-surface-variant);
 }
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 16px;
-}
+/* 书籍卡片网格统一走全局 .lm-novel-grid（src/tokens/theme.css），此处不再重复定义 */
 .more {
   display: flex;
   justify-content: center;

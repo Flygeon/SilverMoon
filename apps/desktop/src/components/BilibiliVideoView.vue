@@ -144,6 +144,13 @@ let art: Artplayer | null = null;
 let danmakuGen = 0;
 /** 当前 DASH（MSE）会话；走 MP4 兜底时为 null */
 let dash: BiliDashSession | null = null;
+/**
+ * 是否正在因「MediaSource 已结束」而重挂 DASH 会话。
+ *
+ * MSE 一旦 endOfStream 就不能再 append；用户回拖到片尾之前只能重建会话。
+ * 用这个标记挡住并发重挂（seeking / waiting / timeupdate 可能同一瞬间连发）。
+ */
+let reloading = false;
 
 const detail = computed(() => bili.detail);
 const play = computed(() => bili.play);
@@ -444,12 +451,12 @@ function pickVideoTrack(currentQn: number): BiliStream | null {
  * MSE（例如 av01 且系统解码器缺失），退回渐进式 MP4 的 durl —— 那是 720P，
  * 但至少能播，且失败原因会明确写在界面上。
  */
-async function mountSource(): Promise<void> {
+async function mountSource(startAt?: number): Promise<void> {
   playerError.value = "";
   const p = play.value;
   if (!p) return;
 
-  const videoTrack = pickVideoTrack(p.quality || bili.activeQn);
+  const videoTrack = pickVideoTrack(bili.activeQn || p.quality);
   const audioTrack = p.dashAudio[0] ?? null;
 
   // 清掉上一轮 DASH 会话（切清晰度 / 切分 P 时 MediaSource 不能复用）
@@ -457,7 +464,7 @@ async function mountSource(): Promise<void> {
   dash = null;
 
   if (videoTrack && BiliDashSession.canPlay(videoTrack, audioTrack)) {
-    await mountDash(videoTrack, audioTrack);
+    await mountDash(videoTrack, audioTrack, startAt);
     return;
   }
 
@@ -472,7 +479,11 @@ async function mountSource(): Promise<void> {
 }
 
 /** 用 MSE 会话喂 ArtPlayer（ArtPlayer 只负责 UI 与控件，数据由我们推进）。 */
-async function mountDash(videoTrack: BiliStream, audioTrack: BiliStream | null): Promise<void> {
+async function mountDash(
+  videoTrack: BiliStream,
+  audioTrack: BiliStream | null,
+  startAt?: number,
+): Promise<void> {
   if (!art) {
     await createPlayer(null);
   }
@@ -481,9 +492,13 @@ async function mountDash(videoTrack: BiliStream, audioTrack: BiliStream | null):
 
   const session = new BiliDashSession();
   dash = session;
-  // 切清晰度时保留当前播放位置；首次起播用 store 读到的续播点
+  // 切清晰度时保留当前播放位置；首次起播用 store 读到的续播点。
+  // 重挂（MediaSource 已结束后回拖）时必须用调用方显式给的秒数：destroy()
+  // 已经把 <video> 的 src 清掉，el.currentTime 此时是 0。
+  const explicit = typeof startAt === "number" && Number.isFinite(startAt) ? startAt : null;
   const startTime =
-    el.currentTime > 0 && Number.isFinite(el.currentTime) ? el.currentTime : (bili.resumeAt ?? 0);
+    explicit ??
+    (el.currentTime > 0 && Number.isFinite(el.currentTime) ? el.currentTime : (bili.resumeAt ?? 0));
 
   try {
     await session.load(el, {
@@ -496,6 +511,15 @@ async function mountDash(videoTrack: BiliStream, audioTrack: BiliStream | null):
       onReady: () => {
         playerError.value = "";
         void el.play().catch(() => undefined);
+      },
+      // MediaSource 已经结束（播完 / 缓冲到头）后用户回拖到未缓冲位置：
+      // MSE 不可逆，只能重挂一个新会话并从用户回拖的位置继续。
+      onNeedsReload: (t) => {
+        if (disposed || reloading) return;
+        reloading = true;
+        void mountSource(t).finally(() => {
+          reloading = false;
+        });
       },
     });
   } catch (e) {
