@@ -437,9 +437,13 @@ impl Host {
 
     /// 宿主是否支持加密（不可用时凭据会以 `plain` 信封降级保存）。
     pub fn secure_available(&self) -> bool {
-        host::op(&self.inner, HostOp::SecureAvailable, serde_json::Value::Null)
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
+        host::op(
+            &self.inner,
+            HostOp::SecureAvailable,
+            serde_json::Value::Null,
+        )
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
     }
 }
 
