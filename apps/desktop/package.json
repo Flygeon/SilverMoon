@@ -17,6 +17,7 @@
     "verify:mock-coverage": "node scripts/check-mock-coverage.mjs",
     "verify:steam": "node scripts/verify-steam-protocol.mjs",
     "verify:steam:offline": "node scripts/verify-steam-protocol.mjs --offline",
+    "verify:steam-local": "node scripts/verify-steam-local.mjs",
     "gen:settings-index": "node scripts/gen-settings-index.mjs",
     "verify:settings-index": "node scripts/gen-settings-index.mjs --check",
     "gen:m3-tokens": "node scripts/gen-m3-tokens.mjs",

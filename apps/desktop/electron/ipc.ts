@@ -28,7 +28,19 @@ import { checkForUpdates, getUpdateState, quitAndInstall } from "./updater";
 import { log } from "./log";
 import { callSidecar, callSidecarBatch } from "./main-bridge";
 import { getFqapiManager } from "./fqapi";
-import { getSteam, guardAuth } from "./steam";
+import {
+  getSteam,
+  guardAuth,
+  getGameDetail,
+  scanLocalLibrary,
+  findInstalled,
+  launchGame,
+  installGame,
+  openInSteam,
+  readSteamSettings,
+  steamSettingsState,
+  updateSteamSettings,
+} from "./steam";
 import { BenchSession, DEFAULT_INTERVAL_MS } from "./bench";
 import { applyNetworkProxy, normalizeProxyConfig } from "./net-proxy";
 
@@ -677,6 +689,44 @@ const handlers: Record<string, Handler> = {
       case "appDetails": {
         const ids = Array.isArray(payload.appIds) ? payload.appIds.map((n) => Number(n)) : [];
         return steam.fetchAppDetails(ids.filter((n) => Number.isFinite(n)));
+      }
+
+      // ---- 本地安装库 / 启动 / 详情 ----
+      case "localLibrary": {
+        const settings = readSteamSettings(dataDir);
+        return scanLocalLibrary(settings.customRoots);
+      }
+      case "launchGame":
+        return launchGame(Number(payload.appId));
+      case "installGame":
+        return installGame(Number(payload.appId));
+      case "openInSteam": {
+        const appId = Number(payload.appId);
+        const settings = readSteamSettings(dataDir);
+        const installed = Boolean(findInstalled(appId, settings.customRoots));
+        return openInSteam(appId, installed);
+      }
+      case "achievements":
+        return steam.fetchAchievements(Number(payload.appId));
+      case "gameDetail":
+        return getGameDetail(steam, dataDir, Number(payload.appId));
+
+      // ---- 设置：Steam 安装目录 ----
+      case "steamSettings":
+        return steamSettingsState(dataDir);
+      case "setSteamSettings": {
+        const roots = Array.isArray(payload.customRoots)
+          ? payload.customRoots.map((r) => String(r))
+          : undefined;
+        return updateSteamSettings(dataDir, roots ? { customRoots: roots } : {});
+      }
+      case "pickSteamRoot": {
+        const result = await dialog.showOpenDialog({
+          title: "选择 Steam 库目录（包含 steamapps 的文件夹）",
+          properties: ["openDirectory"],
+        });
+        if (result.canceled || result.filePaths.length === 0) return { path: null };
+        return { path: result.filePaths[0] };
       }
       // ---- 登录：二维码 / 账号密码 + Guard ----
       case "loginQrStart": {

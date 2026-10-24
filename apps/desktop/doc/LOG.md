@@ -29,7 +29,26 @@
 > - **教训**: …（踩过的坑，供下一个 AI 避雷）
 > ```
 
----
+## 2026-10-24 · Steam 详情页整页化 + 本地库检测 / 启动 / 成就
+
+- **commit**: 见本轮提交
+- **status**: 后端 **真读本机 Steam 验证**（`npm run verify:steam-local` 14 项全绿，扫到 7 款已装游戏）；单测 70 项绿；双层 typecheck exit 0；ESLint 0 error。**未做 GUI 人眼验收**（本机无 Electron 二进制）。
+- **做了什么**：
+  1. 「游戏」页点击卡片从 `m3e-dialog` 浮窗改为**独立详情页** `/games/:appId`（hero 大图 + 左侧主栏 + 右侧信息栏，窄屏单栏）。
+  2. `electron/steam/local.ts`：VDF 解析 + `libraryfolders.vdf`（两代格式）+ `appmanifest_*.acf` 扫描，发现已安装游戏。
+  3. `electron/steam/launch.ts`：`steam://rungameid/<id>` 启动、`steam://install/<id>` 唤起安装。
+  4. `electron/steam/settings.ts`：Steam 目录设置（自动识别 + 手动添加，去重/原子写/坏文件降级）。
+  5. 成就走**社区公开 XML** 而非 `ISteamUserStats`。
+- **为什么**：
+  - **不自己实现下载**。`DroidDeck参考` 能让 Steam 下载，是因为它跑的是**官方 Steam 客户端**（proot + Proton），下载由 Valve 自己的代码完成。自行实现 depot 协议要 CM 长连接 + manifest + 分块 CDN + AES 解密，而**实测本机 CM WebSocket 被重置**（`ECONNRESET`），那条链路跑不通；且实现量极大、本机无法验证。因此「安装」按钮的行为是**唤起官方客户端**，与用户确认的取舍一致。
+  - **启动必须过 Steam，不能直接跑 exe**。直接 spawn 会绕过 Steamworks：成就/云存档不记录、需要 Steam 在线的游戏直接闪退。`steam://rungameid/` 让 Steam 负责启动，overlay 与成就才能正常工作。
+  - **成就必须走社区 XML**。实测 `ISteamUserStats/GetPlayerAchievements` **只认 WebAPI key**：传 `access_token` 直接 400 `Required parameter 'key' is missing`（注意是 400 不是 401，和 `GetOwnedGames` 的行为不同）。本应用不该要求用户去申请 key，所以用免鉴权的 `/profiles/<id>/stats/<appid>/achievements/?xml=1`。
+- **教训**：
+  1. **`StateFlags & 4` 才是「已完整安装」**（4 = StateFullyInstalled）。不判这一位会把「正在下载」的游戏当已安装，点启动必然失败。
+  2. **同一接口族对 token/key 的接受度不一致**：`IPlayerService` 接受 `access_token`，`ISteamUserStats` 只认 `key`。别按「Steam WebAPI 都能用 token」的直觉写。
+  3. **隐私设为 friendsonly/private 时 XML 只回 `privacyState`、没有成就块**，必须降级成 `available:false` 并说明原因，否则界面会显示「0/0 没有成就」这种误导性结论。
+  4. 移动硬盘不在线时，`libraryfolders.vdf` 里仍会列出该库路径，但 `steamapps` 不存在 —— 扫描时逐库校验目录存在，才不会把离线库算进来。
+
 ## 2026-10-24 · Steam 登录（全方式）+ 游戏库：新增「游戏」选项卡
 
 - **commit**: 见本轮提交

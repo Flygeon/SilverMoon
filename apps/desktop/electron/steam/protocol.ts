@@ -83,6 +83,34 @@ export interface SteamAppDetails {
   releaseDate?: string | null;
   isFree?: boolean;
   priceText?: string | null;
+  /** 详情页增强字段（商店接口本来就有，之前没用上） */
+  screenshots?: string[];
+  developers?: string[];
+  publishers?: string[];
+  /** 商店页大背景图（hero 用） */
+  backgroundImage?: string | null;
+}
+
+/** 单个成就。 */
+export interface SteamAchievement {
+  apiName: string;
+  name: string;
+  description?: string | null;
+  icon?: string | null;
+  unlocked: boolean;
+  /** 解锁时间（毫秒）；未解锁为 null */
+  unlockTime?: number | null;
+}
+
+/** 某款游戏的成就进度。 */
+export interface SteamAchievements {
+  appId: number;
+  /** false = 无成就 / 私密 / 未登录，不是错误 */
+  available: boolean;
+  unlocked: number;
+  total: number;
+  achievements: SteamAchievement[];
+  warning?: string | null;
 }
 
 export type SteamAuthStateName = "idle" | "pending" | "guard" | "authenticated" | "failed";
@@ -993,6 +1021,15 @@ export class SteamProtocol {
             priceText:
               ((d.price_overview as { final_formatted?: string })?.final_formatted as string) ??
               (d.is_free ? "免费" : null),
+            // 详情页增强：截图 / 开发商 / 发行商 / 大背景图
+            screenshots: Array.isArray(d.screenshots)
+              ? (d.screenshots as { path_full?: string }[])
+                  .map((s) => String(s.path_full ?? ""))
+                  .filter(Boolean)
+              : [],
+            developers: Array.isArray(d.developers) ? (d.developers as string[]).map(String) : [],
+            publishers: Array.isArray(d.publishers) ? (d.publishers as string[]).map(String) : [],
+            backgroundImage: (d.background_raw as string) ?? (d.background as string) ?? null,
           };
           result[key] = data;
           this.appDetailsCache.set(data.appId, { data, at: now });
@@ -1002,6 +1039,109 @@ export class SteamProtocol {
       }
     }
     return result;
+  }
+
+  // -------------------------------------------------------------------------
+  // 成就
+  // -------------------------------------------------------------------------
+
+  /**
+   * 读某款游戏的成就进度。
+   *
+   * 走 `ISteamUserStats/GetPlayerAchievements`（需要 access_token 与 steamid）。
+   * 隐私设置为私密 / 游戏无成就 / token 失效都会失败 —— 这些**都不是错误**，
+   * 统一返回 `available:false` 并附 `warning`，详情页照常显示其他内容。
+   */
+  async fetchAchievements(appId: number): Promise<SteamAchievements> {
+    const empty: SteamAchievements = {
+      appId,
+      available: false,
+      unlocked: 0,
+      total: 0,
+      achievements: [],
+    };
+    let steamId: string;
+    try {
+      steamId = await this.ensureSteamId();
+    } catch (error) {
+      return { ...empty, warning: (error as Error)?.message ?? "需要登录才能读取成就" };
+    }
+
+    // 走**社区公开 XML**，而不是 `ISteamUserStats/GetPlayerAchievements`。
+    //
+    // 原因（实测）：后者**只认 WebAPI key**，不接受 access_token ——
+    // 传 token 会直接 400 `Required parameter 'key' is missing`。
+    // 而本应用没有、也不该要求用户去申请一个 WebAPI key。
+    // 社区 XML 接口免鉴权、返回结构化 XML，是这个场景唯一可用的来源。
+    //
+    // 隐私为「仅好友可见 / 私密」时，XML 只回 `privacyState` 而无成就列表 ——
+    // 这不是错误，返回 available:false 并说明原因即可。
+    const url = `${COMMUNITY_BASE}/profiles/${steamId}/stats/${appId}/achievements/?xml=1`;
+    try {
+      const response = await this.request(url, { headers: { "User-Agent": UA } });
+      if (!response.ok) {
+        return { ...empty, warning: `读取成就失败（HTTP ${response.status}）` };
+      }
+      const xml = await response.text();
+      const privacy = /<privacyState>([^<]*)<\/privacyState>/.exec(xml)?.[1] ?? "";
+      if (privacy && privacy !== "public") {
+        return {
+          ...empty,
+          warning:
+            privacy === "private"
+              ? "该账号的成就资料设为私密，无法读取"
+              : "该账号的成就资料仅好友可见，无法读取",
+        };
+      }
+
+      // 每个成就是一个 <achievement> 块；按块切分后再取字段，避免跨块正则误配
+      const blocks = xml.match(/<achievement\b[\s\S]*?<\/achievement>/g) ?? [];
+      const achievements: SteamAchievement[] = [];
+      for (const block of blocks) {
+        const pick = (tag: string) => {
+          const m =
+            new RegExp(`<${tag}><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/${tag}>`).exec(block) ??
+            new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`).exec(block);
+          return m?.[1]?.trim() ?? "";
+        };
+        const apiName = pick("apiname");
+        if (!apiName) continue;
+        // <closed>1</closed>：1 = 已解锁
+        const closed = pick("closed") === "1";
+        const unlockTime = Number(pick("unlockTimestamp") || 0);
+        achievements.push({
+          apiName,
+          name: pick("name") || apiName,
+          description: pick("description") || null,
+          icon: pick("iconClosed") || null,
+          unlocked: closed,
+          unlockTime: unlockTime > 0 ? unlockTime * 1000 : null,
+        });
+      }
+
+      if (achievements.length === 0) {
+        return { ...empty, warning: "该游戏没有成就，或成就资料未公开" };
+      }
+      const unlocked = achievements.filter((a) => a.unlocked).length;
+      return {
+        appId,
+        available: true,
+        unlocked,
+        total: achievements.length,
+        achievements,
+      };
+    } catch (error) {
+      return { ...empty, warning: (error as Error)?.message ?? String(error) };
+    }
+  }
+
+  /** 取当前登录账号的 SteamID64（成就等社区接口需要）。 */
+  private async ensureSteamId(): Promise<string> {
+    const token = await this.ensureAccessToken();
+    const id =
+      steamIdFromToken(token) ?? this.accessTokenSteamId ?? this.loadSession()?.steamId ?? null;
+    if (!id) throw new SteamError("缺少 SteamID，请重新登录");
+    return id;
   }
 }
 

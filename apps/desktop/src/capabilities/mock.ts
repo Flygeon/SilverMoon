@@ -27,10 +27,18 @@ import type {
   PixivUserDetail,
   ScanProgress,
   SkinEntry,
+  SteamAchievements,
+  SteamAchievement,
+  SteamActionResult,
   SteamAppDetails,
   SteamAuthState,
   SteamGame,
+  SteamGameDetail,
+  SteamInstalledGame,
   SteamLibrary,
+  SteamLibraryFolder,
+  SteamLocalLibrary,
+  SteamSettings,
   SteamStatus,
   TopTrackStat,
   WebDavEntry,
@@ -271,6 +279,112 @@ function steamAppDetails(appIds: number[]): Record<string, SteamAppDetails> {
   return out;
 }
 
+// ------------------------------------------------------------------ 本地库 / 成就 / 详情
+
+/**
+ * 演示用的「已安装」集合。
+ *
+ * 刻意一装一未装：appId 730（CS2）已安装 —— 详情页能走到「开始游戏 + 占用空间 + 路径」这条分支；
+ * 570（Dota 2）与 367520（Hollow Knight）未安装 —— 能走到「安装」按钮与「需要空间」。
+ */
+const MOCK_STEAM_INSTALLED_IDS = new Set<number>([730, 105600, 1245620]);
+
+/** 稳定的演示时间戳（毫秒）：不用 Date.now()，否则每次刷新页面的「最近运行」都在跳 */
+const MOCK_STEAM_NOW = Date.now();
+
+const MOCK_STEAM_LIBRARY_FOLDERS: SteamLibraryFolder[] = [
+  { path: "C:/Program Files (x86)/Steam", label: null, appCount: 2 },
+  { path: "D:/SteamLibrary", label: "二盘", appCount: 1 },
+];
+
+function steamInstalled(): SteamInstalledGame[] {
+  return MOCK_STEAM_GAMES.filter((g) => MOCK_STEAM_INSTALLED_IDS.has(g.appId)).map((g, i) => ({
+    appId: g.appId,
+    name: g.name,
+    installDir: g.name.replace(/[^A-Za-z0-9]+/g, ""),
+    // 1.8 GB ~ 62 GB，按序号错开，方便肉眼核对 formatSize 的显示
+    sizeOnDisk: (i + 1) * 18.4 * 1024 ** 3,
+    lastPlayedAt: g.lastPlayedAt ?? MOCK_STEAM_NOW - 3 * 24 * 3600 * 1000,
+    // 4 = StateFlagsFullyInstalled
+    stateFlags: 4,
+    libraryPath: MOCK_STEAM_LIBRARY_FOLDERS[i % MOCK_STEAM_LIBRARY_FOLDERS.length].path,
+    manifestPath: `appmanifest_${g.appId}.acf`,
+  }));
+}
+
+function steamLocalLib(): SteamLocalLibrary {
+  const installed = steamInstalled();
+  return {
+    installed,
+    steamRoot: "C:/Program Files (x86)/Steam",
+    libraries: MOCK_STEAM_LIBRARY_FOLDERS.map((f) => ({
+      ...f,
+      appCount: installed.filter((g) => g.libraryPath === f.path).length,
+    })),
+    scannedAt: MOCK_STEAM_NOW,
+    warning: "浏览器预览：本地库为演示数据，真实数据需在桌面端读取 Steam 安装目录",
+  };
+}
+
+/** 演示成就：每款游戏给 5~8 条，前一半已解锁（含解锁时间） */
+function steamAchievementList(appId: number): SteamAchievements {
+  const game = MOCK_STEAM_GAMES.find((g) => g.appId === appId);
+  // 演示「有些游戏没成就」：Hollow Knight 在这里当作无成就，成就区块会整块隐藏
+  if (!game || appId === 367520) {
+    return {
+      appId,
+      available: false,
+      unlocked: 0,
+      total: 0,
+      achievements: [],
+      warning: "该演示游戏没有成就数据",
+    };
+  }
+  const total = 7;
+  const unlockedCount = 4;
+  const achievements: SteamAchievement[] = Array.from({ length: total }, (_, i) => {
+    const unlocked = i < unlockedCount;
+    return {
+      apiName: `ACH_${appId}_${i + 1}`,
+      name: `演示成就 ${i + 1}`,
+      description: unlocked ? "浏览器预览用的演示成就描述" : "尚未解锁的成就不会显示描述",
+      icon: unlocked ? placeholderCover("★", (i * 61) % 360) : null,
+      unlocked,
+      unlockTime: unlocked ? MOCK_STEAM_NOW - (i + 1) * 5 * 24 * 3600 * 1000 : null,
+    };
+  });
+  return { appId, available: true, unlocked: unlockedCount, total, achievements, warning: null };
+}
+
+/** 演示设置：自动识别成功，自定义库目录给一个，便于验证移除按钮 */
+let mockSteamSettings: SteamSettings = {
+  steamRoot: "C:/Program Files (x86)/Steam",
+  customRoots: ["D:/SteamLibrary"],
+  detected: true,
+};
+
+function steamGameDetailOf(appId: number): SteamGameDetail {
+  const map = steamAppDetails([appId]);
+  return {
+    appId,
+    details: map[String(appId)] ?? null,
+    local: steamInstalled().find((g) => g.appId === appId) ?? null,
+    achievements: steamAchievementList(appId),
+  };
+}
+
+/** 演示用的启动 / 唤起结果：未安装在本地库时如实返回 ok:false */
+function steamActionOf(op: "launchGame" | "openInSteam", appId: number): SteamActionResult {
+  const installed = MOCK_STEAM_INSTALLED_IDS.has(appId);
+  if (!installed) {
+    return { ok: false, message: "该游戏尚未安装（浏览器预览：仅为演示状态）" };
+  }
+  return {
+    ok: true,
+    message: op === "launchGame" ? "已在 Steam 中启动（演示）" : "已在 Steam 中打开（演示）",
+  };
+}
+
 function mockAuthenticated(): SteamAuthState {
   mockSteamStatus.loggedIn = true;
   return { state: "authenticated", message: "登录成功（演示）", status: { ...mockSteamStatus } };
@@ -337,6 +451,43 @@ export function mockSteam<T>(payload: Record<string, unknown>): T {
       // 保留 hasSession：退出后仍能演示「继续以 XXX 身份登录」的恢复入口
       mockSteamStatus.loggedIn = false;
       return null as unknown as T;
+    case "localLibrary":
+      return steamLocalLib() as unknown as T;
+    case "gameDetail": {
+      const id = Number(payload.appId);
+      if (!Number.isFinite(id)) return { appId: 0 } as unknown as T;
+      return steamGameDetailOf(id) as unknown as T;
+    }
+    case "achievements": {
+      const id = Number(payload.appId);
+      if (!Number.isFinite(id))
+        return {
+          appId: 0,
+          available: false,
+          unlocked: 0,
+          total: 0,
+          achievements: [],
+        } as unknown as T;
+      return steamAchievementList(id) as unknown as T;
+    }
+    case "launchGame":
+      return steamActionOf("launchGame", Number(payload.appId)) as unknown as T;
+    case "openInSteam":
+      return steamActionOf("openInSteam", Number(payload.appId)) as unknown as T;
+    case "steamSettings":
+      return { ...mockSteamSettings } as unknown as T;
+    case "setSteamSettings": {
+      // 只回写前端传上来的字段，其余保持原样（与宿主「读-改-写」语义一致）
+      if (Array.isArray(payload.customRoots)) {
+        mockSteamSettings = {
+          ...mockSteamSettings,
+          customRoots: payload.customRoots.map((p) => String(p)),
+        };
+      }
+      return { ...mockSteamSettings } as unknown as T;
+    }
+    case "pickSteamRoot":
+      return { path: "E:/SteamLibrary" } as unknown as T;
     default:
       return null as unknown as T;
   }

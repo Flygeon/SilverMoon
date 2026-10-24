@@ -128,6 +128,8 @@ export default [
       // 游戏页（Steam 登录 + 游戏库）：m3e-button 的 icon 槽、m3e-form-field 的
       // leading-icon 槽、m3e-dialog 的 header / actions 槽
       "src/views/GamesView.vue",
+      // 游戏详情页：m3e-card 的 content 槽、m3e-button 的 icon 槽（原生 slot 属性）
+      "src/views/GameDetailView.vue",
       "src/components/SteamLoginPanel.vue",
       // 创作页：m3e-list-item / m3e-form-field / m3e-button 的具名槽
       "src/components/WritingStudio.vue",

@@ -41,7 +41,7 @@ import { translate } from "@shared/i18n";
 import { fetchTrending } from "@/utils/bangumiApi";
 import { SETTINGS_INDEX } from "@/views/settingsIndex.generated";
 import { matchSettings, type SettingsHit } from "@/views/settingsSearch";
-import type { FfmpegStatus } from "@shared/types";
+import type { FfmpegStatus, SteamSettings } from "@shared/types";
 import { listen } from "@/ipc/events";
 
 const settings = useSettingsStore();
@@ -330,7 +330,65 @@ onMounted(async () => {
   } else {
     ffmpeg.value = await capabilities.ffmpegStatus();
   }
+  // Steam 目录设置：只读一次自动识别结果 + 已保存的自定义库目录
+  await loadSteamSettings();
 });
+
+// ---- Steam 目录 ----
+//
+// 两种目录要分清：
+// - 自动识别的 Steam 根目录（detected=true）：只读，界面只显示，不允许手改 ——
+//   改它没有意义（下次启动又会按注册表/默认路径重新识别）；
+// - 自定义库目录（customRoots）：可增删，用来覆盖「Steam 装在非默认盘」的情况。
+//
+// 保存是**显式**的：改完点「保存」才写盘，避免每动一下就落一次 JSON。
+const steamSettings = ref<SteamSettings | null>(null);
+const steamSaving = ref(false);
+/** 未保存的自定义目录草稿（与已保存值分开，取消时可直接丢弃） */
+const steamRootsDraft = ref<string[]>([]);
+
+const steamSettingsDirty = computed(() => {
+  const saved = steamSettings.value?.customRoots ?? [];
+  const draft = steamRootsDraft.value;
+  return draft.length !== saved.length || draft.some((p, i) => p !== saved[i]);
+});
+
+async function loadSteamSettings(): Promise<void> {
+  const res = await capabilities.steamSettings();
+  steamSettings.value = res;
+  steamRootsDraft.value = [...(res.customRoots ?? [])];
+}
+
+async function addSteamRoot(): Promise<void> {
+  const picked = await capabilities.pickSteamRoot();
+  // 取消（null）不是错误，直接返回
+  if (!picked?.path) return;
+  const path = picked.path;
+  // 去重：同一个目录加两次只会让本地库重复扫描
+  if (steamRootsDraft.value.includes(path)) {
+    notify(t("settings.steamRootExists"));
+    return;
+  }
+  steamRootsDraft.value = [...steamRootsDraft.value, path];
+}
+
+function removeSteamRoot(index: number): void {
+  steamRootsDraft.value = steamRootsDraft.value.filter((_, i) => i !== index);
+}
+
+async function saveSteamSettingsDraft(): Promise<void> {
+  steamSaving.value = true;
+  try {
+    const res = await capabilities.setSteamSettings({ customRoots: steamRootsDraft.value });
+    steamSettings.value = res;
+    steamRootsDraft.value = [...(res.customRoots ?? [])];
+    notify(t("settings.steamSaved"));
+  } catch (e) {
+    notify(String(e));
+  } finally {
+    steamSaving.value = false;
+  }
+}
 
 async function recheckFfmpeg() {
   checking.value = true;
@@ -737,6 +795,9 @@ const settingNav = [
       { id: "settings-sync", labelKey: "nav.settingsSync", icon: "cloud" },
       { id: "settings-network", labelKey: "nav.settingsNetwork", icon: "lan" },
       { id: "settings-deps", labelKey: "nav.settingsDeps", icon: "extension" },
+      // Steam 归在「系统」而不是「在线」：它管的是**本机** Steam 安装目录与库路径，
+      // 与账号 / 在线源无关（登录本身在「游戏」页里做）。
+      { id: "settings-steam", labelKey: "nav.settingsSteam", icon: "sports_esports" },
       { id: "settings-about", labelKey: "nav.settingsAbout", icon: "info" },
     ],
   },
@@ -2527,6 +2588,67 @@ onBeforeUnmount(() => {
         </div>
       </m3e-card>
 
+      <!-- Steam 目录 -->
+      <m3e-card
+        v-if="activeSection === 'settings-steam'"
+        id="settings-steam"
+        class="card"
+        variant="outlined"
+      >
+        <div slot="content">
+          <h3>{{ t("settings.steamTitle") }}</h3>
+          <p class="hint">{{ t("settings.steamHint") }}</p>
+
+          <!-- 自动识别的 Steam 根目录：只读展示 -->
+          <SettingRow :label="t('settings.steamRoot')" setting-key="settings.steamRoot">
+            <span
+              v-if="steamSettings?.detected && steamSettings?.steamRoot"
+              class="value path-value"
+            >
+              {{ steamSettings.steamRoot }}
+            </span>
+            <span v-else class="value muted">{{ t("settings.steamNotDetected") }}</span>
+          </SettingRow>
+          <p v-if="steamSettings?.detected" class="hint">
+            {{ t("settings.steamDetectedHint") }}
+          </p>
+
+          <!-- 自定义库目录 -->
+          <h3 class="sub">{{ t("settings.steamCustomRoots") }}</h3>
+          <p class="hint">{{ t("settings.steamCustomRootsHint") }}</p>
+
+          <div v-if="steamRootsDraft.length" class="dir-list">
+            <div v-for="(dir, i) in steamRootsDraft" :key="dir" class="dir-item">
+              <span class="material-symbols-outlined">folder</span>
+              <span class="dir-path" :title="dir">{{ dir }}</span>
+              <m3e-icon-button
+                class="lm-icon-btn-sm danger"
+                size="small"
+                :title="t('settings.steamRemoveRoot')"
+                @click="removeSteamRoot(i)"
+              >
+                <span class="material-symbols-outlined">close</span>
+              </m3e-icon-button>
+            </div>
+          </div>
+          <div v-else class="notice">{{ t("settings.steamCustomRootsEmpty") }}</div>
+
+          <div class="actions">
+            <m3e-button variant="tonal" size="small" @click="addSteamRoot">
+              <span slot="icon" class="material-symbols-outlined">create_new_folder</span>
+              {{ t("settings.steamAddRoot") }}
+            </m3e-button>
+            <m3e-button
+              variant="filled"
+              size="small"
+              :disabled="!steamSettingsDirty || steamSaving"
+              @click="saveSteamSettingsDraft"
+            >
+              {{ steamSaving ? t("settings.steamSaving") : t("settings.steamSave") }}
+            </m3e-button>
+          </div>
+        </div>
+      </m3e-card>
       <!-- 关于 -->
       <m3e-card
         v-if="activeSection === 'settings-about'"

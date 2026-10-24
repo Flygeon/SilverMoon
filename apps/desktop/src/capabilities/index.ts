@@ -202,6 +202,11 @@ import type {
   OsuImportResult,
   OsuProgress,
   SteamRequest,
+  SteamLocalLibrary,
+  SteamAchievements,
+  SteamGameDetail,
+  SteamActionResult,
+  SteamSettings,
   DesktopCaps,
   Rgba,
   WakeLockKind,
@@ -1584,6 +1589,52 @@ export const capabilities = {
   steam<T = unknown>(payload: SteamRequest): Promise<T> {
     if (!isDesktop) return Promise.resolve(mockSteam<T>(payload));
     return callBridge<T>("steam", payload as Record<string, unknown>);
+  },
+
+  /**
+   * 本地 Steam 库（**不需要登录**）：读 libraryfolders.vdf + appmanifest_*.acf，
+   * 拿到「装没装 / 装在哪 / 占多大」。
+   *
+   * 与 steamGames（WebAPI 游戏库）是两条独立链路，页面两个都要拉：
+   * 前者回答「本机有什么」，后者回答「账号买过什么、玩了多久」。
+   */
+  steamLocalLibrary(): Promise<SteamLocalLibrary> {
+    return capabilities.steam<SteamLocalLibrary>({ op: "localLibrary" });
+  },
+
+  /** 启动游戏（唤起 Steam 客户端）。未安装时宿主返回 ok:false + message。 */
+  steamLaunchGame(appId: number): Promise<SteamActionResult> {
+    return capabilities.steam<SteamActionResult>({ op: "launchGame", appId });
+  },
+
+  /** 在 Steam 客户端里打开该游戏的商店 / 库页面（不启动游戏本体）。 */
+  steamOpenInSteam(appId: number): Promise<SteamActionResult> {
+    return capabilities.steam<SteamActionResult>({ op: "openInSteam", appId });
+  },
+
+  /** 取成就列表。无成就系统的游戏返回 available:false（不是错误）。 */
+  steamAchievements(appId: number): Promise<SteamAchievements> {
+    return capabilities.steam<SteamAchievements>({ op: "achievements", appId });
+  },
+
+  /** 详情页**唯一**要发的请求：商店元信息 + 本地安装 + 成就一次拿全。 */
+  steamGameDetail(appId: number): Promise<SteamGameDetail> {
+    return capabilities.steam<SteamGameDetail>({ op: "gameDetail", appId });
+  },
+
+  /** 读 Steam 目录设置（自动识别的根目录 + 用户自定义库目录）。 */
+  steamSettings(): Promise<SteamSettings> {
+    return capabilities.steam<SteamSettings>({ op: "steamSettings" });
+  },
+
+  /** 写 Steam 目录设置（目前只有自定义库目录）。 */
+  setSteamSettings(payload: { customRoots?: string[] }): Promise<SteamSettings> {
+    return capabilities.steam<SteamSettings>({ op: "setSteamSettings", ...payload });
+  },
+
+  /** 弹出目录选择对话框挑一个 Steam 库目录；取消时 path 为 null。 */
+  pickSteamRoot(): Promise<{ path?: string | null }> {
+    return capabilities.steam<{ path?: string | null }>({ op: "pickSteamRoot" });
   },
 
   // ---- 番茄内容源（独立 sidecar）----

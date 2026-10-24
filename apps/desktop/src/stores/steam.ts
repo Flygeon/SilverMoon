@@ -4,11 +4,17 @@ import { computed, ref } from "vue";
 import { capabilities, isDesktop } from "@/capabilities";
 import { listen, type UnlistenFn } from "@/ipc/events";
 import type {
+  SteamAchievements,
+  SteamActionResult,
   SteamAppDetails,
   SteamAuthState,
   SteamGame,
+  SteamGameDetail,
+  SteamInstalledGame,
   SteamLibrary,
+  SteamLocalLibrary,
   SteamQrChallenge,
+  SteamSettings,
   SteamStatus,
 } from "@shared/types";
 
@@ -65,6 +71,23 @@ export const useSteamStore = defineStore("steam", () => {
   const details = ref<Record<string, SteamAppDetails>>({});
   const detailsLoading = ref(false);
   const detailsError = ref("");
+
+  // ---- 本地库（不需要登录）----
+  //
+  // 与上面的 games 是**两条独立链路**：games 来自 WebAPI（要登录、有游玩时长），
+  // local 来自本机 vdf/acf（不要登录、有磁盘占用与安装路径）。
+  // 因此这里单独一套 loading/error，互不覆盖。
+  const localLibrary = ref<SteamLocalLibrary | null>(null);
+  const localLoading = ref(false);
+  const localError = ref("");
+
+  // ---- 详情（详情页一次 gameDetail 拿全）----
+  const detail = ref<SteamGameDetail | null>(null);
+  const detailLoading = ref(false);
+  const detailError = ref("");
+
+  // ---- Steam 目录设置 ----
+  const steamSettings = ref<SteamSettings | null>(null);
 
   // ---- 公共错误 ----
   const error = ref("");
@@ -385,6 +408,147 @@ export const useSteamStore = defineStore("steam", () => {
     detailsError.value = "";
   }
 
+  // ---- 动作：本地库（不依赖登录态）----
+
+  /**
+   * 拉本机已安装游戏。
+   *
+   * **不需要登录**：即使未登录也照拉，卡片上的「已安装」徽标与详情页的操作栏都靠它。
+   * 失败只写 localError，不污染上层 error —— 登录态与本地库是两件事。
+   */
+  async function loadLocalLibrary(): Promise<void> {
+    localLoading.value = true;
+    localError.value = "";
+    try {
+      localLibrary.value = await capabilities.steam<SteamLocalLibrary>({ op: "localLibrary" });
+    } catch (e) {
+      localError.value = messageOf(e);
+    } finally {
+      localLoading.value = false;
+    }
+  }
+
+  /** 本地库里是否装了这款（卡片徽标、详情页操作栏共用这一条判断） */
+  function installedOf(appId: number): SteamInstalledGame | null {
+    return localLibrary.value?.installed.find((g) => g.appId === appId) ?? null;
+  }
+
+  // ---- 动作：详情页 ----
+
+  /**
+   * 打开详情：**只发一个 gameDetail 请求**（商店元信息 + 本地安装 + 成就一次拿全）。
+   *
+   * 换 appId 时清掉上一款的数据，避免详情页在加载期间先闪一下别的游戏的海报。
+   */
+  async function openDetail(appId: number): Promise<void> {
+    if (detail.value?.appId !== appId) detail.value = null;
+    detailLoading.value = true;
+    detailError.value = "";
+    try {
+      const res = await capabilities.steam<SteamGameDetail>({ op: "gameDetail", appId });
+      // 只要仍是当前这款就写入（用户可能已经点返回又进了另一款）
+      if (res && res.appId === appId) detail.value = res;
+      else if (res && !res.appId) detail.value = { ...res, appId };
+      // 顺手把本地安装信息同步进本地库缓存，卡片徽标无需再等一次 localLibrary
+      syncLocalFromDetail(appId, res?.local ?? null);
+    } catch (e) {
+      detailError.value = messageOf(e);
+    } finally {
+      detailLoading.value = false;
+    }
+  }
+
+  /** 把详情里的 local 并回本地库缓存（已存在则替换，不存在则忽略） */
+  function syncLocalFromDetail(appId: number, local: SteamInstalledGame | null): void {
+    if (!local || !localLibrary.value) return;
+    const list = localLibrary.value.installed;
+    const idx = list.findIndex((g) => g.appId === appId);
+    if (idx < 0) return;
+    const next = [...list];
+    next[idx] = local;
+    localLibrary.value = { ...localLibrary.value, installed: next };
+  }
+
+  /** 清空详情（离开详情页时调，避免下次进来先看到旧数据） */
+  function clearDetail(): void {
+    detail.value = null;
+    detailError.value = "";
+  }
+
+  /** 启动游戏：失败时把宿主给的 message 抛给调用方（视图据此提示），不写 detailError */
+  async function launch(appId: number): Promise<SteamActionResult> {
+    try {
+      return await capabilities.steam<SteamActionResult>({ op: "launchGame", appId });
+    } catch (e) {
+      return { ok: false, message: messageOf(e) };
+    }
+  }
+
+  /** 未安装时的「安装」：唤起 Steam 客户端由它接管下载 */
+  async function install(appId: number): Promise<SteamActionResult> {
+    try {
+      return await capabilities.steam<SteamActionResult>({ op: "openInSteam", appId });
+    } catch (e) {
+      return { ok: false, message: messageOf(e) };
+    }
+  }
+
+  /**
+   * 单独拉成就（详情页一般用不上：openDetail 已经带回来了）。
+   *
+   * 保留这个动作是为了「成就接口临时失败后原地重试」，不必整页重拉。
+   */
+  async function loadAchievements(appId: number): Promise<SteamAchievements | null> {
+    try {
+      const res = await capabilities.steam<SteamAchievements>({ op: "achievements", appId });
+      if (detail.value?.appId === appId) detail.value = { ...detail.value, achievements: res };
+      if (!res.available) detailError.value = "";
+      return res;
+    } catch (e) {
+      detailError.value = messageOf(e);
+      return null;
+    }
+  }
+
+  // ---- 动作：Steam 目录设置 ----
+
+  /** 读 Steam 目录设置（自动识别结果 + 自定义库目录） */
+  async function loadSteamSettings(): Promise<SteamSettings | null> {
+    try {
+      steamSettings.value = await capabilities.steam<SteamSettings>({ op: "steamSettings" });
+      return steamSettings.value;
+    } catch (e) {
+      localError.value = messageOf(e);
+      return null;
+    }
+  }
+
+  /** 保存 Steam 目录设置（写盘后以宿主返回值为准，避免前端与磁盘不一致） */
+  async function saveSteamSettings(customRoots?: string[]): Promise<SteamSettings | null> {
+    try {
+      const payload: { op: string; customRoots?: string[] } = { op: "setSteamSettings" };
+      if (customRoots) payload.customRoots = customRoots;
+      steamSettings.value = await capabilities.steam<SteamSettings>(payload);
+      // 库目录变了，本地库要重扫，否则详情页仍按旧库路径判断安装状态
+      await loadLocalLibrary();
+      return steamSettings.value;
+    } catch (e) {
+      localError.value = messageOf(e);
+      return null;
+    }
+  }
+
+  /** 打开目录选择对话框；取消返回 null（不要当成失败报错） */
+  async function pickSteamRoot(): Promise<string | null> {
+    try {
+      const res = await capabilities.steam<{ path?: string | null }>({ op: "pickSteamRoot" });
+      return res?.path ?? null;
+    } catch (e) {
+      localError.value = messageOf(e);
+      return null;
+    }
+  }
+
   return {
     // 状态
     status,
@@ -402,6 +566,13 @@ export const useSteamStore = defineStore("steam", () => {
     details,
     detailsLoading,
     detailsError,
+    localLibrary,
+    localLoading,
+    localError,
+    detail,
+    detailLoading,
+    detailError,
+    steamSettings,
     error,
     // 派生
     loggedIn,
@@ -425,5 +596,15 @@ export const useSteamStore = defineStore("steam", () => {
     cancelLogin,
     fetchDetails,
     clearDetails,
+    loadLocalLibrary,
+    installedOf,
+    openDetail,
+    clearDetail,
+    launch,
+    install,
+    loadAchievements,
+    loadSteamSettings,
+    saveSteamSettings,
+    pickSteamRoot,
   };
 });

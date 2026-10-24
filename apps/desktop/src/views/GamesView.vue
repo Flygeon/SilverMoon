@@ -3,7 +3,10 @@
  * 游戏（左侧导航 → 游戏）。
  *
  * 职责：未登录时出登录卡（复用 components/SteamLoginPanel.vue），已登录时出顶栏 + 游戏库网格，
- * 点卡片打开详情对话框（商店元信息来自 op:"appDetails"）。
+ * 点卡片跳独立详情页（views/GameDetailView.vue，路由 /games/:appId）。
+ *
+ * 另有「已安装」维度：本地库（op:"localLibrary"，读本机 vdf/acf，不需要登录）
+ * 与账号游戏库并行拉取，卡片据此打徽标、工具栏据此筛「全部 / 已安装」。
  *
  * 链路：本视图 → stores/steam.ts → capabilities.steam({ op, ... })
  *       → callBridge("steam", payload) → electron/ipc.ts 的 steam 通道
@@ -15,6 +18,7 @@
  * - 所有请求都有 loading / 错误提示，不允许静默失败。
  */
 import { computed, onActivated, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 import EmptyState from "@/components/EmptyState.vue";
 import SteamLoginPanel from "@/components/SteamLoginPanel.vue";
 import { useSettingsStore } from "@/stores/settings";
@@ -106,10 +110,16 @@ function cacheText(ms?: number | null): string {
 const totalHours = computed(() => Math.round(steam.totalPlaytimeMinutes / 60));
 
 // ---------------------------------------------------------------- 过滤 + 排序
-/** 按关键词过滤后、再按当前排序规则排好的列表 */
+/** 按关键词 + 安装筛选过滤后、再按当前排序规则排好的列表 */
 const visibleGames = computed<SteamGame[]>(() => {
   const q = keyword.value.trim().toLowerCase();
-  const list = q ? steam.games.filter((g) => g.name.toLowerCase().includes(q)) : [...steam.games];
+  let base = steam.games;
+  // 先过「已安装」这一档：本地库为空（没装 Steam / 扫描失败）时该档必然为空，
+  // 与其显示一张空网格，不如让它落到下面的 EmptyState 分支里说明原因
+  if (installFilter.value === "installed") {
+    base = base.filter((g) => installedIds.value.has(g.appId));
+  }
+  const list = q ? base.filter((g) => g.name.toLowerCase().includes(q)) : [...base];
   switch (sortBy.value) {
     case "name":
       return list.sort((a, b) =>
@@ -130,64 +140,47 @@ const visibleGames = computed<SteamGame[]>(() => {
 
 const hasFilter = computed(() => keyword.value.trim().length > 0);
 
-// ---------------------------------------------------------------- 详情对话框
-/** m3e-dialog 没有 v-model，只能拿实例调 show()/hide() */
-interface M3eDialog extends HTMLElement {
-  show(): Promise<void>;
-  hide(returnValue?: string): Promise<void>;
-}
-const detailDialog = ref<M3eDialog | null>(null);
-/** 当前打开详情的游戏 */
-const activeGame = ref<SteamGame | null>(null);
+// ---------------------------------------------------------------- 详情页跳转
+//
+// 详情已从「m3e-dialog 浮窗」改成独立路由页（/games/:appId）。
+// 好处：可回退、可收藏、可刷新，详情页还能铺满整屏做 hero 大图；
+// 代价是卡片点击不再就地展开 —— 所以这里只保留一次 router.push。
 
-const activeDetails = computed(() => {
-  if (!activeGame.value) return null;
-  return steam.details[String(activeGame.value.appId)] ?? null;
-});
+const router = useRouter();
 
-async function openDetails(game: SteamGame): Promise<void> {
-  activeGame.value = game;
-  // 先开弹窗再拉数据，避免等待期间界面毫无反馈
-  await detailDialog.value?.show();
-  if (!steam.details[String(game.appId)]) void steam.fetchDetails(game.appId);
+/** 点卡片 → 进详情页（appId 当路由参数，详情页用 props 收） */
+function openDetails(game: SteamGame): void {
+  void router.push("/games/" + game.appId);
 }
 
-function closeDetails(): void {
-  void detailDialog.value?.hide();
+// ---------------------------------------------------------------- 本地库
+//
+// 本地库（本机装了什么）与游戏库（账号买了什么）是两条独立链路：
+// 前者读 libraryfolders.vdf / appmanifest_*.acf、**不需要登录**，后者走 WebAPI。
+// 这里只用它做「已安装」徽标与「全部 / 已安装」筛选。
+
+/** 安装筛选：全部 / 仅已安装 */
+type InstallFilter = "all" | "installed";
+const installFilter = ref<InstallFilter>("all");
+
+const INSTALL_FILTERS: { value: InstallFilter; labelKey: string; icon: string }[] = [
+  { value: "all", labelKey: "games.filterAll", icon: "apps" },
+  { value: "installed", labelKey: "games.filterInstalled", icon: "download_done" },
+];
+
+/** 本机已安装的 appId 集合（卡片判徽标用它，避免每张卡各做一次 find） */
+const installedIds = computed(
+  () => new Set((steam.localLibrary?.installed ?? []).map((g) => g.appId)),
+);
+
+function isInstalled(appId: number): boolean {
+  return installedIds.value.has(appId);
 }
 
-const detailCover = computed<string>(() => {
-  if (!activeGame.value) return "";
-  const appId = activeGame.value.appId;
-  return (
-    activeDetails.value?.headerImage ||
-    activeDetails.value?.capsuleImage ||
-    activeGame.value.headerUrl ||
-    `https://cdn.akamai.steamstatic.com/steam/apps/${appId}/header.jpg`
-  );
-});
-
-/** 弹窗完全关闭（含 Esc / 点遮罩）后兜底清状态 */
-function onDetailsClosed(): void {
-  activeGame.value = null;
-  steam.clearDetails();
-}
-
-/** 详情里重试（失败后） */
-function retryDetails(): void {
-  if (!activeGame.value) return;
-  steam.clearDetails();
-  void steam.fetchDetails(activeGame.value.appId);
-}
-
-/** 在 Steam 商店打开该游戏（走系统浏览器，应用内不开远程页） */
-function openStore(): void {
-  if (!activeGame.value) return;
-  const id = activeGame.value.appId;
-  void import("@/ipc/opener")
-    .then((m) => m.openUrl(`https://store.steampowered.com/app/${id}`))
-    .catch(() => {});
-}
+/** 「已安装」筛到空时给的解释：扫描失败 / 真的没装（两者不可混为一谈） */
+const localHint = computed(
+  () => steam.localError || steam.localLibrary?.warning || t("games.emptyInstalledHint"),
+);
 
 // ---------------------------------------------------------------- 生命周期
 let loadedOnce = false;
@@ -196,7 +189,9 @@ async function bootstrap(): Promise<void> {
   if (loadedOnce) return;
   loadedOnce = true;
   await steam.subscribe();
-  await steam.load();
+  // 本地库与账号库**并行**：前者读本机 vdf/acf、不需要登录，
+  // 串行会让「已安装」徽标晚一整轮登录+库请求才出现。
+  await Promise.all([steam.load(), steam.loadLocalLibrary()]);
 }
 
 onMounted(() => {
@@ -360,6 +355,21 @@ const libraryEmpty = computed(
             {{ t(s.labelKey) }}
           </m3e-button>
         </m3e-button-group>
+        <!-- 安装筛选：全部 / 已安装（本地库为空时该档必然空，但不能静默空白） -->
+        <m3e-button-group class="filter-group" :aria-label="t('games.filterLabel')">
+          <m3e-button
+            v-for="f in INSTALL_FILTERS"
+            :key="f.value"
+            shape="round"
+            size="medium"
+            type="button"
+            :variant="installFilter === f.value ? 'filled' : 'text'"
+            @click="installFilter = f.value"
+          >
+            <span slot="icon" class="material-symbols-outlined sort-icon">{{ f.icon }}</span>
+            {{ t(f.labelKey) }}
+          </m3e-button>
+        </m3e-button-group>
       </div>
 
       <!-- 加载态：骨架屏 -->
@@ -372,6 +382,18 @@ const libraryEmpty = computed(
           </div>
         </div>
       </div>
+
+      <!-- 「已安装」筛选无结果：先于关键词无结果判断 —— 这样本地库为空时 -->
+      <!-- 说明的是「本机没装（或没扫到）」而不是「换个关键词试试」，后者会误导 -->
+      <EmptyState
+        v-else-if="installFilter === 'installed' && !visibleGames.length && !hasFilter"
+        variant="empty"
+        icon="download_done"
+        :title="t('games.emptyInstalledTitle')"
+        :description="localHint"
+        :action-label="t('games.filterAll')"
+        @action="installFilter = 'all'"
+      />
 
       <!-- 搜索无结果 -->
       <EmptyState
@@ -424,6 +446,11 @@ const libraryEmpty = computed(
               @error="markBroken(coverOf(game))"
             />
             <span v-else class="material-symbols-outlined cover-fallback">sports_esports</span>
+            <!-- 已安装徽标：本地库（本机 vdf/acf）命中才出现，与登录态无关 -->
+            <span v-if="isInstalled(game.appId)" class="installed-badge">
+              <span class="material-symbols-outlined badge-icon">check_circle</span>
+              {{ t("games.installedBadge") }}
+            </span>
           </div>
           <div class="card-body">
             <div class="game-name">{{ game.name }}</div>
@@ -451,94 +478,6 @@ const libraryEmpty = computed(
         <span>{{ t("games.refreshing") }}</span>
       </div>
     </template>
-
-    <!-- ============================ 详情对话框 ============================ -->
-    <m3e-dialog
-      ref="detailDialog"
-      class="detail-dialog"
-      @cancel="closeDetails"
-      @closed="onDetailsClosed"
-    >
-      <span slot="header">{{ activeGame?.name || t("games.details") }}</span>
-      <div v-if="activeGame" class="detail-body">
-        <!-- 封面 -->
-        <div class="detail-cover">
-          <img
-            v-if="detailCover && !isBroken(detailCover)"
-            :src="detailCover"
-            :alt="activeGame.name"
-            loading="lazy"
-            decoding="async"
-            @error="markBroken(detailCover)"
-          />
-          <span v-else class="material-symbols-outlined cover-fallback">sports_esports</span>
-        </div>
-
-        <!-- 基础统计（来自库，永远可用） -->
-        <div class="detail-stats tabular-nums">
-          <div class="stat">
-            <span class="material-symbols-outlined stat-icon">timelapse</span>
-            <span>{{ hoursText(activeGame.playtimeMinutes) }}</span>
-          </div>
-          <div v-if="recentText(activeGame.playtimeRecentMinutes)" class="stat">
-            <span class="material-symbols-outlined stat-icon">update</span>
-            <span>{{ recentText(activeGame.playtimeRecentMinutes) }}</span>
-          </div>
-        </div>
-
-        <!-- 商店详情：加载中 / 失败 / 成功 -->
-        <div v-if="steam.detailsLoading && !activeDetails" class="detail-loading">
-          <m3e-loading-indicator class="lm-loading" />
-          <span>{{ t("games.detailsLoading") }}</span>
-        </div>
-
-        <div v-else-if="steam.detailsError && !activeDetails" class="bar error">
-          <span class="material-symbols-outlined">error</span>
-          <span class="bar-text">{{ t("games.detailsFailed") }}</span>
-          <m3e-button variant="text" size="small" @click="retryDetails">
-            {{ t("games.retry") }}
-          </m3e-button>
-        </div>
-
-        <template v-else-if="activeDetails">
-          <p v-if="activeDetails.shortDescription" class="detail-desc">
-            {{ activeDetails.shortDescription }}
-          </p>
-          <p v-else class="detail-desc muted">{{ t("games.noDescription") }}</p>
-
-          <div v-if="activeDetails.genres?.length" class="detail-row">
-            <span class="row-label">{{ t("games.genres") }}</span>
-            <div class="chips">
-              <m3e-assist-chip v-for="g in activeDetails.genres" :key="g" class="chip">
-                {{ g }}
-              </m3e-assist-chip>
-            </div>
-          </div>
-
-          <div v-if="activeDetails.releaseDate" class="detail-row">
-            <span class="row-label">{{ t("games.releaseDate") }}</span>
-            <span class="row-value">{{ activeDetails.releaseDate }}</span>
-          </div>
-
-          <div class="detail-row">
-            <span class="row-label">{{ t("games.price") }}</span>
-            <span class="row-value price">
-              {{ activeDetails.isFree ? t("games.free") : activeDetails.priceText || "—" }}
-            </span>
-          </div>
-        </template>
-      </div>
-
-      <div slot="actions" end>
-        <m3e-button variant="text" size="small" @click="openStore">
-          <span slot="icon" class="material-symbols-outlined">open_in_new</span>
-          {{ t("games.openStore") }}
-        </m3e-button>
-        <m3e-button variant="filled" size="small" @click="closeDetails">
-          {{ t("games.close") }}
-        </m3e-button>
-      </div>
-    </m3e-dialog>
   </div>
 </template>
 
@@ -870,94 +809,37 @@ const libraryEmpty = computed(
   --m3e-loading-indicator-size: 18px;
 }
 
-/* ---- 详情对话框 ---- */
-.detail-dialog {
-  --m3e-dialog-min-width: min(560px, 92vw);
+/* ---- 安装筛选 ---- */
+.filter-group {
+  --m3e-connected-button-group-spacing: 3px;
+  --m3e-connected-button-group-medium-inner-shape: 8px;
+  --m3e-connected-button-group-medium-inner-pressed-shape: 8px;
+  --m3e-button-medium-container-height: 36px;
+  --m3e-button-medium-label-text-font-size: var(--md-sys-typescale-label-large-size);
+  --m3e-button-icon-size: 18px;
+  --m3e-button-icon-label-space: 8px;
+  display: inline-flex;
 }
-.detail-body {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  max-width: 560px;
-  text-align: left;
-}
-.detail-cover {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  border-radius: var(--md-sys-shape-corner-medium);
-  background: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-outline);
-  overflow: hidden;
-}
-.detail-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.detail-stats {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-  font-size: var(--md-sys-typescale-body-medium-size);
-  color: var(--md-sys-color-on-surface-variant);
-}
-.stat {
+
+/* ---- 已安装徽标（压在封面上，右下角）---- */
+.installed-badge {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  padding: 3px 9px 3px 6px;
+  border-radius: var(--md-sys-shape-corner-full);
+  /* 压在任意封面上，用反色板保证对比度，不依赖封面本身的明暗 */
+  background: var(--md-sys-color-inverse-surface);
+  color: var(--md-sys-color-inverse-on-surface);
+  font-size: var(--md-sys-typescale-label-small-size);
+  line-height: 1.4;
+  pointer-events: none;
 }
-.stat-icon {
-  font-size: 18px;
-}
-.detail-desc {
-  margin: 0;
-  font-size: var(--md-sys-typescale-body-medium-size);
-  line-height: 1.65;
-  color: var(--md-sys-color-on-surface);
-}
-.detail-desc.muted {
-  color: var(--md-sys-color-on-surface-variant);
-}
-.detail-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  font-size: var(--md-sys-typescale-body-medium-size);
-}
-.row-label {
-  flex-shrink: 0;
-  width: 64px;
-  color: var(--md-sys-color-on-surface-variant);
-  font-size: var(--md-sys-typescale-body-small-size);
-  line-height: 24px;
-}
-.row-value {
-  color: var(--md-sys-color-on-surface);
-  line-height: 24px;
-}
-.row-value.price {
-  color: var(--md-sys-color-primary);
-  font-weight: 600;
-}
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.chip {
-  --m3e-filter-chip-container-height: 28px;
-}
-.detail-loading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 64px;
-  color: var(--md-sys-color-on-surface-variant);
-  font-size: var(--md-sys-typescale-body-small-size);
+.badge-icon {
+  font-size: 14px;
 }
 
 @media (max-width: 640px) {

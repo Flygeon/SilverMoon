@@ -10,6 +10,13 @@ const router = createRouter({
     { path: "/music/player", component: () => import("@/views/PlayerView.vue") },
     { path: "/books", component: () => import("@/views/BooksView.vue") },
     { path: "/games", component: () => import("@/views/GamesView.vue") },
+    // 游戏详情页：独立路由（此前是 GamesView 里的 m3e-dialog 浮窗）。
+    // props:true 把 :appId 直接当 prop 传进去，详情页不必自己读 route。
+    {
+      path: "/games/:appId",
+      component: () => import("@/views/GameDetailView.vue"),
+      props: true,
+    },
     { path: "/folders", component: () => import("@/views/FoldersView.vue") },
     { path: "/webdav", component: () => import("@/views/WebDavView.vue") },
     { path: "/treasure", component: () => import("@/views/TreasureView.vue") },

@@ -1610,6 +1610,14 @@ export interface SteamAppDetails {
   isFree?: boolean;
   /** 已格式化的价格文案（如「¥ 98.00」/「免费」），可能为空 */
   priceText?: string | null;
+  /** 商店截图（原图 URL，详情页截图墙用，懒加载） */
+  screenshots?: string[];
+  /** 开发商 */
+  developers?: string[];
+  /** 发行商 */
+  publishers?: string[];
+  /** 大背景图（hero 用；商店页给的是 1920×620 的 page background） */
+  backgroundImage?: string | null;
 }
 
 /** 登录流程状态机的取值。 */
@@ -1643,6 +1651,108 @@ export interface SteamQrChallenge {
   /** 轮询间隔（**秒**，沿用 Steam 接口单位；前端要 ×1000 再给 setInterval） */
   interval: number;
   message?: string | null;
+}
+
+// ------------------------------------------------------------------ 本地库
+//
+// 与上面的 SteamGame 是**两套数据**，别混用：
+// - SteamGame 来自 Steam WebAPI（要登录，字段是游玩时长 / 最近游玩）；
+// - SteamInstalledGame 来自本机 Steam 的 libraryfolders.vdf + appmanifest_*.acf
+//   （**不需要登录**，字段是磁盘占用 / 安装目录）。
+// 详情页两者都用：商店元信息回答「这游戏是什么」，本地库回答「装没装、装哪」。
+
+/** 本机已安装的一款游戏（来自 appmanifest_<appId>.acf）。 */
+export interface SteamInstalledGame {
+  appId: number;
+  name: string;
+  /** 安装目录名（libraryPath/steamapps/common/<installDir>） */
+  installDir?: string | null;
+  /** 磁盘占用（**字节**，注意与 playtimeMinutes 的单位区分） */
+  sizeOnDisk: number;
+  /** 最近运行时间（毫秒时间戳），来自 manifest 的 LastPlayed */
+  lastPlayedAt?: number | null;
+  /** manifest 的 StateFlags（4 = 完全安装，其它值表示下载中/更新中等） */
+  stateFlags: number;
+  /** 所在库文件夹路径 */
+  libraryPath: string;
+  /** manifest 文件完整路径（排障用） */
+  manifestPath: string;
+}
+
+/** 一个 Steam 库文件夹（libraryfolders.vdf 里的一项）。 */
+export interface SteamLibraryFolder {
+  path: string;
+  /** vdf 里的 label（可移动磁盘才有），一般为空 */
+  label?: string | null;
+  /** 该库下已安装的游戏数 */
+  appCount: number;
+}
+
+/** op:"localLibrary" 的返回：本机所有库文件夹 + 已安装游戏。 */
+export interface SteamLocalLibrary {
+  installed: SteamInstalledGame[];
+  /** 自动识别到的 Steam 根目录；识别不到为 null */
+  steamRoot?: string | null;
+  libraries: SteamLibraryFolder[];
+  /** 扫描时间（毫秒） */
+  scannedAt: number;
+  /** 降级提示（例如「未找到 Steam 安装目录」），不影响 installed 为空这一事实 */
+  warning?: string | null;
+}
+
+// ------------------------------------------------------------------ 成就
+
+/** 单条成就。 */
+export interface SteamAchievement {
+  /** Steam 内部 API 名（稳定标识，做 key 用） */
+  apiName: string;
+  name: string;
+  description?: string | null;
+  /** 已解锁时的图标 URL */
+  icon?: string | null;
+  unlocked: boolean;
+  /** 解锁时间（毫秒时间戳）；未解锁为 null */
+  unlockTime?: number | null;
+}
+
+/** 一款游戏的成就列表。 */
+export interface SteamAchievements {
+  appId: number;
+  /** 该游戏是否有成就系统（false 时 unlocked/total 都是 0，界面应整块隐藏） */
+  available: boolean;
+  unlocked: number;
+  total: number;
+  achievements: SteamAchievement[];
+  /** 降级提示（例如「该游戏没有成就」或「成就接口未授权」） */
+  warning?: string | null;
+}
+
+/** op:"gameDetail" 的返回：一次拿全详情页所需的三块数据。 */
+export interface SteamGameDetail {
+  appId: number;
+  /** 商店元信息；取不到时为 null（仍可显示本地库信息） */
+  details?: SteamAppDetails | null;
+  /** 本地安装信息；未安装为 null */
+  local?: SteamInstalledGame | null;
+  /** 成就；无成就系统或未登录为 null */
+  achievements?: SteamAchievements | null;
+}
+
+/** 启动 / 唤起 Steam 这类**动作**的结果。 */
+export interface SteamActionResult {
+  ok: boolean;
+  /** 失败原因（面向用户的原文） */
+  message?: string | null;
+}
+
+/** op:"steamSettings" 的返回。 */
+export interface SteamSettings {
+  /** 自动识别到的 Steam 根目录 */
+  steamRoot?: string | null;
+  /** 用户手动追加的库目录 */
+  customRoots: string[];
+  /** 是否自动识别成功（决定设置页显示路径还是「未识别」） */
+  detected: boolean;
 }
 
 /** 前端调用 capabilities.steam 的最小公共形状。 */

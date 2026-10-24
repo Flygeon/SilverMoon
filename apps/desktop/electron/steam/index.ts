@@ -22,9 +22,18 @@ import path from "node:path";
 import { log } from "../log";
 import { readEncryptedFile, writeEncryptedFile, removeFile } from "../secure-store";
 import { existsSync } from "node:fs";
+import { findInstalled, type SteamInstalledGame } from "./local";
+import { readSteamSettings, setSettingsLogger } from "./settings";
+
+// settings 模块不直接依赖 Electron 的 log（保持可被验证脚本 import），这里注入
+setSettingsLogger((message, ...detail) => log.warn(message, ...detail));
+import type { SteamAchievements, SteamAppDetails } from "./protocol";
 import { SteamProtocol, SteamError, type SteamAuthState, type SteamStorage } from "./protocol";
 
 export * from "./protocol";
+export * from "./local";
+export * from "./launch";
+export * from "./settings";
 
 /** `safeStorage` 加密的存储适配器。 */
 function secureStorage(): SteamStorage {
@@ -62,6 +71,35 @@ export function getSteam(dataDir: string): SteamProtocol {
     log.info("[steam] 协议层已初始化");
   }
   return instance;
+}
+
+/**
+ * 详情页的一次性聚合：商店详情 + 本地安装信息 + 成就，并行拉取。
+ *
+ * 为什么在宿主侧聚合而不是让前端发三次：详情页每次进入都要这三份数据，
+ * 三次往返会让首屏明显变慢；且三者中任何一份失败都不应拖垮整页，
+ * 所以这里各自降级、永不整体失败。
+ */
+export async function getGameDetail(
+  steam: SteamProtocol,
+  dataDir: string,
+  appId: number,
+): Promise<{
+  appId: number;
+  details: SteamAppDetails | null;
+  local: SteamInstalledGame | null;
+  achievements: SteamAchievements | null;
+}> {
+  const settings = readSteamSettings(dataDir);
+  const [details, local, achievements] = await Promise.all([
+    steam
+      .fetchAppDetails([appId])
+      .then((r) => r[String(appId)] ?? null)
+      .catch(() => null),
+    Promise.resolve(findInstalled(appId, settings.customRoots)),
+    steam.fetchAchievements(appId).catch(() => null),
+  ]);
+  return { appId, details, local, achievements };
 }
 
 /** 主动发起登录时的统一状态包装：异常转成 `failed` 状态，避免前端拿到裸 reject。 */
