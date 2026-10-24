@@ -256,6 +256,7 @@ pub fn run() {
             steam::steam_cm_connect,
             steam::steam_cm_disconnect,
             steam::steam_download,
+            steam::steam_app_depots,
             novel::novel_search,
             novel::novel_rank,
             novel::novel_category,

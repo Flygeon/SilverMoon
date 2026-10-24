@@ -33,6 +33,7 @@ pub mod crypto;
 pub mod depot_key;
 pub mod downloader;
 pub mod manifest;
+pub mod pics;
 
 pub use cache::{
     find_cached_manifest, list_cached_manifests, load_cached_manifest, CachedManifest,
@@ -41,4 +42,5 @@ pub use chunk::{process_chunk, ChunkOutcome};
 pub use cm::{CmError, CmManager, CmSession};
 pub use depot_key::fetch_depot_key;
 pub use downloader::{download_app, safe_join, DepotTask, DownloadProgress, DownloadResult};
+pub use pics::{fetch_app_depots, AppDepot};
 pub use manifest::{ContentManifest, FileMapping, ManifestMetadata};

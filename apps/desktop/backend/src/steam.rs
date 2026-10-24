@@ -262,3 +262,50 @@ fn hex_value(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
+
+/// 查某个 app 的 depot 列表（下载前必须先拿到它）。
+///
+/// 走 CM 的 PICS appinfo —— 同样没有 HTTP 端点，只能靠 CM。
+/// 返回每个 depot 的 id 与 public 分支的 manifest gid。
+#[silvermoon_ipc::command]
+pub async fn steam_app_depots(
+    account_name: String,
+    access_token: String,
+    app_id: u32,
+) -> Result<Vec<DepotInfoOut>, String> {
+    let result = tokio::task::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("创建运行时失败：{e}"))?;
+        let mut guard = runtime
+            .block_on(manager().get_or_connect(&account_name, &access_token))
+            .map_err(|e| e.to_string())?;
+        let Some(session) = guard.as_mut() else {
+            return Err("CM 会话不可用".to_string());
+        };
+        runtime
+            .block_on(silvermoon_steam::fetch_app_depots(session, app_id))
+            .map(|list| {
+                list.into_iter()
+                    .map(|d| DepotInfoOut {
+                        depot_id: d.depot_id,
+                        manifest_gid: d.manifest_gid.to_string(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("查询 depot 列表失败：{e}"))?;
+    result
+}
+
+/// 单个 depot 的信息（回给前端）。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DepotInfoOut {
+    pub depot_id: u32,
+    /// u64 超出 JS 安全整数，用字符串过桥
+    pub manifest_gid: String,
+}
