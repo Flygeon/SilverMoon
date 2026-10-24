@@ -29,6 +29,36 @@
 > - **教训**: …（踩过的坑，供下一个 AI 避雷）
 > ```
 
+## 2026-10-24（六）· B 站回归修复 + hero 落地 + CM 凭据真因
+
+- **commit**: 见本轮提交
+- **B 站（已修好，用户确认）**：日志里 `https://api.bilibili.com/x/player/playurl` 报
+  `ERR_BLOCKED_BY_CLIENT`，是 **https** —— 说明上一条「http 放行」没修到触发点。
+  真因：`Referer` 是 Chromium 的 **forbidden request header**。
+  - 旧版 filter 含 `*.bilibili.com` → 拦截器删掉 Referer 再重设（特权操作，允许）
+  - 我为「收窄打击面」去掉它 → 请求带着 net.fetch 传入的 Referer 出发 → 直接 BLOCKED
+  - 修法：恢复 filter + 在 http 通道先摘掉 B 站的 Referer，两条路径不打架。
+- **hero**：前端日志抓到 `heroEl=null`，导航后元素根本不在 DOM。
+  原因：详情页是懒加载组件 + 路由过渡 `mode="out-in"`，固定帧数等不到。
+  修法：改成「命中即返回」的短轮询（≤12 帧 ≈200ms）。
+  与上一版轮询的区别：上一版等的是**网络数据**（gameDetail），慢网必久等；
+  这次等的是「组件挂载 + 一个 DOM 节点」，与网络无关。
+- **CM invalid credentials 的真因（我的 bug）**：
+  诊断日志打出两个 token 的真实 iss 后一切清楚：
+  | token | iss | 用途 |
+  |---|---|---|
+  | access_token | `r:0016_29018D4C_D5D87` | WebAPI |
+  | refresh_token（原始） | `steam` | **CM logon 唯一凭据** |
+  而 `ensureAccessToken` 里有一行把 `GenerateAccessTokenForApp` 返回的 **rotated**
+  refresh_token 覆盖到了会话上 —— 等于把可用于 CM 的凭据换成不能用的那个。
+  GameNative 的 `SteamService.kt` 也是 `accessToken = refreshToken`，印证 refresh_token 才对。
+- **教训**：
+  1. 「更安全的做法」（总是用最新 token）在这里恰好是错的：**token 用途不同，不能互换**。
+  2. 错误文案必须指向下一步动作。`invalid credentials` 让人无从下手，补上
+     「请退出登录后重新扫码」才有用。
+  3. **加渲染进程日志通道**是这几轮最大的效率提升：没有它，纯前端问题只能靠猜改，
+     一轮 CI 二十分钟。hero 这次就是靠 `heroEl=null` 一行定位的。
+
 ## 2026-10-24（五）· 修 CM 登录被拒 + hero 动画不生效
 
 - **commit**: 见本轮提交
