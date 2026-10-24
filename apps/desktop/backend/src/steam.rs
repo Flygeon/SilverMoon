@@ -377,7 +377,7 @@ pub async fn steam_cm_poll_qr(
         .parse()
         .map_err(|_| "clientId 不是合法数字".to_string())?;
     let request_id =
-        from_hex(request_id.trim()).ok_or_else(|| "requestId 不是合法 hex".to_string())?;
+        hex_to_bytes(&request_id).ok_or_else(|| "requestId 不是合法 hex".to_string())?;
 
     let result = tokio::task::spawn_blocking(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -414,27 +414,5 @@ fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn from_hex(text: &str) -> Option<Vec<u8>> {
-    if text.is_empty() || text.len() % 2 != 0 {
-        return None;
-    }
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len() / 2);
-    let mut index = 0;
-    while index < bytes.len() {
-        let high = hex_value(bytes[index])?;
-        let low = hex_value(bytes[index + 1])?;
-        out.push((high << 4) | low);
-        index += 2;
-    }
-    Some(out)
-}
-
-fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
+// 注意：十六进制解析复用文件上方的 `hex_to_bytes` / `hex_value`，
+// 这里**不要**再定义一份 —— 曾经因此触发 E0428（name defined multiple times）。
