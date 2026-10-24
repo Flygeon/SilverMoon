@@ -215,6 +215,31 @@ if (!OFFLINE) {
     return "2048-bit / 256B";
   });
 
+  // ---- 真实网络：换 token 的参数契约（这个 bug 曾真实上线过）----
+  await check("换 token：steamid=0 被 Steam 拒绝（400），证明必须传真实 ID", async () => {
+    const post = (steamid) =>
+      fetch("https://api.steampowered.com/IAuthenticationService/GenerateAccessTokenForApp/v1/", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ refresh_token: "bogus", steamid }).toString(),
+      });
+    // 传 "0"：Steam 回 400 + HTML（Missing required routing parameter）
+    const zero = await post("0");
+    assert(zero.status === 400, `steamid=0 应返回 400，实际 ${zero.status}`);
+    // 传真实形状的 ID：不再 400（虽然 token 是假的，会回空 response，但路由通过）
+    const real = await post("76561197960287930");
+    assert(real.status === 200, `steamid=真实值 应返回 200，实际 ${real.status}`);
+    const body = await real.text();
+    let parsed = null;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      throw new Error("真实 steamid 应返回 JSON，而不是 HTML");
+    }
+    assert(parsed && typeof parsed === "object", "应返回 JSON 对象");
+    return "400 vs 200";
+  });
+
   await check("错误账号：被翻译成可读错误而非静默 pending", async () => {
     const bogus = "silvermoon_probe_" + Math.random().toString(36).slice(2, 10);
     try {

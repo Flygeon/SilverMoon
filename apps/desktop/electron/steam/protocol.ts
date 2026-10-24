@@ -115,6 +115,13 @@ export interface SteamProtocolOptions {
   storage: SteamStorage;
   /** 网络实现。宿主传 Electron `net.fetch`，验证脚本传全局 fetch。 */
   fetchImpl: typeof fetch;
+  /**
+   * 可选的诊断日志。
+   *
+   * 协议层不直接 import Electron 的 log：那样会把它绑死在宿主上，
+   * 验证脚本（`npm run verify:steam`）就跑不起来了。
+   */
+  log?: (message: string, detail?: unknown) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -332,8 +339,11 @@ export class SteamProtocol {
     if (!this.accessToken) {
       try {
         await this.ensureAccessToken();
-      } catch {
-        // 失效只影响 loggedIn，昵称仍可展示（让用户知道是哪个号过期了）
+      } catch (error) {
+        // 必须留痕：这里静默吞掉错误的话，界面只会显示「未登录」，
+        // 而真实原因（例如换 token 被 Steam 以 400 拒绝）在日志里一点痕迹都没有 ——
+        // 本轮就因此把「steamid 传 0」这个 bug 拖到用户实测才暴露。
+        this.options.log?.("[steam] 换取 access_token 失败，按未登录处理", error);
         return {
           loggedIn: false,
           hasSession: true,
@@ -354,19 +364,29 @@ export class SteamProtocol {
     };
   }
 
-  /** 用 refresh_token 换 access_token（约 24h 有效，按需换，不做本地过期计时）。 */
+  /**
+   * 用 refresh_token 换 access_token（约 24h 有效，按需换，不做本地过期计时）。
+   *
+   * ⚠️ **`steamid` 必须是真实的 SteamID64，不能传 `"0"`**。
+   * 实测传 0 时该接口返回 `400 Missing required routing parameter`（HTML，不是 JSON），
+   * 表现是「扫码成功了、账号名也存下来了，但一读 status 就显示未登录」——
+   * 因为换不到 token，`status()` 只能判 `loggedIn:false`。
+   * 参考实现（`Aurelia参考/src/steam_client/market.rs`）同样传真实 steam_id。
+   */
   private async ensureAccessToken(): Promise<string> {
     if (this.accessToken) return this.accessToken;
     const session = this.loadSession();
     if (!session) throw new SteamError("尚未登录 Steam");
+    const steamId = session.steamId ?? "";
+    if (!steamId) throw new SteamError("会话缺少 SteamID，请重新登录");
     const payload = await this.postForm("IAuthenticationService/GenerateAccessTokenForApp/v1/", {
       refresh_token: session.refreshToken,
-      steamid: "0",
+      steamid: steamId,
     });
     const accessToken = String(payload.access_token ?? "");
     if (!accessToken) throw new SteamError("Steam 未返回 access_token，登录态可能已失效");
     this.accessToken = accessToken;
-    this.accessTokenSteamId = payload.steamid ? String(payload.steamid) : null;
+    this.accessTokenSteamId = payload.steamid ? String(payload.steamid) : steamId;
     // 服务端可能轮换 refresh_token，轮换了就落盘
     const rotated = String(payload.refresh_token ?? "");
     if (rotated && rotated !== session.refreshToken) {
@@ -572,8 +592,33 @@ export class SteamProtocol {
     this.saveSession(session);
     this.pending = null;
 
-    // 登录成功后**预热游戏库**：用户切到「游戏」页时库已经在磁盘缓存里，
-    // 不必再等一次 GetOwnedGames 往返。失败无所谓（首次进库会再拉一次）。
+    // ---------------------------------------------------------------------
+    // 自检：登录「成功」必须真的能换出 access_token。
+    //
+    // 少了这一步，「拿到 refresh_token 但换不到 access_token」会变成一个
+    // **自相矛盾的状态**：pollOnce 报 authenticated，status() 却报 loggedIn:false。
+    // 界面的表现是——面板卸载 → GamesView 一看仍未登录 → 重新挂登录面板 →
+    // 又自动开始扫码，用户看到「刚登录成功，怎么又让我扫一次」的死循环。
+    // 宁可在这里明确失败，也不要让它循环。
+    // ---------------------------------------------------------------------
+    this.accessToken = null;
+    try {
+      await this.ensureAccessToken();
+    } catch (error) {
+      const detail = (error as Error)?.message ?? String(error);
+      this.options.log?.("[steam] 登录后换取 access_token 失败", error);
+      // 会话换不出 token 就是废的，删掉免得下次启动又「有会话但仍未登录」
+      this.options.storage.remove(this.options.sessionFile);
+      this.session = null;
+      this.sessionLoaded = true;
+      return {
+        state: "failed",
+        message: `登录成功但会话无法使用（${detail}），请重试`,
+      };
+    }
+
+    // 预热游戏库：切到「游戏」页时库已在磁盘缓存里，不必再等一次往返。
+    // 失败无所谓（首次进库会再拉一次）。
     void this.getLibrary(true).catch(() => {
       /* 预热失败不影响登录结果 */
     });
@@ -618,17 +663,23 @@ export class SteamProtocol {
   ): Promise<Pick<SteamSessionFile, "personaName" | "avatarUrl" | "steamId">> {
     let resolvedId = steamId ?? null;
     let accessToken = "";
-    try {
-      const payload = await this.postForm("IAuthenticationService/GenerateAccessTokenForApp/v1/", {
-        refresh_token: refreshToken,
-        steamid: "0",
-      });
-      accessToken = String(payload.access_token ?? "");
-      if (!resolvedId && payload.steamid) resolvedId = String(payload.steamid);
-      this.accessToken = accessToken || null;
-      this.accessTokenSteamId = resolvedId;
-    } catch {
-      // 换不到 token 就只走 XML 回退
+    // 这里同样必须传真实 steamid（传 "0" 会被 Steam 以 400 拒绝）。
+    // 拿不到 id 就跳过换 token，直接走免鉴权的社区 XML。
+    if (resolvedId) {
+      try {
+        const payload = await this.postForm(
+          "IAuthenticationService/GenerateAccessTokenForApp/v1/",
+          {
+            refresh_token: refreshToken,
+            steamid: resolvedId,
+          },
+        );
+        accessToken = String(payload.access_token ?? "");
+        this.accessToken = accessToken || null;
+        this.accessTokenSteamId = resolvedId;
+      } catch {
+        // 换不到 token 就只走 XML 回退
+      }
     }
 
     if (resolvedId) {

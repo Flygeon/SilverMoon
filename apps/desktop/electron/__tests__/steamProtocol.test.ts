@@ -8,7 +8,10 @@
  *    用户看到的是"验证码一直不对"，很难定位；
  * 2. `describeEResult` —— 判错会让登录失败只剩一个数字；
  * 3. 会话读写 / 缓存 / 登出的状态机 —— 判错的表现是"重启后账号丢了"或"换号后
- *    看到上一个号的游戏库"。
+ *    看到上一个号的游戏库"；
+ * 4. 换 access_token 的**参数形状** —— 见文末「回归」用例：这里曾把 steamid 写成 "0"，
+ *    Steam 直接回 400，而 status() 把异常吞成 loggedIn:false，于是界面表现成
+ *    「扫码明明成功了，却一直说尚未登录」。
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -228,6 +231,91 @@ describe("会话状态机", () => {
     const steam = new SteamProtocol({ sessionFile, libraryFile, storage, fetchImpl: noNetwork });
     await expect(steam.fetchAppDetails([])).resolves.toEqual({});
     await expect(steam.fetchAppDetails([0, -1, Number.NaN])).resolves.toEqual({});
+  });
+});
+
+describe("回归：换 access_token 必须传真实 steamid", () => {
+  /**
+   * 这段守的是一个**真实上线过的 bug**：
+   * 原实现调用 GenerateAccessTokenForApp 时写死了 steamid: "0"，
+   * Steam 返回 400（Missing required routing parameter）；
+   * 而 status() 为了「昵称仍可展示」把异常吞掉，只回 loggedIn:false ——
+   * 用户看到的是「二维码扫了、账号名也显示了，却一直提示尚未登录，还反复重来」。
+   *
+   * 所以这里不联网，而是**截获真正要发出的表单**，断言 steamid 是会话里的那个。
+   */
+  function captureFetch(ok = true) {
+    const calls: { url: string; body: string }[] = [];
+    const fake: typeof fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      calls.push({ url, body: typeof init?.body === "string" ? init.body : "" });
+      if (!ok) return new Response("bad", { status: 400 });
+      return new Response(
+        JSON.stringify({ response: { access_token: "at-ok", refresh_token: "rt-ok" } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+    return { calls, fake };
+  }
+
+  function storageWith(session: unknown) {
+    const files = new Map<string, string>();
+    files.set("/v/steam-session.json", JSON.stringify(session));
+    const storage: SteamStorage = {
+      read: (f) => files.get(f) ?? null,
+      write: (f, t) => void files.set(f, t),
+      remove: (f) => void files.delete(f),
+      exists: (f) => files.has(f),
+    };
+    return storage;
+  }
+
+  function make(fake: typeof fetch, storage: SteamStorage, log?: (m: string) => void) {
+    return new SteamProtocol({
+      sessionFile: "/v/steam-session.json",
+      libraryFile: "/v/steam-library.json",
+      storage,
+      fetchImpl: fake,
+      ...(log ? { log } : {}),
+    });
+  }
+
+  it("把会话里的 steamId 原样发出去（绝不能是 0）", async () => {
+    const { calls, fake } = captureFetch();
+    const storage = storageWith({
+      refreshToken: "rt",
+      steamId: "76561198000000001",
+      accountName: "acc",
+    });
+    const status = await make(fake, storage).status();
+    expect(status.loggedIn).toBe(true);
+
+    const tokenCall = calls.find((c) => c.url.includes("GenerateAccessTokenForApp"));
+    expect(tokenCall, "应当调用过换 token 接口").toBeTruthy();
+    const params = new URLSearchParams(tokenCall?.body ?? "");
+    expect(params.get("steamid")).toBe("76561198000000001");
+    expect(params.get("steamid")).not.toBe("0");
+    expect(params.get("refresh_token")).toBe("rt");
+  });
+
+  it("会话缺 steamId 时直接判未登录，不发那个注定 400 的请求", async () => {
+    const { calls, fake } = captureFetch();
+    const storage = storageWith({ refreshToken: "rt" });
+    const status = await make(fake, storage).status();
+
+    expect(status.loggedIn).toBe(false);
+    expect(status.hasSession).toBe(true);
+    expect(calls.find((c) => c.url.includes("GenerateAccessTokenForApp"))).toBeUndefined();
+  });
+
+  it("换 token 失败时写诊断日志（否则界面只剩「未登录」，无从排查）", async () => {
+    const logged: string[] = [];
+    const { fake } = captureFetch(false);
+    const storage = storageWith({ refreshToken: "rt", steamId: "76561198000000001" });
+    const status = await make(fake, storage, (m) => void logged.push(m)).status();
+
+    expect(status.loggedIn).toBe(false);
+    expect(logged.some((m) => m.includes("access_token"))).toBe(true);
   });
 });
 

@@ -57,6 +57,7 @@ export function getSteam(dataDir: string): SteamProtocol {
       // 关键：用 Chromium 网络栈，代理设置才生效
       fetchImpl: ((input: RequestInfo | URL, init?: RequestInit) =>
         net.fetch(typeof input === "string" ? input : String(input), init)) as typeof fetch,
+      log: (message, detail) => log.warn(message, detail),
     });
     log.info("[steam] 协议层已初始化");
   }
