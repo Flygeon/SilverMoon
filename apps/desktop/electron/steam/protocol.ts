@@ -493,9 +493,21 @@ export class SteamProtocol {
     }
 
     for (const candidate of candidates) {
-      if (!candidate.token) continue;
-      if (isSteamCmToken(candidate.token)) {
-        this.options.log?.("[steam] CM 凭据已选用", { source: candidate.source });
+      if (!candidate.token) {
+        // 记录「缺失」本身：缺 access_token 往往说明换取失败，是排查的第一步
+        this.options.log?.("[steam] CM 凭据候选为空", { source: candidate.source });
+        continue;
+      }
+      const ok = isSteamCmToken(candidate.token);
+      // 两个候选**都**记下来（不只记失败的那个）。
+      // 关键是 iss 的实际值：steam-vent 硬性要求 iss==="steam"，
+      // 不知道它是多少就只能猜。
+      this.options.log?.("[steam] CM 凭据候选判定", {
+        source: candidate.source,
+        accepted: ok,
+        ...describeTokenShape(candidate.token),
+      });
+      if (ok) {
         return { accountName, token: candidate.token, source: candidate.source };
       }
     }

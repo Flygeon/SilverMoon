@@ -876,12 +876,23 @@ watch(
             </span>
           </div>
 
-          <!-- 错误：展示后端原文（不自己猜原因），并给重试 -->
+          <!--
+            错误：展示后端原文（不自己猜原因），并给两条出路：
+            ① 重试（可能是网络抖动 / 凭据刚刷新）
+            ② 走 Steam 客户端安装 —— 应用内下载依赖 CM 长连接，
+               一旦 CM 侧不通（凭据、协议兼容、网络封锁），这里永远不会成功。
+               与其让用户卡在一个必定失败的按钮上，不如给一条确定能走通的路。
+          -->
           <div v-if="steam.downloadError" class="download-error" role="alert">
             <span class="download-error-text">{{ steam.downloadError }}</span>
-            <m3e-button variant="text" size="small" @click="retryInstall">
-              {{ t("games.detail.downloadRetry") }}
-            </m3e-button>
+            <div class="download-error-actions">
+              <m3e-button variant="text" size="small" @click="retryInstall">
+                {{ t("games.detail.downloadRetry") }}
+              </m3e-button>
+              <m3e-button variant="text" size="small" @click="openInSteam">
+                {{ t("games.detail.installViaSteam") }}
+              </m3e-button>
+            </div>
           </div>
 
           <template v-else>
@@ -1489,6 +1500,13 @@ watch(
   flex-shrink: 0;
 }
 /* 错误：展示后端原文，不换说法 */
+.download-error-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
 .download-error {
   display: flex;
   align-items: center;
