@@ -123,6 +123,14 @@ jobs:
       - name: Unit tests (backend pure logic)
         run: cargo test --manifest-path apps/desktop/backend/Cargo.toml --lib
 
+      # ⚠️ silvermoon-steam 是**独立 package**（path 依赖、不在 workspace 成员里），
+      # 上面那条 `--lib` **不会**跑它的测试。曾经因此误判「匿名 CM 连接可用」——
+      # 实际上那条测试一次都没执行过。
+      # 这里单独跑：其中 anonymous_cm_can_start_qr_login 会真连 Steam CM，
+      # 是「自建 CM 登录（拿 client 受众 token）」方案能否成立的前提验证。
+      - name: Unit tests (steam crate)
+        run: cargo test --manifest-path apps/desktop/backend/crates/silvermoon-steam/Cargo.toml --lib -- --nocapture
+
       - name: Rustfmt check (splash launcher)
         run: cargo fmt --check --manifest-path apps/desktop/splash/Cargo.toml
 
