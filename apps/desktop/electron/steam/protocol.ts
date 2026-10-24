@@ -227,12 +227,54 @@ export class SteamProtocol {
     params: Record<string, string>,
   ): Promise<Record<string, unknown>> {
     const body = new URLSearchParams(params).toString();
-    const response = await this.request(`${API_BASE}/${endpoint}`, {
+    const response = await this.requestWithRetry(`${API_BASE}/${endpoint}`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": UA },
       body,
     });
     return this.readApiPayload(endpoint, response);
+  }
+
+  /**
+   * 带重试的请求（只对 **5xx** 与网络层瞬时错误重试）。
+   *
+   * ## 为什么必须有
+   *
+   * 用户实测碰到过 `BeginAuthSessionViaQR` 返回 **502**：Steam 网关的瞬时故障，
+   * 几秒后同一请求就恢复正常（实测连续 3 次 200）。若不重试，用户看到的是
+   * 红条「返回 HTTP 502」并被迫手动点「刷新二维码」—— 明明再试一次就好。
+   *
+   * 只重试 5xx / 网络错误，**不重试 4xx**：4xx 是确定性错误（参数错、token 失效），
+   * 重试只会拖慢失败反馈，还可能加重限流。
+   */
+  private async requestWithRetry(url: string, init?: RequestInit): Promise<Response> {
+    const attempts = 3;
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const response = await this.request(url, init);
+        // 只有服务端错误才值得重试；4xx 立刻返回让上层给出准确文案
+        if (response.status >= 500 && attempt < attempts) {
+          this.options.log?.(`[steam] 服务端 ${response.status}，第 ${attempt} 次重试`, url);
+          await sleep(400 * attempt);
+          continue;
+        }
+        return response;
+      } catch (error) {
+        lastError = error;
+        // 网络层瞬时错误（超时 / 连接被重置）也重试
+        const transient =
+          (error instanceof SteamError && !error.status) ||
+          (error as { status?: number })?.status === undefined;
+        if (attempt < attempts && transient) {
+          this.options.log?.(`[steam] 请求失败，第 ${attempt} 次重试`, (error as Error)?.message);
+          await sleep(400 * attempt);
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new SteamError(String(lastError));
   }
 
   /** GET 一个 WebAPI，返回 `response` 字段体。 */
@@ -258,6 +300,17 @@ export class SteamProtocol {
       // 直接把状态码抛出去会让排查者以为是 URL 写错了（本轮就踩过这个误判）。
       if (response.status === 401 || response.status === 403) {
         throw new SteamError("Steam 登录凭据无效或已过期，请重新登录", response.status);
+      }
+      // 5xx 已经重试过仍失败：给用户可行动的提示，而不是裸状态码
+      if (response.status >= 500) {
+        throw new SteamError(
+          "Steam 服务器暂时不可用（已自动重试），请稍等片刻再点「刷新二维码」",
+          response.status,
+        );
+      }
+      // 429：Steam 对频繁请求的限流
+      if (response.status === 429) {
+        throw new SteamError("请求过于频繁，已被 Steam 限流，请稍等几分钟再试", response.status);
       }
       throw new SteamError(`Steam 接口 ${endpoint} 返回 HTTP ${response.status}`, response.status);
     }
@@ -705,10 +758,16 @@ export class SteamProtocol {
           },
         );
         accessToken = String(payload.access_token ?? "");
-        this.accessToken = accessToken || null;
-        this.accessTokenSteamId = resolvedId;
+        // ⚠️ 只在**真的换到**时才覆盖 this.accessToken。
+        // 原先写成 `this.accessToken = accessToken || null`：换失败（空串）时会把
+        // poll 已经拿到的有效 token 抹成 null，于是登录后自检报
+        // 「Steam 未返回 access_token」—— 而 token 其实一直是好的。
+        if (accessToken) {
+          this.accessToken = accessToken;
+          this.accessTokenSteamId = resolvedId;
+        }
       } catch {
-        // 换不到 token 就只走 XML 回退
+        // 换不到 token 就只走 XML 回退（保留已有的 accessToken 不动）
       }
     }
 
@@ -917,6 +976,11 @@ export class SteamProtocol {
 // ---------------------------------------------------------------------------
 // 工具函数
 // ---------------------------------------------------------------------------
+
+/** 简易延时（重试退避用）。 */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * 从 refresh_token 里解出 SteamID64。

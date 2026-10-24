@@ -578,6 +578,85 @@ describe("二维码登录：直接采用 poll 返回的 access_token", () => {
   });
 });
 
+describe("回归：fetchProfile 不得抹掉 poll 拿到的 access_token", () => {
+  /**
+   * 真实上线过的 bug：fetchProfile 里写了 `this.accessToken = accessToken || null`，
+   * 当 GenerateAccessTokenForApp 返回空（缺 steamid / 被限流）时，会把 poll 已经
+   * 拿到的**有效** token 抹成 null —— 于是登录后自检报「Steam 未返回 access_token」，
+   * 而 token 其实一直是好的。表现：二维码扫了、提示「登录成功但会话无法使用」，反复重来。
+   */
+  it("poll 给了 token、换 token 接口返回空时，仍应保持已登录", async () => {
+    const fake: typeof fetch = async (input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url.includes("BeginAuthSessionViaQR")) {
+        return new Response(
+          JSON.stringify({
+            response: {
+              client_id: "1",
+              request_id: "r",
+              challenge_url: "https://s.team/q/1/1",
+              interval: 1,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.includes("PollAuthSessionStatus")) {
+        // 带 steamid：这样 fetchProfile 里「用 steamid 去换 token」的分支才会真的执行，
+        // 否则整段被 `if (resolvedId)` 跳过，这个回归用例就抓不到 bug（踩过一次）。
+        return new Response(
+          JSON.stringify({
+            response: {
+              refresh_token: "opaque-rt",
+              access_token: "good-at",
+              steamid: "76561198000000002",
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      // 换 token 接口：返回空 response（等价于「换不到」），但不抛错
+      if (url.includes("GenerateAccessTokenForApp")) {
+        return new Response(JSON.stringify({ response: {} }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("GetOwnedGames")) {
+        return new Response(JSON.stringify({ response: { games: [] } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ response: { players: [] } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const files = new Map<string, string>();
+    const storage: SteamStorage = {
+      read: (f) => files.get(f) ?? null,
+      write: (f, t) => void files.set(f, t),
+      remove: (f) => void files.delete(f),
+      exists: (f) => files.has(f),
+    };
+    const steam = new SteamProtocol({
+      sessionFile: "/v/steam-session.json",
+      libraryFile: "/v/steam-library.json",
+      storage,
+      fetchImpl: fake,
+    });
+
+    await steam.beginQr();
+    const state = await steam.pollOnce();
+
+    // 关键：换 token 失败不该毁掉 poll 给的 token
+    expect(state.state).toBe("authenticated");
+    expect(state.status?.loggedIn).toBe(true);
+  });
+});
+
 describe("内存存储（占位，确保纯逻辑用例不落盘）", () => {
   it("写进去能读出来，删掉就没了", () => {
     const storage = memoryStorage();
