@@ -58,7 +58,7 @@ impl CdnServer {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct ServerListResponse {
     #[serde(default)]
     servers: Vec<CdnServer>,

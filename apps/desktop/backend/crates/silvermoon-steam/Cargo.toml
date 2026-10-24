@@ -11,16 +11,22 @@ license = "GPL-3.0-only"
 # 选它而不是自己造协议：CM 协议含 RSA 密钥交换、protobuf 编解码、心跳、重连，
 # 自己写要上万行，且本机没有 MSVC 链接器、无法编译验证。
 steam-vent = "0.5"
+# CM service method 的请求/响应类型定义（GetManifestRequestCode / GetCDNAuthToken）
+steam-vent-proto-steam = "=0.5.2"
 
 tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
 thiserror = "1"
 tracing = "0.1"
+serde_json = "1"
 
 # ---- depot 下载所需的加密与解析 ----
 # 版本与 backend/Cargo.toml **刻意保持一致**：同一 crate 图里出现两份
 # aes/cbc 会让类型不互通（各自定义了自己的 Block/SessionKey）。
+# ⚠️ alloc 只能加在 **cbc** 上：aes 本身没有 alloc feature（只有 hazmat），
+# 而 decrypt_padded_vec_mut / encrypt_padded_vec_mut 定义在 cbc 的 Encryptor/Decryptor 上，
+# 由 cbc 的 alloc → cipher/alloc 打开。
 aes = "0.8"
-cbc = "0.1"
+cbc = { version = "0.1", features = ["alloc"] }
 ecb = "0.1"
 sha1 = "0.10"
 # manifest / chunk 的 VZ 压缩（Valve 自定义封装）

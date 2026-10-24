@@ -130,7 +130,7 @@ pub fn download_depot(
     servers: &[CdnServer],
     request_code: u64,
     cdn_token: &str,
-    progress: Option<ProgressFn<'_>>,
+    mut progress: Option<ProgressFn<'_>>,
 ) -> Result<DepotResult, String> {
     if servers.is_empty() {
         return Err("没有可用的 CDN 服务器".to_string());
