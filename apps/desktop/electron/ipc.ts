@@ -28,6 +28,7 @@ import { checkForUpdates, getUpdateState, quitAndInstall } from "./updater";
 import { log } from "./log";
 import { callSidecar, callSidecarBatch } from "./main-bridge";
 import { getFqapiManager } from "./fqapi";
+import { getSteam, guardAuth } from "./steam";
 import { BenchSession, DEFAULT_INTERVAL_MS } from "./bench";
 import { applyNetworkProxy, normalizeProxyConfig } from "./net-proxy";
 
@@ -137,6 +138,34 @@ async function handleBench(payload: Record<string, unknown>): Promise<unknown> {
     default:
       throw new Error(`未知基准操作：${action}`);
   }
+}
+
+/**
+ * 广播 Steam 登录状态。
+ *
+ * 扫码登录是**跨窗口**发生的：登录面板可能开在设置窗口，而用户盯着主窗口的
+ * 「游戏」页。协议层只有一份进程级会话，界面却有多份副本 —— 没有广播时，
+ * 用户会看到「登录成功了，但主窗口还显示未登录」，直到手动切页才刷新。
+ *
+ * 事件名 `steam:auth` 必须与前端 `listen("steam:auth")` 一致（改名不报错、只静默失效）。
+ */
+function broadcastSteamAuth(state: unknown): void {
+  try {
+    dispatchEvent({ event: "steam:auth", target: null, payload: state });
+  } catch (error) {
+    log.warn("[steam] 广播登录状态失败：", error);
+  }
+}
+
+/** 登录流程的状态变化才值得广播（pending 只是「还在等」，广播会刷屏）。 */
+function broadcastAuthResult(state: { state?: string } | null | undefined): unknown {
+  if (
+    state &&
+    (state.state === "authenticated" || state.state === "failed" || state.state === "guard")
+  ) {
+    broadcastSteamAuth(state);
+  }
+  return state;
 }
 
 const handlers: Record<string, Handler> = {
@@ -622,6 +651,75 @@ const handlers: Record<string, Handler> = {
     };
     const timeout = typeof payload.timeoutMs === "number" ? payload.timeoutMs : undefined;
     return manager.request(request, timeout);
+  },
+
+  // -------------------------------------------------------------------------
+  // Steam（登录 / 游戏库 / 商店）
+  //
+  // 它**不在** Rust 命令表里：Steam 的 CM WebSocket 在本机被网络重置，能用的只有
+  // 纯 HTTPS WebAPI；协议实现放在 electron/steam/，可以当场验证（见那边注释）。
+  // -------------------------------------------------------------------------
+  steam: async (payload) => {
+    const op = String(payload.op ?? "");
+    // 数据目录必须先由 main.ts 的 setDataDirs() 设好。真为空时宁可明确报错，
+    // 也不要让 path.join("", "steam-session.json") 变成**相对当前工作目录**的路径 ——
+    // 那会把登录凭据写到启动目录（开发期是仓库根），排查起来极其费解。
+    const dataDir = dataRoot();
+    if (!dataDir) throw new Error("数据目录尚未初始化，无法使用 Steam 能力");
+    const steam = getSteam(dataDir);
+    switch (op) {
+      case "status":
+        return steam.status();
+      case "library":
+        return steam.getLibrary(Boolean(payload.refresh));
+      case "refreshLibrary":
+        return steam.getLibrary(true);
+      case "appDetails": {
+        const ids = Array.isArray(payload.appIds) ? payload.appIds.map((n) => Number(n)) : [];
+        return steam.fetchAppDetails(ids.filter((n) => Number.isFinite(n)));
+      }
+      // ---- 登录：二维码 / 账号密码 + Guard ----
+      case "loginQrStart": {
+        const { challengeUrl, interval } = await steam.beginQr();
+        // 二维码不是「状态」，但和登录状态同属一条链路，前端按同一形状消费
+        return {
+          state: "pending",
+          message: "请用 Steam 手机应用扫描二维码",
+          challengeUrl,
+          interval,
+        };
+      }
+      case "loginPoll":
+        return broadcastAuthResult(await guardAuth(() => steam.pollOnce()));
+      case "loginCredentials":
+        return broadcastAuthResult(
+          await guardAuth(() =>
+            steam.beginCredentials(
+              String(payload.accountName ?? ""),
+              String(payload.password ?? ""),
+            ),
+          ),
+        );
+      case "submitGuard":
+        return broadcastAuthResult(
+          await guardAuth(() =>
+            steam.submitGuard(
+              String(payload.code ?? ""),
+              payload.codeType === "email" ? "email" : "device",
+            ),
+          ),
+        );
+      case "cancelLogin":
+        steam.cancel();
+        return null;
+      case "logout":
+        steam.logout();
+        // 退出登录也要广播：别的窗口（例如主窗口 + 迷你播放器）必须一起回到未登录态
+        broadcastSteamAuth({ state: "idle", message: null, status: await steam.status() });
+        return null;
+      default:
+        throw new Error(`未知的 steam 操作：${op}`);
+    }
   },
 
   // -------------------------------------------------------------------------

@@ -27,6 +27,11 @@ import type {
   PixivUserDetail,
   ScanProgress,
   SkinEntry,
+  SteamAppDetails,
+  SteamAuthState,
+  SteamGame,
+  SteamLibrary,
+  SteamStatus,
   TopTrackStat,
   WebDavEntry,
   WebDavStatus,
@@ -193,6 +198,149 @@ const mockOnlineLyrics = new Map<string, string>();
 /** 本地：path → 当前标签 / 写入前备份 / 是否写过（预览里让三个语义都走得通） */
 const mockLocalTags = new Map<string, MusicTagFields>();
 const mockLocalBackups = new Map<string, MusicTagFields>();
+
+/**
+ * Steam 通道的 mock 实现（浏览器预览专用）。
+ *
+ * 与 Rust 命令的 mock **分开导出**，理由和 mockMusicTags 相同：steam 是主进程
+ * 通用能力（call("steam")），不是后端路由表里的命令。若把它写成 mockInvoke 里的
+ * 一个 case，`npm run verify:mock-coverage` 会按「路由表里没这条 → 死分支」直接判红。
+ *
+ * 形态尽量贴近真实宿主，好让三个界面都能点通：
+ * - 默认**已登录**（直接能看到游戏库）；点「退出登录」后落到登录卡，
+ *   此时 hasSession 仍为 true，于是「继续以 XXX 身份登录」这条路也走得通；
+ * - 封面/头像用内联 SVG 占位（placeholderCover），不依赖外网，预览不会裂图；
+ * - Guard 流程按 codeType 演示两种文案，提交任意 4 位以上验证码即登录成功。
+ */
+const MOCK_STEAM_GAMES: SteamGame[] = [
+  { appId: 730, name: "Counter-Strike 2", playtimeMinutes: 18342, playtimeRecentMinutes: 320 },
+  { appId: 570, name: "Dota 2", playtimeMinutes: 9021, playtimeRecentMinutes: 0 },
+  { appId: 105600, name: "Terraria", playtimeMinutes: 4210, playtimeRecentMinutes: 145 },
+  { appId: 413150, name: "Stardew Valley", playtimeMinutes: 3980, playtimeRecentMinutes: 60 },
+  { appId: 367520, name: "Hollow Knight", playtimeMinutes: 2410, playtimeRecentMinutes: null },
+  { appId: 1145360, name: "Hades", playtimeMinutes: 1560, playtimeRecentMinutes: 88 },
+  { appId: 292030, name: "The Witcher 3: Wild Hunt", playtimeMinutes: 6200 },
+  { appId: 1245620, name: "ELDEN RING", playtimeMinutes: 5400, playtimeRecentMinutes: 210 },
+].map((g, i) => ({
+  ...g,
+  // 每款游戏给一个稳定的「最近游玩」时间点（毫秒），便于验证排序与相对时间
+  lastPlayedAt: i === 1 ? null : Date.now() - (i + 1) * 26 * 3600 * 1000,
+  iconUrl: placeholderCover(String(g.appId), (i * 47) % 360),
+  headerUrl: placeholderCover(g.name.slice(0, 2), (i * 47) % 360),
+}));
+
+/** 预览里的登录态（退出登录后置 false，用来演示登录卡片） */
+const mockSteamStatus: SteamStatus = {
+  loggedIn: true,
+  accountName: "silvermoon_demo",
+  personaName: "SilverMoon 演示账号",
+  steamId: "76561198000000000",
+  avatarUrl: placeholderCover("SM", 200),
+  hasSession: true,
+};
+
+/** 扫码轮询计数：第 3 次 poll 视为「已确认」，让预览不必真等 */
+let mockSteamPollCount = 0;
+
+function steamLib(): SteamLibrary {
+  return {
+    games: MOCK_STEAM_GAMES,
+    total: MOCK_STEAM_GAMES.length,
+    cachedAt: Date.now() - 5 * 60_000,
+    warning: "浏览器预览：数据为演示内容，真实游戏库需在桌面端登录 Steam",
+  };
+}
+
+function steamAppDetails(appIds: number[]): Record<string, SteamAppDetails> {
+  const out: Record<string, SteamAppDetails> = {};
+  for (const id of appIds) {
+    const hit = MOCK_STEAM_GAMES.find((g) => g.appId === id);
+    out[String(id)] = {
+      appId: id,
+      name: hit?.name ?? "未知游戏",
+      headerImage: hit?.headerUrl ?? null,
+      capsuleImage: hit?.headerUrl ?? null,
+      shortDescription:
+        "这是浏览器预览用的演示简介：真实内容来自 Steam 商店接口（store.steampowered.com/api/appdetails）。",
+      genres: ["动作", "独立", "角色扮演"],
+      releaseDate: "2023 年 10 月 24 日",
+      isFree: id === 570,
+      priceText: id === 570 ? "免费" : "¥ 98.00",
+    };
+  }
+  return out;
+}
+
+function mockAuthenticated(): SteamAuthState {
+  mockSteamStatus.loggedIn = true;
+  return { state: "authenticated", message: "登录成功（演示）", status: { ...mockSteamStatus } };
+}
+
+/** Steam 通道 mock：按 op 分派，与 electron/ipc.ts 的 steam 分支一一对应。 */
+export function mockSteam<T>(payload: Record<string, unknown>): T {
+  const op = String(payload.op ?? "");
+  switch (op) {
+    case "status":
+      return { ...mockSteamStatus } as unknown as T;
+    case "library":
+    case "refreshLibrary":
+      if (!mockSteamStatus.loggedIn) {
+        // 与真实宿主一致：未登录但有缓存时给缓存 + 警告，而不是直接抛错
+        return { ...steamLib(), warning: "登录态已失效，显示的是上次缓存的游戏库" } as unknown as T;
+      }
+      return steamLib() as unknown as T;
+    case "appDetails": {
+      const ids = Array.isArray(payload.appIds) ? payload.appIds.map((n) => Number(n)) : [];
+      return steamAppDetails(ids.filter((n) => Number.isFinite(n))) as unknown as T;
+    }
+    case "loginQrStart":
+      mockSteamPollCount = 0;
+      return {
+        state: "pending",
+        message: "请用 Steam 手机应用扫描二维码（浏览器预览：扫码不会真的生效）",
+        challengeUrl: "https://s.team/q/mock-preview-challenge",
+        // 契约里 interval 的单位是**秒**；预览给 3 秒，省得等太久
+        interval: 3,
+      } as unknown as T;
+    case "loginPoll":
+      mockSteamPollCount += 1;
+      if (mockSteamPollCount >= 3) return mockAuthenticated() as unknown as T;
+      return {
+        state: "pending",
+        message: `等待手机确认（演示：再轮询 ${3 - mockSteamPollCount} 次即成功）`,
+      } as unknown as T;
+    case "loginCredentials": {
+      const account = String(payload.accountName ?? "").trim();
+      if (!account) {
+        return { state: "failed", message: "请输入账号名" } as unknown as T;
+      }
+      mockSteamStatus.accountName = account;
+      // 演示「需要验证码」：手机令牌路径（真实宿主由 Steam 决定用哪种）
+      return {
+        state: "guard",
+        guardType: "device",
+        message: "请输入 Steam 手机令牌上显示的验证码（演示：任意 4 位以上即可）",
+      } as unknown as T;
+    }
+    case "submitGuard": {
+      const code = String(payload.code ?? "").trim();
+      if (code.length < 4) {
+        return { state: "failed", message: "验证码格式不正确" } as unknown as T;
+      }
+      mockSteamStatus.personaName = mockSteamStatus.personaName || "SilverMoon 演示账号";
+      return mockAuthenticated() as unknown as T;
+    }
+    case "cancelLogin":
+      mockSteamPollCount = 0;
+      return null as unknown as T;
+    case "logout":
+      // 保留 hasSession：退出后仍能演示「继续以 XXX 身份登录」的恢复入口
+      mockSteamStatus.loggedIn = false;
+      return null as unknown as T;
+    default:
+      return null as unknown as T;
+  }
+}
 
 /**
  * 音乐标签通用能力的 mock 实现。

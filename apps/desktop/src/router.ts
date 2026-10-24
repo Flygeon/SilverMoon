@@ -9,6 +9,7 @@ const router = createRouter({
     { path: "/music", component: () => import("@/views/MusicView.vue") },
     { path: "/music/player", component: () => import("@/views/PlayerView.vue") },
     { path: "/books", component: () => import("@/views/BooksView.vue") },
+    { path: "/games", component: () => import("@/views/GamesView.vue") },
     { path: "/folders", component: () => import("@/views/FoldersView.vue") },
     { path: "/webdav", component: () => import("@/views/WebDavView.vue") },
     { path: "/treasure", component: () => import("@/views/TreasureView.vue") },

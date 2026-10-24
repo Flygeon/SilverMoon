@@ -200,6 +200,9 @@ const navItems = computed(() => [
   { key: "videos", path: "/videos", icon: "movie", type: "video" },
   { key: "music", path: "/music", icon: "music_note", type: "audio" },
   { key: "books", path: "/books", icon: "menu_book", type: "book" },
+  // 游戏：Steam 登录 + 游戏库（见 views/GamesView.vue）。type 为 null，
+  // 因为它不进媒体库统计，导航徽标不该显示媒体条数。
+  { key: "games", path: "/games", icon: "sports_esports", type: null },
   { key: "treasure", path: "/treasure", icon: "inventory_2", type: null },
 ]);
 

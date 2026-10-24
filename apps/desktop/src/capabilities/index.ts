@@ -201,13 +201,14 @@ import type {
   OsuSearchResult,
   OsuImportResult,
   OsuProgress,
+  SteamRequest,
   DesktopCaps,
   Rgba,
   WakeLockKind,
   WakeLockStatus,
   WallpaperMode,
 } from "@shared/types";
-import { mockInvoke, mockMusicTags } from "./mock";
+import { mockInvoke, mockMusicTags, mockSteam } from "./mock";
 
 /** 桌面端（Electron 宿主）为真；纯 Web 预览时为假，所有原生能力降级为 mock。 */
 /**
@@ -1570,6 +1571,19 @@ export const capabilities = {
   /** 在线：补齐原始标签快照（只填缺的字段，不覆盖已有值） */
   cacheOnlineMusicTagOriginal(key: string, fields: Partial<MusicTagFields>): Promise<void> {
     return musicTagCall("writeOriginal", { key, fields });
+  },
+
+  // ---- Steam（登录 / 游戏库 / 商店）----
+  //
+  // 与番茄内容源一样，它**不走 Rust 命令表**：Steam 的 CM WebSocket 在部分网络下
+  // 被重置，能用的只有纯 HTTPS WebAPI，协议实现在 electron/steam/（可当场验证）。
+  // 因此单独一条 steam 通道，payload 一律 { op, ...args }。
+  //
+  // 浏览器预览（无宿主）时交给 mockSteam：登录/库都返回演示数据，
+  // 让 npm run dev:renderer 能把这三个界面完整点一遍。
+  steam<T = unknown>(payload: SteamRequest): Promise<T> {
+    if (!isDesktop) return Promise.resolve(mockSteam<T>(payload));
+    return callBridge<T>("steam", payload as Record<string, unknown>);
   },
 
   // ---- 番茄内容源（独立 sidecar）----

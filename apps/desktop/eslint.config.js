@@ -125,6 +125,10 @@ export default [
       "src/views/WebDavView.vue",
       // osu! 谱面下载页（百宝箱 → 更多工具）：m3e-button 的 icon 槽
       "src/views/OsuView.vue",
+      // 游戏页（Steam 登录 + 游戏库）：m3e-button 的 icon 槽、m3e-form-field 的
+      // leading-icon 槽、m3e-dialog 的 header / actions 槽
+      "src/views/GamesView.vue",
+      "src/components/SteamLoginPanel.vue",
       // 创作页：m3e-list-item / m3e-form-field / m3e-button 的具名槽
       "src/components/WritingStudio.vue",
       // 绘画页：m3e-button 的 icon 槽

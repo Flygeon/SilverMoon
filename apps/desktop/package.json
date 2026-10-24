@@ -15,6 +15,8 @@
     "verify:word-lyrics": "node scripts/verify-word-lyrics.mjs",
     "verify:tag-sources": "node scripts/verify-music-tag-sources.mjs",
     "verify:mock-coverage": "node scripts/check-mock-coverage.mjs",
+    "verify:steam": "node scripts/verify-steam-protocol.mjs",
+    "verify:steam:offline": "node scripts/verify-steam-protocol.mjs --offline",
     "gen:settings-index": "node scripts/gen-settings-index.mjs",
     "verify:settings-index": "node scripts/gen-settings-index.mjs --check",
     "gen:m3-tokens": "node scripts/gen-m3-tokens.mjs",

@@ -1545,3 +1545,108 @@ export interface WakeLockStatus {
 
 /** 系统强调色（RGBA，各通道 0-255） */
 export type Rgba = [number, number, number, number];
+
+// ---------------------------------------------------------------------------
+// Steam（登录 / 游戏库 / 商店）
+// ---------------------------------------------------------------------------
+//
+// 链路：src/stores/steam.ts → capabilities.steam(payload)
+//       → callBridge("steam", { op, ...args }) → electron/ipc.ts 的 steam 通道
+//       → electron/steam/（纯 HTTPS WebAPI，见那边的文件头）。
+//
+// 注意：Steam **不在 Rust 命令表**里。它的 CM WebSocket 在部分网络下被重置，
+// 能用的只有 HTTPS WebAPI；协议实现留在主进程侧以便当场验证（npm run verify:steam）。
+// 因此这里的类型是前端与 electron/steam/protocol.ts 的对齐契约，两边必须一起改。
+
+/** 当前登录态。hasSession 看磁盘，loggedIn 看 token 能否换出来。 */
+export interface SteamStatus {
+  loggedIn: boolean;
+  /** 账号名（用户输入的那个，不是昵称） */
+  accountName?: string | null;
+  /** 展示昵称 */
+  personaName?: string | null;
+  /** SteamID64，字符串形式（u64 超出 JS 安全整数范围） */
+  steamId?: string | null;
+  avatarUrl?: string | null;
+  /** 磁盘上有会话（哪怕已失效，可据此提供「重连」） */
+  hasSession: boolean;
+}
+
+/** 库里的一款游戏。 */
+export interface SteamGame {
+  appId: number;
+  name: string;
+  /** 总游玩时长（分钟） */
+  playtimeMinutes: number;
+  /** 最近两周游玩时长（分钟） */
+  playtimeRecentMinutes?: number | null;
+  /** 最近游玩时间（**毫秒**时间戳，与库里其它字段不同，别按秒解析） */
+  lastPlayedAt?: number | null;
+  /** 16×16 小图标 */
+  iconUrl?: string | null;
+  /** 460×215 头图 */
+  headerUrl?: string | null;
+}
+
+/** 游戏库。未登录时可能带 warning 并回退到上次缓存。 */
+export interface SteamLibrary {
+  games: SteamGame[];
+  total: number;
+  /** 缓存写入时间（毫秒） */
+  cachedAt?: number | null;
+  /** 降级提示，例如「登录态已失效，显示的是上次缓存的游戏库」 */
+  warning?: string | null;
+}
+
+/** 商店元信息（appDetails 返回的每一项）。 */
+export interface SteamAppDetails {
+  appId: number;
+  name?: string | null;
+  headerImage?: string | null;
+  capsuleImage?: string | null;
+  shortDescription?: string | null;
+  genres?: string[];
+  releaseDate?: string | null;
+  isFree?: boolean;
+  /** 已格式化的价格文案（如「¥ 98.00」/「免费」），可能为空 */
+  priceText?: string | null;
+}
+
+/** 登录流程状态机的取值。 */
+export type SteamAuthStateName = "idle" | "pending" | "guard" | "authenticated" | "failed";
+
+/**
+ * 登录流程的当前状态。
+ *
+ * - pending：等扫码 / 等手机确认，前端应继续轮询 loginPoll
+ * - guard：需要验证码，按 guardType 决定文案与提交入口
+ * - authenticated：登录成功，status 里带最新登录态
+ * - failed：流程失败，message 是面向用户的原文
+ */
+export interface SteamAuthState {
+  state: SteamAuthStateName;
+  message?: string | null;
+  guardType?: "email" | "device" | null;
+  status?: SteamStatus | null;
+}
+
+/**
+ * op:"loginQrStart" 的返回。
+ *
+ * 主进程实际会在这个对象上**额外**带 state / message（二维码不是「状态」，
+ * 但与登录状态同属一条链路，宿主按同一形状返回），所以这里用可选字段承接，
+ * 不把契约写成互斥的两套类型。
+ */
+export interface SteamQrChallenge {
+  /** 二维码内容（https://s.team/q/<...>），交给 qrcode 库生成 dataURL */
+  challengeUrl: string;
+  /** 轮询间隔（**秒**，沿用 Steam 接口单位；前端要 ×1000 再给 setInterval） */
+  interval: number;
+  message?: string | null;
+}
+
+/** 前端调用 capabilities.steam 的最小公共形状。 */
+export interface SteamRequest {
+  op: string;
+  [key: string]: unknown;
+}

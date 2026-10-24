@@ -30,6 +30,27 @@
 > ```
 
 ---
+## 2026-10-24 · Steam 登录（全方式）+ 游戏库：新增「游戏」选项卡
+
+- **commit**: 见本轮提交
+- **status**: 协议层**已真打 Steam 接口验证**（`npm run verify:steam` 15 项全绿）；单测 21 项绿；electron 侧 typecheck / ESLint 干净。**未做人眼 GUI 验证**（本机没装 Electron 二进制，`node_modules/electron/dist` 为空）。
+- **做了什么**：
+  1. 左侧导航栏「百宝箱」之上新增「游戏」选项卡（`navItems` 里排在 `books` 与 `treasure` 之间），路由 `/games`。
+  2. 新增 `electron/steam/protocol.ts`：纯 HTTPS 的 Steam 协议实现 —— 二维码登录、账号密码 + Steam Guard（邮箱码 / 手机令牌 / App 确认）、会话恢复、游戏库（`IPlayerService/GetOwnedGames`）、商店详情（`appdetails`，10 分钟缓存）、账号资料（`GetPlayerSummaries` + 社区 XML 回退）。
+  3. `electron/steam/index.ts` 接到宿主：网络注入 Electron `net.fetch`（走 Chromium 网络栈 → 遵守「设置 → 网络」的代理），存储注入 `secure-store`（`safeStorage`：DPAPI / Keychain / libsecret）。
+  4. `electron/ipc.ts` 新增 `steam` 通道（op 分发）+ `steam:auth` 跨窗口广播。
+  5. 验证：`scripts/verify-steam-protocol.mjs`（真打网络，15 项）、`electron/__tests__/steamProtocol.test.ts`（纯逻辑，21 项）。
+- **为什么**：
+  - **协议放在 Node 侧而不是 Rust 后端**。参考实现（`Aurelia参考/`）用 `steam-vent` 走 CM 的 WebSocket 长连接，但本机实测 **CM 的 WebSocket 会被网络重置**（`ECONNRESET`/`ETIMEDOUT`，三次重试全失败），而 Steam 的 **纯 HTTPS WebAPI 完全可用**（扫码、轮询、RSA 公钥、商店接口全部 200）。两条路在本机能拿到的能力集合相同，但本机**没有 MSVC 链接器**，Rust 后端连 `cargo check` 都跑不了（连 build script 都要链接，AGENTS.md 已记录只能走 CI，约 20 分钟一轮）。把协议写在 Node 侧，才能用 `npm run verify:steam` **当场真打 Steam 接口**。
+  - **不引第三方 Steam 库**（`steam-user` / `steam-session`）：它们同样走 CM WebSocket，在本机不可用；而 HTTPS 这套只需要内置的 `fetch` + `node:crypto`（RSA 用 JWK 拼公钥，密码 PKCS#1 v1.5 加密，明文不上传）。
+  - **凭据走 safeStorage**：refresh_token 等同密码，不能明文落盘；项目已有 `secure-store`，复用即可。密码**从不落盘**。
+  - **代理必须走 `net.fetch`**：Node 全局 `fetch`（undici）不读系统代理、也不吃 `session.setProxy`，项目里已有多处因此改为 `net.fetch`（见 `electron/net-proxy.ts` 文件头）。Steam 服务器在国内常需代理，踩这个坑表现为「登录一直超时」。
+- **教训**：
+  1. **Steam 的账号密码接口对错误账号返回 `200 + {"response":{}}`**，既没有 EResult 也没有错误文案。必须自己判空并给可读提示（否则界面表现为「一直等待确认」）。`verify:steam` 里专门有一条断言守这个行为。
+  2. **`rtime_last_played` 是秒，其它时间字段是毫秒**：协议层已统一转成毫秒再交给前端，前后端类型注释里都写明了。
+  3. **换账号必须清库缓存**：`steam-library.json` 独立于会话文件（为了未登录也能秒开首屏），所以 `logout()` 要同时删两者，否则换号后看到的是上一个账号的游戏。
+  4. 本轮中途跑过 `cargo check`，它**改写了 `backend/Cargo.lock`**（重新解析依赖，删掉 4138 行）。已 `git checkout` 还原 —— 本机无链接器时不要为了「试试看」去跑 cargo，它会动锁文件。
+
 ## 2026-10-20 · 修 schema 版本碰撞（no such column: source）+ 书架合并本地导入
 
 - **commit**: 见本轮提交（基线 `15b4e24`）
