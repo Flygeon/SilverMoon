@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runViewTransition, supportsViewTransition, activeCoverAppId } from "../gameHeroTransition";
+import {
+  runViewTransition,
+  supportsViewTransition,
+  activeCoverAppId,
+  GAME_HERO_VT_NAME,
+} from "../gameHeroTransition";
 
 /**
  * 这些用例只覆盖 `runViewTransition` 的**调度契约**，不覆盖视觉：
@@ -168,6 +175,28 @@ describe("runViewTransition", () => {
     expect(navigatedAt).toBeGreaterThan(0);
     // 从开始到导航发生，不应有可感知延迟（旧实现会等 30 帧）
     expect(navigatedAt - started).toBeLessThan(120);
+  });
+
+  /**
+   * 回归：详情页的 `view-transition-name` 必须与常量**字面一致**。
+   *
+   * 这里曾经写成 `view-transition-name: var(--lm-game-hero-vt)`。
+   * `view-transition-name` 的值类型是 `<custom-ident>`，让变量在这类位置
+   * 解析成合法标识符并不可靠 —— 元素拿不到过渡名，补间就退化成淡入，
+   * 表现正是「hero 动画完全不生效」。改成字面量后又怕两边写歪，
+   * 所以用这条用例把两个文件钉在一起。
+   */
+  it("详情页 CSS 的过渡名与常量一致（不允许 var()）", () => {
+    const file = join(process.cwd(), "src", "views", "GameDetailView.vue");
+    const css = readFileSync(file, "utf8");
+    const hits = css.match(/view-transition-name:\s*([^;]+);/g) ?? [];
+    const heroNames = hits
+      .map((line) => line.replace(/view-transition-name:\s*/, "").replace(";", "").trim())
+      .filter((value) => value !== "none");
+
+    expect(heroNames).toContain(GAME_HERO_VT_NAME);
+    // 明确禁止再退回 var() 写法
+    expect(heroNames.some((value) => value.includes("var("))).toBe(false);
   });
 
   it("不接受 waitFor 参数（接口已移除，传了会在类型层报错）", () => {

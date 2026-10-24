@@ -37,6 +37,8 @@
  */
 import { nextTick, ref } from "vue";
 
+import { callBridge, hasBridge } from "@/ipc/bridge";
+
 /** 两端共用的 `view-transition-name`。 */
 export const GAME_HERO_VT_NAME = "game-cover";
 
@@ -122,6 +124,24 @@ function nextFrame(): Promise<void> {
   });
 }
 
+/**
+ * 把 hero 动画的诊断写进主进程日志（`main.log`，前缀 `[ui]`）。
+ *
+ * 为什么需要：这个动画「有没有生效」是纯渲染层的事，打包版看不到 console，
+ * 上一轮只能靠改代码猜。把三个关键事实记下来 —— 是否支持、两端元素在不在、
+ * 过渡有没有被取消 —— 下次出问题能直接定位，不必再猜一轮。
+ *
+ * 浏览器预览（无 bridge）时静默跳过；记录失败也不该影响动画。
+ */
+function heroLog(message: string, level: "info" | "warn" = "info"): void {
+  if (!hasBridge()) return;
+  try {
+    void callBridge("log", { message, level }).catch(() => {});
+  } catch {
+    /* 日志失败不影响动画 */
+  }
+}
+
 export interface ViewTransitionHandlers {
   /** 导航本身（必须能在**同一个微任务内**完成，不能 await 网络请求） */
   navigate: () => unknown;
@@ -145,6 +165,10 @@ export async function runViewTransition(handlers: ViewTransitionHandlers): Promi
 
   // 退化路径：不支持 / 要求减少动效 → 普通导航，全程不碰动画
   if (!supportsViewTransition() || prefersReducedMotion()) {
+    heroLog(
+      `[hero] 走退化路径：supports=${supportsViewTransition()} reducedMotion=${prefersReducedMotion()}`,
+      "warn",
+    );
     try {
       await handlers.navigate();
     } finally {
@@ -176,6 +200,19 @@ export async function runViewTransition(handlers: ViewTransitionHandlers): Promi
       await handlers.navigate();
       // Vue 的渲染周期（把 hero 元素写进 DOM）
       await nextTick();
+
+      /*
+       * 记录两端元素是否就位。
+       *
+       * View Transition 只在「新旧快照里存在**同名**元素」时才补间；
+       * 少了任意一端，浏览器不会报错，只会安静地淡入 —— 这正是「动画像没生效」
+       * 最常见的两种原因，所以这里把两端分别记下来。
+       */
+      const heroEl = document.querySelector(".hero-media, .skeleton-hero");
+      const heroName = heroEl ? getComputedStyle(heroEl).viewTransitionName : "(无元素)";
+      heroLog(
+        `[hero] 起飞前：heroEl=${heroEl ? heroEl.className : "null"} name=${heroName} activeCoverAppId=${activeCoverAppId.value}`,
+      );
       /*
        * 再等**两帧**。
        *

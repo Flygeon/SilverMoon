@@ -1225,7 +1225,17 @@ watch(
    * 与 .hero-media 是 v-if / v-else 的两个分支，同一时刻只会有一个存在于文档里，
    * 所以不会出现「同名元素重复」而被浏览器整次忽略的情况。
    */
-  view-transition-name: var(--lm-game-hero-vt);
+  /*
+   * ⚠️ 直接写死标识符，**不要**用 var(--lm-game-hero-vt)。
+   *
+   * view-transition-name 的值类型是 <custom-ident>，而 var() 在这类位置
+   * 依赖浏览器把变量解析成 token 再判合法；实测在这一步上不可靠
+   * （元素拿不到过渡名 → 整次补间退化成淡入，也就是「hero 动画没生效」）。
+   *
+   * 这里的字面量必须与 utils/gameHeroTransition.ts 的 GAME_HERO_VT_NAME 一致；
+   * 单测 gameHeroTransition.test.ts 会断言两者相同，所以不会悄悄写歪。
+   */
+  view-transition-name: game-cover;
 }
 .skeleton-bar {
   display: flex;
@@ -1269,7 +1279,17 @@ watch(
   aspect-ratio: 21 / 9;
   background: var(--md-sys-color-surface-container-high);
   color: var(--md-sys-color-outline);
-  view-transition-name: var(--lm-game-hero-vt);
+  /*
+   * ⚠️ 直接写死标识符，**不要**用 var(--lm-game-hero-vt)。
+   *
+   * view-transition-name 的值类型是 <custom-ident>，而 var() 在这类位置
+   * 依赖浏览器把变量解析成 token 再判合法；实测在这一步上不可靠
+   * （元素拿不到过渡名 → 整次补间退化成淡入，也就是「hero 动画没生效」）。
+   *
+   * 这里的字面量必须与 utils/gameHeroTransition.ts 的 GAME_HERO_VT_NAME 一致；
+   * 单测 gameHeroTransition.test.ts 会断言两者相同，所以不会悄悄写歪。
+   */
+  view-transition-name: game-cover;
 }
 .hero-img {
   width: 100%;

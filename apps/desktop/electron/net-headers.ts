@@ -20,20 +20,28 @@ import { log } from "./log";
 const BILI_REFERER = "https://www.bilibili.com";
 
 /*
- * 只覆盖**真正需要 Referer 的资源域名**：视频/音频 CDN 与图片 CDN。
+ * ⚠️ `*://*.bilibili.com/*` **必须**留在 filter 里。这不是"顺带覆盖"，而是必需：
  *
- * ⚠️ 刻意**不包含** `*://*.bilibili.com/*`：
+ * Chromium 把 `Referer` 视为 **forbidden request header** —— 通过 `net.fetch`
+ * 的 headers 传它，整个请求会被判 `net::ERR_BLOCKED_BY_CLIENT`（不可读的错误）。
  *
- * `api.bilibili.com` / `passport.bilibili.com` 这类接口本来就在调用方
- * （`utils/bilibili.ts` 的 `baseHeaders()` / `hostFetch`）**显式带了 Referer**，
- * 走不到这里；而把它们纳进来只会带来风险 ——
- * 一旦拦截器改头失败，Chromium 会把整条请求判成 `ERR_BLOCKED_BY_CLIENT`，
- * 表现为「B 站扫码登录点了没反应、视频放不出来」，且错误完全不可读。
+ * 而 B 站的空间/历史/收藏夹接口**必须**带 Referer（缺了回 -352/-799）。
  *
- * 曾经就是带上 `*.bilibili.com` 而踩到这个坑（见下方 http 放行分支的注释）。
+ * 所以 Referer 只能由 `onBeforeSendHeaders` 在 Chromium 网络层补 ——
+ * 而它**只对 filter 命中的 URL 生效**。一旦把 bilibili.com 从 filter 里去掉，
+ * 接口请求就会带着 net.fetch 传入的 Referer 出发 → 直接 BLOCKED。
+ *
+ * 这个教训第 20 行注释早就写过（forbidden header → BLOCKED_BY_CLIENT），
+ * 但只在"媒体地址要升级 https"的语境里提，没点明**接口 Referer 也必须走拦截器**。
+ * 曾经为"收窄打击面"把 bilibili.com 摘出去，结果正是把能用的路径改坏了。
  */
 const BILI_HOST_FILTER = {
-  urls: ["*://*.bilivideo.com/*", "*://*.bilivideo.cn/*", "*://*.hdslb.com/*"],
+  urls: [
+    "*://*.bilivideo.com/*",
+    "*://*.bilivideo.cn/*",
+    "*://*.hdslb.com/*",
+    "*://*.bilibili.com/*",
+  ],
 };
 
 /** 在 `app.whenReady()` 之后调用（需要 defaultSession 已就绪）。 */

@@ -851,6 +851,30 @@ const handlers: Record<string, Handler> = {
   },
 
   // -------------------------------------------------------------------------
+  // 渲染进程日志
+  // -------------------------------------------------------------------------
+  /**
+   * 让渲染进程把关键诊断写进主进程日志（`main.log`）。
+   *
+   * ## 为什么需要它
+   *
+   * 渲染进程的 `console` 在打包版里看不到。于是「动画没生效」「登录没反应」
+   * 这类**纯前端**问题只能靠猜着改，一轮 CI 二十分钟，试错成本极高。
+   *
+   * 这里只把调用方给的文本按 `[ui]` 前缀记进主日志，不做级别过滤、
+   * 不收任意对象（避免日志被大对象污染）。
+   */
+  log: async (payload) => {
+    const message = String(payload.message ?? "").slice(0, 500);
+    const level = String(payload.level ?? "info");
+    if (!message) return null;
+    if (level === "warn") log.warn(`[ui] ${message}`);
+    else if (level === "error") log.error(`[ui] ${message}`);
+    else log.info(`[ui] ${message}`);
+    return null;
+  },
+
+  // -------------------------------------------------------------------------
   // 带 CORS 豁免的网络请求
   // -------------------------------------------------------------------------
   http: async (payload) => {
@@ -858,6 +882,27 @@ const handlers: Record<string, Handler> = {
     const method = String(payload.method ?? "GET");
     const headers = Object.fromEntries((payload.headers as [string, string][]) ?? []);
     const body = payload.body ? String(payload.body) : undefined;
+
+    /*
+     * B 站域名的 `Referer` 先摘掉，交给 net-headers.ts 的拦截器在 Chromium 层补。
+     *
+     * 原因：`Referer` 是 Chromium 的 **forbidden request header**。
+     * 通过 `net.fetch` 的 init 传它，请求可能直接判 `ERR_BLOCKED_BY_CLIENT`
+     * （错误完全不可读，界面表现为「接口全挂」）。而 `onBeforeSendHeaders`
+     * 里改同一个头是特权操作，Chromium 允许 —— 这也是它一直能工作的原因。
+     *
+     * 所以两条路径不能同时写：留着 init 里那份，拦截器再怎么删改也可能已经晚了。
+     * 只对 B 站域名做这件事，其它站点（pixiv / 番剧等）仍按调用方传的走。
+     */
+    try {
+      const host = new URL(url).hostname.toLowerCase();
+      if (host === "bilibili.com" || host.endsWith(".bilibili.com")) {
+        delete headers.Referer;
+        delete headers.referer;
+      }
+    } catch {
+      // URL 非法：交给下面的 net.fetch 去报错，别在这里吞掉
+    }
 
     // 必须用 Electron 的 `net.fetch`（Chromium 网络栈），不能用 Node 的全局
     // `fetch`（undici）：后者**不读**系统代理，也不吃 `session.setProxy`。
