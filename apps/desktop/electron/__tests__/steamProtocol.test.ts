@@ -23,6 +23,7 @@ import {
   readGuardType,
   describeEResult,
   steamIdFromRefreshToken,
+  describeTokenShape,
   type SteamStorage,
 } from "../steam/protocol";
 
@@ -459,6 +460,109 @@ describe("steamIdFromRefreshToken：二维码流程唯一的 steamid 来源", ()
     expect(JSON.parse(files.get("/v/steam-session.json") ?? "{}").steamId).toBe(
       "76561198000000010",
     );
+  });
+});
+
+describe("二维码登录：直接采用 poll 返回的 access_token", () => {
+  /** poll 响应按官方 proto：**没有 steamid，但有 access_token / account_name**。 */
+  function makeSteam(pollResponse: Record<string, unknown>, calls?: { url: string; body: string }[]) {
+    const fake: typeof fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      calls?.push({ url, body: typeof init?.body === "string" ? init.body : "" });
+      if (url.includes("BeginAuthSessionViaQR")) {
+        return new Response(
+          JSON.stringify({
+            response: { client_id: "1", request_id: "r", challenge_url: "https://s.team/q/1/1", interval: 1 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.includes("PollAuthSessionStatus")) {
+        return new Response(JSON.stringify({ response: pollResponse }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("GenerateAccessTokenForApp")) {
+        // 这条路径不该被走到；真被走到就返回 400（模拟缺 steamid 的失败）
+        return new Response("Missing required routing parameter", { status: 400 });
+      }
+      // GetOwnedGames / 资料：给空但合法的响应
+      if (url.includes("GetOwnedGames")) {
+        return new Response(JSON.stringify({ response: { games: [] } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ response: { players: [] } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const files = new Map<string, string>();
+    const storage: SteamStorage = {
+      read: (f) => files.get(f) ?? null,
+      write: (f, t) => void files.set(f, t),
+      remove: (f) => void files.delete(f),
+      exists: (f) => files.has(f),
+    };
+    const steam = new SteamProtocol({
+      sessionFile: "/v/steam-session.json",
+      libraryFile: "/v/steam-library.json",
+      storage,
+      fetchImpl: fake,
+    });
+    return { steam, files };
+  }
+
+  it("poll 给了 access_token 时，即使没有 steamid 也能登录成功", async () => {
+    const calls: { url: string; body: string }[] = [];
+    // 注意：refresh_token 故意用**非 JWT**（真实 Steam 的 refresh_token 形状
+    // 未必是三段 JWT），确保这条路径不依赖解 token
+    const { steam, files } = makeSteam(
+      { refresh_token: "opaque-refresh-token", access_token: "polled-access-token", account_name: "gabelogannewell" },
+      calls,
+    );
+
+    await steam.beginQr();
+    const state = await steam.pollOnce();
+    expect(state.state).toBe("authenticated");
+    expect(state.status?.loggedIn).toBe(true);
+
+    // 关键：不应为了拿 token 去调 GenerateAccessTokenForApp（那条路需要 steamid）
+    expect(calls.find((c) => c.url.includes("GenerateAccessTokenForApp"))).toBeUndefined();
+
+    const saved = JSON.parse(files.get("/v/steam-session.json") ?? "{}");
+    expect(saved.refreshToken).toBe("opaque-refresh-token");
+    expect(saved.accountName).toBe("gabelogannewell");
+  });
+
+  it("poll 只给 refresh_token（JWT 带 sub）时，仍能靠解析 sub 走通", async () => {
+    const b64u = (o: unknown) => Buffer.from(JSON.stringify(o), "utf8").toString("base64url");
+    const jwt = `${b64u({ alg: "EdDSA" })}.${b64u({ sub: "76561197960287930" })}.sig`;
+    const { steam, files } = makeSteam({ refresh_token: jwt });
+    // 让换 token 接口可用（覆盖「poll 没给 token」时的回退路径）
+    await steam.beginQr();
+    const state = await steam.pollOnce();
+    // 回退路径会调 GenerateAccessTokenForApp，而本用例的假 fetch 对它返回 400，
+    // 因此这里断言的是「明确失败」而不是静默卡住 —— 符合自检的意图
+    expect(state.state).toBe("failed");
+    // 文案里必须说清「会话无法使用」，而不是让界面停在未登录什么都不说
+    expect(String(state.message)).toContain("会话无法使用");
+    // 失败时会清掉废会话，避免下次启动又「有会话但未登录」
+    expect(files.has("/v/steam-session.json")).toBe(false);
+  });
+
+  it("describeTokenShape 不泄露 token 内容", () => {
+    const b64u = (o: unknown) => Buffer.from(JSON.stringify(o), "utf8").toString("base64url");
+    const jwt = `${b64u({ alg: "EdDSA" })}.${b64u({ sub: "76561197960287930", iss: "steam" })}.sig`;
+    const shape = describeTokenShape(jwt);
+    const text = JSON.stringify(shape);
+    // 只有长度 / 段数 / claim 类型，没有原值
+    expect(shape.jwtLike).toBe(true);
+    expect(text).not.toContain("76561197960287930");
+    expect((shape.claims as Record<string, string>).sub).toBe("string");
+    expect(shape.subLength).toBe(17);
   });
 });
 

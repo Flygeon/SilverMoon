@@ -121,7 +121,7 @@ export interface SteamProtocolOptions {
    * 协议层不直接 import Electron 的 log：那样会把它绑死在宿主上，
    * 验证脚本（`npm run verify:steam`）就跑不起来了。
    */
-  log?: (message: string, detail?: unknown) => void;
+  log?: (message: string, ...detail: unknown[]) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +254,11 @@ export class SteamProtocol {
   ): Promise<Record<string, unknown>> {
     const text = await response.text();
     if (!response.ok) {
+      // 401/403 的实际含义是「token 无效或过期」，不是「接口不存在」。
+      // 直接把状态码抛出去会让排查者以为是 URL 写错了（本轮就踩过这个误判）。
+      if (response.status === 401 || response.status === 403) {
+        throw new SteamError("Steam 登录凭据无效或已过期，请重新登录", response.status);
+      }
       throw new SteamError(`Steam 接口 ${endpoint} 返回 HTTP ${response.status}`, response.status);
     }
     let parsed: unknown;
@@ -589,14 +594,23 @@ export class SteamProtocol {
     }
 
     // 登录成功：先拉资料，再落盘（资料失败不影响登录）
+    //
+    // PollAuthSessionStatus 的 proto 里**直接带 access_token**（字段 4）与
+    // account_name（字段 6）。这是最可靠的路径：不必再拿 refresh_token 去换，
+    // 因而也绕开「换 token 必须带真实 steamid」那个坑 —— 二维码流程本来就拿不到
+    // steamid（poll 响应里没有该字段）。拿到就直接用，拿不到才回退去换。
+    const polledAccessToken = payload.access_token ? String(payload.access_token) : "";
+    const polledAccountName = payload.account_name ? String(payload.account_name) : null;
+
     let session: SteamSessionFile = {
       refreshToken,
-      accountName: pending.accountName ?? null,
+      accountName: pending.accountName ?? polledAccountName,
       steamId,
       personaName: null,
       avatarUrl: null,
     };
-    this.accessToken = null;
+    this.accessToken = polledAccessToken || null;
+    if (polledAccessToken) this.accessTokenSteamId = steamId;
     try {
       const profile = await this.fetchProfile(refreshToken, steamId);
       session = { ...session, ...profile };
@@ -615,12 +629,14 @@ export class SteamProtocol {
     // 又自动开始扫码，用户看到「刚登录成功，怎么又让我扫一次」的死循环。
     // 宁可在这里明确失败，也不要让它循环。
     // ---------------------------------------------------------------------
-    this.accessToken = null;
     try {
       await this.ensureAccessToken();
     } catch (error) {
       const detail = (error as Error)?.message ?? String(error);
-      this.options.log?.("[steam] 登录后换取 access_token 失败", error);
+      this.options.log?.("[steam] 登录后换取 access_token 失败", error, {
+        // token 形状（不含内容）足以定位「为什么解不出 steamid」
+        refreshTokenShape: describeTokenShape(refreshToken),
+      });
       // 会话换不出 token 就是废的，删掉免得下次启动又「有会话但仍未登录」
       this.options.storage.remove(this.options.sessionFile);
       this.session = null;
@@ -921,6 +937,44 @@ export class SteamProtocol {
  *
  * 解不出来（不是 JWT / 结构异常）时返回 null，调用方按「会话不可用」处理。
  */
+/**
+ * 描述一个 token 的**结构**（绝不输出内容，只输出可用于排查的形状信息）。
+ *
+ * 用于回答「为什么解不出 steamid」这类问题：是根本不是 JWT、还是 claim 名不对、
+ * 还是值类型不对。把它写进日志是安全的 —— 不包含任何可被冒用的凭据。
+ */
+export function describeTokenShape(token: string): Record<string, unknown> {
+  const text = typeof token === "string" ? token : "";
+  const parts = text.split(".");
+  const shape: Record<string, unknown> = {
+    length: text.length,
+    segments: parts.length,
+    /** 是否形如 JWT（三段） */
+    jwtLike: parts.length === 3,
+  };
+  if (parts.length >= 2) {
+    try {
+      const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+      const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+      const payload = JSON.parse(Buffer.from(padded, "base64").toString("utf8")) as Record<
+        string,
+        unknown
+      >;
+      // 只暴露 claim 名与值类型，不暴露值本身
+      const claims: Record<string, string> = {};
+      for (const [key, value] of Object.entries(payload)) {
+        claims[key] = Array.isArray(value) ? "array" : typeof value;
+      }
+      shape.claims = claims;
+      shape.subType = typeof payload.sub;
+      shape.subLength = typeof payload.sub === "string" ? payload.sub.length : null;
+    } catch {
+      shape.payloadParseError = true;
+    }
+  }
+  return shape;
+}
+
 export function steamIdFromRefreshToken(token: string): string | null {
   if (typeof token !== "string") return null;
   const parts = token.split(".");
