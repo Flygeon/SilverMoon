@@ -132,12 +132,28 @@ const coverFromGrid = computed<string>(() => {
 });
 
 const heroImage = computed<string>(() => {
-  const fromStore = appDetails.value?.headerImage ?? "";
-  // 商店数据还没回来时，先用网格里那张卡的 header 图 —— 这样补间一开始就有图，
-  // 不会先补到空位再「弹」出图片。
+  // 1) 网格传过来的那张 —— **100% 与卡片同图**，补间全程不换图
   const fromGrid = coverFromGrid.value;
-  const background = appDetails.value?.backgroundImage ?? "";
-  return fromStore || fromGrid || background;
+  if (fromGrid) return fromGrid;
+
+  // 2) 商店的 header_image（同一张 header.jpg 的另一种拼法）
+  const fromStore = appDetails.value?.headerImage ?? "";
+  if (fromStore) return fromStore;
+
+  // 3) **同步**拼出 header.jpg —— 不依赖任何请求，首帧就有图。
+  //
+  // 这一步是「hero 元素首帧必须存在」的保险：View Transition 只在
+  // 「旧快照与新快照都存在同名元素」时补间，而新快照是在路由切换后立刻拍的。
+  // 若此时还没图，hero 根本不渲染（或渲染成骨架），补间就没有目标 ——
+  // 用户看到的就是「先卡一下、然后直接出现，没有飞行动画」。
+  const id = numericAppId.value;
+  if (Number.isFinite(id) && id > 0) {
+    return `https://cdn.akamai.steamstatic.com/steam/apps/${id}/header.jpg`;
+  }
+
+  // 4) 最后一档才是商店宽幅背景（1920×620）——
+  //    它与卡片**不是同一张图**，只在实在没有 header 时才用。
+  return appDetails.value?.backgroundImage ?? "";
 });
 
 /** 标题：商店名 → 本地库名 → 兜底文案（未安装且商店拉不到时至少不空着） */
@@ -1062,7 +1078,17 @@ watch(
             <m3e-card class="block" variant="filled">
               <div slot="content">
                 <h2 class="block-title">{{ t("games.detail.about") }}</h2>
-                <p v-if="appDetails?.shortDescription" class="about-text">
+                <!--
+                  正文也先出骨架、后填内容：整页若等接口回来才渲染，
+                  用户看到的是「点完没反应 → 突然全出来」。
+                  hero 区已经做到首帧就有图（见 heroImage 的注释），
+                  这里把文字区补成同一套节奏。
+                -->
+                <div v-if="steam.detailLoading && !appDetails" class="about-skeleton">
+                  <div class="lm-skeleton line wide"></div>
+                  <div class="lm-skeleton line"></div>
+                </div>
+                <p v-else-if="appDetails?.shortDescription" class="about-text">
                   {{ appDetails.shortDescription }}
                 </p>
                 <p v-else class="about-text muted">{{ t("games.noDescription") }}</p>
@@ -1771,6 +1797,12 @@ watch(
   font-size: var(--md-sys-typescale-body-small-size);
   color: var(--md-sys-color-on-surface-variant);
 }
+.about-skeleton {
+  display: grid;
+  gap: 8px;
+  padding: 4px 0;
+}
+
 .about-text {
   margin: 0;
   font-size: var(--md-sys-typescale-body-medium-size);
