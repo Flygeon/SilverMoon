@@ -12,17 +12,6 @@ import {
   GAME_HERO_VT_NAME,
 } from "../gameHeroTransition";
 
-/**
- * 这些用例只覆盖 `runViewTransition` 的**调度契约**，不覆盖视觉：
- *
- * - 导航必须发生（三种环境都要）；
- * - cleanup 必须发生（否则 activeCoverAppId 会残留，下次过渡挂到错的卡片上）；
- * - 不支持 View Transitions 时**不得**触碰 `document.startViewTransition`。
- *
- * 真正的补间由浏览器在合成线程做，jsdom 里量不到，也不该在这里假装能测。
- */
-
-/** 保存 / 还原全局环境（每个用例改 document.startViewTransition 与 matchMedia） */
 const originalStart =
   "startViewTransition" in Document.prototype ? Document.prototype.startViewTransition : undefined;
 
@@ -40,21 +29,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/**
- * 装上假的 startViewTransition。
- *
- * ## 关键：必须复刻真实 API 的错误语义
- *
- * 真实的 `document.startViewTransition(cb)` **不会**把 `cb()` 抛出的异常同步抛给调用方；
- * 它把回调包成 Promise 去跑，异常变成 `finished` 的 rejection。
- *
- * 早先的 fake 直接 `cb()` 并让异常往上冒，导致：
- * - 异常从**假 API 内部**逃逸，绕过了生产代码在回调内部写的 try/catch；
- * - 变成一个没人接的 Promise rejection（CI 上表现为 "Unhandled error: nav failed"）；
- * - 本地因时序差异偶尔不复现 —— 这正是「本地绿、CI 红」的来源。
- *
- * 因此这里把回调结果收进 `finished`，与浏览器一致。
- */
 function installFakeTransition() {
   const calls: (() => unknown)[] = [];
   (Document.prototype as unknown as Record<string, unknown>).startViewTransition = function (
@@ -62,7 +36,6 @@ function installFakeTransition() {
     cb: () => unknown,
   ) {
     calls.push(cb);
-    // 包成 Promise：回调的异常走 finished 的 rejection，而不是同步抛出
     const finished = Promise.resolve().then(() => cb());
     return { finished };
   };
@@ -100,7 +73,6 @@ describe("runViewTransition", () => {
     const navigate = vi.fn(() => {
       throw new Error("nav failed");
     });
-    // cleanup 与线上一致地重置 activeCoverAppId —— 断言这条链路真的闭合
     const cleanup = vi.fn(() => {
       activeCoverAppId.value = null;
     });
@@ -108,7 +80,6 @@ describe("runViewTransition", () => {
 
     await runViewTransition({ navigate, cleanup });
 
-    // 错误被吞掉（调用方不该收到动画/导航的实现细节），但清理一定要跑
     expect(cleanup).toHaveBeenCalledTimes(1);
     expect(activeCoverAppId.value).toBeNull();
   });
@@ -121,7 +92,6 @@ describe("runViewTransition", () => {
 
   it("减少动效时直接导航，不启用过渡", async () => {
     const calls = installFakeTransition();
-    // jsdom 不实现 matchMedia（不是函数，spyOn 会直接报错），所以整段替换掉
     const originalMatchMedia = window.matchMedia;
     Object.defineProperty(window, "matchMedia", {
       configurable: true,
@@ -153,16 +123,6 @@ describe("runViewTransition", () => {
     }
   });
 
-  /**
-   * 回归：导航**绝不能被动画等待阻塞**。
-   *
-   * 旧版在过渡回调里 `await waitForSelector(...)`，最多轮询 30 帧（≈500ms）。
-   * 而 `document.startViewTransition` 的回调是**同步阻塞**快照与渲染的 ——
-   * 回调不 resolve，页面就不更新，用户看到的是「点卡片后卡住半秒才切页」。
-   *
-   * 现在回调里只做同步导航。这条用例锁住「navigate 在过渡结束前就被调用了」，
-   * 且整个流程不含任何轮询等待。
-   */
   it("导航在过渡结束前立即发生（不因动画等待而阻塞）", async () => {
     installFakeTransition();
     let navigatedAt = 0;
@@ -176,19 +136,9 @@ describe("runViewTransition", () => {
     });
 
     expect(navigatedAt).toBeGreaterThan(0);
-    // 从开始到导航发生，不应有可感知延迟（旧实现会等 30 帧）
     expect(navigatedAt - started).toBeLessThan(120);
   });
 
-  /**
-   * 回归：详情页的 `view-transition-name` 必须与常量**字面一致**。
-   *
-   * 这里曾经写成 `view-transition-name: var(--lm-game-hero-vt)`。
-   * `view-transition-name` 的值类型是 `<custom-ident>`，让变量在这类位置
-   * 解析成合法标识符并不可靠 —— 元素拿不到过渡名，补间就退化成淡入，
-   * 表现正是「hero 动画完全不生效」。改成字面量后又怕两边写歪，
-   * 所以用这条用例把两个文件钉在一起。
-   */
   it("详情页 CSS 的过渡名与常量一致（不允许 var()）", () => {
     const file = join(process.cwd(), "src", "views", "GameDetailView.vue");
     const css = readFileSync(file, "utf8");
@@ -203,17 +153,9 @@ describe("runViewTransition", () => {
       .filter((value) => value !== "none");
 
     expect(heroNames).toContain(GAME_HERO_VT_NAME);
-    // 明确禁止再退回 var() 写法
     expect(heroNames.some((value) => value.includes("var("))).toBe(false);
   });
 
-  /**
-   * 回归：网格被 keep-alive 搬离文档后，返回时**仍然**要能拿到那张卡片。
-   *
-   * Vue 的 keep-alive deactivate 是把子树移进一个脱离文档的容器，不是隐藏。
-   * 所以详情页里 `document.querySelector` 一定查不到卡片 —— 旧实现因此在返回时
-   * 拿不到元素，新快照里没有同名元素，浏览器只把 hero 淡出，表现为「返回没有飞回动画」。
-   */
   it("网格 DOM 脱离文档后仍能取到卡片（返回动画的前提）", () => {
     const card = document.createElement("button");
     card.dataset.smAppid = "2704110";
@@ -222,17 +164,13 @@ describe("runViewTransition", () => {
     card.appendChild(cover);
     document.body.appendChild(card);
 
-    // 进入详情：网格侧把被点卡片的封面交出去
     beginCoverFlight(2704110, "https://example.com/header.jpg", cover);
     expect(cover.style.viewTransitionName).toBe(GAME_HERO_VT_NAME);
 
-    // 模拟 keep-alive：整棵子树被移出文档（元素引用还在）
     card.remove();
     expect(document.querySelector('[data-sm-appid="2704110"] .card-cover')).toBeNull();
 
-    // 返回时按 appId 找卡片：必须命中记下来的那个元素
     expect(findCardCover(2704110)).toBe(cover);
-    // 别的 appId 不能误挂（否则过渡名会挂到错的卡片上，整次过渡被丢弃）
     expect(findCardCover(999)).toBeNull();
 
     endCoverFlight();
@@ -241,9 +179,6 @@ describe("runViewTransition", () => {
   });
 
   it("不接受 waitFor 参数（接口已移除，传了会在类型层报错）", () => {
-    // 这条用例是**类型层**的守护：ViewTransitionHandlers 不再有 waitFor。
-    // 运行期用 satisfies 做一次编译期检查 —— 若有人把字段加回来，
-    // 这里的对象字面量会因为「多余属性」而无法满足类型。
     const handlers = {
       navigate: () => undefined,
     } satisfies Parameters<typeof runViewTransition>[0];
