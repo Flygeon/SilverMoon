@@ -29,7 +29,8 @@ use steam_vent::{NetMessage, NetMessageHeader};
 use steam_vent_proto_common::protobuf::Message as _;
 use steam_vent_proto_steam::enums_clientserver::EMsg;
 use steam_vent_proto_steam::steammessages_clientserver_appinfo::{
-    CMsgClientPICSProductInfoRequest, CMsgClientPICSProductInfoResponse,
+    cmsg_client_picsproduct_info_request, CMsgClientPICSProductInfoRequest,
+    CMsgClientPICSProductInfoResponse,
 };
 
 use crate::cm::{CmError, CmSession};
@@ -238,7 +239,7 @@ pub fn depots_from_appinfo(node: &VdfNode) -> Vec<AppDepot> {
 
 /// 查某个 app 的 depot 列表。
 pub async fn fetch_app_depots(session: &CmSession, app_id: u32) -> Result<Vec<AppDepot>, CmError> {
-    let mut app_info = CMsgClientPICSProductInfoRequest::AppInfo::new();
+    let mut app_info = cmsg_client_picsproduct_info_request::AppInfo::new();
     app_info.set_appid(app_id);
     app_info.set_only_public_obsolete(false);
 
