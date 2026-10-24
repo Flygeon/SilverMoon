@@ -863,12 +863,30 @@ const handlers: Record<string, Handler> = {
     // `fetch`（undici）：后者**不读**系统代理，也不吃 `session.setProxy`。
     // 这正是「用户开着代理、Bangumi / 音乐接口仍然超时」的根因。
     // `net.fetch` 固定使用默认 session，代理已经由 `netProxy` 通道设到该 session。
-    const response = await net.fetch(url, {
-      method,
-      headers,
-      body,
-      redirect: "follow",
-    });
+    /*
+     * 失败时把 **URL 与协议**记下来。
+     *
+     * 之前这里只有外层的「通道 http 调用失败：xxx」，看不出是哪个地址 ——
+     * 而 `net::ERR_BLOCKED_BY_CLIENT` 恰恰是「某个域名/协议被拒」这类问题，
+     * 没有 URL 就只能靠猜。特别注意 `http:` 开头的地址：Chromium 不允许在
+     * 明文请求上改写请求头，见 net-headers.ts。
+     */
+    let response: Awaited<ReturnType<typeof net.fetch>>;
+    try {
+      response = await net.fetch(url, {
+        method,
+        headers,
+        body,
+        redirect: "follow",
+      });
+    } catch (error) {
+      const protocol = url.slice(0, url.indexOf(":") + 1) || "?";
+      log.warn(
+        `http 请求失败（${protocol}//）：${(error as Error)?.message ?? String(error)}`,
+        url.slice(0, 200),
+      );
+      throw error;
+    }
 
     // 响应体**统一**以字节过桥，不再区分文本 / 二进制。
     //

@@ -31,6 +31,25 @@ const BILI_HOST_FILTER = {
 /** 在 `app.whenReady()` 之后调用（需要 defaultSession 已就绪）。 */
 export function installBiliMediaHeaders(): void {
   session.defaultSession.webRequest.onBeforeSendHeaders(BILI_HOST_FILTER, (details, callback) => {
+    /*
+     * ⚠️ 明文 http 请求**一律放行，不改头**。
+     *
+     * Chromium 不允许在非安全来源的请求上手动改写 Referer：一旦改了，
+     * 整个请求会被直接判成 `net::ERR_BLOCKED_BY_CLIENT`，而不是回一个
+     * 可读的 4xx。这个错误在界面上的表现就是「网络请求全挂」——
+     * B 站扫码登录没反应、视频播不出来，根源都在这里。
+     *
+     * 之前只靠「媒体地址在 utils/bilibili.ts 里统一升级成 https」来规避，
+     * 但那是**调用方约定**：只要有一个 http 地址漏上来（B 站偶尔会下发
+     * http 的 upos 备份地址），整条链路就被这个拦截器毒死。
+     * 在这里兜底更稳：http 请求保持原样，宁可让它 403（可读），
+     * 也不要变成 BLOCKED（不可读）。
+     */
+    if (!details.url.startsWith("https://")) {
+      callback({});
+      return;
+    }
+
     // 头名大小写不固定：先删掉可能存在的 referer/referrer，再统一写入
     const headers = details.requestHeaders;
     for (const key of Object.keys(headers)) {
