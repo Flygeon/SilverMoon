@@ -142,6 +142,32 @@ function heroLog(message: string, level: "info" | "warn" = "info"): void {
   }
 }
 
+/** 详情页 hero 的候选选择器（骨架屏与真图都挂了同一个过渡名）。 */
+const HERO_SELECTORS = ".hero-media, .skeleton-hero";
+
+/**
+ * 等 hero 元素出现，**命中即返回**；最多 `maxFrames` 帧。
+ *
+ * 返回找到的元素（找不到返回 null），调用方据此记录诊断。
+ *
+ * 这里必须是轮询而不是固定等待：详情页是懒加载组件 + `out-in` 路由过渡，
+ * 新页面进 DOM 的时刻不确定；固定帧数要么不够（补间丢目标），要么白等。
+ * 但轮询预算要**小**（12 帧 ≈ 200ms）：等的是 DOM 节点，不是网络数据。
+ */
+async function waitForHeroElement(selector: string, maxFrames: number): Promise<Element | null> {
+  if (typeof document === "undefined") return null;
+  for (let frame = 0; frame < maxFrames; frame++) {
+    try {
+      const hit = document.querySelector(selector);
+      if (hit) return hit;
+    } catch {
+      return null; // 选择器语法错误：立刻放弃，不空转
+    }
+    await nextFrame();
+  }
+  return null;
+}
+
 export interface ViewTransitionHandlers {
   /** 导航本身（必须能在**同一个微任务内**完成，不能 await 网络请求） */
   navigate: () => unknown;
@@ -202,29 +228,30 @@ export async function runViewTransition(handlers: ViewTransitionHandlers): Promi
       await nextTick();
 
       /*
-       * 记录两端元素是否就位。
+       * 等 hero 元素真正进入 DOM。
        *
-       * View Transition 只在「新旧快照里存在**同名**元素」时才补间；
-       * 少了任意一端，浏览器不会报错，只会安静地淡入 —— 这正是「动画像没生效」
-       * 最常见的两种原因，所以这里把两端分别记下来。
+       * ## 为什么固定帧数不够（实测日志）
+       *
+       * 曾经 `await navigate()` + `nextTick()` + 固定两帧就能走，实测日志却是
+       * `heroEl=null` —— 因为：
+       * 1. 详情页是**异步路由组件**（`() => import(...)`），首次进入要等 chunk；
+       * 2. App.vue 的路由过渡是 `mode="out-in"`：旧页离场与新页挂载跨多帧，
+       *    两帧根本等不到新页。
+       *
+       * ## 为什么这次可以用轮询（上次不行）
+       *
+       * 上一版轮询 30 帧（≈500ms）等的是 `gameDetail` **网络数据**，慢网下必然久等。
+       * 现在等的是「组件挂载 + 一个 DOM 节点」，正常 2-4 帧（≈60ms）就命中，
+       * 上限也只有 12 帧（≈200ms）—— 用户感知不到，而换来的是补间真的发生。
+       *
+       * 命中即返回，不做无谓空转。
        */
-      const heroEl = document.querySelector(".hero-media, .skeleton-hero");
+      const heroEl = await waitForHeroElement(HERO_SELECTORS, 12);
       const heroName = heroEl ? getComputedStyle(heroEl).viewTransitionName : "(无元素)";
       heroLog(
         `[hero] 起飞前：heroEl=${heroEl ? heroEl.className : "null"} name=${heroName} activeCoverAppId=${activeCoverAppId.value}`,
       );
-      /*
-       * 再等**两帧**。
-       *
-       * App.vue 的路由过渡是 `mode="out-in"`：旧页面先离开、新页面才挂载。
-       * 即使我们把时长压成 0s，那也是一次 transitionend，落在下一帧 ——
-       * 只等 nextTick 时新页面可能还没进 DOM，新快照就会拍到旧页面或空白，
-       * 表现就是「有淡入但没有封面飞行」。
-       *
-       * 两帧 ≈ 33ms，用户完全感觉不到；而**不轮询**是关键：
-       * 旧版轮询最多 30 帧（500ms）才是「点击卡住」的真正原因。
-       */
-      await nextFrame();
+      // 元素已进 DOM，再等一帧让布局稳定（否则量到的尺寸是 0，补间会从原点飞）
       await nextFrame();
     });
     await transition.finished;
