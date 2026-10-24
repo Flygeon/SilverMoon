@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runViewTransition, supportsViewTransition, activeCoverAppId } from "../gameHeroTransition";
 
@@ -12,9 +13,8 @@ import { runViewTransition, supportsViewTransition, activeCoverAppId } from "../
  */
 
 /** 保存 / 还原全局环境（每个用例改 document.startViewTransition 与 matchMedia） */
-const originalStart = "startViewTransition" in Document.prototype
-  ? Document.prototype.startViewTransition
-  : undefined;
+const originalStart =
+  "startViewTransition" in Document.prototype ? Document.prototype.startViewTransition : undefined;
 
 function resetEnv(): void {
   if (originalStart === undefined) {
@@ -76,7 +76,10 @@ describe("runViewTransition", () => {
     const navigate = vi.fn(() => {
       throw new Error("nav failed");
     });
-    const cleanup = vi.fn();
+    // cleanup 与线上一致地重置 activeCoverAppId —— 断言这条链路真的闭合
+    const cleanup = vi.fn(() => {
+      activeCoverAppId.value = null;
+    });
     activeCoverAppId.value = 42;
 
     await runViewTransition({ navigate, cleanup });
@@ -94,22 +97,36 @@ describe("runViewTransition", () => {
 
   it("减少动效时直接导航，不启用过渡", async () => {
     const calls = installFakeTransition();
-    vi.spyOn(window, "matchMedia").mockReturnValue({
-      matches: true,
-      media: "(prefers-reduced-motion: reduce)",
-      onchange: null,
-      addListener: () => {},
-      removeListener: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      dispatchEvent: () => false,
-    } as unknown as MediaQueryList);
-    const navigate = vi.fn();
+    // jsdom 不实现 matchMedia（不是函数，spyOn 会直接报错），所以整段替换掉
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string) =>
+        ({
+          matches: true,
+          media: query,
+          onchange: null,
+          addListener: () => {},
+          removeListener: () => {},
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          dispatchEvent: () => false,
+        }) as unknown as MediaQueryList,
+    });
+    try {
+      const navigate = vi.fn();
+      await runViewTransition({ navigate });
 
-    await runViewTransition({ navigate });
-
-    expect(navigate).toHaveBeenCalledTimes(1);
-    expect(calls).toHaveLength(0);
+      expect(navigate).toHaveBeenCalledTimes(1);
+      expect(calls).toHaveLength(0);
+    } finally {
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        writable: true,
+        value: originalMatchMedia,
+      });
+    }
   });
 
   it("waitFor 命中的元素出现后不空转（立刻返回）", async () => {

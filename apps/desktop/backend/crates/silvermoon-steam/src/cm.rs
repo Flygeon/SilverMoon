@@ -30,10 +30,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use steam_vent::connection::Connection;
-use steam_vent::serverlist::ServerList;
-use steam_vent::service_method::ServiceMethodRequest;
-use steam_vent::ConnectionError;
+// ⚠️ 这几个名字只能从 **crate 根**导入。
+// steam-vent 的 `serverlist` / `service_method` 是**私有模块**，
+// 用 `steam_vent::serverlist::ServerList` 会报 E0603（module is private）。
+// crate 根在 lib.rs 里用 `pub use` 重新导出了它们。
+//
+// `ConnectionTrait` 也必须 import：`service_method` 是**该 trait 的方法**，
+// 不是 `Connection` 的固有方法（trait 有 blanket impl，所以 Connection 具备它，
+// 但不 import trait 就调不到）。
+use steam_vent::{Connection, ConnectionError, ConnectionTrait, ServerList, ServiceMethodRequest};
 use tokio::sync::{Mutex, MutexGuard};
 
 /// 一次已建立的 CM 会话。
@@ -106,9 +111,12 @@ impl CmSession {
         self.connection.cell_id()
     }
 
-    /// 连接的 SteamID（数值形式）。
+    /// 连接的 SteamID64（数值形式）。
+    ///
+    /// 用 `steam64()` 而不是 `u64::from(...)`：两者等价，但前者是 steamid-ng
+    /// 明确提供的取值方法，语义更直白、也不会因 trait impl 变化而失效。
     pub fn steam_id(&self) -> u64 {
-        u64::from(self.connection.steam_id())
+        self.connection.steam_id().steam64()
     }
 }
 
