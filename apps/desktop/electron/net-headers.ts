@@ -19,13 +19,21 @@ import { log } from "./log";
 
 const BILI_REFERER = "https://www.bilibili.com";
 
+/*
+ * 只覆盖**真正需要 Referer 的资源域名**：视频/音频 CDN 与图片 CDN。
+ *
+ * ⚠️ 刻意**不包含** `*://*.bilibili.com/*`：
+ *
+ * `api.bilibili.com` / `passport.bilibili.com` 这类接口本来就在调用方
+ * （`utils/bilibili.ts` 的 `baseHeaders()` / `hostFetch`）**显式带了 Referer**，
+ * 走不到这里；而把它们纳进来只会带来风险 ——
+ * 一旦拦截器改头失败，Chromium 会把整条请求判成 `ERR_BLOCKED_BY_CLIENT`，
+ * 表现为「B 站扫码登录点了没反应、视频放不出来」，且错误完全不可读。
+ *
+ * 曾经就是带上 `*.bilibili.com` 而踩到这个坑（见下方 http 放行分支的注释）。
+ */
 const BILI_HOST_FILTER = {
-  urls: [
-    "*://*.bilivideo.com/*",
-    "*://*.bilivideo.cn/*",
-    "*://*.hdslb.com/*",
-    "*://*.bilibili.com/*",
-  ],
+  urls: ["*://*.bilivideo.com/*", "*://*.bilivideo.cn/*", "*://*.hdslb.com/*"],
 };
 
 /** 在 `app.whenReady()` 之后调用（需要 defaultSession 已就绪）。 */
