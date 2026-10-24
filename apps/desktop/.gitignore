@@ -22,6 +22,10 @@ example/extensions/*/*.zip
 # electron-builder output（历史目录，迁回 Tauri 后不再产生）
 release/
 
+# Rust 后端（sidecar）的构建产物
+# ⚠️ 这条之前一直漏了，导致 `git add backend` 会把整个 target/ 拖进仓库
+backend/target/
+
 # 启动器（独立原生小程序）的构建产物
 splash/target/
 
