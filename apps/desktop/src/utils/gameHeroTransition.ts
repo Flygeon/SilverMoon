@@ -164,11 +164,23 @@ export async function runViewTransition(handlers: ViewTransitionHandlers): Promi
    */
   document.documentElement.classList.add(RUNNING_CLASS);
   try {
+    /*
+     * 回调内部必须自己 try/catch，不能指望外面的 try。
+     *
+     * 浏览器会把回调包成 Promise 去跑：回调里抛出的异常若没人接，会变成一次
+     * **未处理的 Promise rejection**（跑到 window 的 unhandledrejection 上，
+     * 被 main.ts 的全局处理器记进错误日志，用户看到「出错了」但其实只是导航失败）。
+     * 外面的 catch 抓不到它 —— 那时异常已经脱离了 await 链。
+     */
     const transition = doc.startViewTransition(async () => {
-      await handlers.navigate();
-      if (handlers.waitFor) await waitForSelector(handlers.waitFor);
-      // 再等一帧，确保新元素的布局尺寸已确定（否则量与补间都按 0 算）
-      await nextFrame();
+      try {
+        await handlers.navigate();
+        if (handlers.waitFor) await waitForSelector(handlers.waitFor);
+        // 再等一帧，确保新元素的布局尺寸已确定（否则量与补间都按 0 算）
+        await nextFrame();
+      } catch {
+        // 导航失败：没有新页面可补间，让过渡自然空跑一次即可，别把异常抛出去
+      }
     });
     await transition.finished;
   } catch {

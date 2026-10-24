@@ -137,16 +137,29 @@ const unlockedAchievements = computed<SteamAchievement[]>(() =>
 );
 
 /**
- * 图标墙最多铺几个。
+ * 图标墙**总共**铺几个格子（含 +N 那个）。
  *
- * 右栏宽 320px，一个图标 44px + 间距 8px → 5 个刚好一行；
- * 多出来的收进「+N」方块（点击去 Steam 看完整列表）。
+ * 右栏宽 340px、内边距 16×2 → 可用约 308px。格子 52px + 间距 8px，
+ * 5 格 = 5×52 + 4×8 = 292px，刚好一行；6 格会挤到第二行（右栏本来就窄，
+ * 两行图标会把「信息」区块顶下去）。
+ *
+ * 所以这里按「**总格子数**」算，而不是「前 N 个已解锁 + 可能的 +N」——
+ * 后者在 6 个以上已解锁时会多出一格。
  */
-const ICON_WALL_MAX = 5;
+const ICON_WALL_TOTAL = 5;
 
-const iconWall = computed(() => unlockedAchievements.value.slice(0, ICON_WALL_MAX));
-/** 超出图标墙的已解锁数（0 = 不显示 +N 方块） */
-const iconOverflow = computed(() => Math.max(0, unlockedAchievements.value.length - ICON_WALL_MAX));
+/** 有溢出时留一格给 +N，否则全部给已解锁图标 */
+const iconWallLimit = computed(() => {
+  const unlocked = unlockedAchievements.value.length;
+  return unlocked > ICON_WALL_TOTAL ? ICON_WALL_TOTAL - 1 : unlocked;
+});
+
+/** 图标墙上实际展示的已解锁成就 */
+const iconWall = computed(() => unlockedAchievements.value.slice(0, iconWallLimit.value));
+/** 收进 +N 的已解锁数（0 = 不显示 +N 方块） */
+const iconOverflow = computed(() =>
+  Math.max(0, unlockedAchievements.value.length - iconWallLimit.value),
+);
 
 /** 未解锁数（「锁定的成就」那行的计数） */
 const lockedCount = computed(() => {
@@ -170,15 +183,38 @@ interface DlcCard {
 
 /** DLC 列表（按商店给的顺序；商店的顺序是有意义的，不要重排） */
 const dlcCards = ref<DlcCard[]>([]);
+/**
+ * 商店给的 DLC **总数**（≠ dlcCards.length）。
+ *
+ * 只预取前几个的元信息，卡片数必然 ≤ 预取数，用卡片数算溢出会得到 0 ——
+ * +N 就永远不出现。所以总数单独存，溢出数按 总数 − 可见行数 算。
+ */
+const dlcTotalCount = ref(0);
 const dlcLoading = ref(false);
 /** DLC 元信息是否拉过（按 appId 记，换游戏要重拉） */
 let dlcLoadedFor = 0;
 
-/** 「额外内容」最多显示 5 个，其余收进 +N */
-const DLC_MAX = 5;
+/**
+ * 「额外内容」最多列几行（含 +N 那一行）。
+ *
+ * 与图标墙同理按**总行数**算：右栏是纵向列表，多一行就多占 60px，
+ * 会把下面的成就与信息顶下去。需求是「最多 5 个 + N」，这里取 5 行封顶，
+ * 有溢出时第 5 行是 +N、只列 4 个卡片。
+ */
+const DLC_MAX_TOTAL = 5;
 
-const visibleDlc = computed(() => dlcCards.value.slice(0, DLC_MAX));
-const dlcOverflow = computed(() => Math.max(0, dlcCards.value.length - DLC_MAX));
+/** 实际列出的卡片行数（有溢出时让一格给 +N） */
+const dlcLimit = computed(() =>
+  dlcCards.value.length > DLC_MAX_TOTAL ? DLC_MAX_TOTAL - 1 : dlcCards.value.length,
+);
+const visibleDlc = computed(() => dlcCards.value.slice(0, dlcLimit.value));
+/**
+ * 收进 +N 的数量。
+ *
+ * 用总数减可见行数，而不是卡片数减可见行数：卡片只预取了前几个，
+ * 后面那些「没查到元信息」的 DLC 也属于「还有更多」，必须计入 +N。
+ */
+const dlcOverflow = computed(() => Math.max(0, dlcTotalCount.value - dlcLimit.value));
 
 /** 有 DLC 才显示整块（没有就整块不渲染，不留「敬请期待」占位） */
 const showExtra = computed(() => dlcCards.value.length > 0);
@@ -186,8 +222,17 @@ const showExtra = computed(() => dlcCards.value.length > 0);
 /**
  * 拉 DLC 的名字与缩略图。
  *
- * 只取前 DLC_MAX+1 个 appId 的详情：多问的那一个用来判断「是否还有更多」，
- * 避免为了一个 +N 数字把几十个 DLC 全查一遍。
+ * ## 为什么只查前几个
+ *
+ * 商店接口一次批量 appids 有长度上限，而 DLC 动辄几十个 —— 全查既慢又可能被截断。
+ * 所以只查「可见的那几行」。
+ *
+ * ## 为什么溢出数要单独记
+ *
+ * 这里必须区分「查到的卡片数」与「DLC 总数」：只查了 5 个，第 6 个及以后拿不到
+ * 元信息会被跳过，若用 `cards.length` 去算 +N，溢出数永远是 0（+N 方块不出现，
+ * 用户就看不到「还有更多」这件事）。因此总数按**商店给的 dlc 名单**记，
+ * 与查到的卡片分开存。
  */
 async function loadDlc(ids: number[]): Promise<void> {
   const appId = numericAppId.value;
@@ -195,14 +240,17 @@ async function loadDlc(ids: number[]): Promise<void> {
   const wanted = ids.filter((n) => Number.isFinite(n) && n > 0);
   if (!wanted.length) {
     dlcCards.value = [];
+    dlcTotalCount.value = 0;
     return;
   }
   dlcLoading.value = true;
   dlcLoadedFor = appId;
   try {
-    const map = await steam.fetchDetailsBatch(wanted.slice(0, DLC_MAX + 1));
+    // 多查一个：第 6 个用来确认「确实还有更多」，不必把几十个全查一遍
+    const prefetch = wanted.slice(0, DLC_MAX_TOTAL + 1);
+    const map = await steam.fetchDetailsBatch(prefetch);
     const cards: DlcCard[] = [];
-    for (const id of wanted) {
+    for (const id of prefetch) {
       const meta = map[String(id)];
       // 名字拿不到的条目直接跳过：宁可少一张卡片，也不要一张没有名字的空卡
       if (!meta?.name) continue;
@@ -213,7 +261,10 @@ async function loadDlc(ids: number[]): Promise<void> {
       });
     }
     // 请求期间用户可能已经切到别的游戏，别把上一款的 DLC 写进来
-    if (dlcLoadedFor === appId) dlcCards.value = cards;
+    if (dlcLoadedFor === appId) {
+      dlcCards.value = cards;
+      dlcTotalCount.value = wanted.length;
+    }
   } finally {
     dlcLoading.value = false;
   }
@@ -397,6 +448,7 @@ async function retry(): Promise<void> {
   if (Number.isNaN(id)) return;
   steam.clearDetail();
   dlcCards.value = [];
+  dlcTotalCount.value = 0;
   dlcLoadedFor = 0;
   await Promise.all([steam.openDetail(id), steam.loadLocalLibrary()]);
 }
@@ -419,6 +471,7 @@ watch(
     if (Number.isNaN(appId)) return;
     if (!ids?.length) {
       dlcCards.value = [];
+      dlcTotalCount.value = 0;
       return;
     }
     // 同一款游戏只拉一次（重试路径会显式把 dlcLoadedFor 归零）
@@ -437,6 +490,7 @@ watch(
   () => {
     steam.clearDetail();
     dlcCards.value = [];
+    dlcTotalCount.value = 0;
     dlcLoadedFor = 0;
     void bootstrap();
   },
@@ -615,7 +669,8 @@ watch(
               <div slot="content">
                 <div class="block-head">
                   <h2 class="block-title">{{ t("games.detail.extra") }}</h2>
-                  <span class="block-count tabular-nums">{{ dlcCards.length }}</span>
+                  <!-- 显示 DLC 总数（不是已查到元信息的卡片数），与 +N 口径一致 -->
+                  <span class="block-count tabular-nums">{{ dlcTotalCount }}</span>
                 </div>
 
                 <div class="dlc-list">
@@ -674,9 +729,12 @@ watch(
                 </div>
 
                 <div class="ach-progress-row">
+                  <!-- 显式给 max=100 与 percent 同单位：组件默认 max=1，
+                       传 0.37 也能work，但两处单位不一致会让后来的人算半天 -->
                   <m3e-linear-progress-indicator
                     class="ach-bar"
-                    :value="achievementPercent / 100"
+                    :max="100"
+                    :value="achievementPercent"
                   />
                   <span class="ach-percent tabular-nums">{{ achievementPercent }}%</span>
                 </div>
@@ -689,7 +747,7 @@ watch(
                   }}
                 </p>
 
-                <!-- 已解锁图标墙：只展示已解锁的，最多 ICON_WALL_MAX 个 -->
+                <!-- 已解锁图标墙：只展示已解锁的；有溢出时最后一格是 +N（共 5 格） -->
                 <div class="ach-wall">
                   <button
                     v-for="a in iconWall"

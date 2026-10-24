@@ -30,7 +30,21 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** 装上假的 startViewTransition：立刻执行回调，finished 立即 resolve */
+/**
+ * 装上假的 startViewTransition。
+ *
+ * ## 关键：必须复刻真实 API 的错误语义
+ *
+ * 真实的 `document.startViewTransition(cb)` **不会**把 `cb()` 抛出的异常同步抛给调用方；
+ * 它把回调包成 Promise 去跑，异常变成 `finished` 的 rejection。
+ *
+ * 早先的 fake 直接 `cb()` 并让异常往上冒，导致：
+ * - 异常从**假 API 内部**逃逸，绕过了生产代码在回调内部写的 try/catch；
+ * - 变成一个没人接的 Promise rejection（CI 上表现为 "Unhandled error: nav failed"）；
+ * - 本地因时序差异偶尔不复现 —— 这正是「本地绿、CI 红」的来源。
+ *
+ * 因此这里把回调结果收进 `finished`，与浏览器一致。
+ */
 function installFakeTransition() {
   const calls: (() => unknown)[] = [];
   (Document.prototype as unknown as Record<string, unknown>).startViewTransition = function (
@@ -38,9 +52,9 @@ function installFakeTransition() {
     cb: () => unknown,
   ) {
     calls.push(cb);
-    const result = cb();
-    if (result instanceof Promise) void result;
-    return { finished: Promise.resolve() };
+    // 包成 Promise：回调的异常走 finished 的 rejection，而不是同步抛出
+    const finished = Promise.resolve().then(() => cb());
+    return { finished };
   };
   return calls;
 }
