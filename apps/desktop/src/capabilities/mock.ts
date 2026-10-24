@@ -539,6 +539,16 @@ export function mockSteam<T>(payload: Record<string, unknown>): T {
       mockSteamStatus.loggedIn = false;
       return { ok: true } as unknown as T;
     // 统一登录后的**主**游戏库：走 CM（未扫码时与真实宿主一样失败）
+    case "playerSummary": {
+      if (!mockCmHasToken) throw new Error("尚未扫码登录 Steam");
+      // 头像哈希留空 → 视图走图标占位；若想预览头像效果，可给一段 40 位 hex
+      return {
+        personaName: "SilverMoon 预览账号",
+        avatarHash: "",
+        profileUrl: "https://steamcommunity.com/",
+      } as T;
+    }
+
     case "steamOwnedGames": {
       if (!mockCmHasToken) throw new Error("尚未扫码登录 Steam");
       return MOCK_STEAM_GAMES.map((g) => ({

@@ -45,6 +45,6 @@ pub use cm::{CmError, CmManager, CmSession};
 pub use cm_login::{begin_qr as cm_begin_qr, poll_qr as cm_poll_qr, PollOutcome, QrChallenge};
 pub use depot_key::fetch_depot_key;
 pub use downloader::{download_app, safe_join, DepotTask, DownloadProgress, DownloadResult};
-pub use library::{fetch_owned_games, OwnedGame};
+pub use library::{fetch_owned_games, fetch_player_summary, OwnedGame, PlayerSummary};
 pub use manifest::{ContentManifest, FileMapping, ManifestMetadata};
 pub use pics::{fetch_app_depots, AppDepot};

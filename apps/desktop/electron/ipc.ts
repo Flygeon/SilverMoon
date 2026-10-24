@@ -773,6 +773,20 @@ const handlers: Record<string, Handler> = {
         return reply.ok ? reply.data : { ok: false, error: reply.error ?? "查询游戏库失败" };
       }
 
+      // 玩家资料（昵称 / 头像）：也走 CM，与游戏库同一套凭据。
+      // 缺了它界面只能拿账号名当昵称、没有头像 —— 就是「名字头像不对」。
+      case "playerSummary": {
+        const cmSaved = readCmToken(path.join(dataDir, CM_TOKEN_FILE));
+        if (!cmSaved || !isSteamCmToken(cmSaved.refreshToken)) {
+          return { error: "尚未完成 Steam 扫码登录" };
+        }
+        const reply = await callSidecar("steam_player_summary", {
+          accountName: cmSaved.accountName,
+          accessToken: cmSaved.refreshToken,
+        });
+        return reply.ok ? reply.data : { error: reply.error ?? "查询玩家资料失败" };
+      }
+
       case "cmLoginStatus": {
         const saved = readCmToken(path.join(dataDir, CM_TOKEN_FILE));
         return {

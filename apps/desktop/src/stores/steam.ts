@@ -481,15 +481,49 @@ export const useSteamStore = defineStore("steam", () => {
    */
   function syncStatusFromCm(): void {
     const account = cmLogin.value.accountName || null;
+    const profile = playerProfile.value;
     status.value = {
       loggedIn: cmLogin.value.hasToken,
       accountName: account,
-      personaName: account,
-      // CM 扫码不给 SteamID64 / 头像：留 null，视图会退化成图标占位
-      steamId: null,
-      avatarUrl: null,
+      // 昵称优先用 CM 拿到的 personaName（用户在 Steam 里设的名字），
+      // 拿不到才退回账号名 —— 否则界面显示的永远不是用户认识的那个名字。
+      personaName: profile?.personaName || account,
+      steamId: profile?.steamId || null,
+      avatarUrl: profile?.avatarHash
+        ? `https://avatars.steamstatic.com/${profile.avatarHash}_full.jpg`
+        : null,
       hasSession: cmLogin.value.hasToken,
     };
+  }
+
+  /** 玩家资料（CM 侧）。空表示还没拉到，视图会退回账号名 + 图标占位。 */
+  const playerProfile = ref<{
+    personaName: string;
+    avatarHash: string;
+    steamId: string | null;
+  } | null>(null);
+
+  /** 拉一次玩家资料。失败不抛：昵称/头像属装饰，拿不到用账号名兜底即可。 */
+  async function loadPlayerProfile(): Promise<void> {
+    if (!cmLogin.value.hasToken) {
+      playerProfile.value = null;
+      return;
+    }
+    try {
+      const res = await capabilities.steamPlayerSummary();
+      const personaName = String(res?.personaName ?? "").trim();
+      if (!personaName) {
+        playerProfile.value = null;
+        return;
+      }
+      playerProfile.value = {
+        personaName,
+        avatarHash: String(res?.avatarHash ?? ""),
+        steamId: null,
+      };
+    } catch {
+      playerProfile.value = null;
+    }
   }
 
   /** 只拉登录态（=「有没有 CM 凭据」）。返回最新 status，失败时把原因写进 error。 */
@@ -497,6 +531,8 @@ export const useSteamStore = defineStore("steam", () => {
     statusLoading.value = true;
     try {
       await loadCmLoginStatus();
+      // 资料与登录态分开拉：资料失败不该让整页变成错误态
+      await loadPlayerProfile();
       syncStatusFromCm();
       statusLoaded.value = true;
       return status.value;
@@ -924,6 +960,8 @@ export const useSteamStore = defineStore("steam", () => {
         };
         // **统一登录的接缝**：扫码成功即视为登录 → 立刻同步 status 并拉库，
         // 上层（登录卡 / 顶栏 / 详情页）不需要各自再触发一次。
+        // 先拿昵称/头像，否则首帧会显示账号名 + 无头像，看起来像「信息不对」。
+        await loadPlayerProfile();
         syncStatusFromCm();
         statusLoaded.value = true;
         void loadLibrary();

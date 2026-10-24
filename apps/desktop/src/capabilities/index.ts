@@ -1729,6 +1729,20 @@ export const capabilities = {
   },
 
   /**
+   * 玩家昵称 / 头像（走 CM）。
+   *
+   * 少了它界面只能拿账号名当昵称、头像位只能放图标 —— 用户看到的就是
+   * 「名字不是我设置的那个、头像没有」。
+   */
+  steamPlayerSummary(): Promise<{
+    personaName: string;
+    avatarHash: string;
+    profileUrl: string;
+  }> {
+    return capabilities.steam({ op: "playerSummary" });
+  },
+
+  /**
    * 退出 CM 登录（主进程删掉加密保存的凭据）。
    *
    * 下载与游戏库都靠这份凭据，所以退出后两者都不可用 —— 前端要同时清空库。

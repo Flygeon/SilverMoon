@@ -197,6 +197,8 @@ pub async fn steam_download(
     let host = app.clone();
     let result = tokio::task::spawn_blocking(move || {
         download_app(
+            // 全局 runtime：CM 连接是进程级单例，必须与它同生命周期
+            runtime(),
             manager(),
             &account_name,
             &access_token,
@@ -274,10 +276,10 @@ pub async fn steam_app_depots(
     app_id: u32,
 ) -> Result<Vec<DepotInfoOut>, String> {
     let result = tokio::task::spawn_blocking(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("创建运行时失败：{e}"))?;
+        // 用**全局** runtime：CM 连接是进程级单例，必须与它同生命周期。
+        // 每次新建 current_thread runtime 再销毁，会把连接的心跳一起杀掉，
+        // 下次请求报 "A Tokio 1.x context was found, but it is being shutdown"。
+        let runtime = runtime();
         let mut guard = runtime
             .block_on(manager().get_or_connect(&account_name, &access_token))
             .map_err(|e| e.to_string())?;
@@ -347,10 +349,10 @@ pub struct CmPollResult {
 #[silvermoon_ipc::command]
 pub async fn steam_cm_begin_qr() -> Result<CmQrChallenge, String> {
     let result = tokio::task::spawn_blocking(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("创建运行时失败：{e}"))?;
+        // 用**全局** runtime：CM 连接是进程级单例，必须与它同生命周期。
+        // 每次新建 current_thread runtime 再销毁，会把连接的心跳一起杀掉，
+        // 下次请求报 "A Tokio 1.x context was found, but it is being shutdown"。
+        let runtime = runtime();
         runtime
             .block_on(silvermoon_steam::cm_begin_qr("SilverMoon"))
             .map(|challenge| CmQrChallenge {
@@ -380,10 +382,10 @@ pub async fn steam_cm_poll_qr(
         hex_to_bytes(&request_id).ok_or_else(|| "requestId 不是合法 hex".to_string())?;
 
     let result = tokio::task::spawn_blocking(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("创建运行时失败：{e}"))?;
+        // 用**全局** runtime：CM 连接是进程级单例，必须与它同生命周期。
+        // 每次新建 current_thread runtime 再销毁，会把连接的心跳一起杀掉，
+        // 下次请求报 "A Tokio 1.x context was found, but it is being shutdown"。
+        let runtime = runtime();
         runtime
             .block_on(silvermoon_steam::cm_poll_qr(client_id, &request_id))
             .map(|outcome| match outcome {
@@ -444,10 +446,10 @@ pub async fn steam_owned_games(
     access_token: String,
 ) -> Result<Vec<OwnedGameOut>, String> {
     let result = tokio::task::spawn_blocking(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("创建运行时失败：{e}"))?;
+        // 用**全局** runtime：CM 连接是进程级单例，必须与它同生命周期。
+        // 每次新建 current_thread runtime 再销毁，会把连接的心跳一起杀掉，
+        // 下次请求报 "A Tokio 1.x context was found, but it is being shutdown"。
+        let runtime = runtime();
         let mut guard = runtime
             .block_on(manager().get_or_connect(&account_name, &access_token))
             .map_err(|e| e.to_string())?;
@@ -472,5 +474,48 @@ pub async fn steam_owned_games(
     })
     .await
     .map_err(|e| format!("查询游戏库失败：{e}"))?;
+    result
+}
+
+/// 当前账号的公开资料（昵称 / 头像哈希）。
+#[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayerSummaryOut {
+    pub persona_name: String,
+    /// 头像 SHA-1 hex（40 字符）；前端拼 avatars.steamstatic.com/<hex>_full.jpg
+    pub avatar_hash: String,
+    pub profile_url: String,
+}
+
+/// 查玩家资料（昵称 / 头像）。走 CM，与游戏库同一套凭据。
+///
+/// 缺了它会怎样：界面只能拿账号名当昵称、且没有头像 —— 用户看到的
+/// 就是「名字不对、头像没有」。
+#[silvermoon_ipc::command]
+pub async fn steam_player_summary(
+    account_name: String,
+    access_token: String,
+) -> Result<PlayerSummaryOut, String> {
+    let result = tokio::task::spawn_blocking(move || {
+        // 全局 runtime：与 CM 连接同生命周期
+        let runtime = runtime();
+        let mut guard = runtime
+            .block_on(manager().get_or_connect(&account_name, &access_token))
+            .map_err(|e| e.to_string())?;
+        let Some(session) = guard.as_mut() else {
+            return Err("CM 会话不可用".to_string());
+        };
+        let steam_id = session.steam_id();
+        runtime
+            .block_on(silvermoon_steam::fetch_player_summary(session, steam_id))
+            .map(|p| PlayerSummaryOut {
+                persona_name: p.persona_name,
+                avatar_hash: p.avatar_hash,
+                profile_url: p.profile_url,
+            })
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("查询玩家资料失败：{e}"))?;
     result
 }

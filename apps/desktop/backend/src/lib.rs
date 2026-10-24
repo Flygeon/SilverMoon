@@ -262,6 +262,7 @@ pub fn run() {
             steam::steam_cm_poll_qr,
             // 游戏库也走 CM：一次登录同时供「游戏库」与「下载」使用
             steam::steam_owned_games,
+            steam::steam_player_summary,
             novel::novel_search,
             novel::novel_rank,
             novel::novel_category,

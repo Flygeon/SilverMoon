@@ -23,7 +23,9 @@
 //!
 //! 注意 `img_icon_url` 是**哈希**不是完整 URL，拼法与 WebAPI 版一致。
 
-use steam_vent_proto_steam::steammessages_player_steamclient::CPlayer_GetOwnedGames_Request;
+use steam_vent_proto_steam::steammessages_player_steamclient::{
+    CPlayer_GetOwnedGames_Request, CPlayer_GetPlayerLinkDetails_Request,
+};
 
 use crate::cm::{CmError, CmSession};
 
@@ -86,4 +88,50 @@ pub async fn fetch_owned_games(
     });
     let _ = language; // 预留：CM 版暂不支持按语言本地化游戏名
     Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// 玩家资料（昵称 / 头像）
+// ---------------------------------------------------------------------------
+
+/// 当前账号的公开资料。
+#[derive(Debug, Clone, Default)]
+pub struct PlayerSummary {
+    pub persona_name: String,
+    /// 头像 SHA-1 的 hex（40 字符）；空表示没有
+    pub avatar_hash: String,
+    pub profile_url: String,
+}
+
+/// 查玩家公开资料（昵称 / 头像）。
+///
+/// 走 CM 的 `CPlayer_GetPlayerLinkDetails`：与游戏库同一套凭据，
+/// 不需要额外的 WebAPI key —— 这也是「统一到 CM」的一部分。
+/// 没有它界面只能拿账号名当昵称、且没有头像，看起来就像"信息不全"。
+pub async fn fetch_player_summary(
+    session: &CmSession,
+    steam_id: u64,
+) -> Result<PlayerSummary, CmError> {
+    let mut request = CPlayer_GetPlayerLinkDetails_Request::new();
+    request.steamids.push(steam_id);
+
+    let response = session.call(request).await?;
+    let Some(details) = response.accounts.first() else {
+        return Err(CmError::Rpc("Steam 未返回玩家资料".into()));
+    };
+    // public_data 是 MessageField（可能没有），用 Option 语义读
+    let public = details.public_data.as_ref();
+    let Some(public) = public else {
+        return Err(CmError::Rpc("玩家资料不可见（可能是私密账号）".into()));
+    };
+
+    Ok(PlayerSummary {
+        persona_name: public.persona_name().to_string(),
+        avatar_hash: public
+            .sha_digest_avatar()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>(),
+        profile_url: public.profile_url().to_string(),
+    })
 }

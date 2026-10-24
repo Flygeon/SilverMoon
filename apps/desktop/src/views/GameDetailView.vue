@@ -824,7 +824,13 @@ watch(
       </div>
 
       <!-- ============================ 出错：错误条 + 重试 ============================ -->
-      <div v-else-if="steam.detailError && !detail" class="bar error" role="alert">
+      <!--
+        ⚠️ 条件里必须带 `!heroImage`：有图时**不要**用错误条顶掉 hero。
+        否则会出现「点卡片 → 过渡刚开始 → 详情接口失败 → 错误条替换了 hero →
+        补间目标消失」，用户看到的就是「卡一下，然后动画没了」。
+        错误信息改为在 hero 下方单独提示（见下方 detailError 的提示块）。
+      -->
+      <div v-else-if="steam.detailError && !detail && !heroImage" class="bar error" role="alert">
         <span class="material-symbols-outlined">error</span>
         <span class="bar-text">{{ steam.detailError || t("games.detail.loadFailed") }}</span>
         <m3e-button variant="text" size="small" @click="retry">
@@ -869,6 +875,18 @@ watch(
             </div>
           </div>
         </section>
+
+        <!--
+          详情接口失败、但占位图还在时：hero 保留（不然补间会丢目标），
+          错误在下方单独提示。
+        -->
+        <div v-if="steam.detailError" class="bar error" role="alert">
+          <span class="material-symbols-outlined">error</span>
+          <span class="bar-text">{{ steam.detailError }}</span>
+          <m3e-button variant="text" size="small" @click="retry">
+            {{ t("games.retry") }}
+          </m3e-button>
+        </div>
 
         <!-- ============================ 操作栏 ============================ -->
         <section class="action-bar">

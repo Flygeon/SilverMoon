@@ -302,6 +302,14 @@ fn hex(bytes: &[u8]) -> String {
 ///
 /// 这两步是本模块唯一依赖 CM 的地方 —— 也因此「没有 CM 就没有下载」。
 pub fn download_app(
+    // ⚠️ runtime 由调用方传入，且**必须与 CmManager 同生命周期**（进程级单例）。
+    //
+    // 这里曾经自己新建一个 current_thread runtime，用完随函数结束销毁 ——
+    // 而 CmManager 是全局的，它缓存的 CmSession（含连接心跳、socket）
+    // 绑定在**创建它的那个 runtime** 上。runtime 一销毁，心跳就死，
+    // 下一次任何 CM 请求都会报：
+    //   IO error: A Tokio 1.x context was found, but it is being shutdown.
+    runtime: &tokio::runtime::Runtime,
     manager: &CmManager,
     account_name: &str,
     access_token: &str,
@@ -312,10 +320,6 @@ pub fn download_app(
     use crate::cm_requests::{fetch_cdn_auth_token, fetch_manifest_request_code};
     use crate::depot_key::fetch_depot_key;
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("创建运行时失败：{e}"))?;
 
     // 连 CM（长连接由 manager 持有）。拿不到就整体失败 —— 没有 CM 下不了。
     let mut guard = runtime
