@@ -98,7 +98,7 @@ SilverMoon（中文名**银月**）基于 **Electron 44 + Vue 3 + TypeScript + M
 
 | 项 | 数量 |
 |---|---|
-| `#[silvermoon_ipc::command]` 注册命令 | **186** |
+| `#[silvermoon_ipc::command]` 注册命令 | **187** |
 | sidecar HTTP 路由 | `/health` `/cmd` `/batch` `/events` `/_host` |
 | 前端 IPC 通道 | `sm:invoke` / `sm:invokeBatch` / `sm:call` / `sm:emit` |
 | 自定义协议 | `app://` / `asset://` / `app-cover://`（`ext://` 待补，见下） |

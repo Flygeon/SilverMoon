@@ -21,7 +21,7 @@ sidecar 进程**（SQLite / lofty / 图像处理 / 在线源协议）。
 
 宿主沿革：Tauri 2（原名 LumiLuna）→ Electron 44 → 迁回 Tauri 2 → **2026-10 再迁回 Electron**。
 两次迁移都是「换壳不换芯」：业务代码几乎没动，只换宿主层。`silvermoon-ipc` 契约层就是
-为此存在（`silvermoon_ipc::command` 宏让 186 条业务命令一行都不用改）。
+为此存在（`silvermoon_ipc::command` 宏让 187 条业务命令一行都不用改）。
 
 ## Process model
 
