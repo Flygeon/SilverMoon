@@ -21,6 +21,9 @@ use std::sync::OnceLock;
 use serde::Serialize;
 use tokio::runtime::Runtime;
 
+// EventEmitter 提供 Host::emit —— 它是 **trait 方法**，不 import 就调不到
+// （osu.rs 同样是 use silvermoon_ipc::{EventEmitter, HostApi}）。
+use silvermoon_ipc::EventEmitter;
 use silvermoon_steam::CmManager;
 
 /// 全局 CM 管理器（懒建立）。
