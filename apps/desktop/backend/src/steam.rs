@@ -416,3 +416,61 @@ fn to_hex(bytes: &[u8]) -> String {
 
 // 注意：十六进制解析复用文件上方的 `hex_to_bytes` / `hex_value`，
 // 这里**不要**再定义一份 —— 曾经因此触发 E0428（name defined multiple times）。
+
+// ---------------------------------------------------------------------------
+// 游戏库（走 CM）
+// ---------------------------------------------------------------------------
+
+/// 一款已拥有的游戏（回给前端，字段名对齐 TS 的 `SteamGame`）。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnedGameOut {
+    pub app_id: u32,
+    pub name: String,
+    pub playtime_minutes: u32,
+    pub playtime_two_weeks_minutes: u32,
+    /// 图标哈希（前端拼 CDN），不是完整 URL
+    pub icon_hash: String,
+    pub has_community_stats: bool,
+}
+
+/// 用 CM 会话查游戏库。
+///
+/// 走 CM 而不是 WebAPI 的原因：CM 登录一次即可同时提供「游戏库」与「下载」，
+/// 用户不必扫两次码。详见 `silvermoon_steam::library` 的模块注释。
+#[silvermoon_ipc::command]
+pub async fn steam_owned_games(
+    account_name: String,
+    access_token: String,
+) -> Result<Vec<OwnedGameOut>, String> {
+    let result = tokio::task::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("创建运行时失败：{e}"))?;
+        let mut guard = runtime
+            .block_on(manager().get_or_connect(&account_name, &access_token))
+            .map_err(|e| e.to_string())?;
+        let Some(session) = guard.as_mut() else {
+            return Err("CM 会话不可用".to_string());
+        };
+        runtime
+            .block_on(silvermoon_steam::fetch_owned_games(session, "schinese"))
+            .map(|list| {
+                list.into_iter()
+                    .map(|g| OwnedGameOut {
+                        app_id: g.app_id,
+                        name: g.name,
+                        playtime_minutes: g.playtime_minutes,
+                        playtime_two_weeks_minutes: g.playtime_two_weeks_minutes,
+                        icon_hash: g.icon_hash,
+                        has_community_stats: g.has_community_stats,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("查询游戏库失败：{e}"))?;
+    result
+}

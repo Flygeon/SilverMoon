@@ -260,6 +260,8 @@ pub fn run() {
             // CM 侧扫码登录：拿能用于 CM logon 的 token（网页登录的 token 不行）
             steam::steam_cm_begin_qr,
             steam::steam_cm_poll_qr,
+            // 游戏库也走 CM：一次登录同时供「游戏库」与「下载」使用
+            steam::steam_owned_games,
             novel::novel_search,
             novel::novel_rank,
             novel::novel_category,
