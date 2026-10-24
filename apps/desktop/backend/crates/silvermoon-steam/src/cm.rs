@@ -158,7 +158,18 @@ fn describe_connection_error(error: &ConnectionError) -> String {
             format!("登录凭据被 CM 拒绝（{err}）：CM 只接受 iss=steam 的三段式 JWT，请重新登录")
         }
         ConnectionError::Network(_) => "网络错误（连接 Steam CM 失败）".to_string(),
-        ConnectionError::LoginError(_) => format!("登录被拒：{error}"),
+        // invalid credentials 几乎总是「会话里的 refresh_token 不可用于 CM logon」，
+        // 而它的成因（曾被 GenerateAccessTokenForApp 的 rotated token 覆盖）
+        // 用户在界面上完全看不出来。这里必须直接告诉他下一步做什么。
+        ConnectionError::LoginError(err) => {
+            let text = err.to_string();
+            if text.to_ascii_lowercase().contains("invalid credentials") {
+                "Steam 拒绝了当前会话凭据（invalid credentials）—— 请退出登录后重新扫码，再试下载"
+                    .to_string()
+            } else {
+                format!("登录被拒：{text}")
+            }
+        }
         ConnectionError::Aborted => "登录被中断".to_string(),
         ConnectionError::UnsupportedConfirmationAction(_) => {
             "Steam 要求交互式确认，refresh_token 登录不支持".to_string()

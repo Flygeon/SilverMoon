@@ -622,15 +622,33 @@ export class SteamProtocol {
       (steamId || null);
     this.accessTokenSteamId = resolvedId;
 
-    // 落盘：access_token（及其过期时间）+ 可能轮换的 refresh_token + 补全的 steamId
-    const rotated = String(payload.refresh_token ?? "");
+    /*
+     * 落盘：只更新 access_token 与 steamId，**绝不覆盖 refreshToken**。
+     *
+     * ## 为什么这一行曾经导致「CM 登录被拒：invalid credentials」
+     *
+     * `GenerateAccessTokenForApp` 的响应里也会带一个 `refresh_token`（rotated）。
+     * 早先的实现拿它覆盖了会话里的原始 refreshToken，看起来"总是用最新的更安全"，
+     * 实际上是**把可用于 CM logon 的凭据换成了不能用的那个**：
+     *
+     * | token 来源 | iss（实测） | 用途 |
+     * |---|---|---|
+     * | QR 登录拿到的 refreshToken | `steam` | **CM logon 的唯一凭据** |
+     * | GenerateAccessTokenForApp 的 rotated | `steam`，但带 `oat`/无 `rt_exp` | 只用于再换 access_token |
+     * | GenerateAccessTokenForApp 的 access_token | `r:0016_...` | WebAPI |
+     *
+     * 换成 rotated 之后，Steam 对 CM logon 回 `Login failed: invalid credentials` ——
+     * 而错误信息里完全看不出是"用错了 token"。
+     *
+     * 所以：原始 refreshToken 是**长期凭据**，只在登录/登出时变更，这里不碰它。
+     * rotated 即使存在也丢弃 —— 它带来的收益（延期）远小于"CM 直接连不上"的代价。
+     */
     const latest = this.loadSession() ?? session;
     this.saveSession({
       ...latest,
       steamId: resolvedId ?? latest.steamId ?? null,
       accessToken,
       accessTokenExpiresAt: tokenExpiresAt(accessToken),
-      ...(rotated && rotated !== latest.refreshToken ? { refreshToken: rotated } : {}),
     });
     return accessToken;
   }
