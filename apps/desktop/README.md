@@ -81,7 +81,7 @@ The app is now **three processes**: the Electron main process, the renderer, and
 > The authoritative description of the current architecture is [`doc/AGENTS.md`](doc/AGENTS.md);
 > the previous move back to Tauri is written up in [doc/TAURI-MIGRATION.md](doc/TAURI-MIGRATION.md) (**historical**).
 
-**How "swap the shell, keep the engine" was achieved**: business code keeps its **calling style**; only the **host layer** was replaced. The `silvermoon-ipc` contract layer keeps every host difference in one place — it mirrors Tauri's `Builder` / `Host` (≈AppHandle) / `State` / `Window` / `rt` plus a few macros, so the 185 business commands needed **zero** changes.
+**How "swap the shell, keep the engine" was achieved**: business code keeps its **calling style**; only the **host layer** was replaced. The `silvermoon-ipc` contract layer keeps every host difference in one place — it mirrors Tauri's `Builder` / `Host` (≈AppHandle) / `State` / `Window` / `rt` plus a few macros, so the 186 business commands needed **zero** changes.
 
 | Layer | Approach | Business-code changes |
 |---|---|---|
@@ -94,7 +94,7 @@ The app is now **three processes**: the Electron main process, the renderer, and
 
 | Item | Count |
 |---|---|
-| `#[silvermoon_ipc::command]` registrations | **185** |
+| `#[silvermoon_ipc::command]` registrations | **186** |
 | Sidecar HTTP routes | `/health` `/cmd` `/batch` `/events` `/_host` |
 | Renderer IPC channels | `sm:invoke` / `sm:invokeBatch` / `sm:call` / `sm:emit` |
 | Custom protocols | `app://` / `asset://` / `app-cover://` (`ext://` pending — see below) |

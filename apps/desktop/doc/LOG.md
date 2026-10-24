@@ -29,6 +29,37 @@
 > - **教训**: …（踩过的坑，供下一个 AI 避雷）
 > ```
 
+## 2026-10-24（三）· depot 下载器（manifest 解析 / chunk 解密 / CDN / 缓存读取）
+
+- **commit**: 见本轮提交
+- **status**: `verify:steam-manifest` **5 项全绿（真解析本机 97 份 Valve manifest，73069 个文件条目）**；`verify:steam-cm` 4 项绿；前端 lint 0 error、双层 typecheck exit 0。Rust 侧**仅语法/格式校验**，编译需 CI（本机无链接器）。
+- **做了什么**：
+  1. `backend/crates/silvermoon-steam` 新增 5 个模块：`crypto`（AES-256 ECB/CBC）、`manifest`（容器 + protobuf wire 解析）、`chunk`（解密 + LZMA/zstd/zip 解压）、`cdn`（服务器列表 / manifest / chunk 拉取）、`downloader`（落盘）、`cache`（读本地 depotcache）、`cm_requests`（两个 CM service method）。
+  2. 新增命令 `steam_download`，进度经 `steam:download` 事件回推。
+  3. 新增 `scripts/verify-steam-manifest.mjs`：对真实 Valve manifest 验证解析器。
+- **为什么（能验证到什么程度）**：
+  - 下载链路的前置——`GetManifestRequestCode` 与 `GetCDNAuthToken`——只在 CM 上（WebAPI 实测 404），CM 已打通（`verify:steam-cm`）。
+  - **manifest 解析器能在本机真验证**：Steam 客户端把已装游戏的 manifest 明文缓存在
+    `<Steam>/depotcache/<depot>_<gid>.manifest`。实测本机 97 份，逐份解析全部成功，
+    metadata 的 depot_id/gid 与文件名 100% 吻合。这比「靠自己造样例」可信得多。
+  - CDN 的分块地址、AES 解密、VZ 压缩魔数（`VZa/VSZa/zip）都按 Valve 的公开格式实现，
+    并与 `GameNative-master`（`store_dl/steam/`）对照过。
+- **一个必须说清的缺口：depot key**：
+  - 解密文件名/chunk 需要 32 字节 depot key，获取它要发 CM 老式消息
+    `CMsgClientGetDepotDecryptionKey`（`k_EMsgClientGetDepotDecryptionKey = 5438`）。
+  - 而 `steam-vent 0.5` **没有为这条消息实现 `NetMessage`**（`EncodableMessage` 无 blanket impl，
+    外部也补不上），所以**未安装** depot 的 key 拿不到。
+  - 因此 `DepotTask.depot_key` 由调用方填充；**已安装**的游戏不受影响——它们的 manifest
+    在本地且文件名未加密（实测 0 份加密），`cache.rs` 可直接解析，用于校验/补全。
+- **教训**：
+  1. **`aes::Block` 是非泛型别名**（`GenericArray<u8, U16>`），写 `aes::Block<Aes256>` 编译不过。
+  2. **`steam_vent::serverlist`/`service_method` 是私有模块**，必须从 crate 根导入；
+     `service_method` 还需 `use ConnectionTrait`（它是 trait 方法，不是固有方法）。
+  3. **CDN token 自带 `ticket=` 前缀**，URL 里直接接 `?` 后即可；再拼一次会变成
+     `ticket=ticket=...`，CDN 一律 401。
+  4. **`lzma-rs` 的 raw 解码需要 `raw_decoder` feature**，且 Valve 的 `VZa` 流没有属性头，
+     必须用 `LzmaParams::new(properties, dict_size, unpacked_size)` 显式传参（lc=3/lp=0/pb=2）。
+
 ## 2026-10-24（二）· 修「重启后会话过期」+ CM 连接层 + 详情页 UI 迭代
 
 - **commit**: 见本轮提交

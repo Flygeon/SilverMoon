@@ -15,3 +15,24 @@ steam-vent = "0.5"
 tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
 thiserror = "1"
 tracing = "0.1"
+
+# ---- depot 下载所需的加密与解析 ----
+# 版本与 backend/Cargo.toml **刻意保持一致**：同一 crate 图里出现两份
+# aes/cbc 会让类型不互通（各自定义了自己的 Block/SessionKey）。
+aes = "0.8"
+cbc = "0.1"
+ecb = "0.1"
+sha1 = "0.10"
+# manifest / chunk 的 VZ 压缩（Valve 自定义封装）
+# - VZa*  → LZMA raw 流（lzma-rs）
+# - VSZa* → zstd 帧（ruzstd，纯 Rust 实现，无需 C 工具链）
+# - PK\x03\x04 → 普通 zip（flate2）
+flate2 = "1"
+# raw_decoder：Valve 的 VZa 流**没有** LZMA 属性头，必须用 raw 解码器显式传参
+lzma-rs = { version = "0.3", features = ["raw_decoder"] }
+ruzstd = "0.7"
+# CDN 拉取与 WebAPI 调用
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "native-tls", "gzip"] }
+# 少数 chunk 用普通 zip 封装（版本与 backend 一致，避免两份）
+zip = { version = "2", default-features = false, features = ["deflate"] }
+serde = { version = "1", features = ["derive"] }

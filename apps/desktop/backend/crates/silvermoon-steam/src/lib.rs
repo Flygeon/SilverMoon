@@ -24,6 +24,19 @@
 //! 本 crate 的任何失败都不影响应用主流程：没有 CM 时「安装」按钮回退为
 //! 唤起 Steam 官方客户端。
 
+pub mod cache;
+pub mod cdn;
+pub mod chunk;
 pub mod cm;
+pub mod cm_requests;
+pub mod crypto;
+pub mod downloader;
+pub mod manifest;
 
+pub use cache::{
+    find_cached_manifest, list_cached_manifests, load_cached_manifest, CachedManifest,
+};
+pub use chunk::{process_chunk, ChunkOutcome};
 pub use cm::{CmError, CmManager, CmSession};
+pub use downloader::{download_app, safe_join, DepotTask, DownloadProgress, DownloadResult};
+pub use manifest::{ContentManifest, FileMapping, ManifestMetadata};
