@@ -13,6 +13,8 @@ license = "GPL-3.0-only"
 steam-vent = "0.5"
 # CM service method 的请求/响应类型定义（GetManifestRequestCode / GetCDNAuthToken）
 steam-vent-proto-steam = "=0.5.2"
+# protobuf 运行时：proto crate 未 re-export，只能从 proto-common 取
+steam-vent-proto-common = "0.5.1"
 
 tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
 thiserror = "1"

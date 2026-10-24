@@ -34,8 +34,12 @@
 use std::io::Write;
 
 use bytes::BytesMut;
-use steam_vent::message::{EncodableMessage, MalformedBody, NetMessageHeader};
-use steam_vent::NetMessage;
+// NetMessageHeader 从 **crate 根**取（它源自 net 模块并在此重导出）；
+// 写成 message::NetMessageHeader 会报 E0603（private）。
+use steam_vent::message::{EncodableMessage, MalformedBody};
+use steam_vent::{NetMessage, NetMessageHeader};
+// protobuf 的 write_to_writer / compute_size / parse_from_bytes 定义在 Message trait 上，
+// 必须 import 才能调用。用 proto crate re-export 的 protobuf，确保与 proto 类型同版本。
 use steam_vent_proto_common::protobuf::Message as _;
 use steam_vent_proto_steam::enums_clientserver::EMsg;
 use steam_vent_proto_steam::steammessages_clientserver_2::{
