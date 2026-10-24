@@ -191,7 +191,12 @@ describe("runViewTransition", () => {
     const css = readFileSync(file, "utf8");
     const hits = css.match(/view-transition-name:\s*([^;]+);/g) ?? [];
     const heroNames = hits
-      .map((line) => line.replace(/view-transition-name:\s*/, "").replace(";", "").trim())
+      .map((line) =>
+        line
+          .replace(/view-transition-name:\s*/, "")
+          .replace(";", "")
+          .trim(),
+      )
       .filter((value) => value !== "none");
 
     expect(heroNames).toContain(GAME_HERO_VT_NAME);
