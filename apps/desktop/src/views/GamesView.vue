@@ -23,7 +23,13 @@ import EmptyState from "@/components/EmptyState.vue";
 import SteamLoginPanel from "@/components/SteamLoginPanel.vue";
 import { useSettingsStore } from "@/stores/settings";
 import { useSteamStore, type SteamSort } from "@/stores/steam";
-import { GAME_HERO_VT_NAME, activeCoverAppId, runViewTransition } from "@/utils/gameHeroTransition";
+import {
+  GAME_HERO_VT_NAME,
+  activeCoverAppId,
+  beginCoverFlight,
+  endCoverFlight,
+  runViewTransition,
+} from "@/utils/gameHeroTransition";
 import { translate } from "@shared/i18n";
 import type { SteamGame } from "@shared/types";
 
@@ -167,21 +173,16 @@ const router = useRouter();
  */
 async function openDetails(game: SteamGame): Promise<void> {
   activeCoverAppId.value = game.appId;
-  // 等这张卡片把过渡名真正写进 DOM（否则旧快照里没有它）
+  // 把卡片**当前这张图**交给详情页：它不用等商店接口就有图，
+  // 补间从第一帧到最后一帧都是同一张，不会「飞过去一个空框」。
+  beginCoverFlight(game.appId, coverOf(game) || game.headerUrl || null);
+  // 等这张卡片把过渡名真正写进 DOM（否则旧快照里没有它）。
+  // ⚠️ 这是**一帧内**的同步收尾，不是等网络 —— 不会造成点击卡顿。
   await nextTick();
   await runViewTransition({
+    // 只导航，**不等详情页数据**（等就是几百毫秒的卡死，用户已经反馈过）
     navigate: () => router.push("/games/" + game.appId),
-    /*
-     * 等详情页的 hero「占位」出现再拍新快照。
-     *
-     * 两个候选都要等：首帧是骨架屏（.skeleton-hero，数据未回），数据回来后才换成
-     * .hero-media。两者都挂了同一个 view-transition-name，命中任一即可起飞 ——
-     * 只等 .hero-media 的话，慢网下过渡早已结束，飞行就没了。
-     */
-    waitFor: ".hero-media, .skeleton-hero",
-    cleanup: () => {
-      activeCoverAppId.value = null;
-    },
+    cleanup: endCoverFlight,
   });
 }
 

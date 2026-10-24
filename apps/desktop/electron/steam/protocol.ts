@@ -441,6 +441,29 @@ export class SteamProtocol {
   // 状态
   // -------------------------------------------------------------------------
 
+  /**
+   * 导出建立 CM 会话所需的凭据（**仅主进程内部使用**）。
+   *
+   * 下载必须连 CM，而 CM 要 access_token（JWT）。但 access_token 是长期凭据 ——
+   * **绝不能传到渲染进程**。所以前端只说「我要下载 appId=X」，
+   * 由主进程在这里取凭据再转发给 sidecar。渲染层永远看不到 token。
+   *
+   * 返回 null 表示未登录或换不出 token。
+   */
+  async exportCmCredentials(): Promise<{ accountName: string; accessToken: string } | null> {
+    const session = this.loadSession();
+    if (!session) return null;
+    const accountName = session.accountName ?? "";
+    if (!accountName) return null;
+    try {
+      const accessToken = await this.ensureAccessToken();
+      if (!accessToken) return null;
+      return { accountName, accessToken };
+    } catch {
+      return null;
+    }
+  }
+
   /** 当前登录态。有会话但 token 换不出来 → `loggedIn:false` + `hasSession:true`。 */
   async status(): Promise<SteamStatus> {
     const session = this.loadSession();

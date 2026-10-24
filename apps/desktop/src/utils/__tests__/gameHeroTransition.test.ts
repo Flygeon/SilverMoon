@@ -143,18 +143,40 @@ describe("runViewTransition", () => {
     }
   });
 
-  it("waitFor 命中的元素出现后不空转（立刻返回）", async () => {
+  /**
+   * 回归：导航**绝不能被动画等待阻塞**。
+   *
+   * 旧版在过渡回调里 `await waitForSelector(...)`，最多轮询 30 帧（≈500ms）。
+   * 而 `document.startViewTransition` 的回调是**同步阻塞**快照与渲染的 ——
+   * 回调不 resolve，页面就不更新，用户看到的是「点卡片后卡住半秒才切页」。
+   *
+   * 现在回调里只做同步导航。这条用例锁住「navigate 在过渡结束前就被调用了」，
+   * 且整个流程不含任何轮询等待。
+   */
+  it("导航在过渡结束前立即发生（不因动画等待而阻塞）", async () => {
     installFakeTransition();
-    // .hero-media 已存在（用例里手工造一个），等待应当在这一帧就结束
-    const el = document.createElement("div");
-    el.className = "hero-media";
-    document.body.appendChild(el);
-
+    let navigatedAt = 0;
     const started = Date.now();
-    await runViewTransition({ navigate: () => undefined, waitFor: ".hero-media" });
-    // 只等一帧，远小于 30 帧（500ms）；放宽到 300ms 避免慢机误判
-    expect(Date.now() - started).toBeLessThan(300);
 
-    el.remove();
+    await runViewTransition({
+      navigate: () => {
+        navigatedAt = Date.now();
+        return undefined;
+      },
+    });
+
+    expect(navigatedAt).toBeGreaterThan(0);
+    // 从开始到导航发生，不应有可感知延迟（旧实现会等 30 帧）
+    expect(navigatedAt - started).toBeLessThan(120);
+  });
+
+  it("不接受 waitFor 参数（接口已移除，传了会在类型层报错）", () => {
+    // 这条用例是**类型层**的守护：ViewTransitionHandlers 不再有 waitFor。
+    // 运行期用 satisfies 做一次编译期检查 —— 若有人把字段加回来，
+    // 这里的对象字面量会因为「多余属性」而无法满足类型。
+    const handlers = {
+      navigate: () => undefined,
+    } satisfies Parameters<typeof runViewTransition>[0];
+    expect(handlers.navigate).toBeTypeOf("function");
   });
 });

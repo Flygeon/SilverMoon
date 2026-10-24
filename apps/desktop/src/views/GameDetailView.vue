@@ -31,7 +31,13 @@ import { useSettingsStore } from "@/stores/settings";
 import { useSteamStore } from "@/stores/steam";
 import { formatSize } from "@/utils/format";
 import { capabilities } from "@/capabilities";
-import { GAME_HERO_VT_NAME, activeCoverAppId, runViewTransition } from "@/utils/gameHeroTransition";
+import {
+  GAME_HERO_VT_NAME,
+  activeCoverAppId,
+  activeCoverUrl,
+  endCoverFlight,
+  runViewTransition,
+} from "@/utils/gameHeroTransition";
 import { translate } from "@shared/i18n";
 import type { SteamAchievement } from "@shared/types";
 
@@ -99,16 +105,36 @@ const installed = computed(() => {
 const isInstalled = computed(() => !!installed.value);
 
 /**
- * hero 大图：**原样使用**商店给的 URL。
+ * hero 大图。
  *
- * 优先级 backgroundImage（1920×620 商店页大图）→ headerImage（460×215 头图）。
- * 两者都没有时**返回空串**，由模板出占位图标 —— 不再自己拼 CDN 路径：
+ * ## 必须是**卡片那张图**（用户明确指出）
+ *
+ * 卡片显示的是 Steam 的 `header.jpg`（`headerUrl`）。hero 若用商店的
+ * `backgroundImage`（1920×620 的商店页大背景），两张图**内容不同** ——
+ * View Transition 补间时会出现明显的「换图」跳变，看起来像动画做坏了。
+ *
+ * 所以优先级改为：**商店 headerImage → 网格传来的 headerUrl → backgroundImage**。
+ * 前两者其实是同一张 `header.jpg`（商店接口与 CDN 拼法不同但内容一致），
+ * 保证「卡片飞过来的时候，hero 上就是同一张图」。
+ *
+ * `backgroundImage` 退到最后仅作兜底（极少数 app 没有 header 时）。
+ *
+ * 任何一项都**原样使用**商店/CDN 给的 URL，不自己拼路径 ——
  * 上一版拼的 `/steam/apps/<id>/ss_1.jpg` 全部 404，正是「图片不正常」的根因。
  */
+/** 网格卡片传过来的那张图（同一次过渡内有效，见 gameHeroTransition） */
+const coverFromGrid = computed<string>(() => {
+  const url = activeCoverUrl.value;
+  return typeof url === "string" ? url : "";
+});
+
 const heroImage = computed<string>(() => {
-  const d = appDetails.value;
-  if (!d) return "";
-  return d.backgroundImage || d.headerImage || "";
+  const fromStore = appDetails.value?.headerImage ?? "";
+  // 商店数据还没回来时，先用网格里那张卡的 header 图 —— 这样补间一开始就有图，
+  // 不会先补到空位再「弹」出图片。
+  const fromGrid = coverFromGrid.value;
+  const background = appDetails.value?.backgroundImage ?? "";
+  return fromStore || fromGrid || background;
 });
 
 /** 标题：商店名 → 本地库名 → 兜底文案（未安装且商店拉不到时至少不空着） */
@@ -382,7 +408,9 @@ async function goBack(): Promise<void> {
    * 新快照拍到的还是「没名字」的封面，返回就没有飞回动画。
    */
   if (!Number.isNaN(id)) {
+    // 反向也把「这张卡片该显示哪张图」交还网格，确保飞回时两端是同一张图
     activeCoverAppId.value = id;
+    // 一帧内同步收尾，不是等网络 —— 不会造成返回卡顿
     await nextTick();
   }
   const navigate = () => {
@@ -391,12 +419,10 @@ async function goBack(): Promise<void> {
     else void router.push("/games");
   };
   await runViewTransition({
+    // ⚠️ 不再等 ".games-view"：等它出现会让返回整个卡住半秒。
+    // 网格页被 keep-alive 缓存，DOM 一直存在，导航完成即可拍快照。
     navigate,
-    // 返回的落点是网格页；等它出现再拍新快照
-    waitFor: ".games-view",
-    cleanup: () => {
-      activeCoverAppId.value = null;
-    },
+    cleanup: endCoverFlight,
   });
 }
 

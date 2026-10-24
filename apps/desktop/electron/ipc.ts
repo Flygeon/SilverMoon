@@ -711,6 +711,55 @@ const handlers: Record<string, Handler> = {
       case "gameDetail":
         return getGameDetail(steam, dataDir, Number(payload.appId));
 
+      // ---- 下载（需要 CM）----
+      //
+      // 凭据由**主进程**从已加密的会话里取，前端只传 appId ——
+      // 不把 refresh_token 暴露到渲染进程（那是长期凭据，等同密码）。
+      case "appDepots": {
+        const appId = Number(payload.appId);
+        const cred = await steam.exportCmCredentials();
+        if (!cred) return { ok: false, error: "尚未登录 Steam，无法查询 depot" };
+        const reply = await callSidecar("steam_app_depots", {
+          accountName: cred.accountName,
+          accessToken: cred.accessToken,
+          appId,
+        });
+        return reply.ok ? reply.data : { ok: false, error: reply.error ?? "查询失败" };
+      }
+      case "download": {
+        const appId = Number(payload.appId);
+        const installDir = String(payload.installDir ?? "");
+        if (!installDir) return { ok: false, error: "未指定安装目录" };
+        const cred = await steam.exportCmCredentials();
+        if (!cred) return { ok: false, error: "尚未登录 Steam，无法下载" };
+
+        // 1) 查 depot 列表
+        const depotReply = await callSidecar("steam_app_depots", {
+          accountName: cred.accountName,
+          accessToken: cred.accessToken,
+          appId,
+        });
+        if (!depotReply.ok) {
+          return { ok: false, error: depotReply.error ?? "查询 depot 失败" };
+        }
+        const depots = Array.isArray(depotReply.data) ? depotReply.data : [];
+        if (depots.length === 0) return { ok: false, error: "该游戏没有可下载的 depot" };
+
+        // 2) 发起下载（depot key 由后端自动获取）
+        const reply = await callSidecar("steam_download", {
+          accountName: cred.accountName,
+          accessToken: cred.accessToken,
+          installDir,
+          depots: depots.map((d) => ({
+            depotId: d.depotId,
+            manifestGid: String(d.manifestGid ?? ""),
+            depotKey: "",
+            appId,
+          })),
+        });
+        return reply.ok ? reply.data : { ok: false, error: reply.error ?? "下载失败" };
+      }
+
       // ---- CM（下载前置）。经 sidecar 转发，失败一律降级，不阻断 UI ----
       case "cmStatus":
         return callSidecar("steam_cm_status", {}).then((r) =>

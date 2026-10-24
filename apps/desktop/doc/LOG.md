@@ -29,6 +29,37 @@
 > - **教训**: …（踩过的坑，供下一个 AI 避雷）
 > ```
 
+## 2026-10-24（四）· 修 hero 动画卡死 + 统一 hero 图 + depot key / PICS 打通
+
+- **commit**: 见本轮提交
+- **status**: hero 动画相关单测 7 项绿；vue-tsc / tsc exit 0；PICS 的 VDF 解析在 Node 侧等价验证通过。Rust 编译仍需 CI。
+- **做了什么**：
+  1. **修「点卡片/点返回会卡死半秒」**：删掉过渡回调里的 `waitForSelector` 轮询。
+  2. **hero 图改成卡片同款**：优先级改为 商店 headerImage → 网格传入的 headerUrl → backgroundImage。
+  3. **depot key 打通**：自实现 `NetMessage` 包装 `CMsgClientGetDepotDecryptionKey`。
+  4. **PICS appinfo**：新增 `pics.rs`，查 app 的 depot 列表与 public gid。
+  5. 新命令 `steam_app_depots`；IPC 新增 `appDepots` / `download`（凭据只在主进程内流转）。
+- **为什么（卡死）**：
+  `document.startViewTransition` 的回调**同步阻塞快照与渲染** —— 回调不 resolve，
+  页面就不更新。旧实现为了「等 hero 元素出现」在回调里轮询最多 30 帧（≈500ms），
+  于是点击后整个界面卡住半秒才切页。现在回调只做同步导航；代价是慢网首帧 hero 可能还空，
+  但那是**瞬时**的，而为了动画完整去等 500ms 是实打实的卡死。
+- **为什么（图不对）**：
+  卡片用 `header.jpg`，详情页 hero 原本用商店的 `backgroundImage`（1920×620 大背景），
+  两张图**内容不同**，补间时出现明显「换图」跳变。现改为两端用同一张 header 图，
+  并新增 `activeCoverUrl` 把网格那张图交给详情页，首帧就有图可补。
+- **为什么（depot key 曾经说拿不到）**：
+  上一轮我判断「`steam-vent` 没为 `CMsgClientGetDepotDecryptionKey` 实现 `NetMessage`，所以拿不到」，
+  **这是错的**：`NetMessage: EncodableMessage` 是公开 trait、方法全有默认实现，外部 crate 可以自己实现。
+  GameNative 正是用 JavaSteam 的同名方法（`steamApps.getDepotDecryptionKey`）拿到 key 的。
+  把「上游没实现」当成「做不到」，是少走了一步追问。
+- **教训**：
+  1. **View Transition 回调里绝不能 await 网络/数据**。要等的东西应在导航**前**准备好。
+  2. **`git add backend` 会连 `target/` 一起提交** —— `.gitignore` 里只写了 splash/fqapi 的 target，
+     漏了 backend 的。已补规则并从索引移除（教训：只 add 明确路径，不要 add 目录）。
+  3. 共享元素过渡的「两端图不同」比「没有动画」更难看：宁可先用低分辨率同一张图，
+     也不要在补间途中换图。
+
 ## 2026-10-24（三）· depot 下载器（manifest 解析 / chunk 解密 / CDN / 缓存读取）
 
 - **commit**: 见本轮提交
