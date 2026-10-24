@@ -1,19 +1,23 @@
 <script setup lang="ts">
 /**
- * Steam 登录面板（三种方式：扫码 / 账号密码 + Steam Guard / 已保存会话）。
+ * Steam 扫码登录面板 —— **应用唯一的登录入口**（CM 侧扫码）。
  *
- * 链路：本组件 → useSteamStore → capabilities.steam({ op })
- *       → callBridge("steam", payload) → electron/ipc.ts 的 steam 通道 → electron/steam/。
+ * ## 为什么只剩一种方式
  *
- * 设计要点：
- * - **状态机在 store 里**：这里只负责「什么时候该调哪个 op」。登录流程的
- *   pending / guard / authenticated / failed 全部读 store 的 authState。
- * - **轮询归本组件管**：二维码用 setInterval 反复调 loginPoll，间隔来自宿主的
- *   interval（**秒**）。组件卸载 / 切换方式 / 登录成功都必须停表，否则会泄漏定时器
- *   并持续打接口。
- * - **不静默失败**：每个请求都有 loading 与错误文案；错误来自 store.error。
+ * 早先有两套登录：网页扫码（WebAPI）与 CM 扫码，各要扫一次码。这是设计缺陷 ——
+ * CM 侧现在已经能同时提供「游戏库」与「应用内下载」，所以统一成 CM 扫码：
+ * 用户扫**一次**，库和下载都能用。网页登录的 op 仍留在宿主侧（旧数据 / 排障），
+ * 但本组件不再调用任何一条（新增功能也不要再接回去）。
+ *
+ * ## 职责边界
+ *
+ * - **状态机在 store**：二维码 dataURL、轮询、错误全在 `stores/steam.ts` 的
+ *   `cmLogin` 上；组件只决定「什么时候开始扫」「什么时候算成功」。
+ * - **轮询幂等可停**：store 里同一时刻只有一个定时器；组件卸载 / keep-alive
+ *   失活都必须显式停表，否则用户切到别的页面后后台还在打 cmPollQr。
+ * - **不静默失败**：发起或轮询出错时展示 store 里的 qrError 原文。
  */
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, watch } from "vue";
 import { useSettingsStore } from "@/stores/settings";
 import { useSteamStore } from "@/stores/steam";
 import { translate } from "@shared/i18n";
@@ -24,380 +28,109 @@ const settings = useSettingsStore();
 const steam = useSteamStore();
 const t = (key: string) => translate(settings.lang, key);
 
-/** 当前选中的登录方式；已保存会话只在其存在时作为初始选项 */
-type Method = "qr" | "credentials" | "session";
-const method = ref<Method>(steam.status.hasSession && !steam.status.loggedIn ? "session" : "qr");
-
-// ---- 方式一：二维码 ----
-/** 生成好的二维码 dataURL（qrcode 库产出），空串表示还没生成 */
-const qrImage = ref("");
-const qrLoading = ref(false);
-const qrError = ref("");
-/** 轮询定时器；同一时刻只允许一个 */
-let pollTimer: number | null = null;
-/** 轮询互斥：定时器与「立即补一次」可能撞在一起 */
-let polling = false;
-
-function stopPolling(): void {
-  if (pollTimer !== null) {
-    window.clearInterval(pollTimer);
-    pollTimer = null;
-  }
-}
-
-async function tick(): Promise<void> {
-  if (polling) return;
-  polling = true;
-  try {
-    const done = await steam.pollQr();
-    if (done) {
-      stopPolling();
-      if (steam.loggedIn) emit("logged-in");
-    }
-  } finally {
-    polling = false;
-  }
-}
-
-/** 把 challengeUrl 画成二维码。qrcode 动态 import：只有真正扫码时才需要它。 */
-async function renderQr(url: string): Promise<void> {
-  qrLoading.value = true;
-  qrError.value = "";
-  try {
-    const { default: QRCode } = await import("qrcode");
-    qrImage.value = await QRCode.toDataURL(url, {
-      width: 220,
-      margin: 1,
-      errorCorrectionLevel: "M",
-    });
-  } catch (e) {
-    qrImage.value = "";
-    qrError.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    qrLoading.value = false;
-  }
-}
-
-/** 开始（或重新开始）扫码：拿 challengeUrl → 画码 → 按 interval 起轮询 */
-async function startQrFlow(): Promise<void> {
-  stopPolling();
-  qrImage.value = "";
-  qrError.value = "";
-  const challenge = await steam.startQr();
-  if (!challenge) {
-    qrError.value = steam.error || t("games.qrFailed");
-    return;
-  }
-  await renderQr(challenge.challengeUrl);
-  if (qrError.value) return;
-  // 契约里 interval 的单位是**秒**，setInterval 要毫秒
-  const ms = Math.max(1000, (challenge.interval || 5) * 1000);
-  pollTimer = window.setInterval(() => void tick(), ms);
-  // 立刻补一次：若用户已经确认过（或预览里已到第 3 次），不必干等一个周期
-  void tick();
-}
-
-// ---- 方式二：账号密码 ----
-const accountName = ref(steam.status.accountName ?? "");
-const password = ref("");
-/** 验证码输入（guard 阶段） */
-const guardCode = ref("");
-
-/** 当前流程是否处在 Guard 阶段 */
-const inGuard = computed(() => steam.authState.state === "guard");
-const guardType = computed<"email" | "device">(() => steam.authState.guardType ?? "device");
-
-function submitCredentials(): void {
-  const account = accountName.value.trim();
-  if (!account || !password.value || steam.authBusy) return;
-  void (async () => {
-    const next = await steam.login(account, password.value);
-    password.value = "";
-    if (next.state === "authenticated") {
-      emit("logged-in");
-      return;
-    }
-    // device 确认：host 让用户去手机应用里点确认，这里转为轮询 loginPoll
-    if (next.state === "pending") startGuardPolling();
-    if (next.state === "guard") guardCode.value = "";
-  })();
-}
-
-/** device 确认阶段的轮询（与扫码共用同一套 tick） */
-function startGuardPolling(): void {
-  stopPolling();
-  pollTimer = window.setInterval(() => void tick(), 3000);
-  void tick();
-}
-
-function submitGuardCode(): void {
-  const code = guardCode.value.trim();
-  if (!code || steam.authBusy) return;
-  void (async () => {
-    const next = await steam.submitGuard(code, guardType.value);
-    guardCode.value = "";
-    if (next.state === "authenticated") {
-      emit("logged-in");
-      return;
-    }
-    if (next.state === "pending") startGuardPolling();
-  })();
-}
-
-// ---- 方式三：已保存会话 ----
-const resumeBusy = ref(false);
-
-async function resume(): Promise<void> {
-  if (resumeBusy.value) return;
-  resumeBusy.value = true;
-  try {
-    await steam.resumeSession();
-    if (steam.loggedIn) emit("logged-in");
-  } finally {
-    resumeBusy.value = false;
-  }
-}
-
-// ---- 方式切换 ----
-function choose(next: Method): void {
-  if (next === method.value) return;
-  method.value = next;
-  // 切走扫码就停表，否则后台一直轮询
-  if (next !== "qr") {
-    stopPolling();
-    void steam.cancelLogin();
-  } else {
-    void startQrFlow();
-  }
-}
-
-// 进入扫码页就自动起流程（二维码要用户主动看到才算开始，不必再点一次）
-watch(
-  method,
-  (now) => {
-    if (now === "qr") void startQrFlow();
-  },
-  { immediate: true },
-);
-
-// 登录成功后统一收尾：停表、清码，避免组件还挂着轮询
-watch(
-  () => steam.loggedIn,
-  (ok) => {
-    if (ok) {
-      stopPolling();
-      qrImage.value = "";
-    }
-  },
-);
-
-onBeforeUnmount(() => {
-  stopPolling();
-  // 面板卸载时若还在扫码流程，通知宿主清掉 pending，避免后台任务挂着
-  if (steam.qr) void steam.cancelLogin();
+/**
+ * 状态文字对应的 i18n 键。
+ *
+ * store 只存状态标记（它不知道界面语言），文案在这里取，中英文各一套。
+ * 宿主目前只回 pending / authorized，`scanned` 是给「已扫码待确认」预留的。
+ */
+const statusKey = computed(() => {
+  const status = steam.cmLogin.statusText;
+  if (status === "success") return "games.qrAuthorized";
+  if (status === "scanned") return "games.qrScanConfirm";
+  return "games.qrWaiting";
 });
 
-/** 顶部错误条：优先显示 store 的主动错误，其次本地二维码错误 */
-const displayError = computed(() => steam.error || qrError.value);
+/** 重新发起一轮扫码（二维码过期 / 出错后用户主动刷新） */
+async function refreshQr(): Promise<void> {
+  await steam.beginCmLogin();
+}
 
-/** Guard 阶段文案跟着 guardType 走 */
-const guardTitle = computed(() =>
-  guardType.value === "email" ? t("games.guardEmail") : t("games.guardDevice"),
-);
-const guardHint = computed(() =>
-  guardType.value === "email" ? t("games.guardEmailHint") : t("games.guardDeviceHint"),
+onMounted(() => {
+  // 已登录就不必再画码（例如详情页里登录成功后组件还没卸载的那一帧）
+  if (steam.cmLogin.hasToken) return;
+  void steam.beginCmLogin();
+});
+
+onActivated(() => {
+  // keep-alive 回到本页：上一轮可能已经过期，且失活时被停表了 → 重新发起
+  if (steam.cmLogin.hasToken || steam.cmLogin.statusText === "success") return;
+  if (!steam.cmLogin.qrUrl) void steam.beginCmLogin();
+});
+
+onDeactivated(() => {
+  // 页面被缓存（用户去了别的页）：**必须停表**，否则后台一直打 cmPollQr
+  steam.stopCmPolling();
+});
+
+onBeforeUnmount(() => {
+  steam.stopCmPolling();
+  // 清掉这一轮的二维码与会话标识；hasToken / accountName 是主进程的事实，不动
+  steam.resetCmLogin();
+});
+
+// 扫码成功 → 通知调用方（游戏库刷新 / 详情页续上被拦下的下载）
+watch(
+  () => steam.cmLogin.statusText,
+  (now, before) => {
+    if (now === "success" && before !== "success") emit("logged-in");
+  },
 );
 </script>
 
 <template>
   <div class="steam-login">
-    <!-- 三种方式的入口：M3E 连通按钮组，切换时不留第二套视觉 -->
-    <m3e-button-group class="method-group" aria-label="login method">
-      <m3e-button
-        v-for="m in ['qr', 'credentials', 'session'] as Method[]"
-        :key="m"
-        shape="round"
-        size="medium"
-        type="button"
-        :variant="method === m ? 'filled' : 'tonal'"
-        :disabled="m === 'session' && !steam.status.hasSession"
-        @click="choose(m)"
-      >
-        <span slot="icon" class="material-symbols-outlined method-icon">{{
-          m === "qr" ? "qr_code_2" : m === "credentials" ? "key" : "history"
-        }}</span>
-        {{
-          m === "qr"
-            ? t("games.methodQr")
-            : m === "credentials"
-              ? t("games.methodCredentials")
-              : t("games.methodSession")
-        }}
-      </m3e-button>
-    </m3e-button-group>
+    <!-- 一次扫码，两处可用：这句话是这次架构统一的核心，别删 -->
+    <p class="hint">{{ t("games.qrScanOnce") }}</p>
 
-    <!-- 错误：统一一条，不让三种方式各说各的 -->
-    <div v-if="displayError" class="bar error" role="alert">
+    <!-- 错误：统一一条，不让界面出现两套说法 -->
+    <div v-if="steam.cmLogin.qrError" class="bar error" role="alert">
       <span class="material-symbols-outlined">error</span>
-      <span>{{ displayError }}</span>
+      <span>{{ steam.cmLogin.qrError }}</span>
     </div>
 
-    <!-- ================= 方式一：二维码 ================= -->
-    <section v-if="method === 'qr'" class="pane qr-pane">
-      <p class="hint">{{ t("games.qrHint") }}</p>
-      <div class="qr-box">
-        <img v-if="qrImage" :src="qrImage" class="qr-img" :alt="t('games.methodQr')" />
-        <div v-else class="qr-placeholder">
-          <m3e-loading-indicator v-if="qrLoading || steam.authBusy" class="lm-loading" />
-          <span v-else class="material-symbols-outlined qr-fail-icon">qr_code_2</span>
-          <span class="qr-placeholder-text">
-            {{ qrLoading || steam.authBusy ? t("games.qrWaiting") : t("games.qrFailed") }}
-          </span>
-        </div>
+    <div class="qr-box">
+      <img
+        v-if="steam.cmLogin.qrUrl"
+        :src="steam.cmLogin.qrUrl"
+        class="qr-img"
+        :alt="t('games.qrHint')"
+      />
+      <div v-else class="qr-placeholder">
+        <m3e-loading-indicator v-if="steam.cmLogin.qrBusy" class="lm-loading" />
+        <span v-else class="material-symbols-outlined qr-fail-icon">qr_code_2</span>
+        <span class="qr-placeholder-text">
+          {{ steam.cmLogin.qrBusy ? t("games.qrWaiting") : t("games.qrFailed") }}
+        </span>
       </div>
-      <p class="status-line">
-        <m3e-loading-indicator v-if="steam.authState.state === 'pending'" class="inline-loading" />
-        <span>{{ steam.authState.message || t("games.qrWaiting") }}</span>
-      </p>
-      <div class="pane-actions">
-        <m3e-button
-          variant="outlined"
-          size="small"
-          :disabled="steam.authBusy || !!qrLoading"
-          @click="startQrFlow"
-        >
-          <span slot="icon" class="material-symbols-outlined">refresh</span>
-          {{ t("games.qrRefresh") }}
-        </m3e-button>
-      </div>
-      <p class="foot-hint">{{ t("games.qrPreviewNote") }}</p>
-    </section>
+    </div>
 
-    <!-- ================= 方式二：账号密码 / Guard ================= -->
-    <section v-else-if="method === 'credentials'" class="pane">
-      <!-- Guard 阶段：只显示验证码输入，不显示账号密码 -->
-      <template v-if="inGuard">
-        <div class="guard-head">
-          <span class="material-symbols-outlined guard-icon">{{
-            guardType === "email" ? "mail" : "smartphone"
-          }}</span>
-          <div>
-            <div class="guard-title">{{ guardTitle }}</div>
-            <p class="guard-hint">{{ guardHint }}</p>
-          </div>
-        </div>
-        <m3e-form-field class="field" variant="filled">
-          <input
-            v-model="guardCode"
-            type="text"
-            inputmode="numeric"
-            autocomplete="one-time-code"
-            :placeholder="t('games.guardPlaceholder')"
-            spellcheck="false"
-            @keydown.enter.prevent="submitGuardCode"
-          />
-        </m3e-form-field>
-        <div class="pane-actions">
-          <m3e-button
-            variant="filled"
-            size="small"
-            :disabled="!guardCode.trim() || steam.authBusy"
-            @click="submitGuardCode"
-          >
-            <span slot="icon" class="material-symbols-outlined">check</span>
-            {{ steam.authBusy ? t("games.submitting") : t("games.submit") }}
-          </m3e-button>
-          <m3e-button variant="text" size="small" @click="choose('qr')">
-            {{ t("games.backToLogin") }}
-          </m3e-button>
-        </div>
-      </template>
+    <p class="scan-hint">{{ t("games.qrHint") }}</p>
 
-      <!-- 账号密码输入 -->
-      <template v-else>
-        <m3e-form-field class="field" variant="filled">
-          <input
-            v-model="accountName"
-            type="text"
-            autocomplete="username"
-            :placeholder="t('games.accountPlaceholder')"
-            spellcheck="false"
-          />
-          <span slot="leading-icon" class="material-symbols-outlined field-icon">person</span>
-        </m3e-form-field>
-        <m3e-form-field class="field" variant="filled">
-          <input
-            v-model="password"
-            type="password"
-            autocomplete="current-password"
-            :placeholder="t('games.passwordPlaceholder')"
-            @keydown.enter.prevent="submitCredentials"
-          />
-          <span slot="leading-icon" class="material-symbols-outlined field-icon">password</span>
-        </m3e-form-field>
-        <div class="pane-actions">
-          <m3e-button
-            variant="filled"
-            size="small"
-            :disabled="!accountName.trim() || !password || steam.authBusy"
-            @click="submitCredentials"
-          >
-            <span slot="icon" class="material-symbols-outlined">login</span>
-            {{ steam.authBusy ? t("games.loggingIn") : t("games.login") }}
-          </m3e-button>
-        </div>
-        <p class="foot-hint">
-          <span class="material-symbols-outlined inline-icon">verified</span>
-          {{ t("games.loginLocalOnly") }}
-        </p>
-      </template>
+    <p class="status-line" role="status">
+      <m3e-loading-indicator
+        v-if="!steam.cmLogin.qrError && !steam.cmLogin.qrBusy"
+        class="inline-loading"
+      />
+      <span>{{ t(statusKey) }}</span>
+    </p>
 
-      <!-- device 确认中：提示去手机点确认，同时后台轮询 -->
-      <div v-if="steam.authState.state === 'pending'" class="confirm-box">
-        <m3e-loading-indicator class="lm-loading" />
-        <span>{{ t("games.guardDeviceConfirm") }}</span>
-        <p class="status-line">{{ steam.authState.message }}</p>
-      </div>
-    </section>
+    <div class="pane-actions">
+      <m3e-button
+        variant="outlined"
+        size="small"
+        :disabled="steam.cmLogin.qrBusy"
+        @click="refreshQr"
+      >
+        <span slot="icon" class="material-symbols-outlined">refresh</span>
+        {{ t("games.qrRefresh") }}
+      </m3e-button>
+    </div>
 
-    <!-- ================= 方式三：已保存会话 ================= -->
-    <section v-else class="pane">
-      <div class="session-box">
-        <span class="material-symbols-outlined session-icon">account_circle</span>
-        <div class="session-text">
-          <div class="session-title">
-            {{
-              steam.displayName
-                ? t("games.continueAs").replace("{name}", steam.displayName)
-                : t("games.methodSession")
-            }}
-          </div>
-          <p class="session-hint">
-            {{ steam.needsReconnect ? t("games.reconnectHint") : t("games.continueHint") }}
-          </p>
-        </div>
-      </div>
-      <div class="pane-actions">
-        <m3e-button
-          variant="filled"
-          size="small"
-          :disabled="resumeBusy || steam.statusLoading"
-          @click="resume"
-        >
-          <span slot="icon" class="material-symbols-outlined">sync</span>
-          {{
-            resumeBusy
-              ? t("games.loggingIn")
-              : steam.needsReconnect
-                ? t("games.reconnect")
-                : t("games.continueAs").replace("{name}", steam.displayName || "")
-          }}
-        </m3e-button>
-        <m3e-button variant="text" size="small" @click="choose('credentials')">
-          {{ t("games.switchAccount") }}
-        </m3e-button>
-      </div>
-    </section>
+    <p class="foot-hint">
+      <span class="material-symbols-outlined inline-icon">verified</span>
+      {{ t("games.loginLocalOnly") }}
+    </p>
   </div>
 </template>
 
@@ -405,25 +138,8 @@ const guardHint = computed(() =>
 .steam-login {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
   width: 100%;
-}
-
-/* 连通按钮组：与 SegmentedTabs 同一套令牌（36dp 高、3dp 间隙、8dp 内侧圆角） */
-.method-group {
-  --m3e-connected-button-group-spacing: 3px;
-  --m3e-connected-button-group-medium-inner-shape: 8px;
-  --m3e-connected-button-group-medium-inner-pressed-shape: 8px;
-  --m3e-button-medium-container-height: 36px;
-  --m3e-button-medium-label-text-font-size: var(--md-sys-typescale-label-large-size);
-  --m3e-button-icon-size: 18px;
-  --m3e-button-icon-label-space: 8px;
-  display: inline-flex;
-  align-self: center;
-}
-.method-icon {
-  font-size: 18px;
-  line-height: 1;
 }
 
 /* ---- 提示条 ---- */
@@ -443,24 +159,25 @@ const guardHint = computed(() =>
 .bar .material-symbols-outlined {
   font-size: 18px;
 }
-/* ---- 面板 ---- */
-.pane {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
 .hint {
   margin: 0;
   text-align: center;
   font-size: var(--md-sys-typescale-body-medium-size);
   color: var(--md-sys-color-on-surface-variant);
 }
+.scan-hint {
+  margin: 0;
+  text-align: center;
+  font-size: var(--md-sys-typescale-title-small-size);
+  font-weight: var(--md-sys-typescale-title-small-weight);
+  color: var(--md-sys-color-on-surface);
+}
 .foot-hint {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  margin: 4px 0 0;
+  margin: 0;
   font-size: var(--md-sys-typescale-body-small-size);
   color: var(--md-sys-color-on-surface-variant);
   text-align: center;
@@ -469,7 +186,9 @@ const guardHint = computed(() =>
   font-size: 16px;
 }
 
-/* ---- 二维码 ---- */
+/* ---- 二维码 ----
+   ⚠️ 码本身是「黑码白底」的 PNG（qrcode 的 toDataURL 自带白底与 margin），
+   所以这里**不设**任何底色令牌：二维码的成像不跟主题走，写死颜色反而会扫不出来。 */
 .qr-box {
   display: flex;
   align-items: center;
@@ -480,9 +199,6 @@ const guardHint = computed(() =>
   width: 220px;
   height: 220px;
   border-radius: var(--md-sys-shape-corner-medium);
-  background: #fff;
-  padding: 8px;
-  box-sizing: border-box;
 }
 .qr-placeholder {
   display: flex;
@@ -522,90 +238,5 @@ const guardHint = computed(() =>
   justify-content: center;
   gap: 8px;
   flex-wrap: wrap;
-}
-
-/* ---- 表单 ---- */
-.field {
-  width: 100%;
-  --m3e-form-field-container-height: 48px;
-}
-.field input {
-  width: 100%;
-  border: none;
-  background: transparent;
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-medium-size);
-  outline: none;
-}
-.field-icon {
-  font-size: 20px;
-  color: var(--md-sys-color-on-surface-variant);
-}
-
-/* ---- Guard ---- */
-.guard-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 14px;
-  border-radius: var(--md-sys-shape-corner-medium);
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
-}
-.guard-icon {
-  font-size: 24px;
-  flex-shrink: 0;
-}
-.guard-title {
-  font-size: var(--md-sys-typescale-title-small-size);
-  font-weight: var(--md-sys-typescale-title-small-weight);
-}
-.guard-hint {
-  margin: 4px 0 0;
-  font-size: var(--md-sys-typescale-body-small-size);
-  line-height: 1.5;
-}
-.confirm-box {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 16px;
-  border-radius: var(--md-sys-shape-corner-medium);
-  background: var(--md-sys-color-surface-container-high);
-  font-size: var(--md-sys-typescale-body-medium-size);
-  color: var(--md-sys-color-on-surface);
-  text-align: center;
-}
-
-/* ---- 已保存会话 ---- */
-.session-box {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 16px;
-  border-radius: var(--md-sys-shape-corner-large);
-  background: var(--md-sys-color-surface-container-high);
-}
-.session-icon {
-  font-size: 40px;
-  color: var(--md-sys-color-primary);
-}
-.session-text {
-  min-width: 0;
-}
-.session-title {
-  font-size: var(--md-sys-typescale-title-small-size);
-  font-weight: var(--md-sys-typescale-title-small-weight);
-  color: var(--md-sys-color-on-surface);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.session-hint {
-  margin: 4px 0 0;
-  font-size: var(--md-sys-typescale-body-small-size);
-  color: var(--md-sys-color-on-surface-variant);
 }
 </style>

@@ -1790,6 +1790,69 @@ export interface SteamDownloadOutcome {
   depots: number;
   /** 失败原因原文；成功为 null */
   error?: string | null;
+  /**
+   * 缺少「CM 下载授权」时的标记（宿主置 true）。
+   *
+   * 它与普通失败**语义不同**：不是网络/磁盘出了问题，而是还没扫码授权过。
+   * 视图看到它应该弹授权面板（扫码），而不是给一个「重试」按钮让用户白点。
+   */
+  needCmLogin?: boolean;
+}
+
+// ------------------------------------------------------------------ CM 侧扫码登录（下载专用）
+//
+// 网页登录（WebAPI）拿到的 token 受众是 WebAPI，传给 CM 会被 Steam 回
+// invalid credentials。应用内下载必须用**另一套**凭据，所以单独三组 op。
+// 安全约定：扫码成功后的 refresh_token 由主进程加密保存，**不回传渲染进程**，
+// 因此这里所有类型都不含 token 字段。
+
+/** op:"cmLoginStatus" 的返回：主进程里有没有可用的 CM 凭据。 */
+export interface SteamCmLoginStatus {
+  hasToken: boolean;
+  /** 凭据对应的账号名；没有凭据时为空串 */
+  accountName: string;
+}
+
+/** op:"cmBeginQr" 的返回。失败时宿主给 `{ error }`，所以字段都是可选的。 */
+export interface SteamCmQrChallenge {
+  /** 画二维码用的挑战地址（交给 qrcode 库） */
+  challengeUrl: string;
+  /** u64 的十进制字符串：超出 JS 安全整数，**不要转 number** */
+  clientId: string;
+  /** 二进制 requestId 的 hex 表达 */
+  requestId: string;
+  /** 轮询间隔，单位是**秒**（可能是小数） */
+  interval: number;
+  error?: string | null;
+}
+
+/**
+ * op:"steamOwnedGames" 的数组元素（**走 CM 拿的游戏库**）。
+ *
+ * 与 WebAPI 版的 `SteamGame` 是同一份库的两种来源，字段刻意保持一一对应关系：
+ * 这里给的是 `iconHash`（哈希），前端自己拼 CDN —— 拼法与 WebAPI 版完全一致，
+ * 见 electron/steam/protocol.ts 里的 iconUrl 拼法。
+ */
+export interface SteamOwnedGame {
+  appId: number;
+  name: string;
+  /** 总游玩时长（分钟） */
+  playtimeMinutes: number;
+  /** 最近两周游玩时长（分钟） */
+  playtimeTwoWeeksMinutes: number;
+  /** 图标**哈希**（不是 URL）；空串表示没有 */
+  iconHash: string;
+  /** 该游戏是否有社区统计（成就等） */
+  hasCommunityStats: boolean;
+}
+
+/** op:"cmPollQr" 的返回。只回状态，token 留在主进程。 */
+export interface SteamCmPollResult {
+  /** 后端当前只回 "pending" | "authorized"；用 string 接住将来可能新增的状态 */
+  status: string;
+  /** 授权成功时的账号名 */
+  accountName?: string;
+  error?: string | null;
 }
 
 /**

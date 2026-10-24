@@ -891,8 +891,12 @@ export const messages = {
       subtitle: "连接 Steam，查看游戏库与游玩时长",
       // ---- 登录卡 ----
       loginTitle: "登录 Steam",
-      loginDesc: "扫码、账号密码或恢复已保存的会话，数据只留在本机",
+      loginDesc: "用 Steam 手机 App 扫一次码即可：游戏库与下载都可用，凭据只留在本机",
       loginLocalOnly: "凭据经系统安全存储加密后保存在本机，不会上传",
+      // 统一登录后：CM 扫码拿到的凭据同时供「游戏库」与「应用内下载」使用
+      qrScanOnce: "扫码一次即可，游戏库与下载都可用",
+      qrAuthorized: "扫码成功，正在加载游戏库…",
+      libraryFromWebapi: "当前游戏库来自旧的网页登录会话；扫码登录后可使用应用内下载",
       continueAs: "继续以 {name} 身份登录",
       continueHint: "检测到已保存的会话，点一下即可恢复",
       reconnect: "重连",
@@ -904,6 +908,7 @@ export const messages = {
       methodSession: "已保存会话",
       qrHint: "用 Steam 手机应用扫描二维码",
       qrWaiting: "等待手机确认…",
+      qrScanConfirm: "已扫码，请在手机上确认",
       qrExpired: "二维码已过期",
       qrFailed: "二维码获取失败",
       qrRefresh: "刷新二维码",
@@ -1031,6 +1036,9 @@ export const messages = {
         downloadDepotsTitle: "depot 列表",
         downloadDepotsFailed: "depot 列表读取失败",
         downloadNoDepots: "该游戏没有可下载的 depot",
+        // ---- 扫码登录（CM：游戏库与下载共用同一份凭据）----
+        loginNeeded: "需要扫码登录 Steam",
+        openQrLogin: "扫码登录",
       },
     },
     books: {
@@ -2249,8 +2257,12 @@ export const messages = {
       // ---- Login card ----
       loginTitle: "Sign in to Steam",
       loginDesc:
-        "Scan a QR code, use your credentials, or resume a saved session. Data stays local",
+        "Scan once with the Steam mobile app — the library and in-app downloads both work, and the credential stays on this device",
       loginLocalOnly: "Credentials are encrypted by the OS keystore and never leave this device",
+      qrScanOnce: "One scan covers both the library and in-app downloads",
+      qrAuthorized: "Scanned — loading your library…",
+      libraryFromWebapi:
+        "The library comes from an old web sign-in session; scan in to enable in-app downloads",
       continueAs: "Continue as {name}",
       continueHint: "A saved session was found — one click to resume",
       reconnect: "Reconnect",
@@ -2262,6 +2274,7 @@ export const messages = {
       methodSession: "Saved session",
       qrHint: "Scan the QR code with the Steam mobile app",
       qrWaiting: "Waiting for confirmation…",
+      qrScanConfirm: "Scanned — confirm on your phone",
       qrExpired: "The QR code expired",
       qrFailed: "Could not load the QR code",
       qrRefresh: "Refresh QR code",
@@ -2389,6 +2402,9 @@ export const messages = {
         downloadDepotsTitle: "Depots",
         downloadDepotsFailed: "Could not read the depot list",
         downloadNoDepots: "This game has no downloadable depots",
+        // ---- QR sign-in (CM: one credential for both library and downloads) ----
+        loginNeeded: "Scan in to Steam",
+        openQrLogin: "Scan to sign in",
       },
     },
     books: {

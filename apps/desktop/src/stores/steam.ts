@@ -16,6 +16,7 @@ import type {
   SteamInstalledGame,
   SteamLibrary,
   SteamLocalLibrary,
+  SteamOwnedGame,
   SteamQrChallenge,
   SteamSettings,
   SteamStatus,
@@ -23,6 +24,38 @@ import type {
 
 /** 游戏库排序方式：最近游玩 / 名称 / 总时长 */
 export type SteamSort = "recent" | "name" | "playtime";
+
+/**
+ * CM 扫码登录的界面状态（**应用唯一的登录方式**）。
+ *
+ * 历史：早先有两条登录路径（网页扫码 + CM 扫码），各要扫一次码，属设计缺陷。
+ * 现在 CM 侧同时能提供「游戏库」与「下载」，所以只保留 CM 扫码，扫一次两处都用。
+ *
+ * 字段与 `status` 的分工：
+ * - 这里放**扫码流程的临时状态**（二维码、轮询、错误）；
+ * - 登录结果会被同步进 `status`（见 syncStatusFromCm），视图仍然只读 status，
+ *   这样统一登录不会引起界面抖动 / 大面积改动。
+ */
+export interface CmLogin {
+  /** 主进程里有没有可用的 CM 凭据（下载的前提） */
+  hasToken: boolean;
+  /** 凭据对应的账号名；没有凭据时为空串 */
+  accountName: string;
+  /** 二维码图片（dataURL，由 challengeUrl 画出来）；空串表示还没有码 */
+  qrUrl: string;
+  /** 正在发起扫码 / 画二维码（**不含轮询**，否则二维码区会不停闪） */
+  qrBusy: boolean;
+  /** 发起或轮询失败的原因（原文展示，不二次翻译） */
+  qrError: string;
+  /**
+   * 状态标记，视图据此选文案：
+   * "" | "waiting" | "scanned" | "success" | "error"。
+   *
+   * 存标记而不是成品文案：store 不知道当前界面语言，文案统一在视图里用
+   * `translate(lang, key)` 取，中英文才不会漏一套。
+   */
+  statusText: string;
+}
 
 /** 一次「状态 + 库」的完整刷新结果，供视图决定要不要显示错误态 */
 interface LoadOptions {
@@ -61,6 +94,15 @@ export const useSteamStore = defineStore("steam", () => {
   const warning = ref<string | null>(null);
   const libraryLoaded = ref(false);
   const libraryLoading = ref(false);
+  /**
+   * 当前游戏库的数据来源：
+   * - "cm"：扫码登录后的主路径（库 + 下载都可用）；
+   * - "webapi"：CM 不可用时回退的**旧网页会话**（只能看库，不能应用内下载）；
+   * - ""：还没拿到库。
+   *
+   * ⚠️ 视图必须据此标注来源：两条路径的凭据不同，用户要能看出「现在这份库不支持下载」。
+   */
+  const librarySource = ref<"cm" | "webapi" | "">("");
 
   // ---- 登录流程 ----
   const authState = ref<SteamAuthState>({ state: "idle" });
@@ -68,6 +110,31 @@ export const useSteamStore = defineStore("steam", () => {
   const authBusy = ref(false);
   /** 二维码挑战（challengeUrl + 轮询间隔），null 表示没在扫码 */
   const qr = ref<SteamQrChallenge | null>(null);
+
+  // ---- CM 扫码登录（主登录态：游戏库 + 下载共用一份凭据）----
+  const cmLogin = ref<CmLogin>({
+    hasToken: false,
+    accountName: "",
+    qrUrl: "",
+    qrBusy: false,
+    qrError: "",
+    statusText: "",
+  });
+  /** 一次扫码会话的标识：轮询要靠它认会话（宿主不回传 token，只认这两个 id） */
+  let cmClientId = "";
+  let cmRequestId = "";
+  /** 轮询定时器；与网页登录的定时器分开（旧登录仍可作为回退数据源） */
+  let cmTimer: number | null = null;
+  /** 轮询互斥：定时器与「立刻补一次」可能撞在一起 */
+  let cmPolling = false;
+  /**
+   * 扫码「代次」。每发起一轮 +1；异步链在 await 之后回头比对，代次变了就整段丢弃。
+   *
+   * 为什么需要：用户连点「刷新二维码」时，旧请求可能在新的之后才返回 —— 若不管，
+   * 旧链会把 cmClientId 写回上一轮的 id 并再起一个定时器，界面上的码与轮询的会话
+   * 从此对不上（表现为「扫了没反应」）。
+   */
+  let cmGeneration = 0;
 
   // ---- 详情 ----
   /** appId → 商店详情；同一个 appId 只拉一次 */
@@ -103,6 +170,12 @@ export const useSteamStore = defineStore("steam", () => {
   const downloadBusy = ref(false);
   /** 下载失败原因（后端给的可读中文原文，原样展示，不做二次翻译） */
   const downloadError = ref("");
+  /**
+   * 上次下载失败是因为**没有扫码登录**（不是网络/磁盘问题）。
+   *
+   * 视图据此把「重试」换成「扫码登录」入口，否则用户会在一个必然失败的按钮上反复点。
+   */
+  const downloadNeedCmLogin = ref(false);
   /** 正在下载的 appId（详情页据此判断「这个进度条是不是我的」） */
   const downloadAppId = ref<number | null>(null);
   /** depot 列表（下载面板用；op:"appDepots"） */
@@ -115,12 +188,8 @@ export const useSteamStore = defineStore("steam", () => {
   // ---- 公共错误 ----
   const error = ref("");
 
-  /** 是否已登录（顶栏、库、详情都看它） */
+  /** 是否已登录（顶栏、库、详情都看它）。统一登录后 = 有没有 CM 凭据。 */
   const loggedIn = computed(() => status.value.loggedIn);
-  /** 有会话但没登进去 —— 提供「重连」入口 */
-  const needsReconnect = computed(
-    () => statusLoaded.value && !status.value.loggedIn && status.value.hasSession,
-  );
   /** 顶栏展示名：昵称优先，其次账号名 */
   const displayName = computed(() => status.value.personaName || status.value.accountName || "");
   /** 全库总时长（分钟） */
@@ -169,9 +238,14 @@ export const useSteamStore = defineStore("steam", () => {
   let listening = false;
 
   /**
-   * 订阅 `steam:auth`（宿主在登录状态变化时推送）。
+   * 订阅 `steam:auth`（宿主推送的**旧网页登录**状态变化）。
    *
-   * 幂等：多次调用只挂一个监听器；浏览器预览没有宿主事件，静默跳过。
+   * ⚠️ 统一登录后登录态的唯一真源是「主进程里有没有 CM 凭据」（cmLoginStatus）。
+   * 这条事件推的是网页登录状态，**绝不能**再写进 `status`：否则用户用 CM 扫码
+   * 登录着，宿主一条陈旧的网页事件就能把界面翻回「未登录」登录卡。
+   *
+   * 因此这里只更新旧状态机（authState，仅供排障/将来回退），并保持幂等 ——
+   * GamesView 仍然会调它，删掉会让那一侧的初始化流程与订阅的时机关联变得模糊。
    */
   async function subscribe(): Promise<void> {
     if (listening || !isDesktop) return;
@@ -181,14 +255,9 @@ export const useSteamStore = defineStore("steam", () => {
         const next = event.payload;
         if (!next || typeof next !== "object") return;
         authState.value = next;
-        if (next.status) status.value = next.status;
-        if (next.state === "authenticated") {
-          statusLoaded.value = true;
-          void loadLibrary();
-        }
       });
     } catch {
-      // 宿主未提供该事件时不影响主流程（登录仍可用 op 轮询推进）
+      // 宿主未提供该事件时不影响主流程
       listening = false;
     }
   }
@@ -251,6 +320,7 @@ export const useSteamStore = defineStore("steam", () => {
     downloadError.value = "";
     downloadAppId.value = null;
     depotFractions.value = {};
+    downloadNeedCmLogin.value = false;
   }
 
   /**
@@ -358,7 +428,11 @@ export const useSteamStore = defineStore("steam", () => {
 
     try {
       const res = await capabilities.steamDownload(appId, installDir);
+      // 没登录是**可恢复**的：不是下载失败，而是还没扫码。视图据此打开扫码面板，
+      // 用户扫完码会自动重试，不必自己再点一次「重试下载」。
+      downloadNeedCmLogin.value = Boolean(res && !res.ok && res.needCmLogin);
       if (res && res.ok) {
+        downloadNeedCmLogin.value = false;
         // 下载完成后本地库的 acf 才更新，必须**强制重扫**，否则详情页仍按旧数据
         // 判断安装状态，卡片也不会出现「已安装」徽标。
         await loadLocalLibrary();
@@ -389,16 +463,43 @@ export const useSteamStore = defineStore("steam", () => {
     resetDownload();
   }
 
-  // ---- 动作：登录态 ----
+  // ---- 动作：登录态（**统一走 CM 扫码**）----
+  //
+  // 早先两套登录（网页扫码 + CM 扫码）要扫两次码，是设计缺陷。现在 CM 侧同时提供
+  // 游戏库与下载，登录只剩一条路。旧的网页登录 op 仍留在宿主侧（旧数据 / 排障），
+  // 但 UI 不再主动走它 —— 这里也只在「回退取库」时读一次旧会话。
 
-  /** 只拉登录态。返回最新 status，失败时把错误写进 error 并返回已知值。 */
+  /**
+   * 把 CM 登录结果同步进 `status`。
+   *
+   * 为什么不干脆删掉 status、让视图直接读 cmLogin：顶栏 / 登录卡 / 详情页都按
+   * `status.loggedIn`、`displayName` 渲染，保留这层字段（含 statusLoaded 语义）
+   * 能让「统一登录」这件事在界面上**零抖动**地发生。
+   *
+   * `hasSession` 与 `hasToken` 同值：CM 模型里没有「有会话但没登进去」的中间态，
+   * 置 false 才能让 needsReconnect 那条「重连」提示不再误报。
+   */
+  function syncStatusFromCm(): void {
+    const account = cmLogin.value.accountName || null;
+    status.value = {
+      loggedIn: cmLogin.value.hasToken,
+      accountName: account,
+      personaName: account,
+      // CM 扫码不给 SteamID64 / 头像：留 null，视图会退化成图标占位
+      steamId: null,
+      avatarUrl: null,
+      hasSession: cmLogin.value.hasToken,
+    };
+  }
+
+  /** 只拉登录态（=「有没有 CM 凭据」）。返回最新 status，失败时把原因写进 error。 */
   async function loadStatus(): Promise<SteamStatus> {
     statusLoading.value = true;
     try {
-      const next = await capabilities.steam<SteamStatus>({ op: "status" });
-      status.value = next;
+      await loadCmLoginStatus();
+      syncStatusFromCm();
       statusLoaded.value = true;
-      return next;
+      return status.value;
     } catch (e) {
       error.value = messageOf(e);
       statusLoaded.value = true;
@@ -408,26 +509,86 @@ export const useSteamStore = defineStore("steam", () => {
     }
   }
 
-  /** 拉游戏库。`refresh` 时带 refresh 参数绕过宿主磁盘缓存。 */
+  /**
+   * CM 游戏库条目 → 视图用的 SteamGame。
+   *
+   * 图标拼法与 WebAPI 版**逐字一致**（见 electron/steam/protocol.ts 的 iconUrl）：
+   * 宿主只给哈希，前端拼 CDN。header 图没有哈希，按 appId 拼标准头图路径 ——
+   * 这样「扫码登录后卡片 / hero 图变灰」这种回退感不会出现。
+   */
+  function mapOwnedGame(g: SteamOwnedGame): SteamGame {
+    const iconHash = g.iconHash || "";
+    return {
+      appId: g.appId,
+      name: g.name || `App ${g.appId}`,
+      playtimeMinutes: g.playtimeMinutes ?? 0,
+      playtimeRecentMinutes: g.playtimeTwoWeeksMinutes ?? null,
+      // CM 库不返回最近游玩时间（那是 WebAPI 的 rtime_last_played）
+      lastPlayedAt: null,
+      iconUrl: iconHash
+        ? `https://media.steampowered.com/steamcommunity/public/images/apps/${g.appId}/${iconHash}.jpg`
+        : null,
+      headerUrl: `https://cdn.akamai.steamstatic.com/steam/apps/${g.appId}/header.jpg`,
+    };
+  }
+
+  /**
+   * 拉游戏库：**优先 CM**，失败再回退旧 WebAPI。
+   *
+   * 三条分支的语义别混：
+   * - CM 成功 → librarySource="cm"（主路径：库 + 下载都可用）；
+   * - CM 失败 → 回退 op:"library"（旧网页会话），成功则 source="webapi"，UI 标注来源；
+   * - 两条都失败 → 未扫码时**不算错误**（界面出登录卡即可），已扫码才是真错误。
+   */
   async function loadLibrary(refresh = false): Promise<void> {
     libraryLoading.value = true;
     error.value = "";
+    let cmFailure = "";
     try {
-      const lib = await capabilities.steam<SteamLibrary>(
-        refresh ? { op: "refreshLibrary" } : { op: "library", refresh: false },
-      );
-      games.value = lib.games ?? [];
-      total.value = lib.total ?? games.value.length;
-      cachedAt.value = lib.cachedAt ?? null;
-      warning.value = lib.warning ?? null;
-      libraryLoaded.value = true;
-      // 库能拉通说明登录态有效；顺手同步一次状态，省一次 status 调用
-      if (!status.value.loggedIn) {
-        status.value = { ...status.value, loggedIn: true };
+      // 1) 主路径：CM（扫码一次，库与下载共用同一份凭据）
+      if (cmLogin.value.hasToken) {
+        try {
+          const owned = await capabilities.steamOwnedGames();
+          games.value = (owned ?? []).map(mapOwnedGame);
+          total.value = games.value.length;
+          // CM 路径没有宿主的磁盘缓存时间，用当前时刻表示「刚拉到」
+          cachedAt.value = Date.now();
+          warning.value = null;
+          librarySource.value = "cm";
+          libraryLoaded.value = true;
+          if (!status.value.loggedIn) syncStatusFromCm();
+          return;
+        } catch (e) {
+          // 记下原因：两条路都失败时，这才是该给用户看的真错误
+          cmFailure = messageOf(e);
+        }
       }
-    } catch (e) {
-      error.value = messageOf(e);
-      libraryLoaded.value = true;
+
+      // 2) 回退：旧 WebAPI（老用户的网页会话还在时，至少能先看到库）
+      try {
+        const lib = await capabilities.steam<SteamLibrary>(
+          refresh ? { op: "refreshLibrary" } : { op: "library", refresh: false },
+        );
+        games.value = lib.games ?? [];
+        total.value = lib.total ?? games.value.length;
+        cachedAt.value = lib.cachedAt ?? null;
+        warning.value = lib.warning ?? null;
+        librarySource.value = "webapi";
+        libraryLoaded.value = true;
+        // 库能拉通说明旧会话还有效：点亮登录态，别让界面同时出现库和登录卡
+        if (!status.value.loggedIn) status.value = { ...status.value, loggedIn: true };
+        return;
+      } catch (e) {
+        games.value = [];
+        total.value = 0;
+        cachedAt.value = null;
+        warning.value = null;
+        librarySource.value = "";
+        libraryLoaded.value = true;
+        // 未扫码登录不是错误：登录卡就是正确交互，报错反而多一条噪音；
+        // 已扫码却拉不到库，才把 CM 侧原因暴露出来。
+        error.value = cmLogin.value.hasToken ? cmFailure || messageOf(e) : "";
+      }
     } finally {
       libraryLoading.value = false;
     }
@@ -436,7 +597,7 @@ export const useSteamStore = defineStore("steam", () => {
   /**
    * 首屏加载：先拿登录态，已登录再拉库。
    *
-   * 顺序不能反：未登录时拉库在真实宿主会抛「尚未登录」，白留一条错误提示。
+   * 顺序不能反：未扫码时拉库在真实宿主会白跑一次「尚未登录」，留一条无意义错误。
    */
   async function load(options: LoadOptions = {}): Promise<void> {
     error.value = "";
@@ -446,56 +607,73 @@ export const useSteamStore = defineStore("steam", () => {
     }
   }
 
-  /** 顶栏刷新按钮：强制重拉库（登录态失效时先提示重连） */
+  /** 顶栏刷新按钮：重新确认登录态后强制重拉库 */
   async function refresh(): Promise<void> {
-    if (!status.value.loggedIn) {
-      // 没登录时「刷新」等价于重连：先刷新状态看能不能恢复会话
-      await reconnect();
-      return;
-    }
+    await loadStatus();
+    if (!status.value.loggedIn) return; // 未扫码：界面出登录卡，不报错
     await loadLibrary(true);
   }
 
   /**
-   * 重连：会话存在但 token 过期时用。
+   * 重连 / 重试：重新确认 CM 凭据后重拉库。
    *
-   * 先重新读 status（宿主会自动用 refresh_token 换 access_token），
-   * 换出来了再拉库；换不出来就把错误留在 error 上。
+   * CM 模型里没有 refresh_token 过期这一说（凭据要么在、要么不在），
+   * 所以这里不做「换 token」，只是给界面一个统一的重试入口。
    */
   async function reconnect(): Promise<void> {
     await loadStatus();
-    if (status.value.loggedIn) {
-      await loadLibrary(true);
-      return;
-    }
-    if (!error.value) error.value = "会话仍不可用，请重新登录";
+    if (status.value.loggedIn) await loadLibrary(true);
   }
 
-  /** 退出登录：宿主删会话 + 清内存态 */
+  /** 退出登录：删掉 CM 凭据 + 清内存态（库 / 详情 / 下载一起失效） */
   async function logout(): Promise<void> {
     authBusy.value = true;
     error.value = "";
     try {
-      await capabilities.steam<null>({ op: "logout" });
+      await capabilities.cmLogout();
+      // 旧网页会话也顺手清掉：它只是回退数据源，留着会让「已退出」状态可疑。
+      // 这是清理，不是登录路径 —— UI 不再走网页登录。
+      try {
+        await capabilities.steam<null>({ op: "logout" });
+      } catch {
+        // 宿主侧旧会话本来就不存在时忽略
+      }
       games.value = [];
       total.value = 0;
       cachedAt.value = null;
       warning.value = null;
       libraryLoaded.value = false;
+      librarySource.value = "";
       details.value = {};
       authState.value = { state: "idle" };
       qr.value = null;
-      // 退出后仍保留 hasSession 语义由宿主决定（删了会话就是 false）
-      status.value = { loggedIn: false, hasSession: status.value.hasSession };
-      await loadStatus();
+      cmGeneration += 1;
+      stopCmPolling();
+      cmClientId = "";
+      cmRequestId = "";
+      cmLogin.value = {
+        hasToken: false,
+        accountName: "",
+        qrUrl: "",
+        qrBusy: false,
+        qrError: "",
+        statusText: "",
+      };
+      status.value = { loggedIn: false, hasSession: false };
     } catch (e) {
+      // 凭据没删掉就别假装已退出：错误留在 error 上让用户重试
       error.value = messageOf(e);
     } finally {
       authBusy.value = false;
     }
   }
 
-  // ---- 动作：登录流程 ----
+  // ---- 动作：旧网页登录（**历史保留，UI 已不再走**）----
+  //
+  // 这些动作对应宿主侧仍保留的网页登录 op（loginQrStart / loginPoll / …）。
+  // 统一到 CM 扫码后，界面不再调用它们；保留是为了：①旧数据 / 排障仍能验证
+  // 网页侧链路；②万一需要临时回退，不必再从 git 里捞代码。
+  // ⚠️ 新增功能不要再接这里的任何一条。
 
   /** 方式一：开始扫码。返回 challengeUrl + interval（秒）。 */
   async function startQr(): Promise<SteamQrChallenge | null> {
@@ -619,6 +797,170 @@ export const useSteamStore = defineStore("steam", () => {
     } catch {
       // 取消失败没有用户可做的补救动作，只复位前端即可
     }
+  }
+
+  // ---- 动作：CM 扫码登录（游戏库 + 下载共用同一份凭据）----
+  //
+  // 三条不变量，改动时别破坏：
+  // 1. **与网页登录互不影响**：这里不读写 status / authState / qr，两套凭据各自推进；
+  // 2. **轮询必须幂等可停**：同一时刻最多一个定时器，重复 begin 会先停旧表；
+  // 3. **不碰 token**：扫码成功后凭据由主进程加密保存，这里只把 hasToken 刷成 true。
+
+  /** 只拉「有没有 CM 凭据」，不做任何副作用。失败把原因留在 qrError 上。 */
+  async function loadCmLoginStatus(): Promise<void> {
+    try {
+      const res = await capabilities.cmLoginStatus();
+      cmLogin.value = {
+        ...cmLogin.value,
+        hasToken: Boolean(res?.hasToken),
+        accountName: res?.accountName ?? "",
+      };
+    } catch (e) {
+      cmLogin.value = { ...cmLogin.value, qrError: messageOf(e) };
+    }
+  }
+
+  /**
+   * 发起 CM 扫码登录：拿 challengeUrl → 画成二维码 → 按 interval 起轮询。
+   *
+   * 画码用 `qrcode` 动态 import + toDataURL：只有真要扫码时才把这个库拉进来；
+   * 二维码参数（220px / margin 1 / M 级纠错）与早先的登录面板保持一致。
+   */
+  async function beginCmLogin(): Promise<void> {
+    // 重新发起 = 作废旧会话，先把上一个定时器停掉再换 clientId/requestId
+    const generation = ++cmGeneration;
+    stopCmPolling();
+    cmClientId = "";
+    cmRequestId = "";
+    cmLogin.value = {
+      ...cmLogin.value,
+      qrBusy: true,
+      qrError: "",
+      qrUrl: "",
+      statusText: "waiting",
+    };
+    try {
+      const res = await capabilities.cmBeginQr();
+      // 期间又发起了一轮（用户连点刷新 / 组件重挂）：这次的结果整段丢弃
+      if (generation !== cmGeneration) return;
+      if (!res || res.error || !res.challengeUrl) {
+        throw new Error(res?.error || "发起扫码登录失败");
+      }
+      cmClientId = res.clientId;
+      cmRequestId = res.requestId;
+      const { default: QRCode } = await import("qrcode");
+      const dataUrl = await QRCode.toDataURL(res.challengeUrl, {
+        width: 220,
+        margin: 1,
+        errorCorrectionLevel: "M",
+      });
+      if (generation !== cmGeneration) return;
+      cmLogin.value = { ...cmLogin.value, qrUrl: dataUrl, statusText: "waiting" };
+      startCmPolling(res.interval);
+    } catch (e) {
+      // 只把错误写给「当前这一轮」：更晚发起的那轮不该被旧请求的失败覆盖
+      if (generation === cmGeneration) {
+        cmLogin.value = {
+          ...cmLogin.value,
+          qrUrl: "",
+          qrError: messageOf(e),
+          statusText: "error",
+        };
+      }
+    } finally {
+      // 同理：旧一轮结束时不能把新一轮的 loading 关掉，否则二维码区会闪一下
+      if (generation === cmGeneration) {
+        cmLogin.value = { ...cmLogin.value, qrBusy: false };
+      }
+    }
+  }
+
+  /**
+   * 起轮询。**幂等**：先停旧表再挂新表，不会攒出多个定时器。
+   *
+   * `intervalSeconds` 来自宿主，单位是**秒**（可能是小数），setInterval 要毫秒。
+   */
+  function startCmPolling(intervalSeconds: number): void {
+    stopCmPolling();
+    if (!cmClientId) return;
+    const ms = Math.max(1000, (intervalSeconds || 5) * 1000);
+    cmTimer = window.setInterval(() => void cmTick(), ms);
+    // 立刻补一次：二维码刚出现就查一遍，用户若已经确认过（或预览里已到第 2 次）不必干等
+    void cmTick();
+  }
+
+  /** 停轮询。**必须**在关面板 / 组件卸载 / 授权成功时调用，否则后台会一直打接口。 */
+  function stopCmPolling(): void {
+    if (cmTimer !== null) {
+      window.clearInterval(cmTimer);
+      cmTimer = null;
+    }
+  }
+
+  /** 轮询一次。返回 void —— 停表与状态推进都在内部决定，调用方不必关心。 */
+  async function cmTick(): Promise<void> {
+    if (cmPolling || !cmClientId) return;
+    cmPolling = true;
+    try {
+      const res = await capabilities.cmPollQr(cmClientId, cmRequestId);
+      if (res?.error) {
+        stopCmPolling();
+        cmLogin.value = { ...cmLogin.value, qrError: res.error, statusText: "error" };
+        return;
+      }
+      if (res?.status === "authorized") {
+        stopCmPolling();
+        cmClientId = "";
+        cmRequestId = "";
+        // 以主进程的落盘结果为准再刷新一次（token 不会回传，只能问「有没有」）
+        await loadCmLoginStatus();
+        cmLogin.value = {
+          ...cmLogin.value,
+          hasToken: true,
+          accountName: res.accountName || cmLogin.value.accountName,
+          qrUrl: "",
+          qrError: "",
+          statusText: "success",
+        };
+        // **统一登录的接缝**：扫码成功即视为登录 → 立刻同步 status 并拉库，
+        // 上层（登录卡 / 顶栏 / 详情页）不需要各自再触发一次。
+        syncStatusFromCm();
+        statusLoaded.value = true;
+        void loadLibrary();
+        return;
+      }
+      // 宿主目前只回 pending / authorized；"scanned" 是给将来「已扫码待确认」预留的
+      cmLogin.value = {
+        ...cmLogin.value,
+        statusText: res?.status === "scanned" ? "scanned" : "waiting",
+      };
+    } catch (e) {
+      // 轮询抛错（宿主崩溃 / 通道断开）：停表并把原因交给视图，别让二维码永远转圈
+      stopCmPolling();
+      cmLogin.value = { ...cmLogin.value, qrError: messageOf(e), statusText: "error" };
+    } finally {
+      cmPolling = false;
+    }
+  }
+
+  /**
+   * 收起面板时的复位：停表 + 丢掉这一轮的码与会话标识。
+   *
+   * 刻意**不清 hasToken / accountName** —— 那是主进程的事实，跟面板开关无关。
+   */
+  function resetCmLogin(): void {
+    // 作废在途请求：关面板后旧请求若晚到，不应该把二维码又画回来
+    cmGeneration += 1;
+    stopCmPolling();
+    cmClientId = "";
+    cmRequestId = "";
+    cmLogin.value = {
+      ...cmLogin.value,
+      qrUrl: "",
+      qrBusy: false,
+      qrError: "",
+      statusText: "",
+    };
   }
 
   // ---- 动作：商店详情 ----
@@ -850,6 +1192,7 @@ export const useSteamStore = defineStore("steam", () => {
     warning,
     libraryLoaded,
     libraryLoading,
+    librarySource,
     authState,
     authBusy,
     qr,
@@ -866,6 +1209,7 @@ export const useSteamStore = defineStore("steam", () => {
     downloadProgress,
     downloadBusy,
     downloadError,
+    downloadNeedCmLogin,
     downloadAppId,
     depots,
     depotsLoading,
@@ -874,7 +1218,6 @@ export const useSteamStore = defineStore("steam", () => {
     error,
     // 派生
     loggedIn,
-    needsReconnect,
     displayName,
     totalPlaytimeMinutes,
     downloadPercent,
@@ -894,6 +1237,13 @@ export const useSteamStore = defineStore("steam", () => {
     submitGuard,
     resumeSession,
     cancelLogin,
+    // CM 扫码登录（游戏库 + 下载）
+    cmLogin,
+    loadCmLoginStatus,
+    beginCmLogin,
+    startCmPolling,
+    stopCmPolling,
+    resetCmLogin,
     fetchDetails,
     fetchDetailsBatch,
     clearDetails,

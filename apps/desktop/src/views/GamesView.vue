@@ -250,10 +250,9 @@ function onLoggedIn(): void {
   if (!steam.games.length) void steam.loadLibrary();
 }
 
-// 错误条上的「重试」按语义分流：未登录时重连，已登录时刷库
+// 错误条上的「重试」：统一登录后只有一个入口 —— 重新确认凭据再拉库
 function retry(): void {
-  if (steam.loggedIn) void steam.refresh();
-  else void steam.reconnect();
+  void steam.refresh();
 }
 
 // 退出登录后清空筛选，避免残留关键词让人以为库空了
@@ -291,12 +290,6 @@ const libraryEmpty = computed(
           <span class="login-logo material-symbols-outlined">sports_esports</span>
           <h2 class="login-title">{{ t("games.loginTitle") }}</h2>
           <p class="login-desc">{{ t("games.loginDesc") }}</p>
-        </div>
-
-        <!-- 登录态失效（hasSession 但未登入）时先提示重连 -->
-        <div v-if="steam.needsReconnect" class="bar warn" role="status">
-          <span class="material-symbols-outlined">info</span>
-          <span>{{ t("games.reconnectHint") }}</span>
         </div>
 
         <SteamLoginPanel @logged-in="onLoggedIn" />
@@ -352,6 +345,15 @@ const libraryEmpty = computed(
           </m3e-button>
         </div>
       </header>
+
+      <!--
+        库来源标注：CM 不可用时会回退到旧的网页登录会话（只能看库、不能应用内下载）。
+        两条路径的凭据不同，用户必须能看出当前这份库是哪种来源。
+      -->
+      <div v-if="steam.librarySource === 'webapi'" class="bar warn" role="status">
+        <span class="material-symbols-outlined">info</span>
+        <span>{{ t("games.libraryFromWebapi") }}</span>
+      </div>
 
       <!-- 宿主降级提示（如「登录态已失效，显示上次缓存」） -->
       <div v-if="steam.warning" class="bar warn" role="status">

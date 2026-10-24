@@ -209,6 +209,10 @@ import type {
   SteamSettings,
   SteamDepotInfo,
   SteamDownloadOutcome,
+  SteamCmLoginStatus,
+  SteamCmQrChallenge,
+  SteamCmPollResult,
+  SteamOwnedGame,
   DesktopCaps,
   Rgba,
   WakeLockKind,
@@ -1681,6 +1685,56 @@ export const capabilities = {
    */
   steamDownload(appId: number, installDir: string): Promise<SteamDownloadOutcome> {
     return capabilities.steam<SteamDownloadOutcome>({ op: "download", appId, installDir });
+  },
+
+  // ---- CM 侧扫码登录（**只为下载服务**，与网页登录完全独立）----
+  //
+  // 为什么不能复用网页登录：网页扫码拿到的 token 受众是 WebAPI，交给 CM 会被
+  // Steam 回 invalid credentials。下载必须走 CM 的匿名连接 + BeginAuthSessionViaQR
+  // 拿到「受众是 Steam 客户端」的凭据。成功后 token 由主进程加密保存，**不回传前端**。
+
+  /** 读「下载专用（CM）凭据」是否存在；与 steam 登录态互不影响。 */
+  cmLoginStatus(): Promise<SteamCmLoginStatus> {
+    return capabilities.steam<SteamCmLoginStatus>({ op: "cmLoginStatus" });
+  },
+
+  /**
+   * 发起 CM 扫码登录。返回 challengeUrl（交给 qrcode 画码）与轮询间隔（**秒**）。
+   * 失败时宿主回 `{ error }` 而不是抛错，调用方要判空。
+   */
+  cmBeginQr(): Promise<SteamCmQrChallenge> {
+    return capabilities.steam<SteamCmQrChallenge>({ op: "cmBeginQr" });
+  },
+
+  /**
+   * 轮询一次扫码结果。**必须带上 beginQr 给的 clientId / requestId** —— 宿主靠它们
+   * 认会话；缺一个宿主会直接回 pending（不会报错）。
+   */
+  cmPollQr(clientId: string, requestId: string): Promise<SteamCmPollResult> {
+    return capabilities.steam<SteamCmPollResult>({ op: "cmPollQr", clientId, requestId });
+  },
+
+  /**
+   * 用 CM 会话取「已拥有的游戏」（**游戏库的主数据源**）。
+   *
+   * 与旧 WebAPI 路径（op:"library"）的区别：这里不需要网页登录态 —— 扫码一次
+   * 拿到的 CM 凭据既支撑游戏库也支撑下载。返回的是**数组**（没有缓存包装）；
+   * 老路径的缓存 / warning 语义仍由 op:"library" 保留，作为 CM 不可用时的兜底。
+   *
+   * ⚠️ 镜像：宿主侧对应 steam_owned_games（字段 camelCase）。失败时宿主抛错，
+   * 由 store 决定是否回退到 WebAPI。
+   */
+  steamOwnedGames(): Promise<SteamOwnedGame[]> {
+    return capabilities.steam<SteamOwnedGame[]>({ op: "steamOwnedGames" });
+  },
+
+  /**
+   * 退出 CM 登录（主进程删掉加密保存的凭据）。
+   *
+   * 下载与游戏库都靠这份凭据，所以退出后两者都不可用 —— 前端要同时清空库。
+   */
+  cmLogout(): Promise<{ ok: boolean }> {
+    return capabilities.steam<{ ok: boolean }>({ op: "cmLogout" });
   },
 
   // ---- 番茄内容源（独立 sidecar）----

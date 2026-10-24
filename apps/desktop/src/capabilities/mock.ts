@@ -252,6 +252,18 @@ const mockSteamStatus: SteamStatus = {
 /** 扫码轮询计数：第 3 次 poll 视为「已确认」，让预览不必真等 */
 let mockSteamPollCount = 0;
 
+// ---- CM 登录（预览）----
+//
+// 统一登录后 **CM 扫码就是主登录态**：游戏库与下载共用这份凭据。
+// 预览默认「未扫码」（false），这样浏览器预览从登录卡开始，能完整走一遍
+// 「扫码 → 授权 → 拉库」；扫码成功后下面的 mock 库才可见。
+/** 预览里是否已有 CM 凭据：初始 false，扫一遍码之后置 true */
+let mockCmHasToken = false;
+/** CM 凭据对应的账号名 */
+let mockCmAccountName = "";
+/** CM 轮询计数：第 2 次 poll 视为已授权（让浏览器预览能快速看完整流程） */
+let mockCmPollCount = 0;
+
 function steamLib(): SteamLibrary {
   return {
     games: MOCK_STEAM_GAMES,
@@ -497,6 +509,49 @@ export function mockSteam<T>(payload: Record<string, unknown>): T {
     // SSE 后转发过来的，浏览器预览根本没有这条通道，mock 里 setInterval 也发不出
     // 一个真实事件。所以这里只回一个成功结果；「下载中」的进度外观由
     // stores/steam.ts 在 !isDesktop 时用一段假进度自己走一遍（见那边注释）。
+    // ---- CM 扫码登录（浏览器预览：扫一遍码就「登录成功」）----
+    case "cmLoginStatus":
+      return { hasToken: mockCmHasToken, accountName: mockCmAccountName } as unknown as T;
+    case "cmBeginQr":
+      // 每次重新发起都把计数归零：刷新二维码后同样「两次轮询成功」
+      mockCmPollCount = 0;
+      return {
+        challengeUrl: "https://s.team/q/mock-cm-preview-challenge",
+        clientId: "70000000000000001",
+        requestId: "0123456789abcdef0123456789abcdef",
+        // 契约里单位是**秒**；预览给 2 秒，省得等太久
+        interval: 2,
+      } as unknown as T;
+    case "cmPollQr": {
+      mockCmPollCount += 1;
+      if (mockCmPollCount < 2) return { status: "pending" } as unknown as T;
+      mockCmHasToken = true;
+      mockCmAccountName = mockSteamStatus.accountName || "silvermoon_demo";
+      // 统一登录：CM 扫码成功即视为登录，旧 WebAPI 分支的登录态同步跟上
+      mockSteamStatus.loggedIn = true;
+      mockSteamStatus.accountName = mockCmAccountName;
+      return { status: "authorized", accountName: mockCmAccountName } as unknown as T;
+    }
+    case "cmLogout":
+      mockCmHasToken = false;
+      mockCmAccountName = "";
+      mockCmPollCount = 0;
+      mockSteamStatus.loggedIn = false;
+      return { ok: true } as unknown as T;
+    // 统一登录后的**主**游戏库：走 CM（未扫码时与真实宿主一样失败）
+    case "steamOwnedGames": {
+      if (!mockCmHasToken) throw new Error("尚未扫码登录 Steam");
+      return MOCK_STEAM_GAMES.map((g) => ({
+        appId: g.appId,
+        name: g.name,
+        playtimeMinutes: g.playtimeMinutes,
+        playtimeTwoWeeksMinutes: g.playtimeRecentMinutes ?? 0,
+        // 演示图标哈希：真实宿主给的是 Steam 的 img_icon_url，拼 CDN 的方式一致
+        iconHash: "mock" + g.appId.toString(16) + "icon",
+        hasCommunityStats: g.appId !== 367520,
+      })) as unknown as T;
+    }
+
     case "appDepots":
       return mockSteamDepots(Number(payload.appId)) as unknown as T;
     case "download": {
@@ -507,6 +562,16 @@ export function mockSteam<T>(payload: Record<string, unknown>): T {
           bytesWritten: 0,
           depots: 0,
           error: "尚未登录 Steam，无法下载",
+        } satisfies SteamDownloadOutcome as unknown as T;
+      }
+      // 与真实宿主一致：没有 CM 凭据时回 needCmLogin，让「扫码登录」面板在预览里能被触发
+      if (!mockCmHasToken) {
+        return {
+          ok: false,
+          bytesWritten: 0,
+          depots: 0,
+          error: "需要先用「Steam 扫码登录（下载）」授权一次：网页登录的凭据无法用于下载",
+          needCmLogin: true,
         } satisfies SteamDownloadOutcome as unknown as T;
       }
       const appId = Number(payload.appId);

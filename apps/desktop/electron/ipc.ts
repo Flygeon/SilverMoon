@@ -748,9 +748,31 @@ const handlers: Record<string, Handler> = {
             log.warn("[steam] 保存 CM 凭据失败", (error as Error)?.message);
           }
         }
-        // 不把 refresh_token 回传给渲染进程（它是长期凭据，等同密码）
-        return { status: data.status ?? "pending", accountName: data.accountName ?? "" };
+        // 不把 refresh_token 回传给渲染进程（它是长期凭据，等同密码）。
+        // authorized 一并回传：前端用它区分「已扫码待确认」与「授权完成」。
+        return {
+          status: data.status ?? "pending",
+          accountName: data.accountName ?? "",
+          authorized: data.status === "authorized",
+        };
       }
+      // 游戏库：走 CM（与登录同一套凭据，用户只需扫一次码）
+      //
+      // 之前漏了这个分支：后端 steam_owned_games 已注册，但宿主没转发，
+      // 桌面端会命中 default 抛「未知的 steam 操作」—— 前端只能退回旧 WebAPI，
+      // 等于统一登录白做。补齐后 CM 是唯一数据源。
+      case "steamOwnedGames": {
+        const cmSaved = readCmToken(path.join(dataDir, CM_TOKEN_FILE));
+        if (!cmSaved || !isSteamCmToken(cmSaved.refreshToken)) {
+          return { ok: false, error: "尚未完成 Steam 扫码登录" };
+        }
+        const reply = await callSidecar("steam_owned_games", {
+          accountName: cmSaved.accountName,
+          accessToken: cmSaved.refreshToken,
+        });
+        return reply.ok ? reply.data : { ok: false, error: reply.error ?? "查询游戏库失败" };
+      }
+
       case "cmLoginStatus": {
         const saved = readCmToken(path.join(dataDir, CM_TOKEN_FILE));
         return {

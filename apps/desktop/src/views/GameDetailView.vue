@@ -28,9 +28,10 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useSettingsStore } from "@/stores/settings";
+import SteamLoginPanel from "@/components/SteamLoginPanel.vue";
 import { useSteamStore } from "@/stores/steam";
 import { formatSize } from "@/utils/format";
-import { capabilities } from "@/capabilities";
+import { capabilities, isDesktop } from "@/capabilities";
 import {
   GAME_HERO_VT_NAME,
   activeCoverAppId,
@@ -548,20 +549,62 @@ const suggestedInstallDir = computed<string>(() => {
 });
 
 /**
- * 「安装」→ 选目录 → 真实下载。
+ * 真正下发下载（选完目录后走这里）。
+ *
+ * 抽出来是因为下载有**两条入口**：用户点「安装」、以及授权成功后自动重试。
+ * 两处都要「先清上次状态 → 发命令 → 按结果分流」，写两遍必然分叉。
+ */
+async function runDownload(installDir: string): Promise<void> {
+  const id = numericAppId.value;
+  if (Number.isNaN(id) || actionBusy.value || steam.downloadBusy) return;
+  actionBusy.value = true;
+  steam.resetDownload();
+  try {
+    const res = await steam.download(id, installDir);
+    if (!res.ok) {
+      // 没登录不是「下载失败」：打开扫码面板，扫完码用**同一个目录**自动重试，
+      // 让用户不必再看一次目录选择框。
+      if (res.needCmLogin) {
+        pendingInstallDir = installDir;
+        // 凭据可能刚失效：刷新一次登录态，让顶栏 / 面板状态与宿主一致
+        void steam.loadStatus();
+        showLoginPanel.value = true;
+        return;
+      }
+      notify(res.error || t("games.detail.downloadFailed"));
+      return;
+    }
+    pendingInstallDir = null;
+    notify(t("games.detail.downloadDone").replace("{size}", sizeText(res.bytesWritten) || "—"));
+    // 下载完成后 depot 面板收起来，把版面还给正文
+    showDepotPanel.value = false;
+  } finally {
+    actionBusy.value = false;
+  }
+}
+
+/**
+ * 「安装」→（必要时先扫码登录）→ 选目录 → 真实下载。
  *
  * 目录选择**预填建议路径**：Steam 库目录 + steamapps/common/<游戏名>，用户
  * 只需确认或改选；取消对话框视为放弃安装（不是失败，不报错）。
+ *
+ * ⚠️ 登录现在只有一种：CM 扫码（扫一次，游戏库与下载都可用）。所以「没登录」
+ * 的引导就是**打开同一个扫码面板**，不再跳设置页、也不再单独做一套授权 UI。
  */
 async function startInstall(): Promise<void> {
   const id = numericAppId.value;
   if (Number.isNaN(id) || actionBusy.value || steam.downloadBusy) return;
-  if (needLogin.value) {
-    notify(t("games.detail.downloadNeedLogin"));
+
+  // 1) 登录态可能是用户在别处刚扫的码：现查一次再决定要不要开面板
+  if (!steam.statusLoaded) await steam.loadStatus();
+  if (!steam.loggedIn) {
+    pendingInstallDir = null; // 还没选目录，登录成功后重新走一遍选目录
+    showLoginPanel.value = true;
     return;
   }
 
-  // 1) 选目录（预填建议路径，用户可改）
+  // 2) 选目录（预填建议路径，用户可改）
   let installDir: string | null = null;
   try {
     installDir = await capabilities.pickDirectory({
@@ -571,23 +614,18 @@ async function startInstall(): Promise<void> {
   } catch {
     installDir = null;
   }
+  /*
+   * 浏览器预览没有原生目录对话框（capabilities.pickDirectory 在非桌面端直接回 null），
+   * 若不兜底，「授权 → 自动重试下载」这条链路在预览里会静默结束、看不到下载进度。
+   * 因此只在预览里用建议路径顶上；桌面端保持原语义（用户取消 = 安静退出）。
+   */
+  if (!installDir && !isDesktop) {
+    installDir = suggestedInstallDir.value || "C:/SteamLibrary/steamapps/common/SilverMoonDemo";
+  }
   if (!installDir) return; // 用户取消：安静退出
 
-  // 2) 发下载（阻塞，进度走事件；store 内保证「先订阅再发命令」）
-  actionBusy.value = true;
-  steam.resetDownload();
-  try {
-    const res = await steam.download(id, installDir);
-    if (!res.ok) {
-      notify(res.error || t("games.detail.downloadFailed"));
-      return;
-    }
-    notify(t("games.detail.downloadDone").replace("{size}", sizeText(res.bytesWritten) || "—"));
-    // 下载完成后 depot 面板收起来，把版面还给正文
-    showDepotPanel.value = false;
-  } finally {
-    actionBusy.value = false;
-  }
+  // 3) 发下载（阻塞，进度走事件；store 内保证「先订阅再发命令」）
+  await runDownload(installDir);
 }
 
 /** 失败后重试：复用同一个入口（重新选目录 + 重新下发） */
@@ -596,14 +634,50 @@ async function retryInstall(): Promise<void> {
   await startInstall();
 }
 
+// ---------------------------------------------------------------- 扫码登录（下载前置）
+//
+// 登录只有一种：CM 扫码，扫一次游戏库与下载都可用。这里**不复制**二维码 / 轮询
+// 逻辑，直接复用 <SteamLoginPanel>（与游戏页同一个组件），避免两套 UI 各自演化。
+// 本页只多做两件事：记下被拦下的安装目录、登录成功后自动把下载接回去。
+
+/** 扫码登录面板是否展开（下载被登录态拦下时打开） */
+const showLoginPanel = ref(false);
+/** 上次下载用的安装目录：登录成功后直接复用，不必让用户再选一次 */
+let pendingInstallDir: string | null = null;
+
 /**
- * 跳去「设置 → Steam」登录（未登录时的引导）。
- *
- * 用 push 而不是 replace：用户登完可能想返回详情页继续安装。
- * 设置页的 Steam 分类由 SettingsView 自己按 hash 定位，这里只负责带过去。
+ * 下载面板标题：缺登录时说「需要扫码登录」，不说「下载失败」——
+ * 那不是故障，只是还没登录；写成失败会让用户去找并不存在的错误。
  */
-async function goSteamSettings(): Promise<void> {
-  await router.push({ path: "/settings", query: { section: "steam" } });
+const downloadTitleKey = computed(() => {
+  if (steam.downloadNeedCmLogin) return "games.detail.loginNeeded";
+  if (steam.downloadError) return "games.detail.downloadFailed";
+  return "games.detail.downloading";
+});
+
+/** 标题前的图标：缺登录用「登录」语义，而非错误叉 */
+const downloadTitleIcon = computed(() => {
+  if (steam.downloadNeedCmLogin) return "login";
+  return steam.downloadError ? "error" : "download";
+});
+
+/** 打开扫码面板（面板内部会在 mount 时自己发起一轮扫码） */
+function openQrLogin(): void {
+  showLoginPanel.value = true;
+}
+
+/** 关闭面板：组件卸载会停轮询并清掉这一轮的码（见 SteamLoginPanel 的 onBeforeUnmount） */
+function closeLoginPanel(): void {
+  showLoginPanel.value = false;
+}
+
+/** 登录成功：收起面板并接着装（有上次的目录就直接复用，否则重走「选目录 → 下载」） */
+async function onCmLoggedIn(): Promise<void> {
+  showLoginPanel.value = false;
+  const dir = pendingInstallDir;
+  pendingInstallDir = null;
+  if (dir) await runDownload(dir);
+  else await startInstall();
 }
 
 /** 展开/收起 depot 面板；展开时按需拉一次 depot 列表 */
@@ -673,6 +747,9 @@ onUnmounted(() => {
   // 只清提示条计时器；下载的**事件订阅留在 store**（下载可能仍在跑，断订阅会丢后期进度）
   if (toastTimer) window.clearTimeout(toastTimer);
   toastTimer = null;
+  // 扫码面板的轮询归 store 管：面板自身的 onBeforeUnmount 会停表，这里再兜一次
+  // （用户可能在扫码途中直接切走路由，组件栈的卸载顺序不该成为唯一的保险）。
+  steam.stopCmPolling();
 });
 
 // 同一路由内换 appId 时重拉（清掉上一款的数据，避免先闪一下旧海报）
@@ -843,14 +920,15 @@ watch(
         </section>
 
         <!--
-          未登录降级：下载需要 CM（登录态）。这里先在前端说清楚并给跳转，
-          而不是等用户选完目录、点了下载才收到后端的「尚未登录 Steam」。
+          未登录降级：下载需要 CM 凭据（= 扫码登录）。这里先在前端说清楚并直接给出
+          扫码入口（与游戏页同一个面板），而不是等用户选完目录、点了下载才收到
+          后端的「需要先扫码登录」。
         -->
         <div v-if="needLogin && !isInstalled" class="bar info" role="status">
           <span class="material-symbols-outlined">login</span>
           <span class="bar-text">{{ t("games.detail.downloadNeedLogin") }}</span>
-          <m3e-button variant="text" size="small" @click="goSteamSettings">
-            {{ t("games.detail.downloadGoLogin") }}
+          <m3e-button variant="text" size="small" @click="openQrLogin">
+            {{ t("games.detail.openQrLogin") }}
           </m3e-button>
         </div>
 
@@ -862,14 +940,8 @@ watch(
         <section v-if="showDownloadPanel" class="download-panel">
           <div class="download-head">
             <span class="download-title">
-              <span class="material-symbols-outlined download-icon">
-                {{ steam.downloadError ? "error" : "download" }}
-              </span>
-              {{
-                steam.downloadError
-                  ? t("games.detail.downloadFailed")
-                  : t("games.detail.downloading")
-              }}
+              <span class="material-symbols-outlined download-icon">{{ downloadTitleIcon }}</span>
+              {{ t(downloadTitleKey) }}
             </span>
             <span v-if="!steam.downloadError" class="download-percent tabular-nums">
               {{ steam.downloadPercent }}%
@@ -951,6 +1023,31 @@ watch(
               </li>
             </ul>
           </div>
+        </section>
+
+        <!-- ============================ 扫码登录（下载前置） ============================ -->
+        <!--
+          登录只有一种：CM 扫码（扫一次，游戏库与下载都可用）。所以这里**不再**做
+          一套独立的「下载授权」UI，而是直接复用游戏页的 <SteamLoginPanel> ——
+          二维码 / 轮询 / 状态文案只有一份实现，两个入口不会各自演化。
+
+          交互闭环：
+          - 触发：点「安装」时未登录，或 download 返回 needCmLogin；
+          - 面板可关闭；关闭即卸载组件，组件内会停轮询并清掉这一轮的码；
+          - 扫码成功（组件 emit logged-in）→ 收起面板 → 自动把下载接回去
+            （有上次选的目录就直接复用，否则重走「选目录 → 下载」）。
+        -->
+        <section v-if="showLoginPanel" class="login-panel" aria-live="polite">
+          <div class="login-panel-head">
+            <span class="login-panel-title">
+              <span class="material-symbols-outlined login-panel-icon">login</span>
+              {{ t("games.detail.loginNeeded") }}
+            </span>
+            <m3e-icon-button :title="t('games.close')" @click="closeLoginPanel">
+              <span class="material-symbols-outlined">close</span>
+            </m3e-icon-button>
+          </div>
+          <SteamLoginPanel @logged-in="onCmLoggedIn" />
         </section>
 
         <div v-if="toast" class="bar info" role="status">
@@ -1596,6 +1693,39 @@ watch(
   text-align: right;
   font-size: var(--md-sys-typescale-label-small-size);
   color: var(--md-sys-color-on-surface-variant);
+}
+
+/* ---- 扫码登录（下载前置）----
+   版式与 .download-panel 一致；二维码 / 状态文案由 SteamLoginPanel 自己负责，
+   这里只管容器与标题行 —— 两个入口（游戏页、详情页）共用同一份 UI。 */
+.login-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  border-radius: var(--md-sys-shape-corner-large);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-low);
+}
+.login-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.login-panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--md-sys-typescale-title-small-size);
+  font-weight: var(--md-sys-typescale-title-small-weight);
+  color: var(--md-sys-color-on-surface);
+}
+.login-panel-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+  color: var(--md-sys-color-primary);
 }
 
 /* ---- 两栏 ---- */
