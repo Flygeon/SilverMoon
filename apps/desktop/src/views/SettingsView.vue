@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import PageHeader from "@/components/PageHeader.vue";
 import ExtensionSlot from "@/components/ExtensionSlot.vue";
 import {
@@ -47,6 +47,7 @@ import { listen } from "@/ipc/events";
 const settings = useSettingsStore();
 const library = useLibraryStore();
 const router = useRouter();
+const route = useRoute();
 const bangumiCollect = useBangumiCollectStore();
 const bangumiTokenDraft = ref(settings.bangumiToken);
 
@@ -324,6 +325,8 @@ function toggleDevtools(event: Event) {
 }
 
 onMounted(async () => {
+  // 带 section 跳进来的（如详情页的「去登录」）先落位到那个分类
+  applySectionFromRoute();
   // 恢复上次手动指定的目录，再查询实际可用状态
   if (settings.ffmpegDir) {
     ffmpeg.value = await capabilities.ffmpegSetPath(settings.ffmpegDir);
@@ -821,6 +824,25 @@ function selectSection(id: string) {
   activeSection.value = id;
   // 不同分类高度差很大，不回到顶部会让短分类停在上一屏的滚动位置
   settingsBodyEl.value?.scrollTo({ top: 0 });
+}
+
+/**
+ * 从路由 query 切到指定分类（供其它页面的「去登录 / 去设置」跳转使用）。
+ *
+ * 为什么要有：游戏详情页在未登录时会提示「需要先登录 Steam」，跳过来若仍停在
+ * 漂亮主题这类默认分类，用户还得自己找一遍——把跳转做成「直达」才有意义。
+ *
+ * `section` 的值是**分类 id**（如 `settings-steam`）；不合法就直接忽略，
+ * 不能让一个手写 URL 把页面切到一个不存在的分类、右侧空白。
+ */
+function applySectionFromRoute(): void {
+  const raw = route.query.section;
+  const wanted = typeof raw === "string" ? raw : "";
+  if (!wanted) return;
+  // 有的调用方只给短名（steam），统一补成 settings-<x>，两种写法都收
+  const id = wanted.startsWith("settings-") ? wanted : `settings-${wanted}`;
+  const known = settingNav.some((group) => group.items.some((item) => item.id === id));
+  if (known) selectSection(id);
 }
 
 // ---------------------------------------------------------------- 设置搜索

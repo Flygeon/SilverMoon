@@ -1762,6 +1762,60 @@ export interface SteamSettings {
   detected: boolean;
 }
 
+// ------------------------------------------------------------------ 下载（需要 CM）
+//
+// 与上面所有 op 的**本质区别**：下载是**阻塞调用** —— 命令要等所有 depot 都落盘
+// 才返回，可能几分钟。因此进度不走返回值，走 `steam:download` 事件（见下），
+// 前端必须先 subscribeDownload() 再发 download，否则全程只有一个不动的按钮。
+
+/**
+ * 一个 depot（op:"appDepots" 的数组元素）。
+ *
+ * ⚠️ `manifestGid` 是**字符串**：它是 Steam 的 u64 manifest id，超出 JS 安全整数
+ * （2^53-1）的范围，用 number 接会静默丢精度 —— 而 manifest id 差一位就是另一个
+ * build，CDN 会直接 404/404。契约里宿主也按字符串给，前端全程不要转 number。
+ */
+export interface SteamDepotInfo {
+  depotId: number;
+  /** u64 的十进制字符串；不能转 number */
+  manifestGid: string;
+}
+
+/** op:"download" 的返回。`ok:false` 时 `error` 是后端已写好的可读中文原文。 */
+export interface SteamDownloadOutcome {
+  ok: boolean;
+  /** 实际写入字节数（失败时为 0） */
+  bytesWritten: number;
+  /** 完成的 depot 数 */
+  depots: number;
+  /** 失败原因原文；成功为 null */
+  error?: string | null;
+}
+
+/**
+ * `steam:download` 事件的载荷（**当前正在下载的那个 depot** 的进度）。
+ *
+ * 注意单位分两层：
+ * - `depotDone` / `depotTotal` 是**字节**（当前 depot 内）；
+ * - `depotsDone` / `depotsTotal` 是**个数**（整体）。
+ * 总进度条没有全局总字节数（不同 depot 体积差几个数量级），因此按
+ * 「已完成 depot 数 + 当前 depot 的字节比例」折算成一个 0~1 的整体比例。
+ */
+export interface SteamDownloadProgress {
+  /** 当前 depot 的 id */
+  depotId: number;
+  /** 当前 depot 已下载字节 */
+  depotDone: number;
+  /** 当前 depot 总字节（0 表示宿主还不知道，此时只按 depot 个数算） */
+  depotTotal: number;
+  /** 已完成的 depot 个数 */
+  depotsDone: number;
+  /** 本次要下载的 depot 总数 */
+  depotsTotal: number;
+  /** 当前正在写的文件（相对安装目录的路径） */
+  currentFile: string;
+}
+
 /** 前端调用 capabilities.steam 的最小公共形状。 */
 export interface SteamRequest {
   op: string;

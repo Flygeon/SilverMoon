@@ -40,6 +40,8 @@ import type {
   SteamLocalLibrary,
   SteamSettings,
   SteamStatus,
+  SteamDepotInfo,
+  SteamDownloadOutcome,
   TopTrackStat,
   WebDavEntry,
   WebDavStatus,
@@ -488,9 +490,63 @@ export function mockSteam<T>(payload: Record<string, unknown>): T {
     }
     case "pickSteamRoot":
       return { path: "E:/SteamLibrary" } as unknown as T;
+
+    // ---- 下载（浏览器预览：直接成功，不做真下载）----
+    //
+    // mock 里**不能**模拟进度事件：`steam:download` 是宿主从 sidecar 收到了
+    // SSE 后转发过来的，浏览器预览根本没有这条通道，mock 里 setInterval 也发不出
+    // 一个真实事件。所以这里只回一个成功结果；「下载中」的进度外观由
+    // stores/steam.ts 在 !isDesktop 时用一段假进度自己走一遍（见那边注释）。
+    case "appDepots":
+      return mockSteamDepots(Number(payload.appId)) as unknown as T;
+    case "download": {
+      // 与真实宿主一致：未登录直接失败，好让「需要先登录」这条分支在预览里也能看见
+      if (!mockSteamStatus.loggedIn) {
+        return {
+          ok: false,
+          bytesWritten: 0,
+          depots: 0,
+          error: "尚未登录 Steam，无法下载",
+        } satisfies SteamDownloadOutcome as unknown as T;
+      }
+      const appId = Number(payload.appId);
+      if (!Number.isFinite(appId)) {
+        return {
+          ok: false,
+          bytesWritten: 0,
+          depots: 0,
+          error: "appId 不合法",
+        } satisfies SteamDownloadOutcome as unknown as T;
+      }
+      const depots = mockSteamDepots(appId);
+      return {
+        ok: true,
+        bytesWritten: depots.length * 1.2 * 1024 ** 3,
+        depots: depots.length,
+        error: null,
+      } satisfies SteamDownloadOutcome as unknown as T;
+    }
+
     default:
       return null as unknown as T;
   }
+}
+
+/**
+ * 演示用的 depot 列表。
+ *
+ * 按 appId 派生 2~4 个 depot，manifestGid 用一串**长十进制字符串** —— 刻意
+ * 超过 2^53（JS 安全整数），这样任何「顺手转 number」的写法在预览里就会
+ * 肉眼可见地丢精度，而不是等真机上 CDN 404 才发现。
+ */
+function mockSteamDepots(appId: number): SteamDepotInfo[] {
+  const base = Number.isFinite(appId) && appId > 0 ? appId : 730;
+  const count = 2 + (base % 3);
+  return Array.from({ length: count }, (_, i) => ({
+    depotId: base * 10 + i + 1,
+    // 21 位十进制，远超 Number.MAX_SAFE_INTEGER（16 位）
+    manifestGid: `${base}${String(i + 1).padStart(6, "0")}9876543210`,
+  }));
 }
 
 /**

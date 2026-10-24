@@ -8,6 +8,9 @@ import type {
   SteamActionResult,
   SteamAppDetails,
   SteamAuthState,
+  SteamDepotInfo,
+  SteamDownloadOutcome,
+  SteamDownloadProgress,
   SteamGame,
   SteamGameDetail,
   SteamInstalledGame,
@@ -89,6 +92,26 @@ export const useSteamStore = defineStore("steam", () => {
   // ---- Steam 目录设置 ----
   const steamSettings = ref<SteamSettings | null>(null);
 
+  // ---- 下载（阻塞命令 + 事件进度）----
+  //
+  // download 命令要等所有 depot 落盘才返回（可能几分钟），进度**只能**来自
+  // `steam:download` 事件。所以这里的职责是：先挂订阅、再发命令、把事件写进
+  // downloadProgress，并保证同一时刻只有一个任务（后端也只有一份 CM 会话）。
+  /** 当前进度（null = 没有在下载；成功后保留最后一帧，便于视图显示 100%） */
+  const downloadProgress = ref<SteamDownloadProgress | null>(null);
+  /** 是否有一个下载任务在跑（按钮置灰 + 面板展开都看它） */
+  const downloadBusy = ref(false);
+  /** 下载失败原因（后端给的可读中文原文，原样展示，不做二次翻译） */
+  const downloadError = ref("");
+  /** 正在下载的 appId（详情页据此判断「这个进度条是不是我的」） */
+  const downloadAppId = ref<number | null>(null);
+  /** depot 列表（下载面板用；op:"appDepots"） */
+  const depots = ref<SteamDepotInfo[]>([]);
+  const depotsLoading = ref(false);
+  const depotsError = ref("");
+  /** 每个 depot 的完成度（0~1），事件驱动的累积值；key = depotId */
+  const depotFractions = ref<Record<number, number>>({});
+
   // ---- 公共错误 ----
   const error = ref("");
 
@@ -104,6 +127,38 @@ export const useSteamStore = defineStore("steam", () => {
   const totalPlaytimeMinutes = computed(() =>
     games.value.reduce((sum, g) => sum + (g.playtimeMinutes || 0), 0),
   );
+
+  /**
+   * 总进度百分比（0~100，整数）。
+   *
+   * 为什么不是简单的「字节 / 总字节」：宿主的进度事件只给**当前 depot**的
+   * 字节数（depotDone / depotTotal），没有全局总字节 —— 各 depot 体积能差
+   * 几个数量级，把当前 depot 的字节比例直接当总进度会让进度条反复回跳。
+   *
+   * 所以按「已完成 depot 个数 + 当前 depot 的字节比例」折算：
+   * 每个 depot 占 1/depotsTotal，当前这个再按自身字节比例填充。
+   * 事件里 depotTotal 为 0（宿主还没算出体积）时，这一段按 0 计，
+   * 进度条表现为「按 depot 个数跳台阶」，不会卡死也不倒退。
+   */
+  const downloadPercent = computed<number>(() => {
+    const progress = downloadProgress.value;
+    if (!progress || !progress.depotsTotal) return 0;
+    const total = progress.depotsTotal;
+    const finished = Math.min(progress.depotsDone, total);
+    const fraction =
+      progress.depotTotal > 0 ? Math.min(1, progress.depotDone / progress.depotTotal) : 0;
+    const ratio = (finished + fraction) / total;
+    return Math.max(0, Math.min(100, Math.round(ratio * 100)));
+  });
+
+  /** 当前 depot 的已下载 / 总字节（未知总量时 total 为 0，视图据此省略分母） */
+  const downloadBytes = computed<{ done: number; total: number }>(() => {
+    const progress = downloadProgress.value;
+    return {
+      done: progress?.depotDone ?? 0,
+      total: progress?.depotTotal ?? 0,
+    };
+  });
 
   function messageOf(e: unknown): string {
     return e instanceof Error ? e.message : String(e);
@@ -143,6 +198,195 @@ export const useSteamStore = defineStore("steam", () => {
     unlisten?.();
     unlisten = null;
     listening = false;
+  }
+
+  // ---- 事件订阅：下载进度 ----
+  //
+  // 与上面的 steam:auth 分开一段自己的 unlisten，理由：两条事件的订阅时机
+  // 不同（登录态进页面就订，下载只在真正开始下载前才需要），共用一个
+  // unlisten 会让「取消下载订阅」顺手把登录态推送也断掉。
+  let downloadUnlisten: UnlistenFn | null = null;
+  let downloadListening = false;
+
+  /**
+   * 订阅 `steam:download`（宿主/后端在下载过程中持续推送）。
+   *
+   * **幂等**：多次调用只挂一个监听器，重复调用直接返回 —— 视图在每次点「安装」
+   * 前都可以放心再调一次，不会攒出 N 个监听器把同一帧写 N 遍。
+   *
+   * 浏览器预览没有宿主事件通道，这里静默跳过（mock 的假进度在 download() 里走）。
+   */
+  async function subscribeDownload(): Promise<void> {
+    if (downloadListening || !isDesktop) return;
+    downloadListening = true;
+    try {
+      downloadUnlisten = await listen<SteamDownloadProgress>("steam:download", (event) => {
+        const next = event.payload;
+        if (!next || typeof next !== "object") return;
+        downloadProgress.value = next;
+        // 逐 depot 的完成度：depotDone/depotTotal 给的是**当前** depot，
+        // 已完成的那些直接记 1（depotsDone 之前的都算完）。
+        const fractions = { ...depotFractions.value };
+        if (next.depotTotal > 0) {
+          fractions[next.depotId] = Math.min(1, next.depotDone / next.depotTotal);
+        }
+        depotFractions.value = fractions;
+      });
+    } catch {
+      // 宿主未提供该事件时不影响主流程（download 仍会正常返回结果）
+      downloadListening = false;
+    }
+  }
+
+  /** 取消下载订阅（目前视图不会主动断，store 常驻；留给测试与极端场景） */
+  function unsubscribeDownload(): void {
+    downloadUnlisten?.();
+    downloadUnlisten = null;
+    downloadListening = false;
+  }
+
+  /** 清掉上一次下载的进度 / 错误（重试或换了游戏时调，避免显示别人的进度条） */
+  function resetDownload(): void {
+    downloadProgress.value = null;
+    downloadError.value = "";
+    downloadAppId.value = null;
+    depotFractions.value = {};
+  }
+
+  /**
+   * 浏览器预览的假进度演示。
+   *
+   * mock 的 download 会立刻返回成功，没有事件可推，界面就会「点一下直接跳成功」，
+   * 完全看不出下载中的样子。这里在预览环境自己走一段 1.6s 的假进度，把
+   * 「进度条 + 当前文件 + depot 计数」这套 UI 走一遍，**只影响预览**：
+   * 真实桌面端走的是后端事件，不会进这里。
+   */
+  async function runMockProgress(appId: number): Promise<void> {
+    const total = 3;
+    const fileNames = ["game/data.bin", "game/assets.pak", "game/engine.dll", "game/audio.ogg"];
+    let tick = 0;
+    downloadAppId.value = appId;
+    // 必须**等假进度走完**再让 download() resolve：mock 的命令是瞬间返回的，
+    // 若不等，downloadBusy 立刻变回 false，面板当场消失，进度条一帧都看不到。
+    await new Promise<void>((resolve) => {
+      const timer = window.setInterval(() => {
+        tick += 1;
+        const step = Math.floor(tick / 6);
+        const withinDepot = ((tick % 6) + 1) / 6;
+        const depotsDone = Math.min(total - 1, step);
+        downloadProgress.value = {
+          depotId: 1000 + depotsDone,
+          depotDone: Math.round(withinDepot * 512 * 1024 * 1024),
+          depotTotal: 512 * 1024 * 1024,
+          depotsDone,
+          depotsTotal: total,
+          currentFile: fileNames[tick % fileNames.length],
+        };
+        if (tick >= 6 * total) {
+          // 收尾：补一帧全完成，让进度条明确走到 100% 再退出
+          window.clearInterval(timer);
+          downloadProgress.value = {
+            depotId: 1000 + total,
+            depotDone: 512 * 1024 * 1024,
+            depotTotal: 512 * 1024 * 1024,
+            depotsDone: total,
+            depotsTotal: total,
+            currentFile: "",
+          };
+          resolve();
+        }
+      }, 260);
+    });
+  }
+
+  // ---- 动作：下载 ----
+
+  /**
+   * 查 depot 列表（下载面板用）。
+   *
+   * 失败时宿主返回 `{ ok:false, error }` 而不是抛错，所以这里要按
+   * `Array.isArray` 判别两种形态 —— 直接当数组遍历会得到一个「看着有值、
+   * 实际是错误对象」的幽灵列表。
+   */
+  async function fetchDepots(appId: number): Promise<SteamDepotInfo[]> {
+    depotsLoading.value = true;
+    depotsError.value = "";
+    try {
+      const res = await capabilities.steamAppDepots(appId);
+      if (Array.isArray(res)) {
+        depots.value = res;
+        return res;
+      }
+      depots.value = [];
+      depotsError.value = res?.error || "未能获取 depot 列表";
+      return [];
+    } catch (e) {
+      depots.value = [];
+      depotsError.value = messageOf(e);
+      return [];
+    } finally {
+      depotsLoading.value = false;
+    }
+  }
+
+  /**
+   * 下载一款游戏到指定目录。**阻塞** —— 直到全部 depot 落盘才返回。
+   *
+   * 时序不能错：**先订阅事件、再发命令**。反过来的话，宿主在订阅生效前推的
+   * 头几帧进度就丢了，进度条会从中间开始。
+   *
+   * 返回值语义（与后端一致，不做二次包装）：
+   * - `{ ok:true }`：已全部写入，顺手重扫本地库，卡片/详情页切到「开始游戏」；
+   * - `{ ok:false, error }`：error 是后端写好的可读中文原文，直接展示。
+   */
+  async function download(appId: number, installDir: string): Promise<SteamDownloadOutcome> {
+    // 同一时刻只允许一个下载任务：后端只有一份 CM 会话，并发下发只会互相踩
+    if (downloadBusy.value) {
+      return { ok: false, bytesWritten: 0, depots: 0, error: "已有下载任务在进行中" };
+    }
+    downloadBusy.value = true;
+    downloadError.value = "";
+    downloadAppId.value = appId;
+    downloadProgress.value = null;
+    depotFractions.value = {};
+
+    // 先订阅再发命令（见上面的注释）
+    await subscribeDownload();
+    // 预览环境没有事件通道，自己走一段假进度，好让 UI 看得见
+    // （必须 await：mock 命令瞬间返回，不等的话面板会立刻收起）
+    if (!isDesktop) await runMockProgress(appId);
+
+    try {
+      const res = await capabilities.steamDownload(appId, installDir);
+      if (res && res.ok) {
+        // 下载完成后本地库的 acf 才更新，必须**强制重扫**，否则详情页仍按旧数据
+        // 判断安装状态，卡片也不会出现「已安装」徽标。
+        await loadLocalLibrary();
+        // 详情页的 local 字段来自 openDetail，同步刷新一次让它切到「开始游戏」
+        const detailId = detail.value?.appId;
+        if (detailId === appId) await openDetail(appId);
+        return res;
+      }
+      downloadError.value = res?.error || "下载失败";
+      return res;
+    } catch (e) {
+      // 命令本身抛错（宿主崩溃 / 通道断开）也要落到 downloadError，由视图展示重试
+      downloadError.value = messageOf(e);
+      return { ok: false, bytesWritten: 0, depots: 0, error: downloadError.value };
+    } finally {
+      downloadBusy.value = false;
+    }
+  }
+
+  /**
+   * 取消下载。
+   *
+   * ⚠️ 后端没有取消 op：download 是阻塞命令，宿主侧也没有 kill 通道。因此
+   * 前端**不能**真的中止下载，只能复位界面状态。视图里按钮呈「不可点」的
+   * 下载中态，而不是给一个「取消」按钮骗用户点 —— 点了也不会停下磁盘写入。
+   */
+  function cancelDownload(): void {
+    resetDownload();
   }
 
   // ---- 动作：登录态 ----
@@ -619,12 +863,22 @@ export const useSteamStore = defineStore("steam", () => {
     detailLoading,
     detailError,
     steamSettings,
+    downloadProgress,
+    downloadBusy,
+    downloadError,
+    downloadAppId,
+    depots,
+    depotsLoading,
+    depotsError,
+    depotFractions,
     error,
     // 派生
     loggedIn,
     needsReconnect,
     displayName,
     totalPlaytimeMinutes,
+    downloadPercent,
+    downloadBytes,
     // 动作
     subscribe,
     unsubscribe,
@@ -653,5 +907,11 @@ export const useSteamStore = defineStore("steam", () => {
     loadSteamSettings,
     saveSteamSettings,
     pickSteamRoot,
+    fetchDepots,
+    download,
+    cancelDownload,
+    resetDownload,
+    subscribeDownload,
+    unsubscribeDownload,
   };
 });

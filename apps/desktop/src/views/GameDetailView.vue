@@ -25,7 +25,7 @@
  *   加载失败用 onerror 降级成占位，绝不留破图；
  * - 所有请求都有骨架 / 错误条 + 重试，不允许静默失败。
  */
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useSettingsStore } from "@/stores/settings";
 import { useSteamStore } from "@/stores/steam";
@@ -61,6 +61,8 @@ const invalidAppId = computed(() => Number.isNaN(numericAppId.value));
 
 /** 操作栏按钮的忙碌态（启动 / 安装是异步的，防连点） */
 const actionBusy = ref(false);
+/** 下载面板是否展开（默认折叠，详情页主内容优先） */
+const showDepotPanel = ref(false);
 /** 操作结果提示（一句话，几秒后自动消失） */
 const toast = ref("");
 let toastTimer: number | null = null;
@@ -426,7 +428,13 @@ async function goBack(): Promise<void> {
   });
 }
 
-/** 主按钮：已安装 → 启动游戏；未安装 → 唤起 Steam 客户端去安装 */
+/**
+ * 主按钮的「开始游戏」分支（已安装时）。
+ *
+ * 未安装现在走 `startInstall()`（真实下载）而不再是 openInSteam —— 这条只在
+ * 已安装时触发；保留 `steam.install` 兜底是为了「刚装完、本地库还没扫完就点了」
+ * 这种极短窗口（launch 会失败，退一步唤起 Steam 客户端），不让用户看到死按钮。
+ */
 async function primaryAction(): Promise<void> {
   const id = numericAppId.value;
   if (Number.isNaN(id) || actionBusy.value) return;
@@ -468,6 +476,152 @@ const installPath = computed<string>(() => {
   return [g.libraryPath, "steamapps", "common", g.installDir].join(sep);
 });
 
+// ---------------------------------------------------------------- 下载
+//
+// ⚠️ download 是**阻塞命令**（几分钟），进度只能靠 store 订阅的 steam:download
+// 事件。因此这里的职责是「发起 + 呈现」，全部状态都在 store 里，视图不做计时器。
+
+/** 这款游戏的下载进度是不是当前这条（换了游戏就不该显示别人进度条） */
+const downloadingThis = computed(() => {
+  const id = numericAppId.value;
+  if (Number.isNaN(id) || !steam.downloadBusy) return false;
+  return steam.downloadAppId === id;
+});
+
+/** 下载面板整体展开条件：正在下载，或上次失败有错误要展示 */
+const showDownloadPanel = computed(
+  () =>
+    downloadingThis.value || (!!steam.downloadError && steam.downloadAppId === numericAppId.value),
+);
+
+/** 当前文件的短名（宿主给的是相对安装目录的路径，太长会撑破操作栏） */
+const currentFileName = computed<string>(() => {
+  const file = steam.downloadProgress?.currentFile ?? "";
+  if (!file) return "";
+  const parts = file.split(/[\\/]/);
+  return parts[parts.length - 1] || file;
+});
+
+/** 「已下载 X / Y」：宿主的 depotTotal 为 0 时只显示已下载量 */
+const progressBytesText = computed<string>(() => {
+  const { done, total } = steam.downloadBytes;
+  if (!total) return t("games.detail.downloadBytesOnly").replace("{done}", sizeText(done));
+  return t("games.detail.downloadBytes")
+    .replace("{done}", sizeText(done))
+    .replace("{total}", sizeText(total));
+});
+
+/** depot 计数文案（0/0 时不显示，避免「depot 0 / 0」这种噪声） */
+const progressDepotText = computed<string>(() => {
+  const progress = steam.downloadProgress;
+  if (!progress || !progress.depotsTotal) return "";
+  return t("games.detail.downloadDepots")
+    .replace("{done}", String(Math.min(progress.depotsDone, progress.depotsTotal)))
+    .replace("{total}", String(progress.depotsTotal));
+});
+
+/** 未登录时不能下载（后端会返回 { ok:false, error:"尚未登录" }，先在前端说清楚） */
+const needLogin = computed(() => steam.statusLoaded && !steam.loggedIn);
+
+/**
+ * 建议安装目录：`<Steam根>/steamapps/common/<游戏安装名>`。
+ *
+ * 取 Steam 根目录的顺序：用户自定义库优先 → 自动识别的根 → 本地库报的根。
+ * 都拿不到就返回空串，交给用户在对话框里自己选（不硬拼一个不存在的路径）。
+ */
+const suggestedInstallDir = computed<string>(() => {
+  const settings = steam.steamSettings;
+  const root =
+    settings?.customRoots?.[0] ||
+    settings?.steamRoot ||
+    steam.localLibrary?.steamRoot ||
+    steam.installedOf(numericAppId.value)?.libraryPath ||
+    "";
+  if (!root) return "";
+  // 安装目录名：本地库有就用它；否则用游戏名去掉非法字符（与 Steam 的命名习惯一致）
+  const name =
+    installed.value?.installDir ||
+    (appDetails.value?.name || "").replace(/[<>:"/\\|?*]+/g, "").trim() ||
+    "SilverMoonGame";
+  const sep = root.includes("\\") ? "\\" : "/";
+  return [root.replace(/[\\/]+$/, ""), "steamapps", "common", name].join(sep);
+});
+
+/**
+ * 「安装」→ 选目录 → 真实下载。
+ *
+ * 目录选择**预填建议路径**：Steam 库目录 + steamapps/common/<游戏名>，用户
+ * 只需确认或改选；取消对话框视为放弃安装（不是失败，不报错）。
+ */
+async function startInstall(): Promise<void> {
+  const id = numericAppId.value;
+  if (Number.isNaN(id) || actionBusy.value || steam.downloadBusy) return;
+  if (needLogin.value) {
+    notify(t("games.detail.downloadNeedLogin"));
+    return;
+  }
+
+  // 1) 选目录（预填建议路径，用户可改）
+  let installDir: string | null = null;
+  try {
+    installDir = await capabilities.pickDirectory({
+      title: t("games.detail.downloadChooseDir"),
+      defaultPath: suggestedInstallDir.value || undefined,
+    });
+  } catch {
+    installDir = null;
+  }
+  if (!installDir) return; // 用户取消：安静退出
+
+  // 2) 发下载（阻塞，进度走事件；store 内保证「先订阅再发命令」）
+  actionBusy.value = true;
+  steam.resetDownload();
+  try {
+    const res = await steam.download(id, installDir);
+    if (!res.ok) {
+      notify(res.error || t("games.detail.downloadFailed"));
+      return;
+    }
+    notify(t("games.detail.downloadDone").replace("{size}", sizeText(res.bytesWritten) || "—"));
+    // 下载完成后 depot 面板收起来，把版面还给正文
+    showDepotPanel.value = false;
+  } finally {
+    actionBusy.value = false;
+  }
+}
+
+/** 失败后重试：复用同一个入口（重新选目录 + 重新下发） */
+async function retryInstall(): Promise<void> {
+  steam.resetDownload();
+  await startInstall();
+}
+
+/**
+ * 跳去「设置 → Steam」登录（未登录时的引导）。
+ *
+ * 用 push 而不是 replace：用户登完可能想返回详情页继续安装。
+ * 设置页的 Steam 分类由 SettingsView 自己按 hash 定位，这里只负责带过去。
+ */
+async function goSteamSettings(): Promise<void> {
+  await router.push({ path: "/settings", query: { section: "steam" } });
+}
+
+/** 展开/收起 depot 面板；展开时按需拉一次 depot 列表 */
+async function toggleDepotPanel(): Promise<void> {
+  showDepotPanel.value = !showDepotPanel.value;
+  if (!showDepotPanel.value) return;
+  const id = numericAppId.value;
+  if (Number.isNaN(id)) return;
+  if (steam.depots.length && !steam.depotsError) return;
+  await steam.fetchDepots(id);
+}
+
+/** 单个 depot 的完成度（0~100）；没有事件数据时为 0 */
+function depotPercent(depotId: number): number {
+  const fraction = steam.depotFractions[depotId] ?? 0;
+  return Math.max(0, Math.min(100, Math.round(fraction * 100)));
+}
+
 /** 重试：详情 + 本地库一起重来（本地库失败也会让操作栏判错） */
 async function retry(): Promise<void> {
   const id = numericAppId.value;
@@ -486,6 +640,9 @@ async function bootstrap(): Promise<void> {
   // 本地库是「整机一份」，与 appId 无关，拉过就不再重复拉
   const jobs: Promise<unknown>[] = [steam.openDetail(id)];
   if (!steam.localLibrary) jobs.push(steam.loadLocalLibrary());
+  // Steam 目录设置是「建议安装路径」的一半（另一半是游戏名）；拉不到就用本地库的
+  // steamRoot 兜底，所以失败不报错、不影响详情页
+  if (!steam.steamSettings) jobs.push(steam.loadSteamSettings());
   await Promise.all(jobs);
 }
 
@@ -508,6 +665,14 @@ watch(
 
 onMounted(() => {
   void bootstrap();
+  // 埋好进度订阅：即便用户是从「已开始下载」的状态回到本页，也能立刻收到事件
+  void steam.subscribeDownload();
+});
+
+onUnmounted(() => {
+  // 只清提示条计时器；下载的**事件订阅留在 store**（下载可能仍在跑，断订阅会丢后期进度）
+  if (toastTimer) window.clearTimeout(toastTimer);
+  toastTimer = null;
 });
 
 // 同一路由内换 appId 时重拉（清掉上一款的数据，避免先闪一下旧海报）
@@ -608,11 +773,34 @@ watch(
         <!-- ============================ 操作栏 ============================ -->
         <section class="action-bar">
           <div class="action-main">
-            <m3e-button variant="filled" :disabled="actionBusy" @click="primaryAction">
-              <span slot="icon" class="material-symbols-outlined">
-                {{ isInstalled ? "play_arrow" : "download" }}
-              </span>
-              {{ isInstalled ? t("games.detail.play") : t("games.detail.install") }}
+            <!--
+              三种态：
+              - 已安装 → 开始游戏（走 launchGame）；
+              - 下载中 → 「下载中」不可点（download 是阻塞命令，没有取消 op，
+                给个「取消」按钮只会骗用户点，点了也不会停下磁盘写入）；
+              - 未安装 → 安装（选目录 + 真实下载）。
+            -->
+            <m3e-button v-if="downloadingThis" variant="filled" disabled @click="() => {}">
+              <span slot="icon" class="material-symbols-outlined">downloading</span>
+              {{ t("games.detail.downloading") }}
+            </m3e-button>
+            <m3e-button
+              v-else-if="isInstalled"
+              variant="filled"
+              :disabled="actionBusy"
+              @click="primaryAction"
+            >
+              <span slot="icon" class="material-symbols-outlined">play_arrow</span>
+              {{ t("games.detail.play") }}
+            </m3e-button>
+            <m3e-button
+              v-else
+              variant="filled"
+              :disabled="actionBusy || steam.downloadBusy"
+              @click="startInstall"
+            >
+              <span slot="icon" class="material-symbols-outlined">download</span>
+              {{ t("games.detail.install") }}
             </m3e-button>
 
             <template v-if="isInstalled">
@@ -644,6 +832,106 @@ watch(
             <m3e-icon-button :title="t('games.detail.copyLink')" @click="copyText(heroImage)">
               <span class="material-symbols-outlined">link</span>
             </m3e-icon-button>
+          </div>
+        </section>
+
+        <!--
+          未登录降级：下载需要 CM（登录态）。这里先在前端说清楚并给跳转，
+          而不是等用户选完目录、点了下载才收到后端的「尚未登录 Steam」。
+        -->
+        <div v-if="needLogin && !isInstalled" class="bar info" role="status">
+          <span class="material-symbols-outlined">login</span>
+          <span class="bar-text">{{ t("games.detail.downloadNeedLogin") }}</span>
+          <m3e-button variant="text" size="small" @click="goSteamSettings">
+            {{ t("games.detail.downloadGoLogin") }}
+          </m3e-button>
+        </div>
+
+        <!-- ============================ 下载进度 ============================ -->
+        <!--
+          download 是阻塞调用：没有进度条，用户就只能盯一个不动的按钮（可能几分钟）。
+          进度数据全部来自 store 的 steam:download 事件，这里只做呈现。
+        -->
+        <section v-if="showDownloadPanel" class="download-panel">
+          <div class="download-head">
+            <span class="download-title">
+              <span class="material-symbols-outlined download-icon">
+                {{ steam.downloadError ? "error" : "download" }}
+              </span>
+              {{
+                steam.downloadError
+                  ? t("games.detail.downloadFailed")
+                  : t("games.detail.downloading")
+              }}
+            </span>
+            <span v-if="!steam.downloadError" class="download-percent tabular-nums">
+              {{ steam.downloadPercent }}%
+            </span>
+          </div>
+
+          <!-- 错误：展示后端原文（不自己猜原因），并给重试 -->
+          <div v-if="steam.downloadError" class="download-error" role="alert">
+            <span class="download-error-text">{{ steam.downloadError }}</span>
+            <m3e-button variant="text" size="small" @click="retryInstall">
+              {{ t("games.detail.downloadRetry") }}
+            </m3e-button>
+          </div>
+
+          <template v-else>
+            <!-- variant="wavy" 是 MD3 Expressive 的「进行中」形态，与成就条区分开 -->
+            <m3e-linear-progress-indicator
+              class="download-bar"
+              variant="wavy"
+              :max="100"
+              :value="steam.downloadPercent"
+            />
+            <div class="download-meta">
+              <span class="download-file" :title="steam.downloadProgress?.currentFile || ''">
+                {{
+                  steam.downloadProgress?.currentFile
+                    ? t("games.detail.downloadCurrentFile").replace("{file}", currentFileName)
+                    : t("games.detail.downloadPrepare")
+                }}
+              </span>
+              <span class="download-bytes tabular-nums">{{ progressBytesText }}</span>
+              <span v-if="progressDepotText" class="download-depots tabular-nums">
+                {{ progressDepotText }}
+              </span>
+            </div>
+          </template>
+
+          <!-- depot 明细：折叠，不抢正文版面（详情页空间优先给简介 / 截图） -->
+          <button type="button" class="depot-toggle" @click="toggleDepotPanel">
+            <span class="material-symbols-outlined depot-toggle-icon">
+              {{ showDepotPanel ? "expand_less" : "expand_more" }}
+            </span>
+            {{ t("games.detail.downloadDepotsTitle") }}
+            <span v-if="steam.depots.length" class="depot-count tabular-nums">
+              {{ steam.depots.length }}
+            </span>
+          </button>
+
+          <div v-if="showDepotPanel" class="depot-body">
+            <div v-if="steam.depotsLoading" class="side-loading">
+              <m3e-loading-indicator class="inline-loading" />
+            </div>
+            <div v-else-if="steam.depotsError" class="depot-error">
+              {{ t("games.detail.downloadDepotsFailed") }}：{{ steam.depotsError }}
+            </div>
+            <div v-else-if="!steam.depots.length" class="depot-error">
+              {{ t("games.detail.downloadNoDepots") }}
+            </div>
+            <ul v-else class="depot-list">
+              <li v-for="depot in steam.depots" :key="depot.depotId" class="depot-row">
+                <span class="depot-id tabular-nums">#{{ depot.depotId }}</span>
+                <m3e-linear-progress-indicator
+                  class="depot-bar"
+                  :max="100"
+                  :value="depotPercent(depot.depotId)"
+                />
+                <span class="depot-pct tabular-nums">{{ depotPercent(depot.depotId) }}%</span>
+              </li>
+            </ul>
           </div>
         </section>
 
@@ -1107,6 +1395,162 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ---- 下载面板 ----
+   进度条本体交给 m3e-linear-progress-indicator（默认 4px 厚、primary 前景），
+   这里只管容器、文字与折叠区，不自己画条。 */
+.download-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  border-radius: var(--md-sys-shape-corner-large);
+  background: var(--md-sys-color-surface-container-low);
+}
+.download-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.download-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--md-sys-typescale-title-small-size);
+  font-weight: var(--md-sys-typescale-title-small-weight);
+  color: var(--md-sys-color-on-surface);
+}
+.download-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+  color: var(--md-sys-color-primary);
+}
+.download-percent {
+  flex-shrink: 0;
+  font-size: var(--md-sys-typescale-label-large-size);
+  color: var(--md-sys-color-primary);
+}
+.download-bar {
+  /* 进行中用 wavy 形态（MD3 Expressive），与成就的平直条区分 */
+  --m3e-linear-progress-indicator-thickness: 6px;
+}
+.download-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  min-width: 0;
+  font-size: var(--md-sys-typescale-body-small-size);
+  color: var(--md-sys-color-on-surface-variant);
+}
+/* 文件名可能很长：占满剩余宽度并省略，不许把「已下载」挤出去 */
+.download-file {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--md-sys-color-on-surface);
+}
+.download-bytes,
+.download-depots {
+  flex-shrink: 0;
+}
+/* 错误：展示后端原文，不换说法 */
+.download-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+  font-size: var(--md-sys-typescale-body-small-size);
+  line-height: 1.5;
+}
+.download-error-text {
+  flex: 1;
+  min-width: 0;
+  /* 后端给的错误可能带路径 / 堆栈，保留换行但仍可读 */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* depot 折叠开关 */
+.depot-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 4px 8px 4px 4px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: transparent;
+  color: var(--md-sys-color-on-surface-variant);
+  font-family: inherit;
+  font-size: var(--md-sys-typescale-label-medium-size);
+  cursor: pointer;
+}
+.depot-toggle:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+.depot-toggle:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+.depot-toggle-icon {
+  font-size: 20px;
+}
+.depot-count {
+  padding: 0 6px;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  font-size: var(--md-sys-typescale-label-small-size);
+}
+.depot-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.depot-error {
+  font-size: var(--md-sys-typescale-body-small-size);
+  color: var(--md-sys-color-error);
+}
+.depot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.depot-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.depot-id {
+  flex-shrink: 0;
+  width: 88px;
+  font-size: var(--md-sys-typescale-label-small-size);
+  color: var(--md-sys-color-on-surface-variant);
+}
+.depot-bar {
+  flex: 1;
+  min-width: 0;
+  --m3e-linear-progress-indicator-thickness: 4px;
+}
+.depot-pct {
+  flex-shrink: 0;
+  width: 40px;
+  text-align: right;
+  font-size: var(--md-sys-typescale-label-small-size);
+  color: var(--md-sys-color-on-surface-variant);
 }
 
 /* ---- 两栏 ---- */

@@ -207,6 +207,8 @@ import type {
   SteamGameDetail,
   SteamActionResult,
   SteamSettings,
+  SteamDepotInfo,
+  SteamDownloadOutcome,
   DesktopCaps,
   Rgba,
   WakeLockKind,
@@ -1095,10 +1097,21 @@ export const capabilities = {
     if (!isDesktop) return;
     await revealItemInDir(path.replace(/\\/g, "/"));
   },
-  /** 选择目录，返回路径或 null */
-  async pickDirectory(): Promise<string | null> {
+  /**
+   * 选择目录，返回路径或 null。
+   *
+   * `defaultPath` 可选：桌面端的 showOpenDialog 支持预填路径，用它把
+   * 「建议安装到 <Steam根>/steamapps/common/<游戏名>」直接摆在用户面前，
+   * 省掉逐层点目录的操作（用户仍可改选别处）。
+   */
+  async pickDirectory(options?: { title?: string; defaultPath?: string }): Promise<string | null> {
     if (!isDesktop) return null;
-    const result = await dialogOpen({ directory: true, multiple: false });
+    const result = await dialogOpen({
+      directory: true,
+      multiple: false,
+      title: options?.title,
+      defaultPath: options?.defaultPath,
+    });
     if (typeof result === "string") return result;
     if (result && typeof result === "object" && "path" in result) {
       return (result as { path: string }).path;
@@ -1635,6 +1648,39 @@ export const capabilities = {
   /** 弹出目录选择对话框挑一个 Steam 库目录；取消时 path 为 null。 */
   pickSteamRoot(): Promise<{ path?: string | null }> {
     return capabilities.steam<{ path?: string | null }>({ op: "pickSteamRoot" });
+  },
+
+  // ---- 下载（需要 CM；阻塞调用 + 事件进度）----
+  //
+  // ⚠️ 这两个 op 与上面所有 Steam 能力有一条本质区别：**下载是阻塞的**。
+  // `steamDownload` 要等所有 depot 落盘才 resolve，可能几分钟；期间只有
+  // `steam:download` 事件在推进度。因此调用方**必须先订阅事件**再发命令，
+  // store 里把这件事收敛成 `subscribeDownload()`，视图不要直接调这里。
+
+  /**
+   * 查某款游戏的 depot 列表（下载前置）。
+   *
+   * 失败时宿主返回 `{ ok:false, error }` 而不是抛错，所以返回类型是
+   * 「数组 | 错误对象」的联合 —— 调用方要按 `Array.isArray` 判别，
+   * 别假设它一定给出数组。
+   */
+  async steamAppDepots(appId: number): Promise<SteamDepotInfo[] | { ok: false; error: string }> {
+    const res = await capabilities.steam<SteamDepotInfo[] | { ok: false; error: string }>({
+      op: "appDepots",
+      appId,
+    });
+    return res;
+  },
+
+  /**
+   * 下载一款游戏到 `installDir`（**阻塞**，进度走 `steam:download` 事件）。
+   *
+   * 宿主内部会自己先查 depot 再下发，前端只需给 appId + 目录。
+   * 返回 `ok:false` 时 `error` 是后端写好的可读中文，**原样展示**即可，
+   * 不要按字符串猜原因。
+   */
+  steamDownload(appId: number, installDir: string): Promise<SteamDownloadOutcome> {
+    return capabilities.steam<SteamDownloadOutcome>({ op: "download", appId, installDir });
   },
 
   // ---- 番茄内容源（独立 sidecar）----
