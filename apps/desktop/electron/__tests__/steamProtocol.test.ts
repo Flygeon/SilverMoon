@@ -465,14 +465,22 @@ describe("steamIdFromRefreshToken：二维码流程唯一的 steamid 来源", ()
 
 describe("二维码登录：直接采用 poll 返回的 access_token", () => {
   /** poll 响应按官方 proto：**没有 steamid，但有 access_token / account_name**。 */
-  function makeSteam(pollResponse: Record<string, unknown>, calls?: { url: string; body: string }[]) {
+  function makeSteam(
+    pollResponse: Record<string, unknown>,
+    calls?: { url: string; body: string }[],
+  ) {
     const fake: typeof fetch = async (input, init) => {
       const url = typeof input === "string" ? input : String(input);
       calls?.push({ url, body: typeof init?.body === "string" ? init.body : "" });
       if (url.includes("BeginAuthSessionViaQR")) {
         return new Response(
           JSON.stringify({
-            response: { client_id: "1", request_id: "r", challenge_url: "https://s.team/q/1/1", interval: 1 },
+            response: {
+              client_id: "1",
+              request_id: "r",
+              challenge_url: "https://s.team/q/1/1",
+              interval: 1,
+            },
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
@@ -520,7 +528,11 @@ describe("二维码登录：直接采用 poll 返回的 access_token", () => {
     // 注意：refresh_token 故意用**非 JWT**（真实 Steam 的 refresh_token 形状
     // 未必是三段 JWT），确保这条路径不依赖解 token
     const { steam, files } = makeSteam(
-      { refresh_token: "opaque-refresh-token", access_token: "polled-access-token", account_name: "gabelogannewell" },
+      {
+        refresh_token: "opaque-refresh-token",
+        access_token: "polled-access-token",
+        account_name: "gabelogannewell",
+      },
       calls,
     );
 
