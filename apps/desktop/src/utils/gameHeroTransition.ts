@@ -65,10 +65,20 @@ export function beginCoverFlight(appId: number, coverUrl: string | null): void {
   activeCoverUrl.value = coverUrl;
 }
 
-/** 结束交接（过渡结束或导航完成时调用）。 */
+/**
+ * 结束交接：只清 `activeCoverAppId`（网格侧那张卡的过渡名）。
+ *
+ * ## 为什么**不能**同时清 `activeCoverUrl`
+ *
+ * 过渡结束时详情页的 `gameDetail` 很可能还没回来（网络往返 > 动画时长）。
+ * 此时若把 URL 清掉，`heroImage` 立刻变空 → hero 退回占位图标 →
+ * 用户看到「画面刚飞进来，图就消失了」。
+ *
+ * 保留它，详情页在数据到达前一直用这张图占位；下一次点击卡片时
+ * `beginCoverFlight` 会覆盖成新的。URL 只是个短字符串，留着没有代价。
+ */
 export function endCoverFlight(): void {
   activeCoverAppId.value = null;
-  activeCoverUrl.value = null;
 }
 
 interface ViewTransitionLike {

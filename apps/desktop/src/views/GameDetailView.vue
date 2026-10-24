@@ -715,7 +715,14 @@ watch(
 
     <template v-else>
       <!-- ============================ 加载骨架 ============================ -->
-      <div v-if="steam.detailLoading && !detail" class="hero-skeleton">
+      <!--
+        骨架屏只在**连占位图都没有**时才用。
+
+        从网格点进来时 activeCoverUrl 已经带着「卡片上那张图」，此时若还渲染灰块，
+        View Transition 就会把封面补间到一个灰色方块上 —— 视觉上正是「动画像没生效」。
+        有图就直接用图占位，等 detail 回来再补标题/成就等内容。
+      -->
+      <div v-if="steam.detailLoading && !detail && !heroImage" class="hero-skeleton">
         <div class="lm-skeleton skeleton-hero"></div>
         <div class="skeleton-bar">
           <div class="lm-skeleton line wide"></div>
