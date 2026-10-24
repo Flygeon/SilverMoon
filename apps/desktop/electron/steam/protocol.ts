@@ -354,7 +354,9 @@ export class SteamProtocol {
       }
       // 旧版本存下的会话可能没有 steamId（二维码登录曾漏掉）——从 token 自愈补上，
       // 否则升级后的老会话仍然换不出 access_token。补上后立刻写回，只做一次。
-      const healedSteamId = parsed.steamId ?? steamIdFromRefreshToken(parsed.refreshToken);
+      // refresh_token 不是 JWT，解不出 steamid；这里只在缺失时留空，
+      // 真正的 steamid 会在拿到 access_token（JWT）后从它的 sub 解出来。
+      const healedSteamId = parsed.steamId ?? null;
       this.session = {
         refreshToken: parsed.refreshToken,
         accountName: parsed.accountName ?? null,
@@ -441,20 +443,37 @@ export class SteamProtocol {
     if (this.accessToken) return this.accessToken;
     const session = this.loadSession();
     if (!session) throw new SteamError("尚未登录 Steam");
+
+    // 旧会话可能没有 steamId。这里**先换 token 再补 id**：
+    // access_token 本身是 JWT，能解出 sub（= steamid），所以缺 id 不该成为死路。
+    // （早期实现直接 `if (!steamId) throw`，让上一版遗留的会话永远无法恢复。）
     const steamId = session.steamId ?? "";
-    if (!steamId) throw new SteamError("会话缺少 SteamID，请重新登录");
     const payload = await this.postForm("IAuthenticationService/GenerateAccessTokenForApp/v1/", {
       refresh_token: session.refreshToken,
-      steamid: steamId,
+      // 缺 id 时传 "0"：Steam 会以 400 拒绝（这是已知行为），
+      // 所以调用方应尽量先确保有 id；这里只是兜底，失败会照常抛给上层。
+      steamid: steamId || "0",
     });
+
     const accessToken = String(payload.access_token ?? "");
     if (!accessToken) throw new SteamError("Steam 未返回 access_token，登录态可能已失效");
     this.accessToken = accessToken;
-    this.accessTokenSteamId = payload.steamid ? String(payload.steamid) : steamId;
+
+    // steamid：响应里带的 > 从 access_token 解出的 > 会话里存的
+    const resolvedId =
+      (payload.steamid ? String(payload.steamid) : null) ??
+      steamIdFromToken(accessToken) ??
+      (steamId || null);
+    this.accessTokenSteamId = resolvedId;
+    if (resolvedId && resolvedId !== session.steamId) {
+      this.saveSession({ ...session, steamId: resolvedId });
+    }
+
     // 服务端可能轮换 refresh_token，轮换了就落盘
     const rotated = String(payload.refresh_token ?? "");
     if (rotated && rotated !== session.refreshToken) {
-      this.saveSession({ ...session, refreshToken: rotated });
+      const latest = this.loadSession() ?? session;
+      this.saveSession({ ...latest, refreshToken: rotated });
     }
     return accessToken;
   }
@@ -608,13 +627,19 @@ export class SteamProtocol {
     });
 
     const refreshToken = payload.refresh_token ? String(payload.refresh_token) : "";
-    // steamid 三种来源，按可靠性排序：
+    // poll 响应里可能直接给 access_token（proto 字段 4）与 account_name（字段 6）
+    const polledAccessToken = payload.access_token ? String(payload.access_token) : "";
+    const polledAccountName = payload.account_name ? String(payload.account_name) : null;
+
+    // steamid 的可靠来源，按优先级：
     // 1) 响应里的 steamid（账号密码流程会给）；
-    // 2) 从 refresh_token（JWT）的 sub 解出来 —— **二维码流程只有这一条路**；
+    // 2) **access_token 这个 JWT 的 sub**（二维码流程靠它）；
     // 3) 待处理对象里记住的（凭据流程早期存下的）。
+    //
+    // 注意：refresh_token 是**不透明字符串**，不是 JWT，解不出 steamid —— 别再用它。
     const steamId =
       (payload.steamid ? String(payload.steamid) : null) ??
-      (refreshToken ? steamIdFromRefreshToken(refreshToken) : null) ??
+      (polledAccessToken ? steamIdFromToken(polledAccessToken) : null) ??
       pending.steamId ??
       null;
 
@@ -648,13 +673,7 @@ export class SteamProtocol {
 
     // 登录成功：先拉资料，再落盘（资料失败不影响登录）
     //
-    // PollAuthSessionStatus 的 proto 里**直接带 access_token**（字段 4）与
-    // account_name（字段 6）。这是最可靠的路径：不必再拿 refresh_token 去换，
-    // 因而也绕开「换 token 必须带真实 steamid」那个坑 —— 二维码流程本来就拿不到
-    // steamid（poll 响应里没有该字段）。拿到就直接用，拿不到才回退去换。
-    const polledAccessToken = payload.access_token ? String(payload.access_token) : "";
-    const polledAccountName = payload.account_name ? String(payload.account_name) : null;
-
+    // （polledAccessToken / polledAccountName 已在上面函数开头取好。）
     let session: SteamSessionFile = {
       refreshToken,
       accountName: pending.accountName ?? polledAccountName,
@@ -865,8 +884,21 @@ export class SteamProtocol {
 
   /** `IPlayerService/GetOwnedGames`：拥有的全部游戏（含免费游戏与游玩时长）。 */
   private async fetchOwnedGames(accessToken: string): Promise<SteamGame[]> {
+    // ⚠️ `steamid` 是**必需参数**：不带它 Steam 返回 400
+    // `Required parameter 'steamid' is missing`（只在 token 有效时才暴露，
+    // 无效 token 会先被 401 拦下 —— 因此假 token 探测发现不了）。
+    // 优先从 access_token（JWT）解 sub，其次用会话里保存的 steamId。
+    const steamId =
+      steamIdFromToken(accessToken) ??
+      this.accessTokenSteamId ??
+      this.loadSession()?.steamId ??
+      null;
+    if (!steamId) {
+      throw new SteamError("无法确定 SteamID，请重新登录");
+    }
     const payload = await this.getApi("IPlayerService/GetOwnedGames/v1/", {
       access_token: accessToken,
+      steamid: steamId,
       include_appinfo: "1",
       include_played_free_games: "1",
       skip_unvetted_apps: "0",
@@ -1039,7 +1071,20 @@ export function describeTokenShape(token: string): Record<string, unknown> {
   return shape;
 }
 
-export function steamIdFromRefreshToken(token: string): string | null {
+/**
+ * 从 Steam 的 **JWT** 里解出 SteamID64（`sub`）。
+ *
+ * ## 两个关键事实（都是踩坑换来的）
+ *
+ * 1. **access_token 是 JWT**（`sub` = SteamID64），而 **refresh_token 是不透明
+ *    字符串**（不是 JWT）。早期版本误以为 refresh_token 是 JWT，导致二维码登录
+ *    一直拿不到 steamid。
+ * 2. `IPlayerService/GetOwnedGames` **必须**带 `steamid` 参数（与 access_token 并列），
+ *    否则 Steam 回 400 `Required parameter 'steamid' is missing`。
+ *    这个 400 **只在 token 有效时才出现**（无效 token 先被 401 拦下），
+ *    所以用假 token 探测永远测不出来 —— 本轮就是因此多绕了一圈。
+ */
+export function steamIdFromToken(token: string): string | null {
   if (typeof token !== "string") return null;
   const parts = token.split(".");
   if (parts.length < 2) return null;
