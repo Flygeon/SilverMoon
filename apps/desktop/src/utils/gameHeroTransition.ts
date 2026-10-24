@@ -61,6 +61,19 @@ export const activeCoverAppId = ref<number | null>(null);
  */
 export const activeCoverUrl = ref<string | null>(null);
 
+/**
+ * 是否正在跑封面飞行过渡。
+ *
+ * App.vue 用它把路由过渡从 `mode="out-in"` 切成默认模式：
+ * `out-in` 会等旧页离场**之后**才挂载新页，而 View Transition 的新快照
+ * 是在回调结束时拍的 —— 那期间新页根本不在 DOM 里，快照拍不到 hero，
+ * 补间就退化成淡入（还会因为等待而卡顿）。
+ *
+ * 切成默认模式后新旧页在切换瞬间同时存在，浏览器才能把它们拆成两层补间。
+ * 这也是 View Transition 用于 SPA 路由的标准形态。
+ */
+export const heroTransitionActive = ref(false);
+
 /** 开始一次卡片 → 详情页的交接（网格侧调用）。 */
 export function beginCoverFlight(appId: number, coverUrl: string | null): void {
   activeCoverAppId.value = appId;
@@ -211,6 +224,7 @@ export async function runViewTransition(handlers: ViewTransitionHandlers): Promi
    * 新页在路由确认的同一帧就落位。类必须在起飞前挂（此时旧页还在）。
    */
   document.documentElement.classList.add(RUNNING_CLASS);
+  heroTransitionActive.value = true;
   try {
     /*
      * 回调内部必须自己 try/catch：浏览器把回调包成 Promise 跑，
@@ -246,7 +260,9 @@ export async function runViewTransition(handlers: ViewTransitionHandlers): Promi
        *
        * 命中即返回，不做无谓空转。
        */
-      const heroEl = await waitForHeroElement(HERO_SELECTORS, 12);
+      // out-in 已经不再挡路（见 heroTransitionActive 的注释），
+      // 正常 1-2 帧就能命中；4 帧上限 ≈66ms，纯粹兜底懒加载 chunk。
+      const heroEl = await waitForHeroElement(HERO_SELECTORS, 4);
       const heroName = heroEl ? getComputedStyle(heroEl).viewTransitionName : "(无元素)";
       heroLog(
         `[hero] 起飞前：heroEl=${heroEl ? heroEl.className : "null"} name=${heroName} activeCoverAppId=${activeCoverAppId.value}`,
@@ -260,6 +276,7 @@ export async function runViewTransition(handlers: ViewTransitionHandlers): Promi
     // 吞掉：导航已经完成，用户看到的只是「没有动画」。
   } finally {
     document.documentElement.classList.remove(RUNNING_CLASS);
+    heroTransitionActive.value = false;
     cleanup();
   }
 }

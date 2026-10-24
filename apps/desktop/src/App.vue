@@ -9,6 +9,7 @@ import { useLibraryStore } from "@/stores/library";
 import { useMusicTagsStore } from "@/stores/musicTags";
 import { useDesktopStore } from "@/stores/desktop";
 import { capabilities, isDesktop } from "@/capabilities";
+import { heroTransitionActive } from "@/utils/gameHeroTransition";
 import MiniPlayer from "@/components/MiniPlayer.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import TextPrompt from "@/components/TextPrompt.vue";
@@ -701,9 +702,15 @@ router.afterEach((to) => {
           />
 
           <router-view v-slot="{ Component }">
+            <!--
+              mode 在封面飞行期间切成默认（同时进出）：
+              out-in 会等旧页离场后才挂载新页，而 View Transition 的新快照
+              正是在那期间拍的 —— 新页不在 DOM 里，补间拿不到 hero，
+              还会因为等待而让点击显得卡顿。见 utils/gameHeroTransition.ts。
+            -->
             <transition
               :name="isPlayerPage ? 'player' : 'page'"
-              mode="out-in"
+              :mode="heroTransitionActive ? undefined : 'out-in'"
               @enter="onRouteEnter"
             >
               <!--

@@ -298,4 +298,61 @@ mod tests {
         assert!(!is_probably_jwt("plain"));
         assert!(!is_probably_jwt(""));
     }
+
+    /**
+     * 诊断：**匿名 CM 连接能否调用 Authentication.BeginAuthSessionViaQR**。
+     *
+     * ## 为什么需要这条
+     *
+     * 实测结论：走 **WebAPI**（HTTPS）扫码登录拿到的 refresh_token，用于 CM logon 会被
+     * Steam 回 `invalid credentials` —— 即使 `website_id="Client"`、
+     * `platform_type=SteamClient` 都传了。参考实现 Aurelia 是走
+     * **CM 匿名连接**的 `service_method` 调这个接口，拿到的 token 才能登 CM。
+     *
+     * 所以「能不能做真正的下载」，前提是这条路通不通。这条测试就是那个前提的验证：
+     * 匿名连接**不需要任何凭据**，成功即说明可自建 CM 登录流程。
+     *
+     * ## 为什么要 `ignored`
+     *
+     * 它要连外网 Steam。放进常规单测会让 CI 因为网络抖动而红（这类红是噪音，
+     * 会掩盖真正的回归）。需要时手动跑：
+     * `cargo test --lib -- --ignored anonymous_cm`
+     */
+    #[test]
+    fn anonymous_cm_can_start_qr_login() {
+        use steam_vent::connection::Connection;
+        use steam_vent::ConnectionTrait;
+        use steam_vent_proto_steam::enums_clientserver::EAuthTokenPlatformType;
+        use steam_vent_proto_steam::steammessages_auth_steamclient::CAuthentication_BeginAuthSessionViaQR_Request;
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let outcome = rt.block_on(async {
+            let servers = steam_vent::ServerList::discover().await?;
+            let anon = Connection::anonymous(&servers).await?;
+
+            let mut request = CAuthentication_BeginAuthSessionViaQR_Request::new();
+            request.set_device_friendly_name("SilverMoon".to_string());
+            request.set_platform_type(EAuthTokenPlatformType::k_EAuthTokenPlatformType_SteamClient);
+            request.set_website_id("Client".to_string());
+
+            let response: steam_vent_proto_steam::steammessages_auth_steamclient::CAuthentication_BeginAuthSessionViaQR_Response =
+                anon.service_method(request).await?;
+            Ok::<_, Box<dyn std::error::Error>>(response)
+        });
+
+        match outcome {
+            Ok(response) => {
+                // 只要能拿到挑战 URL，就说明匿名 CM + service_method 这条路是通的
+                assert!(
+                    !response.challenge_url().is_empty(),
+                    "返回了空 challenge_url"
+                );
+            }
+            Err(error) => panic!("匿名 CM 登录前提验证失败：{error}"),
+        }
+    }
 }
