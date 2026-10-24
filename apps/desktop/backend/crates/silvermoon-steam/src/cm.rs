@@ -106,6 +106,21 @@ impl CmSession {
             .map_err(|e| CmError::Rpc(e.to_string()))
     }
 
+    /// 发送一条**老式（NetMessage）**请求并等待配对响应。
+    ///
+    /// 与 `call` 的区别：`call` 走 service method（有名有姓的 RPC），
+    /// 而老式消息（如 `CMsgClientGetDepotDecryptionKey`）只能走 `job`。
+    pub async fn job<Req, Rsp>(&self, request: Req) -> Result<Rsp, CmError>
+    where
+        Req: steam_vent::NetMessage,
+        Rsp: steam_vent::NetMessage,
+    {
+        self.connection
+            .job(request)
+            .await
+            .map_err(|e| CmError::Rpc(format!("{e}")))
+    }
+
     /// 当前会话的 cell id（CDN 选点用）。
     pub fn cell_id(&self) -> u32 {
         self.connection.cell_id()

@@ -310,6 +310,7 @@ pub fn download_app(
     mut on_progress: impl FnMut(DownloadProgress),
 ) -> Result<DownloadResult, String> {
     use crate::cm_requests::{fetch_cdn_auth_token, fetch_manifest_request_code};
+    use crate::depot_key::fetch_depot_key;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -333,6 +334,22 @@ pub fn download_app(
     let mut overall = DownloadResult::default();
     let total = tasks.len() as u32;
     for (index, task) in tasks.iter().enumerate() {
+        // 0) depot key：调用方没给就现取（解密文件名与 chunk 都要它）
+        //
+        // 这条是**老式 CM 消息**（CMsgClientGetDepotDecryptionKey），
+        // 已在 depot_key.rs 里自己实现 NetMessage 包装后发出。
+        // 取不到时保留调用方传入的值（可能来自本地缓存），都没有才报错。
+        let mut task_owned = task.clone();
+        if task_owned.depot_key.is_empty() {
+            match runtime.block_on(fetch_depot_key(session, task.app_id, task.depot_id)) {
+                Ok(key) => task_owned.depot_key = key,
+                Err(error) => {
+                    return Err(format!("depot {} 的密钥获取失败：{error}", task.depot_id))
+                }
+            }
+        }
+        let task = &task_owned;
+
         // 1) manifest request code（拿不到就传 0，部分 depot 不需要）
         let request_code = runtime
             .block_on(fetch_manifest_request_code(

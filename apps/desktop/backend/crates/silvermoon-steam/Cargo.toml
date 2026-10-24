@@ -18,6 +18,8 @@ tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
 thiserror = "1"
 tracing = "0.1"
 serde_json = "1"
+# depot_key.rs 的 EncodableMessage 签名用 BytesMut
+bytes = "1"
 
 # ---- depot 下载所需的加密与解析 ----
 # 版本与 backend/Cargo.toml **刻意保持一致**：同一 crate 图里出现两份
