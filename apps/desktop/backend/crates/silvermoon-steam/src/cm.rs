@@ -47,6 +47,27 @@ use tokio::sync::{Mutex, MutexGuard};
 /// 否则响应会串（steam-vent 的连接不保证多路复用安全）。
 pub struct CmSession {
     connection: Connection,
+    /// 建立该会话所用的账号名（用于识别「换了账号要重连」）
+    account: String,
+    /// 建立该会话所用 token 的指纹（不存原文：它是长期凭据）
+    token_tag: String,
+}
+
+/// 取 token 的短指纹：长度 + 首尾各 8 字符。
+///
+/// 不存 token 原文（等同密码）、也不需要强哈希 —— 这里只用来判断
+/// 「和上次连的是不是同一个凭据」。
+fn token_tag(access_token: &str) -> String {
+    let head: String = access_token.chars().take(8).collect();
+    let tail: String = access_token
+        .chars()
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{}:{head}:{tail}", access_token.len())
 }
 
 impl CmSession {
@@ -89,7 +110,19 @@ impl CmSession {
         .map_err(|_| CmError::Timeout)?
         .map_err(|e| CmError::Login(describe_connection_error(&e)))?;
 
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            account: account_name.trim().to_string(),
+            token_tag: token_tag(access_token),
+        })
+    }
+
+    /// 这个会话是否由同一账号 + 同一凭据建立。
+    ///
+    /// 用于 `CmManager::get_or_connect` 判断能否复用：换了账号或换了 token
+    /// 却继续用旧连接，会让「重新登录后仍然报旧错误」变得无法解释。
+    pub fn matches(&self, account_name: &str, access_token: &str) -> bool {
+        self.account == account_name.trim() && self.token_tag == token_tag(access_token)
     }
 
     /// 调用一个 service method。
@@ -226,7 +259,17 @@ impl CmManager {
         access_token: &str,
     ) -> Result<MutexGuard<'_, Option<CmSession>>, CmError> {
         let mut guard = self.session.lock().await;
-        if guard.is_none() {
+        // 复用的前提是「同一账号 + 同一凭据」。
+        //
+        // 早先只判断 `is_none()`，于是换账号或换新 token 之后仍会拿旧连接去请求 ——
+        // 表现为「明明重新登录了，还是报上一个凭据的错误」，且完全无从排查。
+        let reusable = match guard.as_ref() {
+            Some(existing) => existing.matches(account_name, access_token),
+            None => false,
+        };
+        if !reusable {
+            // 丢掉旧会话（连接随 Drop 关闭），再用新凭据重连
+            *guard = None;
             let session = CmSession::connect(account_name, access_token).await?;
             *guard = Some(session);
         }

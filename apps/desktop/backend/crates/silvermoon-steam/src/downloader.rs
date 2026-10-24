@@ -331,20 +331,30 @@ pub fn download_app(
         return Err("Steam 未返回任何 CDN 服务器".to_string());
     }
 
+    // 目标目录先建出来：调用方给的往往是「steamapps/common/<游戏名>」这种还不存在的路径。
+    // 少了这一步，manifest 里若没有任何目录条目，首个文件写盘就会 ENOENT。
+    fs::create_dir_all(install_dir)
+        .map_err(|e| format!("创建安装目录 {} 失败：{e}", install_dir.display()))?;
+
     let mut overall = DownloadResult::default();
     let total = tasks.len() as u32;
+    // 收集「被跳过的 depot」而不是让单个失败拖垮整次下载：
+    // 含 DLC 的游戏里常有当前账号没授权的 depot（Steam 回 EResult != OK），
+    // 那不是错误，跳过它继续下其余部分才是对的行为。
+    let mut skipped: Vec<String> = Vec::new();
     for (index, task) in tasks.iter().enumerate() {
         // 0) depot key：调用方没给就现取（解密文件名与 chunk 都要它）
         //
         // 这条是**老式 CM 消息**（CMsgClientGetDepotDecryptionKey），
         // 已在 depot_key.rs 里自己实现 NetMessage 包装后发出。
-        // 取不到时保留调用方传入的值（可能来自本地缓存），都没有才报错。
+        // 取不到时保留调用方传入的值（可能来自本地缓存），都没有就跳过这个 depot。
         let mut task_owned = task.clone();
         if task_owned.depot_key.is_empty() {
             match runtime.block_on(fetch_depot_key(session, task.app_id, task.depot_id)) {
                 Ok(key) => task_owned.depot_key = key,
                 Err(error) => {
-                    return Err(format!("depot {} 的密钥获取失败：{error}", task.depot_id))
+                    skipped.push(format!("depot {}: {error}", task.depot_id));
+                    continue;
                 }
             }
         }
@@ -388,6 +398,16 @@ pub fn download_app(
             }
         }
 
+        // 没有 CDN 票据就去拉 manifest 必然 401 —— 与其让用户看到一句
+        // 莫名其妙的 HTTP 401，不如在这里说清楚是这个 depot 没拿到授权票据。
+        if cdn_token.is_empty() {
+            skipped.push(format!(
+                "depot {}: 没有取得 CDN 访问票据（GetCDNAuthToken 全部失败）",
+                task.depot_id
+            ));
+            continue;
+        }
+
         on_progress(DownloadProgress {
             depot_id: task.depot_id,
             depots_done: index as u32,
@@ -395,16 +415,34 @@ pub fn download_app(
             ..Default::default()
         });
 
-        let result = download_depot(
+        match download_depot(
             task,
             install_dir,
             &servers,
             request_code,
             &cdn_token,
             Some(&mut |p| on_progress(p)),
-        )?;
-        overall.bytes_written += result.bytes_written;
-        overall.depots.push(result);
+        ) {
+            Ok(result) => {
+                overall.bytes_written += result.bytes_written;
+                overall.depots.push(result);
+            }
+            // 单个 depot 失败也跳过：多 depot 游戏里一个坏块不该让其余部分全白下。
+            // 但要把原因带出来，最后汇总。
+            Err(error) => skipped.push(format!("depot {}: {error}", task.depot_id)),
+        }
+    }
+
+    // 一个都没成功才算是失败 —— 否则用户会看到「下载失败」但磁盘上其实有内容。
+    if overall.depots.is_empty() {
+        return Err(format!(
+            "没有可下载的内容。{}",
+            if skipped.is_empty() {
+                "Steam 未返回任何 depot".to_string()
+            } else {
+                skipped.join("；")
+            }
+        ));
     }
     Ok(overall)
 }
