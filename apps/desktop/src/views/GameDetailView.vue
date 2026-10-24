@@ -1,30 +1,4 @@
 <script setup lang="ts">
-/**
- * 游戏详情（游戏 → 点卡片 → 独立路由 /games/:appId）。
- *
- * ⚠️ 根节点内联了 `--lm-game-hero-vt` 等 CSS 变量（见模板第一行），
- * 用来承接 hero 的 `view-transition-name` 与补间时长 —— 详见
- * utils/gameHeroTransition.ts 的长注释。
- *
- * 排版参考 Steam 桌面版详情页，配色与形状全部走 MD3：
- * hero 大图（商店背景图 + 渐变遮罩）→ 操作栏 → 左主栏（简介 / 截图墙）
- * + 右栏（额外内容 → 成就 → 信息）。
- *
- * **成就挪到右栏**是照 Steam 的实际布局：左栏留给长篇正文（简介 / 截图），
- * 右栏放「一眼扫完」的速览信息。成就在右栏只出图标墙 + 进度，不铺长列表 ——
- * 逐条成就明细点「查看我的成就」去 Steam 社区看。
- *
- * 链路：本视图 → stores/steam.ts 的 openDetail() → capabilities.steam({op:"gameDetail"})
- *       → 宿主一次返回 { details, local, achievements }，**本页只发这一个请求**；
- *       DLC 名单拿不到名字时再补一次 appDetails 批量请求（见 loadDlc）。
- *
- * 约定（与 GamesView 一致）：
- * - 颜色只用 M3 令牌，不写死 Steam 的深蓝 / 绿色；
- * - 图标一律 Material Symbols Rounded，不用 emoji；
- * - 图片 URL **原样使用**（Steam 的图带 ?t=<时间戳> 查询串，截掉就 404），
- *   加载失败用 onerror 降级成占位，绝不留破图；
- * - 所有请求都有骨架 / 错误条 + 重试，不允许静默失败。
- */
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useSettingsStore } from "@/stores/settings";
@@ -65,7 +39,6 @@ const invalidAppId = computed(() => Number.isNaN(numericAppId.value));
 const actionBusy = ref(false);
 /** 下载面板是否展开（默认折叠，详情页主内容优先） */
 const showDepotPanel = ref(false);
-/** 操作结果提示（一句话，几秒后自动消失） */
 const toast = ref("");
 let toastTimer: number | null = null;
 
@@ -75,12 +48,7 @@ function notify(message: string): void {
   toastTimer = window.setTimeout(() => (toast.value = ""), 3200);
 }
 
-/**
- * 加载失败的图片集合（URL → true）。
- *
- * 只在 onerror 里写入：Steam 的图带 `?t=<时间戳>` 查询串，同一张图不同批次
- * 时间戳可能不同，所以按**完整 URL**做 key，不做归一化。
- */
+/** 加载失败的图片集合（URL → true）。 */
 const brokenImages = ref<Record<string, boolean>>({});
 
 function markBroken(url: string | null | undefined): void {
@@ -107,26 +75,6 @@ const installed = computed(() => {
 });
 
 const isInstalled = computed(() => !!installed.value);
-
-/**
- * hero 大图。
- *
- * ## 必须是**卡片那张图**（用户明确指出）
- *
- * 卡片显示的是 Steam 的 `header.jpg`（`headerUrl`）。hero 若用商店的
- * `backgroundImage`（1920×620 的商店页大背景），两张图**内容不同** ——
- * View Transition 补间时会出现明显的「换图」跳变，看起来像动画做坏了。
- *
- * 所以优先级改为：**商店 headerImage → 网格传来的 headerUrl → backgroundImage**。
- * 前两者其实是同一张 `header.jpg`（商店接口与 CDN 拼法不同但内容一致），
- * 保证「卡片飞过来的时候，hero 上就是同一张图」。
- *
- * `backgroundImage` 退到最后仅作兜底（极少数 app 没有 header 时）。
- *
- * 任何一项都**原样使用**商店/CDN 给的 URL，不自己拼路径 ——
- * 上一版拼的 `/steam/apps/<id>/ss_1.jpg` 全部 404，正是「图片不正常」的根因。
- */
-/** 网格卡片传过来的那张图（同一次过渡内有效，见 gameHeroTransition） */
 const coverFromGrid = computed<string>(() => {
   const url = activeCoverUrl.value;
   return typeof url === "string" ? url : "";
@@ -265,21 +213,7 @@ const dlcOverflow = computed(() => Math.max(0, dlcTotalCount.value - dlcLimit.va
 /** 有 DLC 才显示整块（没有就整块不渲染，不留「敬请期待」占位） */
 const showExtra = computed(() => dlcCards.value.length > 0);
 
-/**
- * 拉 DLC 的名字与缩略图。
- *
- * ## 为什么只查前几个
- *
- * 商店接口一次批量 appids 有长度上限，而 DLC 动辄几十个 —— 全查既慢又可能被截断。
- * 所以只查「可见的那几行」。
- *
- * ## 为什么溢出数要单独记
- *
- * 这里必须区分「查到的卡片数」与「DLC 总数」：只查了 5 个，第 6 个及以后拿不到
- * 元信息会被跳过，若用 `cards.length` 去算 +N，溢出数永远是 0（+N 方块不出现，
- * 用户就看不到「还有更多」这件事）。因此总数按**商店给的 dlc 名单**记，
- * 与查到的卡片分开存。
- */
+/** 拉 DLC 的名字与缩略图。 */
 async function loadDlc(ids: number[]): Promise<void> {
   const appId = numericAppId.value;
   if (Number.isNaN(appId)) return;
@@ -423,13 +357,11 @@ async function goBack(): Promise<void> {
    * 返回时也要让网格里**这张**卡片挂上过渡名，否则「新快照」里没有同名元素，
    * 浏览器只会把 hero 淡出、不会飞回卡片位置。
    *
-   * 网格页被 keep-alive 缓存着、DOM 还在，所以写 activeCoverAppId 会立刻反映到
-   * 那张卡上；但要等 nextTick 让它真正写进 DOM —— 与进入时同理，不等的话
-   * 新快照拍到的还是「没名字」的封面，返回就没有飞回动画。
+   * ⚠️ 网格页被 keep-alive 缓存，但它的 DOM 是**脱离文档**的（Vue 把子树搬进
+   * storageContainer）。所以这里不能指望 querySelector 在详情页里查到那张卡 ——
+   * `findCardCover` 会退回「进入时记下的元素引用」，见 utils/gameHeroTransition.ts。
    */
   if (!Number.isNaN(id)) {
-    // 反向：直接给网格里那张卡挂过渡名（DOM 操作，同步生效，无重渲染）。
-    // 网格被 keep-alive 缓存、DOM 还在，querySelector 比等一次重渲染快得多。
     beginCoverFlight(id, heroImage.value || null, findCardCover(id));
   }
   const navigate = () => {
@@ -1113,8 +1045,24 @@ watch(
               </div>
             </m3e-card>
 
+            <!--
+              截图墙骨架：接口回来前先按最终版式占位。
+              不留白再「突然长出一大块」—— 那会让刚飞进来的 hero 被整体上推，
+              视觉上像动画没落位。
+            -->
+            <m3e-card v-if="steam.detailLoading && !appDetails" class="block" variant="filled">
+              <div slot="content">
+                <h2 class="block-title">{{ t("games.detail.screenshots") }}</h2>
+                <div class="shot-wall">
+                  <div v-for="n in 4" :key="'shot-skeleton-' + n" class="shot">
+                    <div class="lm-skeleton shot-skeleton"></div>
+                  </div>
+                </div>
+              </div>
+            </m3e-card>
+
             <!-- 截图墙：URL 原样使用（带 ?t= 时间戳），失败逐张降级成占位图标 -->
-            <m3e-card v-if="screenshots.length" class="block" variant="filled">
+            <m3e-card v-else-if="screenshots.length" class="block" variant="filled">
               <div slot="content">
                 <h2 class="block-title">{{ t("games.detail.screenshots") }}</h2>
                 <div class="shot-wall">
@@ -1268,6 +1216,22 @@ watch(
                   <span class="ach-locked-title">{{ t("games.detail.lockedTitle") }}</span>
                   <span class="ach-locked-count tabular-nums">×{{ lockedCount }}</span>
                   <span class="ach-locked-hint">{{ t("games.detail.lockedHint") }}</span>
+                </div>
+              </div>
+            </m3e-card>
+
+            <!--
+              右栏骨架：额外内容 / 成就这两块在数据到达前**整块不存在**，
+              会让右栏高度先短后长、把下面的内容顶下去。先给一张占位卡，
+              版式从第一帧就是最终的，数据到了只是「填内容」。
+            -->
+            <m3e-card v-if="steam.detailLoading && !detail" class="block" variant="filled">
+              <div slot="content">
+                <div class="block-head">
+                  <div class="lm-skeleton line wide"></div>
+                </div>
+                <div class="side-skeleton">
+                  <div v-for="n in 3" :key="'side-skeleton-' + n" class="lm-skeleton line"></div>
                 </div>
               </div>
             </m3e-card>
@@ -1871,6 +1835,12 @@ watch(
 .shot-fallback {
   font-size: 28px;
 }
+/* 截图墙占位：撑满整格，与真图的圆角/裁切一致，数据到了不会跳版 */
+.shot-skeleton {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+}
 
 /* ---- 额外内容（DLC）---- */
 .dlc-list {
@@ -2051,6 +2021,13 @@ watch(
   display: flex;
   justify-content: center;
   padding: 6px 0 2px;
+}
+/* 右栏占位行：与真实条目的行高接近，避免数据到达时整列高度突变 */
+.side-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
 }
 .inline-loading {
   --m3e-loading-indicator-size: 18px;

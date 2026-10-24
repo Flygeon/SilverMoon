@@ -29,6 +29,63 @@
 > - **教训**: …（踩过的坑，供下一个 AI 避雷）
 > ```
 
+## 2026-10-24（八）· 修 Steam 应用内下载：manifest 不再强依赖 CDN 票据 + 错误不再静默
+
+- **commit**: 见本轮提交
+- **status**: **未验证**（本机无 MSVC 链接器，Rust 只能由 CI 编译）。本地做到的是：
+  rustfmt 干净、语法可解析、CDN 行为实测、manifest 解析器用真实数据实测。
+- **现象**：详情页点「安装」立刻失败，进度条一帧都没动：
+  「没有可下载的内容。depot 2704111: manifest 格式无法解析（CDN 票据未收到：
+  cache2-hkg1...：Steam CM 请求失败：Remote returned an error code: Fail; …）」
+- **根因（两段，缺一不可）**：
+  1. **Steam 拒绝了两条内容 RPC**。那句 Remote returned an error code: Fail 来自 steam-vent 的
+     RawNetMessage::into_header_and_message（net.rs:355-358）—— 它检查的是**响应头里的 eresult**，
+     而且发生在解析响应体**之前**。所以这是服务端拒绝，不是网络/编码/解析问题。
+     方法名与字段名都核对过（ContentServerDirectory.GetManifestRequestCode#1 /
+     GetCDNAuthToken#1，字段 app_id / depot_id / manifest_id / host_name 全部对得上），没写错。
+  2. **我们把拒绝变成了 0，又把 0 变成了一句没法排查的话**。fetch_manifest_request_code 用
+     unwrap_or(0) 吞掉错误 → manifest URL 既无 code 也无 ticket → CDN 回错误页 →
+     最终报「manifest 格式无法解析」，而响应体里真正的内容被丢掉了。
+- **本轮实测证据（可复现）**：
+  - 不带 request code 请求 /depot/<id>/manifest/<gid>/5：lax2 / hkg1 / sha1 / sgp1 四个 cell
+    **每个节点都回 401 + 98 字节 HTML**；chunk 路径回 404。
+    所以「没有 request code 就下不了」是硬事实，不是可省掉的优化。
+  - ContentManifest::parse **不是**根因：把解析器逐行移植到 Node，跑本机 Steam depotcache 里
+    12 份真实 manifest，**12/12 全部解析成功**。
+- **改了什么**：
+  1. cdn.rs：fetch_bytes 改为返回结构化 CdnFetchError（HTTP 状态 + 响应体前缀 + 传输层原因），
+     新增 is_auth_denied()（只认 401/403）与 describe_body_prefix()。
+  2. cm_requests.rs：新增 ServiceMethodCall / ServiceMethodResponseBody（自己实现
+     EncodableMessage / NetMessage，用 k_EMsgServiceMethodCallFromClientNonAuthed）。
+     两个 RPC 都先走已登录路径、失败再走 NonAuthed 回退；两条都失败时**把两边的原因都带上**。
+  3. downloader.rs：manifest 先不带票据拉，只有 CDN 明确 401/403 才去逐个节点申请票据；
+     manifest 改成「逐个节点试 + 当场解析」，解析不了就把响应体开头写进错误；
+     request code 拿不到 / 为 0 都进诊断备注，不再静默。
+  4. 进度节流 ProgressGate（≤10 次/秒；首次、当前文件变化、100% 必定放行），并且
+     **文件内部也报进度** —— 原来只在文件写完后报一次，大文件下载期间进度条完全不动。
+- **为什么这样能修好**：
+  - 票据从「硬前置」降级为「401/403 才要」，Steam 拒发票据不再连累本来能下的 depot
+    （参考实现 GameNative 的 fetch_cdn_auth_token 注释就是 on a 401/403）；
+  - 真有 Steam 侧拒绝时，错误里会直接带上 app / depot / manifest 三个 id 与两条路径的 EResult，
+    一眼能区分「账号没授权」和「app_id 与 depot 不匹配」；
+  - 大文件下载期间进度条会动，不再是「一帧都不动」。
+- **仍然没定位的（下一轮第一件事）**：Steam 为什么回 Fail。
+  已排除共同原因是 app_branch —— GetCDNAuthToken 根本没有 branch 字段却也失败。
+  也**基本排除**「app_id 不是该 depot 的归属 app」：本次失败的是 app 2704110
+  （Aliya: Timelink）的 depot 2704111，是同一 app 的直属 depot（depot id 与 app id
+  相邻，不是共享组件 / DLC 的形态）。这条只作为「将来遇到共享 depot、DLC depot 时」
+  的通用注意事项保留，**不要再用它解释本次现象**。
+  下一步看**新错误文案**：它会带 app / depot / manifest 三个 id、两条路径各自的 EResult，
+  以及（拿到 code 之后）CDN 的 HTTP 状态与响应体开头。
+  若仍是 Fail，重点转向「CM 会话本身缺了什么」—— 同一会话上 GetOwnedGames / PICS /
+  GetDepotDecryptionKey 都正常，只有 ContentServerDirectory 这两个方法被拒。
+- **教训**：
+  1. **协议层的 unwrap_or(0) 等于销毁证据**。默认值可以继续用，但原因必须留下来。
+  2. 判断「两条 RPC 同时失败」的共同原因时，**看它们的入参交集**：都吃 app_id + depot_id，
+     而 GetCDNAuthToken 没有 branch —— 这一步就把分支假设排掉了，省掉一次无效改动。
+  3. **「上游返回 2xx」不等于「拿到了想要的东西」**。非空就收下，等于把错误页当数据用，
+     错误会一路漂到很远的地方才炸，且炸出来的话毫无信息量。
+
 ## 2026-10-24（七）· 统一到 CM 登录（一次扫码）+ 游戏库搬 CM
 
 - **commit**: 见本轮提交

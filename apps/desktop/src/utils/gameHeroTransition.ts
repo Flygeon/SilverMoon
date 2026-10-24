@@ -88,6 +88,24 @@ export const heroTransitionActive = ref(false);
  */
 let flownElement: HTMLElement | null = null;
 
+/**
+ * 上一次起飞时被点的那张卡片的**元素引用**（返回时用）。
+ *
+ * ## 为什么不能靠 querySelector 找回来
+ *
+ * 返回时详情页还在，网格页被 keep-alive 缓存着 —— 但 keep-alive 的 deactivate
+ * 是把整棵 DOM **移进一个脱离文档的容器**（Vue 的 storageContainer），
+ * 不是留在文档里隐藏。所以 `document.querySelector("[data-sm-appid] .card-cover")`
+ * 在详情页里**必然返回 null**（之前的注释写反了）。
+ *
+ * 拿不到元素 → 返回时新快照里没有同名元素 → 浏览器只把 hero 淡出、不会飞回卡片。
+ * 这正是「进入有动画、返回没有」的成因。
+ *
+ * 因此这里在**离开网格时**就把元素记下来：DOM 引用本身还在（只是被搬走），
+ * 给它写好过渡名后，网格被重新激活时元素带着名字回到文档，新快照就能拍到。
+ */
+let rememberedCard: HTMLElement | null = null;
+
 /** 开始一次卡片 → 详情页的交接（网格侧调用）。 */
 export function beginCoverFlight(
   appId: number,
@@ -101,6 +119,23 @@ export function beginCoverFlight(
   if (element) {
     element.style.viewTransitionName = GAME_HERO_VT_NAME;
     flownElement = element;
+    // 记下来供返回时复用（见 rememberedCard 的注释）
+    rememberedCard = element;
+    /*
+     * 强制让浏览器**立刻**算一次样式。
+     *
+     * `startViewTransition` 的旧快照不是同步拍的，但它在同一个任务末尾就会拍；
+     * 只要 style 已写入就一定包含在内。这里读一次布局属性纯粹是把「写入」与
+     * 「浏览器可能推迟的样式计算」解耦，代价是一次可忽略的同步布局 ——
+     * 换来的是「过渡名一定进了旧快照」这个确定性。
+     */
+    void element.offsetWidth;
+    heroLog(
+      "[hero] 起飞侧：connected=" +
+        String(element.isConnected) +
+        " name=" +
+        getComputedStyle(element).viewTransitionName,
+    );
   }
 }
 
@@ -113,17 +148,27 @@ export function clearFlownElement(): void {
 }
 
 /**
- * 在网格里按 appId 找那张卡片的封面元素。
+ * 找「某张卡片的封面元素」。
  *
- * 返回详情页时用它挂过渡名 —— 网格被 keep-alive 缓存、DOM 还在，
- * 直接查比等一次重渲染快得多。
+ * 顺序：先在文档里查（网格**正被显示**时能命中，例如详情页里直接点了另一张卡），
+ * 查不到再退回 `rememberedCard`（网格被 keep-alive 搬离文档时的唯一可用引用）。
+ *
+ * ⚠️ 别把这里改成「只查文档」：详情页里网格是**脱离文档**的，
+ * querySelector 一定返回 null，返回动画会静默退化成淡出。
  */
 export function findCardCover(appId: number): HTMLElement | null {
   try {
-    return document.querySelector<HTMLElement>(`[data-sm-appid="${appId}"] .card-cover`);
+    const hit = document.querySelector<HTMLElement>(`[data-sm-appid="${appId}"] .card-cover`);
+    if (hit) return hit;
   } catch {
-    return null;
+    // 选择器语法错误只可能是改坏了常量，继续走下面的兜底
   }
+  const remembered = rememberedCard;
+  if (!remembered) return null;
+  // appId 对不上就说明记的是**上一张**卡：宁可没有返回动画，也不要把过渡名挂错卡片
+  const owner = remembered.closest<HTMLElement>("[data-sm-appid]");
+  const ownerId = Number(owner?.dataset.smAppid ?? Number.NaN);
+  return Number.isFinite(ownerId) && ownerId === appId ? remembered : null;
 }
 
 /**
@@ -145,6 +190,8 @@ export function endCoverFlight(): void {
 
 interface ViewTransitionLike {
   finished: Promise<void>;
+  /** 伪元素建好、补间已排程；用来数「这条补间到底有没有真的跑起来」。 */
+  ready?: Promise<void>;
 }
 
 type DocWithViewTransition = Document & {
@@ -316,9 +363,14 @@ export async function runViewTransition(handlers: ViewTransitionHandlers): Promi
        *
        * 命中即返回，不做无谓空转。
        */
-      // out-in 已经不再挡路（见 heroTransitionActive 的注释），
-      // 正常 1-2 帧就能命中；4 帧上限 ≈66ms，纯粹兜底懒加载 chunk。
-      const heroEl = await waitForHeroElement(HERO_SELECTORS, 4);
+      /*
+       * 正常 1-2 帧就能命中；上限 3 帧 ≈50ms，纯粹兜底懒加载 chunk。
+       *
+       * 这里**不再**在命中后再补等一帧布局：`.hero-media` 有 `aspect-ratio: 21/9`，
+       * 宽度一确定尺寸就确定，不存在「量到 0 尺寸、从原点飞」的问题；
+       * 而每多等一帧，用户就多看到一帧「点下去没反应」的冻结画面。
+       */
+      const heroEl = await waitForHeroElement(HERO_SELECTORS, 3);
       const tHero = performance.now();
       const heroName = heroEl ? getComputedStyle(heroEl).viewTransitionName : "(无元素)";
       heroLog(
@@ -330,9 +382,43 @@ export async function runViewTransition(handlers: ViewTransitionHandlers): Promi
           `total=${(tHero - tStart).toFixed(0)}ms`,
         tHero - tStart > 400 ? "warn" : "info",
       );
-      // 元素已进 DOM，再等一帧让布局稳定（否则量到的尺寸是 0，补间会从原点飞）
-      await nextFrame();
     });
+
+    /*
+     * 过渡真正开始后数一次补间。
+     *
+     * 为什么需要：前面那条日志只能证明「hero 元素带上了名字」，
+     * 证明不了「浏览器为它建了 ::view-transition-group(game-cover) 的动画」。
+     * 两者之间还可能断在「同名元素在快照里出现了两次」（浏览器会直接丢弃整次过渡，
+     * 不报错）—— 那正是最难靠读代码发现的一类失败。这条日志把那种情况暴露出来：
+     * animations=0 就是「补间没建立」，与「动画太短看不清」区分开。
+     */
+    void transition.ready
+      ?.then(() => {
+        try {
+          const pseudoOf = (animation: Animation): string =>
+            (animation.effect as KeyframeEffect | null)?.pseudoElement ?? "";
+          const running = document
+            .getAnimations()
+            .filter((a) => pseudoOf(a).includes(GAME_HERO_VT_NAME));
+          const detail = running
+            .map((a) => {
+              const timing = a.effect?.getTiming();
+              return `${pseudoOf(a) || "?"}:${Math.round(Number(timing?.duration ?? 0))}ms`;
+            })
+            .join(",");
+          heroLog(
+            `[hero] 补间已建立：animations=${running.length}${detail ? ` [${detail}]` : ""}`,
+            running.length === 0 ? "warn" : "info",
+          );
+        } catch {
+          /* 诊断失败不影响动画 */
+        }
+      })
+      .catch(() => {
+        /* 过渡被取消时 ready 会 reject：忽略 */
+      });
+
     await transition.finished;
   } catch {
     // 过渡被浏览器取消（例如同时触发另一次过渡）时 finished 会 reject，

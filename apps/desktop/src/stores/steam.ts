@@ -278,6 +278,45 @@ export const useSteamStore = defineStore("steam", () => {
   let downloadListening = false;
 
   /**
+   * 待提交的最新一帧进度 + 已排程的 rAF。
+   *
+   * ## 为什么要在前端再合一次
+   *
+   * 后端按「写了一个 chunk」推事件，几百 MB 的游戏一秒能推几十上百帧；
+   * 每一帧都写 ref 会让 Vue 每帧都重算 downloadPercent / downloadBytes 并 patch
+   * 进度条，和用户在详情页的其它交互抢主线程 —— 表现就是「下载时点什么都卡」。
+   *
+   * 这里只保留**最新**一帧，用 rAF 合并到一次渲染：进度条最多 60fps，
+   * 中间帧丢掉不影响观感（百分比本来就取整），但 Vue 的更新次数降一个量级。
+   */
+  let pendingProgress: SteamDownloadProgress | null = null;
+  let progressFrame: number | null = null;
+
+  /** 把合并后的那一帧写进响应式状态（rAF 回调）。 */
+  function commitProgress(): void {
+    progressFrame = null;
+    const next = pendingProgress;
+    pendingProgress = null;
+    if (!next) return;
+    downloadProgress.value = next;
+    // 逐 depot 的完成度：depotDone/depotTotal 给的是**当前** depot
+    const fractions = { ...depotFractions.value };
+    if (next.depotTotal > 0) {
+      fractions[next.depotId] = Math.min(1, next.depotDone / next.depotTotal);
+    }
+    depotFractions.value = fractions;
+  }
+
+  /** 丢掉待提交的那一帧（换游戏 / 复位时调，避免上一款的进度又冒出来）。 */
+  function cancelPendingProgress(): void {
+    if (progressFrame !== null) {
+      cancelAnimationFrame(progressFrame);
+      progressFrame = null;
+    }
+    pendingProgress = null;
+  }
+
+  /**
    * 订阅 `steam:download`（宿主/后端在下载过程中持续推送）。
    *
    * **幂等**：多次调用只挂一个监听器，重复调用直接返回 —— 视图在每次点「安装」
@@ -292,14 +331,11 @@ export const useSteamStore = defineStore("steam", () => {
       downloadUnlisten = await listen<SteamDownloadProgress>("steam:download", (event) => {
         const next = event.payload;
         if (!next || typeof next !== "object") return;
-        downloadProgress.value = next;
-        // 逐 depot 的完成度：depotDone/depotTotal 给的是**当前** depot，
-        // 已完成的那些直接记 1（depotsDone 之前的都算完）。
-        const fractions = { ...depotFractions.value };
-        if (next.depotTotal > 0) {
-          fractions[next.depotId] = Math.min(1, next.depotDone / next.depotTotal);
+        // 只留最新一帧，合并到下一帧统一提交（见 pendingProgress 的注释）
+        pendingProgress = next;
+        if (progressFrame === null) {
+          progressFrame = requestAnimationFrame(commitProgress);
         }
-        depotFractions.value = fractions;
       });
     } catch {
       // 宿主未提供该事件时不影响主流程（download 仍会正常返回结果）
@@ -316,6 +352,7 @@ export const useSteamStore = defineStore("steam", () => {
 
   /** 清掉上一次下载的进度 / 错误（重试或换了游戏时调，避免显示别人的进度条） */
   function resetDownload(): void {
+    cancelPendingProgress();
     downloadProgress.value = null;
     downloadError.value = "";
     downloadAppId.value = null;
@@ -417,6 +454,8 @@ export const useSteamStore = defineStore("steam", () => {
     downloadBusy.value = true;
     downloadError.value = "";
     downloadAppId.value = appId;
+    // 上一轮可能还有一帧排在 rAF 里，先丢掉，否则它会写回旧进度
+    cancelPendingProgress();
     downloadProgress.value = null;
     depotFractions.value = {};
 
@@ -502,11 +541,30 @@ export const useSteamStore = defineStore("steam", () => {
     avatarHash: string;
     steamId: string | null;
   } | null>(null);
+  /** 上面那份资料属于哪个账号（换账号必须重拉，见 loadPlayerProfile 的注释） */
+  let profileAccount = "";
 
-  /** 拉一次玩家资料。失败不抛：昵称/头像属装饰，拿不到用账号名兜底即可。 */
-  async function loadPlayerProfile(): Promise<void> {
+  /**
+   * 拉一次玩家资料。失败不抛：昵称/头像属装饰，拿不到用账号名兜底即可。
+   *
+   * ## 为什么默认不重复拉
+   *
+   * 它是**一次 CM RPC**，而 `CmSession` 用 Mutex 串行化 —— 同一时刻只能有一个
+   * service method 在飞。日志里出现过 `steam_player_summary` 20 秒超时：
+   * 那段时间整个 CM 会话都被占着，下载要的 CDN 票据请求只能排队。
+   *
+   * 而调用它的地方很频繁：`GamesView.onActivated` 每次从详情页返回网格都会走
+   * `loadStatus()`。昵称/头像在登录那一刻就定了，没有理由每次回列表都重拉。
+   * 因此这里按账号缓存：同一账号已有资料就直接返回；`force` 只给登录成功那一次用。
+   */
+  async function loadPlayerProfile(force = false): Promise<void> {
     if (!cmLogin.value.hasToken) {
       playerProfile.value = null;
+      profileAccount = "";
+      return;
+    }
+    // 同一账号已有资料：不重复打 CM（见上面的注释）
+    if (!force && playerProfile.value && profileAccount === cmLogin.value.accountName) {
       return;
     }
     try {
@@ -521,8 +579,10 @@ export const useSteamStore = defineStore("steam", () => {
         avatarHash: String(res?.avatarHash ?? ""),
         steamId: null,
       };
+      profileAccount = cmLogin.value.accountName;
     } catch {
       playerProfile.value = null;
+      profileAccount = "";
     }
   }
 
@@ -695,6 +755,9 @@ export const useSteamStore = defineStore("steam", () => {
         qrError: "",
         statusText: "",
       };
+      // 资料属于上一个账号：一并清掉，否则换个账号登录会先闪出旧昵称/头像
+      playerProfile.value = null;
+      profileAccount = "";
       status.value = { loggedIn: false, hasSession: false };
     } catch (e) {
       // 凭据没删掉就别假装已退出：错误留在 error 上让用户重试
@@ -961,7 +1024,8 @@ export const useSteamStore = defineStore("steam", () => {
         // **统一登录的接缝**：扫码成功即视为登录 → 立刻同步 status 并拉库，
         // 上层（登录卡 / 顶栏 / 详情页）不需要各自再触发一次。
         // 先拿昵称/头像，否则首帧会显示账号名 + 无头像，看起来像「信息不对」。
-        await loadPlayerProfile();
+        // 刚扫码成功：必须**强制**拉一次资料（这是它唯一的刷新时机）
+        await loadPlayerProfile(true);
         syncStatusFromCm();
         statusLoaded.value = true;
         void loadLibrary();

@@ -1,22 +1,4 @@
 <script setup lang="ts">
-/**
- * 游戏（左侧导航 → 游戏）。
- *
- * 职责：未登录时出登录卡（复用 components/SteamLoginPanel.vue），已登录时出顶栏 + 游戏库网格，
- * 点卡片跳独立详情页（views/GameDetailView.vue，路由 /games/:appId）。
- *
- * 另有「已安装」维度：本地库（op:"localLibrary"，读本机 vdf/acf，不需要登录）
- * 与账号游戏库并行拉取，卡片据此打徽标、工具栏据此筛「全部 / 已安装」。
- *
- * 链路：本视图 → stores/steam.ts → capabilities.steam({ op, ... })
- *       → callBridge("steam", payload) → electron/ipc.ts 的 steam 通道
- *       → electron/steam/（HTTPS WebAPI：认证 / IPlayerService 游戏库 / 商店 appdetails）。
- *
- * 约定：
- * - 图片一律 loading="lazy"，失败改用 Material 图标占位（**不用 emoji**）；
- * - 颜色只用 M3 令牌（--md-sys-color-*），不写死 Steam 绿（深色主题下会脏）；
- * - 所有请求都有 loading / 错误提示，不允许静默失败。
- */
 import { computed, onActivated, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import EmptyState from "@/components/EmptyState.vue";
@@ -110,13 +92,10 @@ function cacheText(ms?: number | null): string {
 /** 顶栏总时长（小时，整数） */
 const totalHours = computed(() => Math.round(steam.totalPlaytimeMinutes / 60));
 
-// ---------------------------------------------------------------- 过滤 + 排序
 /** 按关键词 + 安装筛选过滤后、再按当前排序规则排好的列表 */
 const visibleGames = computed<SteamGame[]>(() => {
   const q = keyword.value.trim().toLowerCase();
   let base = steam.games;
-  // 先过「已安装」这一档：本地库为空（没装 Steam / 扫描失败）时该档必然为空，
-  // 与其显示一张空网格，不如让它落到下面的 EmptyState 分支里说明原因
   if (installFilter.value === "installed") {
     base = base.filter((g) => installedIds.value.has(g.appId));
   }
@@ -141,42 +120,11 @@ const visibleGames = computed<SteamGame[]>(() => {
 
 const hasFilter = computed(() => keyword.value.trim().length > 0);
 
-// ---------------------------------------------------------------- 详情页跳转（hero 飞行）
-//
-// 详情已从「m3e-dialog 浮窗」改成独立路由页（/games/:appId）。
-// 好处：可回退、可收藏、可刷新，详情页还能铺满整屏做 hero 大图；
-// 代价是卡片点击不再就地展开 —— 于是用 View Transition 让「卡片放大飞进详情页」
-// 补上这段连续感（返回时反向飞回，见 GameDetailView 的 goBack）。
-//
-// 怎么飞：被点卡片的封面挂 view-transition-name，详情页 hero 图挂**同一个**
-// 名字，浏览器在路由切换前后各拍一张快照并自动补间。细节与兜底见
-// utils/gameHeroTransition.ts 的长注释。
-
 const router = useRouter();
 
-/**
- * 点卡片 → 进详情页（appId 当路由参数，详情页用 props 收）。
- *
- * ⚠️ 必须先 `await nextTick()` 再起飞。
- *
- * View Transition 拍「旧快照」的时刻，是它自己的更新任务里 —— 而
- * `activeCoverAppId.value = ...` 触发的重渲染要走 Vue 的 microtask 调度。
- * 不等这一拍，旧快照里的卡片**还没挂上** `view-transition-name`，
- * 浏览器就找不到可补间的元素，整次过渡退化成干巴巴的淡入 ——
- * 表现就是「点卡片没有飞行动画」，而且不报任何错。
- */
 async function openDetails(game: SteamGame, event?: MouseEvent): Promise<void> {
-  /*
-   * 直接给**被点的那个元素**写 view-transition-name。
-   *
-   * 不再经过响应式状态：那会让整个网格重渲染（76 张卡片一起 diff），
-   * 点一下卡住几百毫秒 —— 用户实测反馈「数据量太大卡掉了」。
-   * 直接写 style 与卡片数量无关，且**同步生效**，所以也不再需要 nextTick。
-   */
   const clicked = event?.currentTarget as HTMLElement | null;
   const cover = clicked?.querySelector<HTMLElement>(".card-cover") ?? null;
-  // 把卡片**当前这张图**交给详情页：它不用等商店接口就有图，
-  // 补间从第一帧到最后一帧都是同一张，不会「飞过去一个空框」。
   beginCoverFlight(game.appId, coverOf(game) || game.headerUrl || null, cover);
   await runViewTransition({
     // 只导航，**不等详情页数据**
@@ -185,13 +133,6 @@ async function openDetails(game: SteamGame, event?: MouseEvent): Promise<void> {
   });
 }
 
-// ---------------------------------------------------------------- 本地库
-//
-// 本地库（本机装了什么）与游戏库（账号买了什么）是两条独立链路：
-// 前者读 libraryfolders.vdf / appmanifest_*.acf、**不需要登录**，后者走 WebAPI。
-// 这里只用它做「已安装」徽标与「全部 / 已安装」筛选。
-
-/** 安装筛选：全部 / 仅已安装 */
 type InstallFilter = "all" | "installed";
 const installFilter = ref<InstallFilter>("all");
 

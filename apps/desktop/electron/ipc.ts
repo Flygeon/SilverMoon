@@ -33,6 +33,7 @@ import {
   guardAuth,
   getGameDetail,
   scanLocalLibrary,
+  invalidateLocalLibraryCache,
   findInstalled,
   launchGame,
   installGame,
@@ -853,6 +854,12 @@ const handlers: Record<string, Handler> = {
             appId,
           })),
         });
+        // 下载成功后磁盘上的 appmanifest 变了：必须立刻让扫描缓存失效，
+        // 否则前端紧接着问 localLibrary 时还会拿到「未安装」的旧快照，
+        // 详情页就会停在「安装」按钮上（用户以为没装上）。
+        if (reply.ok && (reply.data as { ok?: boolean } | null)?.ok) {
+          invalidateLocalLibraryCache();
+        }
         return reply.ok ? reply.data : { ok: false, error: reply.error ?? "下载失败" };
       }
 
@@ -883,6 +890,8 @@ const handlers: Record<string, Handler> = {
         const roots = Array.isArray(payload.customRoots)
           ? payload.customRoots.map((r) => String(r))
           : undefined;
+        // 库目录变了，缓存的「已安装」列表立刻作废（否则要等 TTL 过期才更新）
+        invalidateLocalLibraryCache();
         return updateSteamSettings(dataDir, roots ? { customRoots: roots } : {});
       }
       case "pickSteamRoot": {

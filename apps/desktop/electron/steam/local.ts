@@ -295,8 +295,58 @@ export function parseAppManifest(
   };
 }
 
-/** 扫描所有库，得到已安装游戏列表。 */
+/**
+ * 扫描缓存。
+ *
+ * ## 为什么必须有
+ *
+ * `scanLocalLibrary` 是**同步**的：`discoverSteamRoot`（可能读注册表）+ `readLibraryFolders`
+ * + 对每个库 `readdirSync` 再逐个 `readFileSync` 解析 `appmanifest_*.acf`。
+ * 几百款游戏的库在机械盘上要几十到几百毫秒，而且它跑在**主进程**里 ——
+ * 同步阻塞期间所有 IPC（包括下载进度事件）都停摆。
+ *
+ * 而详情页打开一次会**连着调两次**：`gameDetail` 内部的 `findInstalled`（全量扫一遍），
+ * 以及前端的 `localLibrary`（再扫一遍）。用户感受到的就是「点卡片卡一下」。
+ *
+ * 所以这里加一个 TTL 缓存：同一轮点击里的多次调用只扫一次，浏览期间也不会
+ * 因为「过了几秒」就重新扫描。TTL 的具体取舍见下面的 `SCAN_CACHE_TTL_MS`；
+ * 真正的状态变化由调用方显式 `invalidateLocalLibraryCache()` 立刻失效
+ * （见 ipc.ts 的下载成功 / 改库目录分支）。
+ */
+let scanCache: { key: string; at: number; value: SteamLocalLibrary } | null = null;
+
+/**
+ * 缓存有效期（毫秒）。
+ *
+ * 取 10s 而不是更短：2s 看着「更实时」，实际上用户在网格上浏览几秒再点卡片时
+ * 缓存已经过期，点击那一下照样要吃一次全量扫描 —— 等于没缓存。
+ *
+ * 10s 的代价是「在别处（Steam 客户端）刚装完的游戏，徽标最多晚 10s 出现」，
+ * 而这个应用自己发起的安装**不需要等**：下载成功与改库目录都会显式作废缓存
+ * （见 electron/ipc.ts）。用一个几乎无感的延迟换掉「每次点卡片都卡一下」，
+ * 这笔交易是划算的。
+ */
+const SCAN_CACHE_TTL_MS = 10_000;
+
+/** 丢掉缓存（安装状态刚变化时调，例如下载完成、改了库目录）。 */
+export function invalidateLocalLibraryCache(): void {
+  scanCache = null;
+}
+
+/** 扫描所有库，得到已安装游戏列表（带短 TTL 缓存，见上）。 */
 export function scanLocalLibrary(customRoots: string[] = []): SteamLocalLibrary {
+  const key = customRoots.join("|");
+  const now = Date.now();
+  if (scanCache && scanCache.key === key && now - scanCache.at < SCAN_CACHE_TTL_MS) {
+    return scanCache.value;
+  }
+  const value = scanLocalLibraryUncached(customRoots);
+  scanCache = { key, at: Date.now(), value };
+  return value;
+}
+
+/** 真正的扫描（不做缓存）。导出仅给测试用，业务侧一律走 `scanLocalLibrary`。 */
+export function scanLocalLibraryUncached(customRoots: string[] = []): SteamLocalLibrary {
   const scannedAt = Date.now();
   const { root, candidates } = discoverSteamRoot(customRoots);
   if (!root) {

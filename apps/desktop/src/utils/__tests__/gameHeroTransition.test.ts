@@ -6,6 +6,9 @@ import {
   runViewTransition,
   supportsViewTransition,
   activeCoverAppId,
+  beginCoverFlight,
+  endCoverFlight,
+  findCardCover,
   GAME_HERO_VT_NAME,
 } from "../gameHeroTransition";
 
@@ -202,6 +205,39 @@ describe("runViewTransition", () => {
     expect(heroNames).toContain(GAME_HERO_VT_NAME);
     // 明确禁止再退回 var() 写法
     expect(heroNames.some((value) => value.includes("var("))).toBe(false);
+  });
+
+  /**
+   * 回归：网格被 keep-alive 搬离文档后，返回时**仍然**要能拿到那张卡片。
+   *
+   * Vue 的 keep-alive deactivate 是把子树移进一个脱离文档的容器，不是隐藏。
+   * 所以详情页里 `document.querySelector` 一定查不到卡片 —— 旧实现因此在返回时
+   * 拿不到元素，新快照里没有同名元素，浏览器只把 hero 淡出，表现为「返回没有飞回动画」。
+   */
+  it("网格 DOM 脱离文档后仍能取到卡片（返回动画的前提）", () => {
+    const card = document.createElement("button");
+    card.dataset.smAppid = "2704110";
+    const cover = document.createElement("div");
+    cover.className = "card-cover";
+    card.appendChild(cover);
+    document.body.appendChild(card);
+
+    // 进入详情：网格侧把被点卡片的封面交出去
+    beginCoverFlight(2704110, "https://example.com/header.jpg", cover);
+    expect(cover.style.viewTransitionName).toBe(GAME_HERO_VT_NAME);
+
+    // 模拟 keep-alive：整棵子树被移出文档（元素引用还在）
+    card.remove();
+    expect(document.querySelector('[data-sm-appid="2704110"] .card-cover')).toBeNull();
+
+    // 返回时按 appId 找卡片：必须命中记下来的那个元素
+    expect(findCardCover(2704110)).toBe(cover);
+    // 别的 appId 不能误挂（否则过渡名会挂到错的卡片上，整次过渡被丢弃）
+    expect(findCardCover(999)).toBeNull();
+
+    endCoverFlight();
+    expect(cover.style.viewTransitionName).toBe("");
+    card.remove();
   });
 
   it("不接受 waitFor 参数（接口已移除，传了会在类型层报错）", () => {
