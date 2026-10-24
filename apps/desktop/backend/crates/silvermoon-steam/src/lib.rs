@@ -42,5 +42,5 @@ pub use chunk::{process_chunk, ChunkOutcome};
 pub use cm::{CmError, CmManager, CmSession};
 pub use depot_key::fetch_depot_key;
 pub use downloader::{download_app, safe_join, DepotTask, DownloadProgress, DownloadResult};
-pub use pics::{fetch_app_depots, AppDepot};
 pub use manifest::{ContentManifest, FileMapping, ManifestMetadata};
+pub use pics::{fetch_app_depots, AppDepot};

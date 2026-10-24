@@ -461,8 +461,11 @@ mod tests {
         // file mapping body
         let mut file = Vec::new();
         // field 1: filename
+        // ⚠️ 长度必须与字面量一致：`game.exe` 是 **8** 字节。
+        // 曾写成 9，后面所有字段跟着错位，整份 manifest 解析失败 ——
+        // 表现像「解析器坏了」，其实是测试数据写错。
         file.push(1 << 3 | 2);
-        file.push(9);
+        file.push(8);
         file.extend_from_slice(b"game.exe");
         // field 2: size
         file.push(2 << 3);
@@ -487,7 +490,9 @@ mod tests {
         meta.push(7);
         meta.push(2 << 3); // gid_manifest
         meta.push(9);
-        meta.push(4 << 3); // filenames_encrypted = false（不写即 false）
+        // filenames_encrypted = false：**整个字段不写**即可。
+        // 曾写成「只有 tag 没有值」—— 解析时 varint() 会吞掉下一个字节
+        // （越过 section 边界），导致整份 manifest 判失败。
 
         // 拼容器
         let mut out = Vec::new();

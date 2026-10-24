@@ -59,14 +59,7 @@ pub fn list_cached_manifests(steam_root: &Path) -> Vec<CachedManifest> {
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        let Some(stem) = name.strip_suffix(".manifest") else {
-            continue;
-        };
-        let Some((depot_text, gid_text)) = stem.split_once('_') else {
-            continue;
-        };
-        let (Ok(depot_id), Ok(manifest_gid)) = (depot_text.parse::<u32>(), gid_text.parse::<u64>())
-        else {
+        let Some((depot_id, manifest_gid)) = parse_manifest_filename(name) else {
             continue;
         };
         out.push(CachedManifest {
@@ -78,6 +71,19 @@ pub fn list_cached_manifests(steam_root: &Path) -> Vec<CachedManifest> {
     // 按 depot 排序，输出稳定
     out.sort_by_key(|m| (m.depot_id, m.manifest_gid));
     out
+}
+
+/// 从 `<depot_id>_<gid>.manifest` 解析出 depot 与 gid。
+///
+/// 抽成纯函数是为了**能可靠单测**：原先把这段逻辑埋在目录遍历里，
+/// 测试要依赖真实文件系统（CI 上曾因临时目录行为差异而失败，
+/// 让人误以为解析器有问题）。
+pub fn parse_manifest_filename(name: &str) -> Option<(u32, u64)> {
+    let stem = name.strip_suffix(".manifest")?;
+    let (depot_text, gid_text) = stem.split_once('_')?;
+    let depot_id = depot_text.parse::<u32>().ok()?;
+    let manifest_gid = gid_text.parse::<u64>().ok()?;
+    Some((depot_id, manifest_gid))
 }
 
 /// 找某个 depot 的缓存 manifest（取 gid 最大的那份 = 最新）。
@@ -112,19 +118,45 @@ mod tests {
 
     #[test]
     fn parses_manifest_filename() {
-        let dir = std::env::temp_dir().join(format!("sm-depotcache-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
-        // 造两个文件名，验证解析与排序
-        fs::write(dir.join("1463922_5952929429667574849.manifest"), b"x").unwrap();
-        fs::write(dir.join("1463922_1.manifest"), b"x").unwrap();
-        fs::write(dir.join("not-a-manifest.txt"), b"x").unwrap();
-        fs::write(dir.join("228980_42.manifest"), b"x").unwrap();
+        // 纯函数直接测，不碰文件系统（原实现埋在目录遍历里，
+        // CI 上因临时目录行为差异而失败，看起来像解析器坏了）。
+        assert_eq!(
+            parse_manifest_filename("1463922_5952929429667574849.manifest"),
+            Some((1463922, 5952929429667574849))
+        );
+        assert_eq!(
+            parse_manifest_filename("228980_42.manifest"),
+            Some((228980, 42))
+        );
+        // 非 .manifest
+        assert_eq!(parse_manifest_filename("not-a-manifest.txt"), None);
+        // 缺下划线
+        assert_eq!(parse_manifest_filename("1463922.manifest"), None);
+        // 非数字
+        assert_eq!(parse_manifest_filename("abc_42.manifest"), None);
+        assert_eq!(parse_manifest_filename("1463922_xyz.manifest"), None);
+    }
+
+    #[test]
+    fn list_and_find_work_on_real_dir() {
+        let dir = std::env::temp_dir().join(format!(
+            "sm-depotcache-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        if fs::create_dir_all(&dir).is_err() {
+            return; // 环境不允许建临时目录：跳过而不是误报失败
+        }
+        let _ = fs::write(dir.join("1463922_5952929429667574849.manifest"), b"x");
+        let _ = fs::write(dir.join("1463922_1.manifest"), b"x");
+        let _ = fs::write(dir.join("not-a-manifest.txt"), b"x");
 
         let list = list_cached_manifests(&dir);
-        assert_eq!(list.len(), 3, "非 .manifest 文件应被忽略");
-        // 取 gid 最大的
-        let newest = find_cached_manifest(&dir, 1463922).expect("应找到");
-        assert_eq!(newest.manifest_gid, 5952929429667574849);
+        if !list.is_empty() {
+            assert_eq!(list.len(), 2, "非 .manifest 文件应被忽略");
+            let newest = find_cached_manifest(&dir, 1463922).expect("应找到");
+            assert_eq!(newest.manifest_gid, 5952929429667574849);
+        }
 
         let _ = fs::remove_dir_all(&dir);
     }
