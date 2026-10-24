@@ -9,7 +9,7 @@ import { useLibraryStore } from "@/stores/library";
 import { useMusicTagsStore } from "@/stores/musicTags";
 import { useDesktopStore } from "@/stores/desktop";
 import { capabilities, isDesktop } from "@/capabilities";
-import { heroTransitionActive } from "@/utils/gameHeroTransition";
+
 import MiniPlayer from "@/components/MiniPlayer.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import TextPrompt from "@/components/TextPrompt.vue";
@@ -195,6 +195,19 @@ const library = useLibraryStore();
 const audioEffects = useAudioEffectsStore();
 const router = useRouter();
 const route = useRoute();
+
+/**
+ * 是否处在「游戏」区域（网格页与详情页）。
+ *
+ * 这块区域的路由切换**不能用 `mode="out-in"`**：
+ * out-in 要等旧页面离场后才挂载新页面，而卡片→详情是一次共享元素飞行，
+ * 新页必须立刻进 DOM 才有东西可补间。用 out-in 的结果就是
+ * 「点击后卡一下，然后直接出现，没有飞行动画」。
+ *
+ * 注意是**按路由静态判断**，不要按「过渡是否进行中」动态切换：
+ * 后者会让 Transition 组件重建，反而引入新的卡顿。
+ */
+const isGamesArea = computed(() => route.path.startsWith("/games"));
 
 const navItems = computed(() => [
   { key: "images", path: "/images", icon: "image", type: "image" },
@@ -710,7 +723,7 @@ router.afterEach((to) => {
             -->
             <transition
               :name="isPlayerPage ? 'player' : 'page'"
-              :mode="heroTransitionActive ? undefined : 'out-in'"
+              :mode="isGamesArea ? undefined : 'out-in'"
               @enter="onRouteEnter"
             >
               <!--

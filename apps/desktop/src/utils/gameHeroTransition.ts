@@ -237,9 +237,18 @@ export async function runViewTransition(handlers: ViewTransitionHandlers): Promi
       //
       // 这里的 await 只等「路由解析 + 组件挂载」，**不等任何网络数据**
       // （详情页自己发请求）。首次进入可能要等懒加载 chunk，之后有缓存。
+      /*
+       * 分段计时。
+       *
+       * 「点击后卡一下」这类反馈无法靠猜定位：可能是路由解析慢、懒加载 chunk 慢、
+       * 等 hero 元素慢，也可能是别处。把每段耗时记进日志，一次就能看出瓶颈在哪。
+       */
+      const tStart = performance.now();
       await handlers.navigate();
+      const tNavigate = performance.now();
       // Vue 的渲染周期（把 hero 元素写进 DOM）
       await nextTick();
+      const tTick = performance.now();
 
       /*
        * 等 hero 元素真正进入 DOM。
@@ -263,9 +272,16 @@ export async function runViewTransition(handlers: ViewTransitionHandlers): Promi
       // out-in 已经不再挡路（见 heroTransitionActive 的注释），
       // 正常 1-2 帧就能命中；4 帧上限 ≈66ms，纯粹兜底懒加载 chunk。
       const heroEl = await waitForHeroElement(HERO_SELECTORS, 4);
+      const tHero = performance.now();
       const heroName = heroEl ? getComputedStyle(heroEl).viewTransitionName : "(无元素)";
       heroLog(
-        `[hero] 起飞前：heroEl=${heroEl ? heroEl.className : "null"} name=${heroName} activeCoverAppId=${activeCoverAppId.value}`,
+        `[hero] 起飞前：heroEl=${heroEl ? heroEl.className : "null"} name=${heroName} ` +
+          `coverId=${activeCoverAppId.value} ` +
+          `耗时: navigate=${(tNavigate - tStart).toFixed(0)}ms ` +
+          `tick=${(tTick - tNavigate).toFixed(0)}ms ` +
+          `waitHero=${(tHero - tTick).toFixed(0)}ms ` +
+          `total=${(tHero - tStart).toFixed(0)}ms`,
+        tHero - tStart > 400 ? "warn" : "info",
       );
       // 元素已进 DOM，再等一帧让布局稳定（否则量到的尺寸是 0，补间会从原点飞）
       await nextFrame();
