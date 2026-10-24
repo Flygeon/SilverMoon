@@ -22,6 +22,7 @@ import path from "node:path";
 
 import { log } from "./log";
 import { readEncryptedFile, writeEncryptedFile } from "./secure-store";
+import { writeThemeHint } from "./theme-hint";
 
 interface StoreFile {
   data: Record<string, unknown>;
@@ -83,6 +84,26 @@ function persist(file: string): void {
   } catch (error) {
     log.error(`写入 store ${key} 失败：`, error);
   }
+  // settings.json 被整体加密后，启动器（Rust，明文 JSON 解析）读不到 theme 了；
+  // 这里顺手把「最终明暗」写成明文提示文件给它用。见 electron/theme-hint.ts。
+  if (path.basename(key) === "settings.json") {
+    syncThemeHint(entry.data);
+  }
+}
+
+/**
+ * 把 settings 里的主题偏好同步成启动器可读的明文提示。
+ *
+ * `theme` 的三个取值与渲染层一致：`light` / `dark` / `system`。
+ * `system` 时主进程没有可靠的亮暗来源（那是渲染层的 matchMedia），
+ * 因此**不写提示**，让启动器按它自己读到的系统设置判断 —— 与改动前的行为一致。
+ * 单模式皮肤会锁定明暗，但那份状态在皮肤文档里，启动器原本也没有考虑，不在此扩展。
+ */
+function syncThemeHint(data: Record<string, unknown>): void {
+  const settings = data.settings as Record<string, unknown> | undefined;
+  const raw = settings?.theme;
+  if (raw === "dark") writeThemeHint(dataRoot, true);
+  else if (raw === "light") writeThemeHint(dataRoot, false);
 }
 
 /**

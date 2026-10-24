@@ -42,15 +42,35 @@ use pathfind::{pick_electron, ELECTRON_EXE};
 /// 用于定位 `%APPDATA%\<identifier>\settings.json`。
 const APP_IDENTIFIER: &str = "cn.cool.silvermoon";
 
+/// 应用数据目录：`%APPDATA%\<identifier>`（与 `electron/config.ts` 的 dataDir() 对齐）。
+fn data_dir() -> Option<std::path::PathBuf> {
+    let appdata = std::env::var("APPDATA").ok()?;
+    Some(std::path::Path::new(&appdata).join(APP_IDENTIFIER))
+}
+
+/// 读「明暗提示」——主进程写出的明文小文件（见 `electron/theme-hint.ts`）。
+///
+/// 为什么需要它：`settings.json` 现在**整体被 safeStorage 加密**（里面存着
+/// WebDAV 密码、Bangumi / Pixiv token 等凭据），落盘内容是
+/// `{"__smEnc":"v1","data":"..."}`。启动器用明文 JSON 解析，取不到
+/// `settings.theme`，只能回退系统亮色 —— 表现就是**无论用户选深色还是浅色，
+/// 启动器永远是白底**。让 Rust 去复刻 Chromium 的 OSCrypt（v10 + DPAPI）既繁琐
+/// 又随 Chromium 版本漂移；主题又不是凭据，由主进程单独写一个明文结论最稳。
+///
+/// 返回 Some(true)=深色 / Some(false)=浅色 / None=没有提示（回退旧逻辑）。
+fn read_theme_hint() -> Option<bool> {
+    let path = data_dir()?.join("theme-hint.json");
+    let text = std::fs::read_to_string(path).ok()?;
+    prefs::theme_hint_from_json(&text)
+}
+
 /// 读应用设置里的主题偏好（`settings.json` 的 `settings.theme`）。
 ///
-/// 与 `electron/config.ts` 的 `dataDir()` 对齐：`%APPDATA%\<identifier>`。
-/// 读不到就返回 None，由调用方回退系统亮暗 —— 启动器绝不因为读不到设置而失败。
+/// **仅在旧版（明文）settings.json 上有效**：新版本该文件是加密信封，
+/// 这里会解析失败并返回 None。保留它是为了「用户还没启动过新版主进程」时
+/// 仍能按旧格式取到偏好（升级后第一次启动仍显示正确底色）。
 fn read_theme_pref() -> Option<&'static str> {
-    let appdata = std::env::var("APPDATA").ok()?;
-    let path = std::path::Path::new(&appdata)
-        .join(APP_IDENTIFIER)
-        .join("settings.json");
+    let path = data_dir()?.join("settings.json");
     let text = std::fs::read_to_string(path).ok()?;
     prefs::theme_from_settings(&text)
 }
@@ -126,8 +146,20 @@ fn dump_frames(arg: &str) {
     }
 }
 
-/// 决定 splash 的亮/暗：**跟随应用设置**，设置缺失才跟系统。
+/// 决定 splash 的亮/暗。
+///
+/// 优先级：
+/// 1. **明暗提示**（`theme-hint.json`）—— 新版主进程写出，唯一可靠的来源；
+/// 2. 旧版**明文** `settings.json` 的 `settings.theme` —— 兼容尚未升级的安装；
+/// 3. 系统亮暗。
 fn resolve_mode() -> prefs::Mode {
+    if let Some(dark) = read_theme_hint() {
+        return if dark {
+            prefs::Mode::Dark
+        } else {
+            prefs::Mode::Light
+        };
+    }
     prefs::resolve(read_theme_pref(), system_is_dark())
 }
 

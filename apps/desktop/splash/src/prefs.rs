@@ -45,6 +45,16 @@ pub fn theme_from_settings(json: &str) -> Option<&'static str> {
     }
 }
 
+/// 解析主进程写出的**明暗提示**（`theme-hint.json`）。
+///
+/// 文件契约（与 `electron/theme-hint.ts` 严格对应）：
+/// `{"dark":true}` / `{"dark":false}`。任何异常（空文件、坏 JSON、缺键、类型不对）
+/// 都返回 `None`，由调用方回退到旧逻辑 / 系统亮暗 —— **绝不猜**。
+pub fn theme_hint_from_json(json: &str) -> Option<bool> {
+    let root: Value = serde_json::from_str(json).ok()?;
+    root.get("dark")?.as_bool()
+}
+
 /// 解析最终模式。
 ///
 /// `pref` = `settings.theme` 的值（可能为 `None`）；
@@ -107,6 +117,35 @@ mod tests {
     fn ignores_top_level_theme() {
         let json = r#"{"theme":"dark","settings":{"theme":"light"}}"#;
         assert_eq!(theme_from_settings(json), Some("light"));
+    }
+
+    // ---- 明暗提示（theme-hint.json）：settings.json 加密后的唯一可靠来源 ----
+
+    #[test]
+    fn theme_hint_reads_both_modes() {
+        assert_eq!(theme_hint_from_json(r#"{"dark":true}"#), Some(true));
+        assert_eq!(theme_hint_from_json(r#"{"dark":false}"#), Some(false));
+        // 多余字段不影响
+        assert_eq!(theme_hint_from_json(r#"{"dark":true,"v":1}"#), Some(true));
+    }
+
+    #[test]
+    fn theme_hint_rejects_bad_input() {
+        assert_eq!(theme_hint_from_json(""), None);
+        assert_eq!(theme_hint_from_json("not json"), None);
+        assert_eq!(theme_hint_from_json("{}"), None);
+        assert_eq!(theme_hint_from_json(r#"{"dark":null}"#), None);
+        // 字符串 "true" 不算（避免把类型错误当成真值）
+        assert_eq!(theme_hint_from_json(r#"{"dark":"true"}"#), None);
+        assert_eq!(theme_hint_from_json(r#"{"dark":1}"#), None);
+    }
+
+    /// 加密后的 settings.json 里没有 settings.theme，旧解析必须返回 None，
+    /// 这样调用方才会去读 theme-hint.json —— 这个顺序错了就是白底回归。
+    #[test]
+    fn encrypted_settings_yield_none() {
+        let envelope = r#"{"__smEnc":"v1","data":"djEwabcdef"}"#;
+        assert_eq!(theme_from_settings(envelope), None);
     }
 
     #[test]

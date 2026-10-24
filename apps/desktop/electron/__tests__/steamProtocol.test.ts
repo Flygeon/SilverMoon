@@ -22,6 +22,7 @@ import {
   SteamProtocol,
   readGuardType,
   describeEResult,
+  steamIdFromRefreshToken,
   type SteamStorage,
 } from "../steam/protocol";
 
@@ -316,6 +317,148 @@ describe("回归：换 access_token 必须传真实 steamid", () => {
 
     expect(status.loggedIn).toBe(false);
     expect(logged.some((m) => m.includes("access_token"))).toBe(true);
+  });
+});
+
+describe("steamIdFromRefreshToken：二维码流程唯一的 steamid 来源", () => {
+  /** 造一个形状合法的 JWT（不校验签名，只需要 payload 可解）。 */
+  function jwt(payload: Record<string, unknown>): string {
+    const b64u = (o: unknown) => Buffer.from(JSON.stringify(o), "utf8").toString("base64url");
+    return `${b64u({ alg: "EdDSA", typ: "JWT" })}.${b64u(payload)}.c2ln`;
+  }
+
+  it("从 sub 解出 17 位 SteamID64", () => {
+    expect(steamIdFromRefreshToken(jwt({ iss: "steam", sub: "76561197960287930" }))).toBe(
+      "76561197960287930",
+    );
+  });
+
+  it("sub 是**小**数字时也能解（但 17 位数字必然丢精度，见下一条）", () => {
+    // 只验证类型容错：合法 17 位的数字字面量在 JS 里已失真，不能当输入
+    expect(steamIdFromRefreshToken(jwt({ sub: "76561197960287930" }))).toBe("76561197960287930");
+  });
+
+  it("17 位 SteamID 若以数字形式出现，必然已丢精度 —— 我们宁可不认", () => {
+    // 76561197960287930 > Number.MAX_SAFE_INTEGER（9007199254740991），
+    // 以 number 承载时必然失真（...930 → ...940）。Steam 实际发的是字符串；
+    // 若真收到数字形态，说明链路上某处已经损坏，返回 null 比返回错 ID 安全。
+    // 这里用 Number() 构造而不是字面量：字面量会被 ESLint 的
+    // no-loss-of-precision 直接拦下（那恰好也是同一个事实）。
+    const corrupted = Number("76561197960287930");
+    expect(String(corrupted)).not.toBe("76561197960287930"); // 证明确实失真
+    expect(steamIdFromRefreshToken(jwt({ sub: corrupted }))).toBeNull();
+  });
+
+  it("不是 JWT 时返回 null（不能抛）", () => {
+    expect(steamIdFromRefreshToken("plain-token")).toBeNull();
+    expect(steamIdFromRefreshToken("")).toBeNull();
+    expect(steamIdFromRefreshToken("a.b")).toBeNull(); // payload 不是合法 JSON
+  });
+
+  it("sub 形状不对时返回 null（避免把脏值发去换 token）", () => {
+    expect(steamIdFromRefreshToken(jwt({ sub: "123" }))).toBeNull();
+    expect(steamIdFromRefreshToken(jwt({ sub: "abc" }))).toBeNull();
+    expect(steamIdFromRefreshToken(jwt({}))).toBeNull();
+  });
+
+  it("二维码登录成功后，会话里必须带上从 token 解出的 steamId", async () => {
+    // 模拟二维码流程：轮询只回 refresh_token，不回 steamid
+    const token = jwt({ sub: "76561198000000009" });
+    const calls: { url: string; body: string }[] = [];
+    const fake: typeof fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      calls.push({ url, body: typeof init?.body === "string" ? init.body : "" });
+      if (url.includes("BeginAuthSessionViaQR")) {
+        return new Response(
+          JSON.stringify({
+            response: {
+              client_id: "1",
+              request_id: "r",
+              challenge_url: "https://s.team/q/1/1",
+              interval: 1,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.includes("PollAuthSessionStatus")) {
+        // 关键：只给 refresh_token，没有 steamid
+        return new Response(JSON.stringify({ response: { refresh_token: token } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("GenerateAccessTokenForApp")) {
+        return new Response(JSON.stringify({ response: { access_token: "at" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      // 资料 / 库：给空响应即可
+      return new Response(JSON.stringify({ response: { players: [] } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const files = new Map<string, string>();
+    const storage: SteamStorage = {
+      read: (f) => files.get(f) ?? null,
+      write: (f, t) => void files.set(f, t),
+      remove: (f) => void files.delete(f),
+      exists: (f) => files.has(f),
+    };
+    const steam = new SteamProtocol({
+      sessionFile: "/v/steam-session.json",
+      libraryFile: "/v/steam-library.json",
+      storage,
+      fetchImpl: fake,
+    });
+
+    await steam.beginQr();
+    const state = await steam.pollOnce();
+    expect(state.state).toBe("authenticated");
+
+    // 落盘会话必须带 steamId
+    const saved = JSON.parse(files.get("/v/steam-session.json") ?? "{}");
+    expect(saved.steamId).toBe("76561198000000009");
+
+    // 且换 token 时发出去的是真实 ID（不是 0）
+    const tokenCall = calls.find((c) => c.url.includes("GenerateAccessTokenForApp"));
+    expect(tokenCall).toBeTruthy();
+    expect(new URLSearchParams(tokenCall?.body ?? "").get("steamid")).toBe("76561198000000009");
+  });
+
+  it("旧会话缺 steamId 时自动从 token 补全并写回", async () => {
+    const token = jwt({ sub: "76561198000000010" });
+    const files = new Map<string, string>();
+    // 模拟上一版遗留的会话：有 refreshToken，没有 steamId
+    files.set("/v/steam-session.json", JSON.stringify({ refreshToken: token, accountName: "old" }));
+    const storage: SteamStorage = {
+      read: (f) => files.get(f) ?? null,
+      write: (f, t) => void files.set(f, t),
+      remove: (f) => void files.delete(f),
+      exists: (f) => files.has(f),
+    };
+    const fake: typeof fetch = async () =>
+      new Response(JSON.stringify({ response: { access_token: "at" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    const steam = new SteamProtocol({
+      sessionFile: "/v/steam-session.json",
+      libraryFile: "/v/steam-library.json",
+      storage,
+      fetchImpl: fake,
+    });
+
+    const status = await steam.status();
+    expect(status.loggedIn).toBe(true);
+    expect(status.steamId).toBe("76561198000000010");
+    // 自愈结果已写回磁盘
+    expect(JSON.parse(files.get("/v/steam-session.json") ?? "{}").steamId).toBe(
+      "76561198000000010",
+    );
   });
 });
 

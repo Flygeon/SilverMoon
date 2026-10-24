@@ -294,13 +294,19 @@ export class SteamProtocol {
         this.session = null;
         return null;
       }
+      // 旧版本存下的会话可能没有 steamId（二维码登录曾漏掉）——从 token 自愈补上，
+      // 否则升级后的老会话仍然换不出 access_token。补上后立刻写回，只做一次。
+      const healedSteamId = parsed.steamId ?? steamIdFromRefreshToken(parsed.refreshToken);
       this.session = {
         refreshToken: parsed.refreshToken,
         accountName: parsed.accountName ?? null,
         personaName: parsed.personaName ?? null,
-        steamId: parsed.steamId ?? null,
+        steamId: healedSteamId ?? null,
         avatarUrl: parsed.avatarUrl ?? null,
       };
+      if (!parsed.steamId && healedSteamId) {
+        this.options.storage.write(this.options.sessionFile, JSON.stringify(this.session));
+      }
     } catch {
       // 解密失败（换机 / 凭据损坏）按「未登录」处理，让用户重新登录
       this.session = null;
@@ -544,7 +550,15 @@ export class SteamProtocol {
     });
 
     const refreshToken = payload.refresh_token ? String(payload.refresh_token) : "";
-    const steamId = payload.steamid ? String(payload.steamid) : (pending.steamId ?? null);
+    // steamid 三种来源，按可靠性排序：
+    // 1) 响应里的 steamid（账号密码流程会给）；
+    // 2) 从 refresh_token（JWT）的 sub 解出来 —— **二维码流程只有这一条路**；
+    // 3) 待处理对象里记住的（凭据流程早期存下的）。
+    const steamId =
+      (payload.steamid ? String(payload.steamid) : null) ??
+      (refreshToken ? steamIdFromRefreshToken(refreshToken) : null) ??
+      pending.steamId ??
+      null;
 
     if (!refreshToken) {
       // 服务端可能要求切换 Guard 方式（例如邮箱码改为 App 确认）
@@ -887,6 +901,52 @@ export class SteamProtocol {
 // ---------------------------------------------------------------------------
 // 工具函数
 // ---------------------------------------------------------------------------
+
+/**
+ * 从 refresh_token 里解出 SteamID64。
+ *
+ * ## 为什么必须这么做
+ *
+ * Steam 的 refresh_token 是 **JWT**，其 payload 的 `sub` 就是 SteamID64。
+ * 而不同登录流程能拿到的字段并不一样：
+ * - **账号密码流程**：`BeginAuthSessionViaCredentials` 会直接回 `steamid`；
+ * - **二维码流程**：`PollAuthSessionStatus` 在登录成功时**只回 refresh_token**，
+ *   没有 steamid 字段（实测 keys 只有 `had_remote_interaction` 等）。
+ *
+ * 而换 access_token（`GenerateAccessTokenForApp`）又**必须**带真实 steamid ——
+ * 传 `"0"` 会被 Steam 以 400 拒绝。所以二维码登录后，只能从 token 自己解出来。
+ *
+ * 参考实现（steam-vent / Aurelia）只走「凭据 + CM 会话」那条路，steamid 由
+ * 连接对象持有，因此没有这个问题；我们走纯 HTTPS 才必须自己补这一步。
+ *
+ * 解不出来（不是 JWT / 结构异常）时返回 null，调用方按「会话不可用」处理。
+ */
+export function steamIdFromRefreshToken(token: string): string | null {
+  if (typeof token !== "string") return null;
+  const parts = token.split(".");
+  if (parts.length < 2) return null;
+  try {
+    // JWT payload 是 base64url；补足 padding 后按 base64 解
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+    const json = Buffer.from(padded, "base64").toString("utf8");
+    const payload = JSON.parse(json) as { sub?: string | number };
+    const sub = payload?.sub;
+    if (sub === undefined || sub === null) return null;
+    // ⚠️ 只认**字符串**形式的 sub。
+    // SteamID64 是 17 位，远超 Number.MAX_SAFE_INTEGER（9007199254740991，16 位），
+    // 一旦以 JSON number 形式出现，解析阶段就已丢精度（...930 → ...940），
+    // 而失真后的值**仍然是** 17 位数字，光靠正则拦不住 —— 只能从类型上拒绝。
+    // Steam 实际发的始终是字符串；收到数字说明链路某处已损坏，
+    // 此时返回 null 比返回一个错误 ID 安全（错误 ID 会让换 token 一直失败且极难排查）。
+    if (typeof sub !== "string") return null;
+    const id = sub.trim();
+    if (!/^\d{17}$/.test(id)) return null;
+    return id;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * 从认证响应里推断可用的 Guard 方式。
