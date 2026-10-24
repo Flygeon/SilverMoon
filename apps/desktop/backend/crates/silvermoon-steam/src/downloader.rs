@@ -320,7 +320,6 @@ pub fn download_app(
     use crate::cm_requests::{fetch_cdn_auth_token, fetch_manifest_request_code};
     use crate::depot_key::fetch_depot_key;
 
-
     // 连 CM（长连接由 manager 持有）。拿不到就整体失败 —— 没有 CM 下不了。
     let mut guard = runtime
         .block_on(manager.get_or_connect(account_name, access_token))
@@ -374,8 +373,16 @@ pub fn download_app(
             ))
             .unwrap_or(0);
 
-        // 2) CDN auth token：按节点逐个尝试，第一个成功的就用
+        // 2) CDN auth token：按节点逐个尝试，第一个成功的就用。
+        //
+        // 拿不到**不等于**下不了：免费 / 公开 depot 的 manifest 允许匿名拉取
+        // （实测无鉴权 401 的那个例子是付费 depot）。所以这里只收集失败原因、
+        // 不中断流程 —— 让 manifest 自己说话；真拉了 401，错误里带上这些原因。
+        //
+        // 早先的实现遇到失败就 continue 掉整个 depot，等于把「本来能下」也判死；
+        // 而且通配分支把 Steam 的真实错误吞了，日志只剩一句「全部失败」。
         let mut cdn_token = String::new();
+        let mut cdn_errors: Vec<String> = Vec::new();
         for server in &servers {
             let Some(base) = server.base_url() else {
                 continue;
@@ -398,18 +405,9 @@ pub fn download_app(
                     cdn_token = token;
                     break;
                 }
-                _ => continue,
+                Ok(_) => cdn_errors.push(format!("{host}: 返回空票据")),
+                Err(error) => cdn_errors.push(format!("{host}: {error}")),
             }
-        }
-
-        // 没有 CDN 票据就去拉 manifest 必然 401 —— 与其让用户看到一句
-        // 莫名其妙的 HTTP 401，不如在这里说清楚是这个 depot 没拿到授权票据。
-        if cdn_token.is_empty() {
-            skipped.push(format!(
-                "depot {}: 没有取得 CDN 访问票据（GetCDNAuthToken 全部失败）",
-                task.depot_id
-            ));
-            continue;
         }
 
         on_progress(DownloadProgress {
@@ -433,7 +431,16 @@ pub fn download_app(
             }
             // 单个 depot 失败也跳过：多 depot 游戏里一个坏块不该让其余部分全白下。
             // 但要把原因带出来，最后汇总。
-            Err(error) => skipped.push(format!("depot {}: {error}", task.depot_id)),
+            Err(error) => {
+                // 把 CDN 票据的失败原因一并带出来：manifest 401 的最常见原因
+                // 就是票据没取到，单看 "HTTP 401" 根本判断不了。
+                let hint = if cdn_errors.is_empty() {
+                    String::new()
+                } else {
+                    format!("（CDN 票据未取到：{}）", cdn_errors.join("；"))
+                };
+                skipped.push(format!("depot {}: {error}{hint}", task.depot_id));
+            }
         }
     }
 
