@@ -1,29 +1,39 @@
 <script setup lang="ts">
 /**
- * 游戏详情（游戏 → 点卡片）。
+ * 游戏详情（游戏 → 点卡片 → 独立路由 /games/:appId）。
  *
- * 排版参考 Steam 商店的游戏详情页，但**配色与形状全部走 MD3**：
- * 顶部大 hero（商店背景大图 + 渐变遮罩）→ 操作栏（安装 / 开始游戏）→
- * 左主栏（简介 / 截图墙 / 成就）+ 右信息栏（空间 / 最近运行 / 时长 / 发售日 / 类型 / 价格）。
+ * ⚠️ 根节点内联了 `--lm-game-hero-vt` 等 CSS 变量（见模板第一行），
+ * 用来承接 hero 的 `view-transition-name` 与补间时长 —— 详见
+ * utils/gameHeroTransition.ts 的长注释。
  *
- * 链路：本视图 → stores/steam.ts 的 openDetail() → capabilities.steam({ op: "gameDetail" })
- *       → 宿主一次返回 { details, local, achievements }，**本页只发这一个请求**。
- *       商店元信息（store.steampowered.com/api/appdetails）需要联网；
- *       本地安装信息来自本机 libraryfolders.vdf / appmanifest_*.acf，**不需要登录** ——
- *       两者互不阻塞：联网失败时仍能显示「已安装 / 占用空间 / 安装路径」。
+ * 排版参考 Steam 桌面版详情页，配色与形状全部走 MD3：
+ * hero 大图（商店背景图 + 渐变遮罩）→ 操作栏 → 左主栏（简介 / 截图墙）
+ * + 右栏（额外内容 → 成就 → 信息）。
+ *
+ * **成就挪到右栏**是照 Steam 的实际布局：左栏留给长篇正文（简介 / 截图），
+ * 右栏放「一眼扫完」的速览信息。成就在右栏只出图标墙 + 进度，不铺长列表 ——
+ * 逐条成就明细点「查看我的成就」去 Steam 社区看。
+ *
+ * 链路：本视图 → stores/steam.ts 的 openDetail() → capabilities.steam({op:"gameDetail"})
+ *       → 宿主一次返回 { details, local, achievements }，**本页只发这一个请求**；
+ *       DLC 名单拿不到名字时再补一次 appDetails 批量请求（见 loadDlc）。
  *
  * 约定（与 GamesView 一致）：
  * - 颜色只用 M3 令牌，不写死 Steam 的深蓝 / 绿色；
  * - 图标一律 Material Symbols Rounded，不用 emoji；
- * - 图片一律 loading="lazy"，失败换图标占位；
+ * - 图片 URL **原样使用**（Steam 的图带 ?t=<时间戳> 查询串，截掉就 404），
+ *   加载失败用 onerror 降级成占位，绝不留破图；
  * - 所有请求都有骨架 / 错误条 + 重试，不允许静默失败。
  */
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useSettingsStore } from "@/stores/settings";
 import { useSteamStore } from "@/stores/steam";
 import { formatSize } from "@/utils/format";
+import { capabilities } from "@/capabilities";
+import { GAME_HERO_VT_NAME, activeCoverAppId, runViewTransition } from "@/utils/gameHeroTransition";
 import { translate } from "@shared/i18n";
+import type { SteamAchievement } from "@shared/types";
 
 const props = defineProps<{
   /** 路由参数（/games/:appId）；从 URL 进来时是字符串 */
@@ -55,7 +65,12 @@ function notify(message: string): void {
   toastTimer = window.setTimeout(() => (toast.value = ""), 3200);
 }
 
-/** 头图 / 截图加载失败的集合（URL → true），失败后换占位图标 */
+/**
+ * 加载失败的图片集合（URL → true）。
+ *
+ * 只在 onerror 里写入：Steam 的图带 `?t=<时间戳>` 查询串，同一张图不同批次
+ * 时间戳可能不同，所以按**完整 URL**做 key，不做归一化。
+ */
 const brokenImages = ref<Record<string, boolean>>({});
 
 function markBroken(url: string | null | undefined): void {
@@ -83,14 +98,17 @@ const installed = computed(() => {
 
 const isInstalled = computed(() => !!installed.value);
 
-/** hero 大图：背景大图优先，其次 header，最后按 appId 拼官方 CDN（与 GamesView 同源策略） */
+/**
+ * hero 大图：**原样使用**商店给的 URL。
+ *
+ * 优先级 backgroundImage（1920×620 商店页大图）→ headerImage（460×215 头图）。
+ * 两者都没有时**返回空串**，由模板出占位图标 —— 不再自己拼 CDN 路径：
+ * 上一版拼的 `/steam/apps/<id>/ss_1.jpg` 全部 404，正是「图片不正常」的根因。
+ */
 const heroImage = computed<string>(() => {
-  const id = numericAppId.value;
-  return (
-    appDetails.value?.backgroundImage ||
-    appDetails.value?.headerImage ||
-    (Number.isNaN(id) ? "" : "https://cdn.akamai.steamstatic.com/steam/apps/" + id + "/header.jpg")
-  );
+  const d = appDetails.value;
+  if (!d) return "";
+  return d.backgroundImage || d.headerImage || "";
 });
 
 /** 标题：商店名 → 本地库名 → 兜底文案（未安装且商店拉不到时至少不空着） */
@@ -112,6 +130,126 @@ const showAchievements = computed(() => {
   const a = achievements.value;
   return !!a && a.available && a.achievements.length > 0;
 });
+
+/** 已解锁的成就（图标墙只展示它们；未解锁的按需求不显示图标） */
+const unlockedAchievements = computed<SteamAchievement[]>(() =>
+  (achievements.value?.achievements ?? []).filter((a) => a.unlocked),
+);
+
+/**
+ * 图标墙最多铺几个。
+ *
+ * 右栏宽 320px，一个图标 44px + 间距 8px → 5 个刚好一行；
+ * 多出来的收进「+N」方块（点击去 Steam 看完整列表）。
+ */
+const ICON_WALL_MAX = 5;
+
+const iconWall = computed(() => unlockedAchievements.value.slice(0, ICON_WALL_MAX));
+/** 超出图标墙的已解锁数（0 = 不显示 +N 方块） */
+const iconOverflow = computed(() => Math.max(0, unlockedAchievements.value.length - ICON_WALL_MAX));
+
+/** 未解锁数（「锁定的成就」那行的计数） */
+const lockedCount = computed(() => {
+  const a = achievements.value;
+  if (!a) return 0;
+  return Math.max(0, a.total - a.unlocked);
+});
+
+// ---------------------------------------------------------------- 额外内容（DLC）
+//
+// 契约只给 dlc 的 appid 列表，名字与缩略图要再查一次 appDetails。
+// 这里**按需**拉：详情回来后才发，且只在真的有 dlc 时才发 —— 没有 DLC 的游戏
+// 不该为这个区块多打一次商店接口。
+
+/** DLC 卡片数据（名字 + 缩略图都拿到才有意义） */
+interface DlcCard {
+  appId: number;
+  name: string;
+  image: string;
+}
+
+/** DLC 列表（按商店给的顺序；商店的顺序是有意义的，不要重排） */
+const dlcCards = ref<DlcCard[]>([]);
+const dlcLoading = ref(false);
+/** DLC 元信息是否拉过（按 appId 记，换游戏要重拉） */
+let dlcLoadedFor = 0;
+
+/** 「额外内容」最多显示 5 个，其余收进 +N */
+const DLC_MAX = 5;
+
+const visibleDlc = computed(() => dlcCards.value.slice(0, DLC_MAX));
+const dlcOverflow = computed(() => Math.max(0, dlcCards.value.length - DLC_MAX));
+
+/** 有 DLC 才显示整块（没有就整块不渲染，不留「敬请期待」占位） */
+const showExtra = computed(() => dlcCards.value.length > 0);
+
+/**
+ * 拉 DLC 的名字与缩略图。
+ *
+ * 只取前 DLC_MAX+1 个 appId 的详情：多问的那一个用来判断「是否还有更多」，
+ * 避免为了一个 +N 数字把几十个 DLC 全查一遍。
+ */
+async function loadDlc(ids: number[]): Promise<void> {
+  const appId = numericAppId.value;
+  if (Number.isNaN(appId)) return;
+  const wanted = ids.filter((n) => Number.isFinite(n) && n > 0);
+  if (!wanted.length) {
+    dlcCards.value = [];
+    return;
+  }
+  dlcLoading.value = true;
+  dlcLoadedFor = appId;
+  try {
+    const map = await steam.fetchDetailsBatch(wanted.slice(0, DLC_MAX + 1));
+    const cards: DlcCard[] = [];
+    for (const id of wanted) {
+      const meta = map[String(id)];
+      // 名字拿不到的条目直接跳过：宁可少一张卡片，也不要一张没有名字的空卡
+      if (!meta?.name) continue;
+      cards.push({
+        appId: id,
+        name: meta.name,
+        image: meta.headerImage || meta.capsuleImage || "",
+      });
+    }
+    // 请求期间用户可能已经切到别的游戏，别把上一款的 DLC 写进来
+    if (dlcLoadedFor === appId) dlcCards.value = cards;
+  } finally {
+    dlcLoading.value = false;
+  }
+}
+
+/**
+ * 点 DLC 卡片 → 打开该 DLC 的**商店页**。
+ *
+ * 用 `openInSteam`（steam://install/<id>）而不是 `launchGame`：DLC 的「安装」
+ * 在 Steam 里就是「打开商店页/加入库」，没有独立的启动语义；若 Steam 未安装
+ * （steam:// 无关联）再退到系统浏览器打开网页商店，避免两个都静默失败。
+ */
+async function openDlc(id: number): Promise<void> {
+  const res = await steam.install(id);
+  if (res.ok) return;
+  try {
+    await capabilities.openUrl("https://store.steampowered.com/app/" + id + "/");
+  } catch {
+    notify(res.message || t("games.detail.actionFailed"));
+  }
+}
+
+/** 查看我的成就：打开 Steam 社区该游戏的成就页（需登录，浏览器里也能看） */
+async function viewAllAchievements(): Promise<void> {
+  const id = numericAppId.value;
+  if (Number.isNaN(id)) return;
+  const steamId = steam.status.steamId;
+  const url = steamId
+    ? "https://steamcommunity.com/profiles/" + steamId + "/stats/" + id + "/achievements/"
+    : "https://steamcommunity.com/stats/" + id + "/achievements/";
+  try {
+    await capabilities.openUrl(url);
+  } catch {
+    notify(t("games.detail.actionFailed"));
+  }
+}
 
 // ---------------------------------------------------------------- 格式化
 function pad2(n: number): string {
@@ -172,10 +310,43 @@ const priceText = computed<string>(() => {
 });
 
 // ---------------------------------------------------------------- 动作
-/** 返回：有历史就退一步；直接进详情（无历史）时回游戏列表，避免退到空页 */
-function goBack(): void {
-  if (window.history.length > 1) router.back();
-  else void router.push("/games");
+/**
+ * 返回：走 View Transition 反放（与进入时同一条补间，方向相反）。
+ *
+ * 必须复用 `runViewTransition` 而不是自己调 `startViewTransition`：
+ * 那个工具里做了两件这里不能省的事 —— ①给 <html> 挂 `lm-vt-running`
+ * 把路由页自身的入场位移压平（否则返回时「整页滑入」会和「封面飞回」叠成斜线）；
+ * ②导航后等目标页真正挂载再让浏览器拍新快照（否则拍到空网格，补间不成立）。
+ *
+ * 兜底：不支持 / 用户要求减少动效时，工具内部直接退化成普通导航。
+ */
+async function goBack(): Promise<void> {
+  const id = numericAppId.value;
+  /*
+   * 返回时也要让网格里**这张**卡片挂上过渡名，否则「新快照」里没有同名元素，
+   * 浏览器只会把 hero 淡出、不会飞回卡片位置。
+   *
+   * 网格页被 keep-alive 缓存着、DOM 还在，所以写 activeCoverAppId 会立刻反映到
+   * 那张卡上；但要等 nextTick 让它真正写进 DOM —— 与进入时同理，不等的话
+   * 新快照拍到的还是「没名字」的封面，返回就没有飞回动画。
+   */
+  if (!Number.isNaN(id)) {
+    activeCoverAppId.value = id;
+    await nextTick();
+  }
+  const navigate = () => {
+    // 有历史就退一步；直接进详情（无历史）时回游戏列表，避免退到空页
+    if (window.history.length > 1) router.back();
+    else void router.push("/games");
+  };
+  await runViewTransition({
+    navigate,
+    // 返回的落点是网格页；等它出现再拍新快照
+    waitFor: ".games-view",
+    cleanup: () => {
+      activeCoverAppId.value = null;
+    },
+  });
 }
 
 /** 主按钮：已安装 → 启动游戏；未安装 → 唤起 Steam 客户端去安装 */
@@ -225,6 +396,8 @@ async function retry(): Promise<void> {
   const id = numericAppId.value;
   if (Number.isNaN(id)) return;
   steam.clearDetail();
+  dlcCards.value = [];
+  dlcLoadedFor = 0;
   await Promise.all([steam.openDetail(id), steam.loadLocalLibrary()]);
 }
 
@@ -238,6 +411,22 @@ async function bootstrap(): Promise<void> {
   await Promise.all(jobs);
 }
 
+// 详情回来后按需补 DLC 元信息：详情里给了 dlc 才发，否则这个区块根本不出现
+watch(
+  () => appDetails.value?.dlc,
+  (ids) => {
+    const appId = numericAppId.value;
+    if (Number.isNaN(appId)) return;
+    if (!ids?.length) {
+      dlcCards.value = [];
+      return;
+    }
+    // 同一款游戏只拉一次（重试路径会显式把 dlcLoadedFor 归零）
+    if (dlcLoadedFor === appId && dlcCards.value.length) return;
+    void loadDlc(ids);
+  },
+);
+
 onMounted(() => {
   void bootstrap();
 });
@@ -247,13 +436,29 @@ watch(
   () => props.appId,
   () => {
     steam.clearDetail();
+    dlcCards.value = [];
+    dlcLoadedFor = 0;
     void bootstrap();
   },
 );
 </script>
 
 <template>
-  <div class="detail-view">
+  <!--
+    根节点带两个 CSS 变量：
+    - --lm-game-hero-vt：hero 的 view-transition-name（两端必须同名，值来自 utils）；
+    - --lm-game-hero-vt-duration / -easing：补间时长与缓动（改手感只改这里）。
+    变量写在组件根上而不是 :root：组件根随详情页一起存活，离开即失效，
+    不会把「详情页的动效参数」泄漏成全局状态。
+  -->
+  <div
+    class="detail-view"
+    :style="{
+      '--lm-game-hero-vt': GAME_HERO_VT_NAME,
+      '--lm-game-hero-vt-duration': 'var(--md-sys-motion-duration-spring-spatial)',
+      '--lm-game-hero-vt-easing': 'var(--md-sys-motion-spring-spatial)',
+    }"
+  >
     <!-- 非法 appId：不发请求，直接说明 -->
     <div v-if="invalidAppId" class="bar error" role="alert">
       <span class="material-symbols-outlined">error</span>
@@ -285,18 +490,22 @@ watch(
       <template v-else>
         <!-- ============================ Hero ============================ -->
         <section class="hero">
+          <!--
+            `view-transition-name` 是**静态**的：它与 GamesView 里被点卡片的封面
+            同名，由浏览器在两份快照之间补间，实现「卡片放大飞进详情页」。
+            同一时刻只允许一个元素持有该名字，所以网格侧只在点击的那张卡上挂，
+            见 utils/gameHeroTransition.ts 的长注释。
+          -->
           <div class="hero-media">
             <img
               v-if="heroImage && !isBroken(heroImage)"
               :src="heroImage"
               class="hero-img"
               :alt="title"
-              loading="lazy"
               decoding="async"
               @error="markBroken(heroImage)"
             />
             <span v-else class="material-symbols-outlined hero-fallback">sports_esports</span>
-            <!-- 渐变遮罩：标题压在大图上仍然可读（只用 M3 令牌，不写死颜色） -->
             <div class="hero-scrim"></div>
           </div>
 
@@ -326,7 +535,6 @@ watch(
               {{ isInstalled ? t("games.detail.play") : t("games.detail.install") }}
             </m3e-button>
 
-            <!-- 已安装：状态 + 占用空间 + 可点复制的安装路径 -->
             <template v-if="isInstalled">
               <span class="installed-tag">
                 <span class="material-symbols-outlined tag-icon">check_circle</span>
@@ -359,7 +567,6 @@ watch(
           </div>
         </section>
 
-        <!-- 操作结果提示 -->
         <div v-if="toast" class="bar info" role="status">
           <span class="material-symbols-outlined">info</span>
           <span class="bar-text">{{ toast }}</span>
@@ -367,7 +574,7 @@ watch(
 
         <!-- ============================ 两栏主体 ============================ -->
         <div class="columns">
-          <!-- ---- 左：主内容 ---- -->
+          <!-- ---- 左：正文（简介 / 截图墙）---- -->
           <main class="col-main">
             <m3e-card class="block" variant="filled">
               <div slot="content">
@@ -379,7 +586,7 @@ watch(
               </div>
             </m3e-card>
 
-            <!-- 截图墙：懒加载，失败逐张降级成占位图标 -->
+            <!-- 截图墙：URL 原样使用（带 ?t= 时间戳），失败逐张降级成占位图标 -->
             <m3e-card v-if="screenshots.length" class="block" variant="filled">
               <div slot="content">
                 <h2 class="block-title">{{ t("games.detail.screenshots") }}</h2>
@@ -399,64 +606,142 @@ watch(
                 </div>
               </div>
             </m3e-card>
+          </main>
 
-            <!-- 成就 -->
+          <!-- ---- 右：速览（额外内容 → 成就 → 信息，与 Steam 桌面版同序）---- -->
+          <aside class="col-side">
+            <!-- 额外内容（DLC）：没有 dlc 时整块不渲染，不留占位 -->
+            <m3e-card v-if="showExtra" class="block" variant="filled">
+              <div slot="content">
+                <div class="block-head">
+                  <h2 class="block-title">{{ t("games.detail.extra") }}</h2>
+                  <span class="block-count tabular-nums">{{ dlcCards.length }}</span>
+                </div>
+
+                <div class="dlc-list">
+                  <button
+                    v-for="dlc in visibleDlc"
+                    :key="dlc.appId"
+                    type="button"
+                    class="dlc-item"
+                    :title="dlc.name"
+                    @click="openDlc(dlc.appId)"
+                  >
+                    <span class="dlc-thumb">
+                      <img
+                        v-if="dlc.image && !isBroken(dlc.image)"
+                        :src="dlc.image"
+                        class="dlc-img"
+                        :alt="dlc.name"
+                        loading="lazy"
+                        decoding="async"
+                        @error="markBroken(dlc.image)"
+                      />
+                      <span v-else class="material-symbols-outlined dlc-fallback">extension</span>
+                    </span>
+                    <span class="dlc-name">{{ dlc.name }}</span>
+                  </button>
+
+                  <!-- 超出 5 个的部分收进 +N（点击去 Steam 看全部 DLC） -->
+                  <button
+                    v-if="dlcOverflow > 0"
+                    type="button"
+                    class="dlc-item dlc-more"
+                    :title="t('games.detail.extra')"
+                    @click="openInSteam"
+                  >
+                    <span class="dlc-thumb">
+                      <span class="dlc-more-text tabular-nums"> +{{ dlcOverflow }} </span>
+                    </span>
+                    <span class="dlc-name">{{ t("games.detail.extra") }}</span>
+                  </button>
+                </div>
+
+                <div v-if="dlcLoading" class="side-loading">
+                  <m3e-loading-indicator class="inline-loading" />
+                </div>
+              </div>
+            </m3e-card>
+
+            <!-- 成就（仿 Steam：标题 + 查看入口 + 进度 + 已解锁图标墙） -->
             <m3e-card v-if="showAchievements" class="block" variant="filled">
               <div slot="content">
                 <div class="block-head">
                   <h2 class="block-title">{{ t("games.detail.achievements") }}</h2>
-                  <span class="ach-count tabular-nums">
-                    {{
-                      t("games.detail.unlockedOf")
-                        .replace("{n}", String(achievements?.unlocked ?? 0))
-                        .replace("{total}", String(achievements?.total ?? 0))
-                    }}
-                  </span>
+                  <m3e-button variant="text" size="small" @click="viewAllAchievements">
+                    {{ t("games.detail.viewAchievements") }}
+                  </m3e-button>
                 </div>
 
-                <div class="ach-progress">
+                <div class="ach-progress-row">
                   <m3e-linear-progress-indicator
                     class="ach-bar"
                     :value="achievementPercent / 100"
                   />
+                  <span class="ach-percent tabular-nums">{{ achievementPercent }}%</span>
+                </div>
+                <p class="ach-count tabular-nums">
+                  {{
+                    t("games.detail.unlockedCount")
+                      .replace("{n}", String(achievements?.unlocked ?? 0))
+                      .replace("{total}", String(achievements?.total ?? 0))
+                      .replace("{percent}", String(achievementPercent))
+                  }}
+                </p>
+
+                <!-- 已解锁图标墙：只展示已解锁的，最多 ICON_WALL_MAX 个 -->
+                <div class="ach-wall">
+                  <button
+                    v-for="a in iconWall"
+                    :key="a.apiName"
+                    type="button"
+                    class="ach-tile"
+                    :title="a.name"
+                    @click="viewAllAchievements"
+                  >
+                    <img
+                      v-if="a.icon && !isBroken(a.icon)"
+                      :src="a.icon"
+                      class="ach-tile-img"
+                      :alt="a.name"
+                      loading="lazy"
+                      decoding="async"
+                      @error="markBroken(a.icon)"
+                    />
+                    <span v-else class="material-symbols-outlined ach-tile-fallback">
+                      emoji_events
+                    </span>
+                  </button>
+
+                  <!-- 第五个位置留给 +N（超出部分），点去 Steam 看完整列表 -->
+                  <button
+                    v-if="iconOverflow > 0"
+                    type="button"
+                    class="ach-tile ach-tile-more"
+                    :title="t('games.detail.viewAchievements')"
+                    @click="viewAllAchievements"
+                  >
+                    <span class="ach-more-text tabular-nums">
+                      {{ t("games.detail.moreCount").replace("{n}", String(iconOverflow)) }}
+                    </span>
+                  </button>
+
+                  <!-- 一个已解锁都没有：图标墙位置给灰化占位，不留空白 -->
+                  <span v-if="!unlockedAchievements.length" class="ach-wall-empty">
+                    <span class="material-symbols-outlined">lock</span>
+                  </span>
                 </div>
 
-                <div class="ach-list">
-                  <div
-                    v-for="a in achievements?.achievements ?? []"
-                    :key="a.apiName"
-                    class="ach-item"
-                    :class="{ locked: !a.unlocked }"
-                  >
-                    <div class="ach-icon-wrap">
-                      <img
-                        v-if="a.unlocked && a.icon && !isBroken(a.icon)"
-                        :src="a.icon"
-                        class="ach-icon"
-                        alt=""
-                        loading="lazy"
-                        decoding="async"
-                        @error="markBroken(a.icon)"
-                      />
-                      <span v-else class="material-symbols-outlined ach-icon-fallback">
-                        {{ a.unlocked ? "emoji_events" : "lock" }}
-                      </span>
-                    </div>
-                    <div class="ach-text">
-                      <div class="ach-name">{{ a.name }}</div>
-                      <div v-if="a.description" class="ach-desc">{{ a.description }}</div>
-                    </div>
-                    <span v-if="a.unlockTime" class="ach-time tabular-nums">
-                      {{ relativeTime(a.unlockTime) }}
-                    </span>
-                  </div>
+                <!-- 未解锁：不显示图标墙，只给一行「锁定的成就」+ 灰化占位 -->
+                <div v-if="lockedCount > 0" class="ach-locked">
+                  <span class="ach-locked-title">{{ t("games.detail.lockedTitle") }}</span>
+                  <span class="ach-locked-count tabular-nums">×{{ lockedCount }}</span>
+                  <span class="ach-locked-hint">{{ t("games.detail.lockedHint") }}</span>
                 </div>
               </div>
             </m3e-card>
-          </main>
 
-          <!-- ---- 右：信息栏 ---- -->
-          <aside class="col-side">
+            <!-- 信息 -->
             <m3e-card class="block" variant="filled">
               <div slot="content">
                 <h2 class="block-title">{{ t("games.detail.info") }}</h2>
@@ -498,26 +783,19 @@ watch(
                 </dl>
               </div>
             </m3e-card>
-
-            <!-- 额外内容：契约当前没有 DLC 字段，先给一句说明而不是画一个空区块 -->
-            <m3e-card v-if="appDetails?.developers?.length" class="block" variant="filled">
-              <div slot="content">
-                <h2 class="block-title">{{ t("games.detail.extra") }}</h2>
-                <p class="about-text muted">{{ t("games.detail.extraHint") }}</p>
-              </div>
-            </m3e-card>
           </aside>
         </div>
       </template>
     </template>
   </div>
 </template>
-
 <style scoped>
 .detail-view {
   max-width: 1280px;
   margin: 0 auto;
   padding-bottom: 32px;
+  /* 整页淡入的过渡名；与 GamesView 的 games-grid-page 成对（进入 / 返回同一套） */
+  view-transition-name: game-detail-page;
 }
 
 /* ---- 提示条（与 GamesView 同一版式）---- */
@@ -558,6 +836,17 @@ watch(
   width: 100%;
   aspect-ratio: 21 / 9;
   border-radius: var(--md-sys-shape-corner-large);
+  /*
+   * 骨架屏也挂 hero 的过渡名。
+   *
+   * 为什么：详情页首帧渲染的是骨架屏（`detail` 还没回来），此时 .hero-media
+   * 根本不存在。若不在这里挂名字，等 hero 真出现时过渡早已结束 —— 用户看到的是
+   * 一次普通的淡入，**没有任何飞行动画**，而这正是这个功能存在的理由。
+   *
+   * 与 .hero-media 是 v-if / v-else 的两个分支，同一时刻只会有一个存在于文档里，
+   * 所以不会出现「同名元素重复」而被浏览器整次忽略的情况。
+   */
+  view-transition-name: var(--lm-game-hero-vt);
 }
 .skeleton-bar {
   display: flex;
@@ -585,6 +874,13 @@ watch(
   overflow: hidden;
   background: var(--md-sys-color-surface-container-high);
 }
+/*
+ * hero 的 media 就是「飞行目标」：`view-transition-name` 与 GamesView 里被点卡片
+ * 的封面同名，浏览器会在两份快照之间自动补间（卡片从网格位置放大飞到这里）。
+ *
+ * 名字用 CSS 变量承接（变量由本组件 :root 内联的那一段给出），这样 `utils/`
+ * 里的常量是唯一真源；直接写字面量会有两处字符串，改一处漏一处就静默失效。
+ */
 .hero-media {
   position: relative;
   display: flex;
@@ -594,6 +890,7 @@ watch(
   aspect-ratio: 21 / 9;
   background: var(--md-sys-color-surface-container-high);
   color: var(--md-sys-color-outline);
+  view-transition-name: var(--lm-game-hero-vt);
 }
 .hero-img {
   width: 100%;
@@ -731,7 +1028,7 @@ watch(
 /* ---- 两栏 ---- */
 .columns {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) 340px;
   gap: 16px;
   align-items: start;
 }
@@ -753,13 +1050,23 @@ watch(
 }
 .block-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   margin-bottom: 10px;
 }
+/* 标题与右侧动作按钮并排时，标题自身不再带下边距 */
 .block-head .block-title {
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.block-count {
+  flex-shrink: 0;
+  font-size: var(--md-sys-typescale-body-small-size);
+  color: var(--md-sys-color-on-surface-variant);
 }
 .about-text {
   margin: 0;
@@ -798,74 +1105,188 @@ watch(
   font-size: 28px;
 }
 
-/* ---- 成就 ---- */
-.ach-count {
-  font-size: var(--md-sys-typescale-body-small-size);
-  color: var(--md-sys-color-on-surface-variant);
-}
-.ach-progress {
-  margin-bottom: 12px;
-}
-.ach-bar {
-  width: 100%;
-}
-.ach-list {
+/* ---- 额外内容（DLC）---- */
+.dlc-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
 }
-.ach-item {
+.dlc-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px;
+  gap: 10px;
+  padding: 4px;
+  min-width: 0;
+  border: none;
   border-radius: var(--md-sys-shape-corner-medium);
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
 }
-.ach-item:hover {
+.dlc-item:hover {
   background: var(--md-sys-color-surface-container-high);
 }
-.ach-item.locked {
-  opacity: 0.6;
+.dlc-item:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
 }
-.ach-icon-wrap {
-  display: inline-flex;
+/* 缩略图按商店 header 的比例裁切，固定宽度避免长短标题把行高撑乱 */
+.dlc-thumb {
+  display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
   flex-shrink: 0;
+  width: 88px;
+  aspect-ratio: 16 / 9;
   border-radius: var(--md-sys-shape-corner-small);
   background: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-outline);
   overflow: hidden;
 }
-.ach-icon {
+.dlc-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
-.ach-icon-fallback {
+.dlc-fallback {
   font-size: 22px;
-  color: var(--md-sys-color-on-surface-variant);
 }
-.ach-text {
+.dlc-name {
   min-width: 0;
   flex: 1;
-}
-.ach-name {
-  font-size: var(--md-sys-typescale-body-medium-size);
-  color: var(--md-sys-color-on-surface);
-}
-.ach-desc {
   font-size: var(--md-sys-typescale-body-small-size);
-  color: var(--md-sys-color-on-surface-variant);
+  color: var(--md-sys-color-on-surface);
+  /* 长标题最多两行，超出省略 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.ach-time {
+/* +N 方块：与缩略图同尺寸，颜色走 secondary-container 与图片区分 */
+.dlc-more .dlc-thumb {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+.dlc-more-text {
+  font-size: var(--md-sys-typescale-title-small-size);
+  font-weight: var(--md-sys-typescale-title-small-weight);
+}
+.dlc-more .dlc-name {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+/* ---- 成就（右栏，仿 Steam）---- */
+.ach-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.ach-bar {
+  flex: 1;
+  min-width: 0;
+}
+.ach-percent {
   flex-shrink: 0;
   font-size: var(--md-sys-typescale-label-small-size);
   color: var(--md-sys-color-on-surface-variant);
+}
+.ach-count {
+  margin: 0 0 10px;
+  font-size: var(--md-sys-typescale-body-small-size);
+  color: var(--md-sys-color-on-surface-variant);
+}
+/* 图标墙：横向一排，最多 5 个 + 可能的 +N */
+.ach-wall {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.ach-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface-variant);
+  cursor: pointer;
+  overflow: hidden;
+}
+.ach-tile:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+.ach-tile-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.ach-tile-fallback {
+  font-size: 24px;
+}
+/* +N：与图标同尺寸，底色用 secondary-container 以区分「这是计数不是成就」 */
+.ach-tile-more {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+.ach-more-text {
+  font-size: var(--md-sys-typescale-label-large-size);
+  font-weight: var(--md-sys-typescale-label-large-weight);
+}
+/* 一个都没解锁：图标墙位置给一个灰化占位，不留空白 */
+.ach-wall-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-outline-variant);
+}
+.ach-wall-empty .material-symbols-outlined {
+  font-size: 22px;
+}
+/* 「锁定的成就」：不铺图标，只一行说明 + 计数 */
+.ach-locked {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 10px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+.ach-locked-title {
+  font-size: var(--md-sys-typescale-body-small-size);
+  color: var(--md-sys-color-on-surface-variant);
+}
+.ach-locked-count {
+  font-size: var(--md-sys-typescale-label-medium-size);
+  color: var(--md-sys-color-on-surface-variant);
+}
+.ach-locked-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--md-sys-typescale-label-small-size);
+  color: var(--md-sys-color-outline);
+  text-align: right;
+}
+.side-loading {
+  display: flex;
+  justify-content: center;
+  padding: 6px 0 2px;
+}
+.inline-loading {
+  --m3e-loading-indicator-size: 18px;
 }
 
 /* ---- 右栏信息 ---- */
@@ -920,6 +1341,14 @@ watch(
   }
   .shot-wall {
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  }
+}
+
+/* ---- 减少动效：本页自身的过渡态一律关掉 ---- */
+@media (prefers-reduced-motion: reduce) {
+  .dlc-item,
+  .ach-tile {
+    transition: none;
   }
 }
 </style>

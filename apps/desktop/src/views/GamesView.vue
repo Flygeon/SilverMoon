@@ -17,12 +17,13 @@
  * - 颜色只用 M3 令牌（--md-sys-color-*），不写死 Steam 绿（深色主题下会脏）；
  * - 所有请求都有 loading / 错误提示，不允许静默失败。
  */
-import { computed, onActivated, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import EmptyState from "@/components/EmptyState.vue";
 import SteamLoginPanel from "@/components/SteamLoginPanel.vue";
 import { useSettingsStore } from "@/stores/settings";
 import { useSteamStore, type SteamSort } from "@/stores/steam";
+import { GAME_HERO_VT_NAME, activeCoverAppId, runViewTransition } from "@/utils/gameHeroTransition";
 import { translate } from "@shared/i18n";
 import type { SteamGame } from "@shared/types";
 
@@ -140,17 +141,48 @@ const visibleGames = computed<SteamGame[]>(() => {
 
 const hasFilter = computed(() => keyword.value.trim().length > 0);
 
-// ---------------------------------------------------------------- 详情页跳转
+// ---------------------------------------------------------------- 详情页跳转（hero 飞行）
 //
 // 详情已从「m3e-dialog 浮窗」改成独立路由页（/games/:appId）。
 // 好处：可回退、可收藏、可刷新，详情页还能铺满整屏做 hero 大图；
-// 代价是卡片点击不再就地展开 —— 所以这里只保留一次 router.push。
+// 代价是卡片点击不再就地展开 —— 于是用 View Transition 让「卡片放大飞进详情页」
+// 补上这段连续感（返回时反向飞回，见 GameDetailView 的 goBack）。
+//
+// 怎么飞：被点卡片的封面挂 view-transition-name，详情页 hero 图挂**同一个**
+// 名字，浏览器在路由切换前后各拍一张快照并自动补间。细节与兜底见
+// utils/gameHeroTransition.ts 的长注释。
 
 const router = useRouter();
 
-/** 点卡片 → 进详情页（appId 当路由参数，详情页用 props 收） */
-function openDetails(game: SteamGame): void {
-  void router.push("/games/" + game.appId);
+/**
+ * 点卡片 → 进详情页（appId 当路由参数，详情页用 props 收）。
+ *
+ * ⚠️ 必须先 `await nextTick()` 再起飞。
+ *
+ * View Transition 拍「旧快照」的时刻，是它自己的更新任务里 —— 而
+ * `activeCoverAppId.value = ...` 触发的重渲染要走 Vue 的 microtask 调度。
+ * 不等这一拍，旧快照里的卡片**还没挂上** `view-transition-name`，
+ * 浏览器就找不到可补间的元素，整次过渡退化成干巴巴的淡入 ——
+ * 表现就是「点卡片没有飞行动画」，而且不报任何错。
+ */
+async function openDetails(game: SteamGame): Promise<void> {
+  activeCoverAppId.value = game.appId;
+  // 等这张卡片把过渡名真正写进 DOM（否则旧快照里没有它）
+  await nextTick();
+  await runViewTransition({
+    navigate: () => router.push("/games/" + game.appId),
+    /*
+     * 等详情页的 hero「占位」出现再拍新快照。
+     *
+     * 两个候选都要等：首帧是骨架屏（.skeleton-hero，数据未回），数据回来后才换成
+     * .hero-media。两者都挂了同一个 view-transition-name，命中任一即可起飞 ——
+     * 只等 .hero-media 的话，慢网下过渡早已结束，飞行就没了。
+     */
+    waitFor: ".hero-media, .skeleton-hero",
+    cleanup: () => {
+      activeCoverAppId.value = null;
+    },
+  });
 }
 
 // ---------------------------------------------------------------- 本地库
@@ -239,7 +271,12 @@ const libraryEmpty = computed(
 );
 </script>
 <template>
-  <div class="games-view">
+  <!--
+    整页挂 `games-grid-page`：进入详情时这一页整体淡出（封面另有一份补间，
+    见 .card-cover 上的 view-transition-name），避免两页叠在一起。
+    返回时同一条过渡反放 —— 详见 styles 里 ::view-transition-* 规则。
+  -->
+  <div class="games-view" style="view-transition-name: games-grid-page">
     <!-- ============================ 首屏加载 ============================ -->
     <div v-if="booting" class="boot-block">
       <m3e-loading-indicator class="lm-loading" />
@@ -435,7 +472,18 @@ const libraryEmpty = computed(
           :title="game.name"
           @click="openDetails(game)"
         >
-          <div class="card-cover">
+          <!--
+            封面挂 view-transition-name：只有被点的那一张挂（名字全局唯一），
+            浏览器据此把「卡片封面」与「详情页 hero」补间成一次飞行。
+          -->
+          <div
+            class="card-cover"
+            :style="
+              activeCoverAppId === game.appId
+                ? 'view-transition-name: ' + GAME_HERO_VT_NAME
+                : undefined
+            "
+          >
             <img
               v-if="!isBroken(coverOf(game))"
               :src="coverOf(game)"

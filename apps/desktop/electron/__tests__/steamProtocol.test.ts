@@ -24,6 +24,8 @@ import {
   describeEResult,
   steamIdFromToken,
   describeTokenShape,
+  tokenExpiresAt,
+  isTokenExpired,
   type SteamStorage,
 } from "../steam/protocol";
 
@@ -732,6 +734,175 @@ describe("回归：GetOwnedGames 必须带 steamid（否则 Steam 返回 400）"
     expect(params.get("access_token")).toBeTruthy();
     // 核心断言：没有 steamid 就是 400
     expect(params.get("steamid")).toBe("76561198000000012");
+  });
+});
+
+describe("会话持久化：重启后不应直接掉线", () => {
+  /**
+   * 真实场景：扫码登录当时成功（能看到库），**重启后显示「会话已过期」**。
+   *
+   * 根因是登录时只落盘 refresh_token，重启后第一次用到它就去换 access_token；
+   * 只要那次换取失败（限流 / token 失效 / 网络抖动），用户就被踢到未登录。
+   *
+   * 修复：把 access_token 一起加密落盘，重启先用它；真过期了才换。
+   */
+  function makeStorage(files: Map<string, string>): SteamStorage {
+    return {
+      read: (f) => files.get(f) ?? null,
+      write: (f, t) => void files.set(f, t),
+      remove: (f) => void files.delete(f),
+      exists: (f) => files.has(f),
+    };
+  }
+
+  function jwtWithExp(expSeconds: number): string {
+    const b64u = (o: unknown) => Buffer.from(JSON.stringify(o), "utf8").toString("base64url");
+    return (
+      b64u({ alg: "EdDSA", typ: "JWT" }) +
+      "." +
+      b64u({ iss: "steam", sub: "76561198000000001", exp: expSeconds }) +
+      ".sig"
+    );
+  }
+
+  it("tokenExpiresAt 从 exp（秒）转毫秒", () => {
+    expect(tokenExpiresAt(jwtWithExp(1800000000))).toBe(1800000000 * 1000);
+  });
+
+  it("tokenExpiresAt 对非 JWT 返回 null", () => {
+    expect(tokenExpiresAt("plain")).toBeNull();
+    expect(tokenExpiresAt("a.b")).toBeNull();
+  });
+
+  it("isTokenExpired：解不出 exp 时按过期处理（宁可多换一次）", () => {
+    expect(isTokenExpired(null)).toBe(true);
+    expect(isTokenExpired(undefined)).toBe(true);
+    expect(isTokenExpired(0)).toBe(true);
+  });
+
+  it("isTokenExpired：留 5 分钟余量", () => {
+    const now = Date.now();
+    expect(isTokenExpired(now + 60_000)).toBe(true);
+    expect(isTokenExpired(now + 3_600_000)).toBe(false);
+  });
+
+  it("重启时若落盘的 access_token 仍有效，不发起换 token 请求", async () => {
+    const token = jwtWithExp(Math.floor(Date.now() / 1000) + 3600);
+    const files = new Map<string, string>();
+    files.set(
+      "/v/steam-session.json",
+      JSON.stringify({
+        refreshToken: "opaque-rt",
+        steamId: "76561198000000001",
+        accessToken: token,
+        accessTokenExpiresAt: Date.now() + 3_600_000,
+      }),
+    );
+    const calls: string[] = [];
+    const fake: typeof fetch = async (input) => {
+      calls.push(typeof input === "string" ? input : String(input));
+      return new Response("should-not-happen", { status: 500 });
+    };
+    const steam = new SteamProtocol({
+      sessionFile: "/v/steam-session.json",
+      libraryFile: "/v/steam-library.json",
+      storage: makeStorage(files),
+      fetchImpl: fake,
+    });
+
+    const status = await steam.status();
+    expect(status.loggedIn).toBe(true);
+    expect(status.steamId).toBe("76561198000000001");
+    expect(calls.find((u) => u.includes("GenerateAccessTokenForApp"))).toBeUndefined();
+  });
+
+  it("落盘的 access_token 已过期时才去换，并把新 token 落盘", async () => {
+    const oldToken = jwtWithExp(Math.floor(Date.now() / 1000) - 60);
+    const newToken = jwtWithExp(Math.floor(Date.now() / 1000) + 3600);
+    const files = new Map<string, string>();
+    files.set(
+      "/v/steam-session.json",
+      JSON.stringify({
+        refreshToken: "opaque-rt",
+        steamId: "76561198000000001",
+        accessToken: oldToken,
+        accessTokenExpiresAt: Date.now() - 60_000,
+      }),
+    );
+    const fake: typeof fetch = async (input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url.includes("GenerateAccessTokenForApp")) {
+        return new Response(JSON.stringify({ response: { access_token: newToken } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ response: {} }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const steam = new SteamProtocol({
+      sessionFile: "/v/steam-session.json",
+      libraryFile: "/v/steam-library.json",
+      storage: makeStorage(files),
+      fetchImpl: fake,
+    });
+
+    expect((await steam.status()).loggedIn).toBe(true);
+    const saved = JSON.parse(files.get("/v/steam-session.json") ?? "{}");
+    expect(saved.accessToken).toBe(newToken);
+    expect(typeof saved.accessTokenExpiresAt).toBe("number");
+  });
+
+  it("登录成功时把 access_token 一并落盘（不只 refresh_token）", async () => {
+    const b64u = (o: unknown) => Buffer.from(JSON.stringify(o), "utf8").toString("base64url");
+    const at =
+      b64u({ alg: "EdDSA" }) +
+      "." +
+      b64u({ sub: "76561198000000077", exp: Math.floor(Date.now() / 1000) + 3600 }) +
+      ".sig";
+    const fake: typeof fetch = async (input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url.includes("BeginAuthSessionViaQR")) {
+        return new Response(
+          JSON.stringify({
+            response: {
+              client_id: "1",
+              request_id: "r",
+              challenge_url: "https://s.team/q/1/1",
+              interval: 1,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.includes("PollAuthSessionStatus")) {
+        return new Response(
+          JSON.stringify({ response: { refresh_token: "opaque-rt", access_token: at } }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ response: { players: [] } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const files = new Map<string, string>();
+    const steam = new SteamProtocol({
+      sessionFile: "/v/steam-session.json",
+      libraryFile: "/v/steam-library.json",
+      storage: makeStorage(files),
+      fetchImpl: fake,
+    });
+
+    await steam.beginQr();
+    expect((await steam.pollOnce()).state).toBe("authenticated");
+
+    const saved = JSON.parse(files.get("/v/steam-session.json") ?? "{}");
+    expect(saved.accessToken).toBe(at);
+    expect(saved.refreshToken).toBe("opaque-rt");
+    expect(typeof saved.accessTokenExpiresAt).toBe("number");
   });
 });
 

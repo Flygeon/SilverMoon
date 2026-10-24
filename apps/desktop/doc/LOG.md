@@ -29,6 +29,26 @@
 > - **教训**: …（踩过的坑，供下一个 AI 避雷）
 > ```
 
+## 2026-10-24（二）· 修「重启后会话过期」+ CM 连接层 + 详情页 UI 迭代
+
+- **commit**: 见本轮提交
+- **status**: `verify:steam-cm` 4 项全绿（**真连 CM 成功**）；steam 单测 71 项绿；双层 typecheck exit 0。Rust 侧 CM 层仅做语法校验，**编译需 CI**。
+- **做了什么**：
+  1. **修「扫码登录成功、下次打开却提示会话过期」**：access_token 与会话一起持久化（含 JWT `exp` 过期时间），重启先用它、真过期了才换。见下。
+  2. **新增 CM 连接层** `backend/crates/silvermoon-steam`（复用 `steam-vent`），并接出 `steam_cm_status` / `steam_cm_connect` / `steam_cm_disconnect` 三个命令。
+  3. 新增 `scripts/verify-steam-cm.mjs`：真连 CM 端点，把「网络不通」与「代码有问题」区分开。
+- **为什么（会话掉的根因）**：
+  - 上一版登录时只落盘 `refresh_token`，**从未验证过它可用**；重启后第一次用到它就换 access_token，那次一旦失败（限流 / 失效 / 抖动）用户就被踢到未登录。表现正是「手机里明明记住了账号，下次打开还是过期」。
+  - 修法是把 access_token 一并加密落盘：重启先用它（24h 有效），失败面收窄成「真的过期」。JWT 的 `exp` 直接解出来，留 5 分钟余量避免边界抖动。
+- **为什么（CM 层）**：
+  - 下载的前置条件有两个，都**只能**通过 CM 拿：`GetManifestRequestCode` 与 `GetCDNAuthToken`。它们在 WebAPI 上**不存在**（实测 404）；而没有它们，CDN 的 manifest 请求返回 **401**（实测，已写进验证脚本）。所以「自己下载」的唯一通路是 CM。
+  - 不自己造 CM 协议：含 RSA 密钥交换、protobuf 编解码、心跳、重连，上万行且本机无法编译验证。复用 `steam-vent`（与 `Aurelia参考` 同源）更可靠。
+  - **实测 CM 是可连的**：`GetCMListForConnect` 拿到的端点里 `cmp1-lax1.steamserver.net:443` 建立 WebSocket 成功。之前第一轮失败是因为试了旧端点（`cm0.steamserver.net`）被重置。
+- **教训**：
+  1. **`Connection::access` 的参数是 `(server_list, account, token)`**，不是 steamid。照记忆写会编译失败 —— 这次是先读签名再写，并且 `ConnectionError` 的真实变体是 `AccessToken/Network/LoginError/Aborted/UnsupportedConfirmationAction`，不是 `Login`。
+  2. **`libraryfolders.vdf` 里列出的库目录可能不存在**（移动硬盘没插）。扫描必须逐库校验目录，否则会把离线库算进来。
+  3. 测试确实能抓到实现疏漏：本轮 `loadSession` 重建对象时漏搬 `accessToken`，是回归测试直接抓出来的 —— 没有那条测试，落盘的 token 等于白存。
+
 ## 2026-10-24 · Steam 详情页整页化 + 本地库检测 / 启动 / 成就
 
 - **commit**: 见本轮提交

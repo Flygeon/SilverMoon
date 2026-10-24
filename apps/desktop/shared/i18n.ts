@@ -1005,7 +1005,14 @@ export const messages = {
         developer: "开发商",
         publisher: "发行商",
         extra: "额外内容",
-        extraHint: "该游戏的 DLC 与额外内容会显示在这里（当前接口未返回，敬请期待）。",
+        // ---- 成就（右栏，仿 Steam 布局）----
+        viewAchievements: "查看我的成就",
+        unlockedCount: "您已解锁 {n}/{total} ({percent}%)",
+        lockedTitle: "锁定的成就",
+        lockedHint: "尚未解锁，图标先不显示",
+        moreCount: "+{n}",
+        // ---- 额外内容（DLC）----
+        extraFailed: "部分额外内容读取失败",
       },
     },
     books: {
@@ -2338,8 +2345,14 @@ export const messages = {
         developer: "Developer",
         publisher: "Publisher",
         extra: "Additional content",
-        extraHint:
-          "DLC and additional content will appear here (the current API does not return it yet).",
+        // ---- Achievements (right column, Steam-like layout) ----
+        viewAchievements: "View my achievements",
+        unlockedCount: "{n} of {total} unlocked ({percent}%)",
+        lockedTitle: "Locked achievements",
+        lockedHint: "Not unlocked yet — icons stay hidden",
+        moreCount: "+{n}",
+        // ---- Additional content (DLC) ----
+        extraFailed: "Some additional content could not be loaded",
       },
     },
     books: {

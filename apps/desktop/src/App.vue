@@ -1251,4 +1251,96 @@ html.lm-hero-flying .page-enter-active,
 html.lm-hero-flying .page-leave-active {
   transition-duration: 0s !important;
 }
+
+/* ==========================================================================
+   游戏详情页的卡片 ⇄ hero 飞行（View Transitions API）
+   ==========================================================================
+
+   ## 为什么这段必须写在全局样式里
+
+   `::view-transition-*` 伪元素挂在 document 根上，**不属于任何组件子树**。
+   写在 <style scoped> 里会被追加 [data-v-*] 属性选择器，而伪元素永远不匹配 ——
+   整条规则静默失效（不报错、只是没有动画），很难排查。
+
+   ## 与上面 lm-hero-flying 的关系
+
+   那是**播放器**的 hero 飞行（WAAPI 克隆层，见 utils/heroTransition.ts），
+   走的是另一套机制。这里是**游戏详情**的 View Transitions（浏览器原生补间），
+   两者互不干扰：`lm-hero-flying` 管「路由过渡压平」，`lm-vt-running` 管同一件事，
+   只是针对不同的入口。
+
+   ## 名字从哪来
+
+   `game-cover` 与 utils/gameHeroTransition.ts 的 GAME_HERO_VT_NAME 必须一致；
+   详情页通过 CSS 变量 `--lm-game-hero-vt` 承接（见 GameDetailView.vue 根节点），
+   所以实际上只在那个文件里写了一次字面量，这里是伪元素选择器需要的固定值。
+   改名字要同时改这两处 + 下面所有选择器。
+*/
+:root {
+  --lm-game-hero-vt: game-cover;
+  --lm-game-hero-vt-duration: var(--md-sys-motion-duration-spring-spatial);
+  --lm-game-hero-vt-duration-opacity: var(--md-sys-motion-duration-spring-effects-fast);
+  --lm-game-hero-vt-easing: var(--md-sys-motion-spring-spatial);
+  --lm-game-hero-vt-easing-opacity: var(--md-sys-motion-spring-effects-fast);
+}
+
+/* 封面补间：卡片封面 ⇄ 详情页 hero 的放大 / 缩小（含圆角变化） */
+::view-transition-group(game-cover) {
+  animation-duration: var(--lm-game-hero-vt-duration);
+  animation-timing-function: var(--lm-game-hero-vt-easing);
+}
+
+::view-transition-old(game-cover),
+::view-transition-new(game-cover) {
+  animation-duration: var(--lm-game-hero-vt-duration);
+  animation-timing-function: var(--lm-game-hero-vt-easing);
+  /* 尺寸由两组快照决定，这里保证填满容器不留边 */
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 详情页 / 网格页只做透明度：位移全部交给封面的补间，避免两条位移叠加 */
+::view-transition-old(game-detail-page),
+::view-transition-new(game-detail-page),
+::view-transition-old(games-grid-page),
+::view-transition-new(games-grid-page) {
+  animation-duration: var(--lm-game-hero-vt-duration-opacity);
+  animation-timing-function: var(--lm-game-hero-vt-easing-opacity);
+}
+
+/*
+   过渡进行中：把路由页自身的入场位移压平。
+
+   与上面 lm-hero-flying 同一套做法：`mode="out-in"` 会让旧页先离场、新页后挂载，
+   那期间屏幕是空的；而 View Transition 的新快照正是在这个窗口里拍的。
+   压平后新页在路由确认的同一帧就落位，补间才有东西可拍。
+   这个类由 utils/gameHeroTransition.ts 在起飞前挂上、过渡结束摘掉，且带 finally 兜底。
+*/
+html.lm-vt-running .page-enter-from,
+html.lm-vt-running .page-leave-to {
+  transform: none !important;
+  opacity: 1 !important;
+}
+
+html.lm-vt-running .page-enter-active,
+html.lm-vt-running .page-leave-active {
+  transition-duration: 0s !important;
+}
+
+/*
+   减少动效：砍掉补间。
+   JS 侧已经在 supportsViewTransition / prefersReducedMotion 里短路，
+   这里只是双保险（例如用户在过渡进行中打开系统设置）。
+*/
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(game-cover),
+  ::view-transition-old(game-cover),
+  ::view-transition-new(game-cover),
+  ::view-transition-old(game-detail-page),
+  ::view-transition-new(game-detail-page),
+  ::view-transition-old(games-grid-page),
+  ::view-transition-new(games-grid-page) {
+    animation-duration: 0.01ms !important;
+  }
+}
 </style>

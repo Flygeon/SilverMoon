@@ -1,0 +1,17 @@
+[package]
+name = "silvermoon-steam"
+version = "0.1.0"
+description = "Steam CM 连接层与 depot 下载器（供 SilverMoon 后端调用）"
+edition = "2021"
+rust-version = "1.82"
+license = "GPL-3.0-only"
+
+[dependencies]
+# CM 长连接：与参考实现 Aurelia 同源。
+# 选它而不是自己造协议：CM 协议含 RSA 密钥交换、protobuf 编解码、心跳、重连，
+# 自己写要上万行，且本机没有 MSVC 链接器、无法编译验证。
+steam-vent = "0.5"
+
+tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
+thiserror = "1"
+tracing = "0.1"

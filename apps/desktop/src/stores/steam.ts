@@ -402,6 +402,52 @@ export const useSteamStore = defineStore("steam", () => {
     }
   }
 
+  /**
+   * 批量取商店详情（**DLC 名单用**）。
+   *
+   * 与 `fetchDetails` 的差别：
+   * - 一次传多个 appId，宿主按 20 个一组打 `appdetails`，省往返；
+   * - 命中缓存的直接复用，只对缺的补请求；
+   * - 失败**不写 detailsError**：DLC 只是详情页的补充区块，整块消失比整页报错合理。
+   *
+   * 返回「本次拿到的那些」（key 是 appId 字符串），调用方自行按自己的顺序排列。
+   */
+  async function fetchDetailsBatch(appIds: number[]): Promise<Record<string, SteamAppDetails>> {
+    const wanted = appIds.filter((n) => Number.isFinite(n) && n > 0);
+    if (!wanted.length) return {};
+
+    const hit: Record<string, SteamAppDetails> = {};
+    const missing: number[] = [];
+    for (const id of wanted) {
+      const key = String(id);
+      const cached = details.value[key];
+      if (cached) hit[key] = cached;
+      else if (!missing.includes(id)) missing.push(id);
+    }
+    if (!missing.length) return hit;
+
+    try {
+      const res = await capabilities.steam<Record<string, SteamAppDetails>>({
+        op: "appDetails",
+        appIds: missing,
+      });
+      if (res && typeof res === "object") {
+        // 只有带名字的条目才值得写进缓存与返回：宿主对「已下架 / 地区不可见」的
+        // appid 也会给一条残缺记录，拿它去渲染会得到一张没有名字的空卡片。
+        const fresh: Record<string, SteamAppDetails> = {};
+        for (const [key, value] of Object.entries(res)) {
+          if (!value || !value.name) continue;
+          fresh[key] = value;
+        }
+        if (Object.keys(fresh).length) details.value = { ...details.value, ...fresh };
+        Object.assign(hit, fresh);
+      }
+    } catch {
+      // DLC 元信息拿不到就不显示，不打扰用户（主内容已经齐了）
+    }
+    return hit;
+  }
+
   /** 清空详情缓存（退出登录、或用户手动重试时用） */
   function clearDetails(): void {
     details.value = {};
@@ -595,6 +641,7 @@ export const useSteamStore = defineStore("steam", () => {
     resumeSession,
     cancelLogin,
     fetchDetails,
+    fetchDetailsBatch,
     clearDetails,
     loadLocalLibrary,
     installedOf,

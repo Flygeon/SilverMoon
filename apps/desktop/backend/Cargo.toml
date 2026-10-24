@@ -29,6 +29,8 @@ crate-type = ["rlib"]
 silvermoon-ipc = { path = "crates/silvermoon-ipc" }
 # B 站协议层（纯逻辑：WBI 签名 / 弹幕解析 / 模型归一化），命令层见 src/bilibili.rs
 silvermoon-bili = { path = "crates/silvermoon-bili" }
+# Steam CM 连接层（下载功能前置）。登录/库/启动/详情不依赖它，走 electron 侧 HTTPS。
+silvermoon-steam = { path = "crates/silvermoon-steam" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

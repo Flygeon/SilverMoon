@@ -711,6 +711,24 @@ const handlers: Record<string, Handler> = {
       case "gameDetail":
         return getGameDetail(steam, dataDir, Number(payload.appId));
 
+      // ---- CM（下载前置）。经 sidecar 转发，失败一律降级，不阻断 UI ----
+      case "cmStatus":
+        return callSidecar("steam_cm_status", {}).then((r) =>
+          r.ok ? r.data : { connected: false },
+        );
+      case "cmConnect": {
+        const account = String(payload.accountName ?? "");
+        const token = String(payload.refreshToken ?? "");
+        if (!account || !token) return { connected: false, error: "缺少账号或凭据" };
+        return callSidecar("steam_cm_connect", { accountName: account, refreshToken: token }).then(
+          (r) => (r.ok ? r.data : { connected: false, error: r.error ?? "连接失败" }),
+        );
+      }
+      case "cmDisconnect":
+        return callSidecar("steam_cm_disconnect", {}).then((r) =>
+          r.ok ? r.data : { connected: false },
+        );
+
       // ---- 设置：Steam 安装目录 ----
       case "steamSettings":
         return steamSettingsState(dataDir);

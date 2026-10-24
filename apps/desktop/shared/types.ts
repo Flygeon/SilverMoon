@@ -1618,6 +1618,13 @@ export interface SteamAppDetails {
   publishers?: string[];
   /** 大背景图（hero 用；商店页给的是 1920×620 的 page background） */
   backgroundImage?: string | null;
+  /**
+   * DLC 的 appid 列表（商店接口的 `dlc` 字段）。
+   *
+   * 这里**只放 id**：名字与缩略图要再查一次 appdetails，详情页按需批量取。
+   * 与 `electron/steam/protocol.ts` 的同名字段一一对应，别只改一边。
+   */
+  dlc?: number[];
 }
 
 /** 登录流程状态机的取值。 */

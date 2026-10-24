@@ -37,6 +37,19 @@
 export interface SteamSessionFile {
   /** 长期凭据，用于换取 access_token。**等同密码**，必须加密存储。 */
   refreshToken: string;
+  /**
+   * 上次拿到的 access_token（JWT，约 24h 有效）。
+   *
+   * **为什么要存它**：只靠 refresh_token 的话，一旦 `GenerateAccessTokenForApp`
+   * 换不出 token（Steam 侧限流 / 该 token 已失效 / 网络抖动），重启后就直接
+   * 变成「未登录」——即使登录当时一切正常。存一份 access_token，重启时先用它，
+   * 真正过期了再换，能把「记得密码但下次打开就掉线」的概率降到最低。
+   *
+   * 与 refresh_token 同等敏感（可直接冒用接口），因此同样走 safeStorage 加密。
+   */
+  accessToken?: string | null;
+  /** access_token 的过期时间（毫秒时间戳，从 JWT 的 exp 解出）。 */
+  accessTokenExpiresAt?: number | null;
   /** 账号名（用户输入的那个，不是昵称）。 */
   accountName?: string | null;
   /** 展示昵称。 */
@@ -89,6 +102,13 @@ export interface SteamAppDetails {
   publishers?: string[];
   /** 商店页大背景图（hero 用） */
   backgroundImage?: string | null;
+  /**
+   * DLC 的 appid 列表（对应 Steam 商店 `dlc` 字段）。
+   *
+   * 详情页「额外内容」用它列出该游戏的 DLC。名字需要再查一次 appdetails，
+   * 因此这里只放 id —— 前端按需批量取（或先显示 id 再补名字）。
+   */
+  dlc?: number[];
 }
 
 /** 单个成就。 */
@@ -387,6 +407,10 @@ export class SteamProtocol {
       const healedSteamId = parsed.steamId ?? null;
       this.session = {
         refreshToken: parsed.refreshToken,
+        // ⚠️ 这三个字段必须一起搬出来。漏掉 accessToken 的话，落盘的 token
+        // 等于白存 —— 重启后仍会去换 token，一旦换失败又显示未登录。
+        accessToken: parsed.accessToken ?? null,
+        accessTokenExpiresAt: parsed.accessTokenExpiresAt ?? null,
         accountName: parsed.accountName ?? null,
         personaName: parsed.personaName ?? null,
         steamId: healedSteamId ?? null,
@@ -472,6 +496,19 @@ export class SteamProtocol {
     const session = this.loadSession();
     if (!session) throw new SteamError("尚未登录 Steam");
 
+    // ---- 第一步：优先复用上次落盘的 access_token ----
+    //
+    // 为什么要这一步：只靠 refresh_token 的话，任何一次「换 token 失败」
+    // （限流 / 网络抖动 / 该 refresh_token 已失效）都会让**重启后直接显示未登录**，
+    // 哪怕登录当时一切正常 —— 用户看到的就是「明明记住密码了，下次打开又让我登录」。
+    // access_token 约 24h 有效，先用它能把这条路径的失败面收窄成「真的过期了」。
+    const saved = session.accessToken ?? "";
+    if (saved && !isTokenExpired(session.accessTokenExpiresAt)) {
+      this.accessToken = saved;
+      this.accessTokenSteamId = steamIdFromToken(saved) ?? session.steamId ?? null;
+      return saved;
+    }
+
     // 旧会话可能没有 steamId。这里**先换 token 再补 id**：
     // access_token 本身是 JWT，能解出 sub（= steamid），所以缺 id 不该成为死路。
     // （早期实现直接 `if (!steamId) throw`，让上一版遗留的会话永远无法恢复。）
@@ -493,16 +530,17 @@ export class SteamProtocol {
       steamIdFromToken(accessToken) ??
       (steamId || null);
     this.accessTokenSteamId = resolvedId;
-    if (resolvedId && resolvedId !== session.steamId) {
-      this.saveSession({ ...session, steamId: resolvedId });
-    }
 
-    // 服务端可能轮换 refresh_token，轮换了就落盘
+    // 落盘：access_token（及其过期时间）+ 可能轮换的 refresh_token + 补全的 steamId
     const rotated = String(payload.refresh_token ?? "");
-    if (rotated && rotated !== session.refreshToken) {
-      const latest = this.loadSession() ?? session;
-      this.saveSession({ ...latest, refreshToken: rotated });
-    }
+    const latest = this.loadSession() ?? session;
+    this.saveSession({
+      ...latest,
+      steamId: resolvedId ?? latest.steamId ?? null,
+      accessToken,
+      accessTokenExpiresAt: tokenExpiresAt(accessToken),
+      ...(rotated && rotated !== latest.refreshToken ? { refreshToken: rotated } : {}),
+    });
     return accessToken;
   }
 
@@ -714,8 +752,21 @@ export class SteamProtocol {
     try {
       const profile = await this.fetchProfile(refreshToken, steamId);
       session = { ...session, ...profile };
+      // fetchProfile 可能顺手拿到新的 access_token（换 token 成功时）
+      if (this.accessToken && this.accessToken !== polledAccessToken) {
+        session = { ...session, accessToken: this.accessToken };
+      }
     } catch {
       // 资料只是锦上添花，拿不到就显示账号名
+    }
+    // 把 access_token 一起落盘：重启后先用它，真的过期了才去换 refresh_token。
+    // 这是「记住密码但下次打开掉线」的主要修复点。
+    if (this.accessToken) {
+      session = {
+        ...session,
+        accessToken: this.accessToken,
+        accessTokenExpiresAt: tokenExpiresAt(this.accessToken),
+      };
     }
     this.saveSession(session);
     this.pending = null;
@@ -745,6 +796,18 @@ export class SteamProtocol {
         state: "failed",
         message: `登录成功但会话无法使用（${detail}），请重试`,
       };
+    }
+
+    // 自检拿到的 token 可能比登录时新（refresh 过一次），补落盘
+    if (this.accessToken) {
+      const cur = this.loadSession();
+      if (cur && cur.accessToken !== this.accessToken) {
+        this.saveSession({
+          ...cur,
+          accessToken: this.accessToken,
+          accessTokenExpiresAt: tokenExpiresAt(this.accessToken),
+        });
+      }
     }
 
     // 预热游戏库：切到「游戏」页时库已在磁盘缓存里，不必再等一次往返。
@@ -1030,6 +1093,11 @@ export class SteamProtocol {
             developers: Array.isArray(d.developers) ? (d.developers as string[]).map(String) : [],
             publishers: Array.isArray(d.publishers) ? (d.publishers as string[]).map(String) : [],
             backgroundImage: (d.background_raw as string) ?? (d.background as string) ?? null,
+            dlc: Array.isArray(d.dlc)
+              ? (d.dlc as unknown[])
+                  .map((n) => Number(n))
+                  .filter((n) => Number.isFinite(n) && n > 0)
+              : [],
           };
           result[key] = data;
           this.appDetailsCache.set(data.appId, { data, at: now });
@@ -1224,6 +1292,37 @@ export function describeTokenShape(token: string): Record<string, unknown> {
  *    这个 400 **只在 token 有效时才出现**（无效 token 先被 401 拦下），
  *    所以用假 token 探测永远测不出来 —— 本轮就是因此多绕了一圈。
  */
+
+/** 从 JWT 里取 `exp`（秒）并转成毫秒；解不出返回 null。 */
+export function tokenExpiresAt(token: string): number | null {
+  if (typeof token !== "string") return null;
+  const parts = token.split(".");
+  if (parts.length < 2) return null;
+  try {
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+    const payload = JSON.parse(Buffer.from(padded, "base64").toString("utf8")) as { exp?: unknown };
+    const exp = Number(payload?.exp);
+    if (!Number.isFinite(exp) || exp <= 0) return null;
+    return exp * 1000;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 判断已落盘的 access_token 是否该视为过期。
+ *
+ * - 没有过期时间（解不出 exp）→ **当作过期**，走换 token。宁可多换一次，
+ *   也不要用一个来路不明的 token 去调接口（会得到 401，比多一次请求更糟）。
+ * - 留 5 分钟余量：避免「判为有效、发出去已过期」的边界抖动。
+ */
+export function isTokenExpired(expiresAt: number | null | undefined): boolean {
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= 0) return true;
+  const SAFETY_MS = 5 * 60_000;
+  return Date.now() + SAFETY_MS >= expiresAt;
+}
+
 export function steamIdFromToken(token: string): string | null {
   if (typeof token !== "string") return null;
   const parts = token.split(".");

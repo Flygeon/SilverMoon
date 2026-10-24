@@ -108,7 +108,7 @@ SilverMoon（中文名**银月**）是一个 **monorepo**：桌面端是 **Elect
 - **主进程 → 后端**：`electron/sidecar.ts` spawn 可执行文件，从 stdout 解析 `SILVERMOON_READY {"port":N}` 握手
 - **后端 → 主进程**：`electron/host-server.ts` 的 `POST /_host`，用于建窗口、托盘、热键、打开文件
 - 两个 HTTP 服务都只绑 `127.0.0.1`，共用 `X-SilverMoon-Token` 请求头（每次启动随机生成）
-- Rust 侧注册 **182 条业务命令**（`#[silvermoon_ipc::command]`），在 `backend/src/lib.rs` 的 `generate_handler!` 里统一登记
+- Rust 侧注册 **185 条业务命令**（`#[silvermoon_ipc::command]`），在 `backend/src/lib.rs` 的 `generate_handler!` 里统一登记
 - **番茄小说**是一个额外的 sidecar（`fqapi/`）：stdio 行分隔 JSON、零端口，宿主按需懒启动
 
 > **迁移沿革**：Tauri 2（原名 LumiLuna） → Electron 44 → 迁回 Tauri 2 → **2026-10 再迁回 Electron**。

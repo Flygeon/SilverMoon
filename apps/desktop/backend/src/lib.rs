@@ -14,6 +14,7 @@ pub mod novel_bqg;
 pub mod osu;
 pub mod pixiv;
 pub mod secure_cred;
+pub mod steam;
 pub mod tray;
 pub mod webdav;
 
@@ -250,6 +251,10 @@ pub fn run() {
             osu::osu_search,
             osu::osu_download,
             osu::osu_import_archive,
+            // ---- Steam CM（下载功能的前置，全部可降级）----
+            steam::steam_cm_status,
+            steam::steam_cm_connect,
+            steam::steam_cm_disconnect,
             novel::novel_search,
             novel::novel_rank,
             novel::novel_category,
