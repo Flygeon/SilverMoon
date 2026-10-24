@@ -322,8 +322,11 @@ mod tests {
     fn anonymous_cm_can_start_qr_login() {
         use steam_vent::connection::Connection;
         use steam_vent::ConnectionTrait;
-        use steam_vent_proto_steam::enums_clientserver::EAuthTokenPlatformType;
-        use steam_vent_proto_steam::steammessages_auth_steamclient::CAuthentication_BeginAuthSessionViaQR_Request;
+        // ⚠️ EAuthTokenPlatformType 在 auth steamclient 模块里，
+        // **不是** enums_clientserver（写错会 E0432）。
+        use steam_vent_proto_steam::steammessages_auth_steamclient::{
+            CAuthentication_BeginAuthSessionViaQR_Request, EAuthTokenPlatformType,
+        };
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()

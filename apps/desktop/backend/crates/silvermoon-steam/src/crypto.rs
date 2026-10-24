@@ -16,10 +16,9 @@
 //! 算法本身是公开的（Valve 的 depot 格式早已被 SteamKit / DepotDownloader 记录）。
 
 use aes::cipher::block_padding::Pkcs7;
-// BlockDecrypt / BlockEncrypt 提供 decrypt_block / encrypt_block（单块，无 padding）
-use aes::cipher::{
-    BlockDecrypt, BlockDecryptMut, BlockEncrypt, BlockEncryptMut, KeyInit, KeyIvInit,
-};
+// BlockDecrypt 提供单块 decrypt_block（无 padding）；
+// BlockDecryptMut / BlockEncryptMut 提供 padded_vec_mut 系列。
+use aes::cipher::{BlockDecrypt, BlockDecryptMut, BlockEncryptMut, KeyInit, KeyIvInit};
 use aes::Aes256;
 use sha1::{Digest, Sha1};
 
