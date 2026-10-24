@@ -17,19 +17,13 @@
  * - 颜色只用 M3 令牌（--md-sys-color-*），不写死 Steam 绿（深色主题下会脏）；
  * - 所有请求都有 loading / 错误提示，不允许静默失败。
  */
-import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onActivated, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import EmptyState from "@/components/EmptyState.vue";
 import SteamLoginPanel from "@/components/SteamLoginPanel.vue";
 import { useSettingsStore } from "@/stores/settings";
 import { useSteamStore, type SteamSort } from "@/stores/steam";
-import {
-  GAME_HERO_VT_NAME,
-  activeCoverAppId,
-  beginCoverFlight,
-  endCoverFlight,
-  runViewTransition,
-} from "@/utils/gameHeroTransition";
+import { beginCoverFlight, endCoverFlight, runViewTransition } from "@/utils/gameHeroTransition";
 import { translate } from "@shared/i18n";
 import type { SteamGame } from "@shared/types";
 
@@ -171,16 +165,21 @@ const router = useRouter();
  * 浏览器就找不到可补间的元素，整次过渡退化成干巴巴的淡入 ——
  * 表现就是「点卡片没有飞行动画」，而且不报任何错。
  */
-async function openDetails(game: SteamGame): Promise<void> {
-  activeCoverAppId.value = game.appId;
+async function openDetails(game: SteamGame, event?: MouseEvent): Promise<void> {
+  /*
+   * 直接给**被点的那个元素**写 view-transition-name。
+   *
+   * 不再经过响应式状态：那会让整个网格重渲染（76 张卡片一起 diff），
+   * 点一下卡住几百毫秒 —— 用户实测反馈「数据量太大卡掉了」。
+   * 直接写 style 与卡片数量无关，且**同步生效**，所以也不再需要 nextTick。
+   */
+  const clicked = event?.currentTarget as HTMLElement | null;
+  const cover = clicked?.querySelector<HTMLElement>(".card-cover") ?? null;
   // 把卡片**当前这张图**交给详情页：它不用等商店接口就有图，
   // 补间从第一帧到最后一帧都是同一张，不会「飞过去一个空框」。
-  beginCoverFlight(game.appId, coverOf(game) || game.headerUrl || null);
-  // 等这张卡片把过渡名真正写进 DOM（否则旧快照里没有它）。
-  // ⚠️ 这是**一帧内**的同步收尾，不是等网络 —— 不会造成点击卡顿。
-  await nextTick();
+  beginCoverFlight(game.appId, coverOf(game) || game.headerUrl || null, cover);
   await runViewTransition({
-    // 只导航，**不等详情页数据**（等就是几百毫秒的卡死，用户已经反馈过）
+    // 只导航，**不等详情页数据**
     navigate: () => router.push("/games/" + game.appId),
     cleanup: endCoverFlight,
   });
@@ -473,20 +472,15 @@ const libraryEmpty = computed(
           :key="game.appId"
           class="card game-card"
           :title="game.name"
-          @click="openDetails(game)"
+          :data-sm-appid="game.appId"
+          @click="openDetails(game, $event)"
         >
           <!--
-            封面挂 view-transition-name：只有被点的那一张挂（名字全局唯一），
-            浏览器据此把「卡片封面」与「详情页 hero」补间成一次飞行。
+            封面在点击时**用 DOM 直接**挂上 view-transition-name（见 utils/gameHeroTransition.ts）。
+            不要改回 :style 绑 activeCoverAppId —— 那会让整个网格（几十上百张卡片）
+            跟着重渲染，点一下卡几百毫秒，用户原话「数据量太大卡掉了」。
           -->
-          <div
-            class="card-cover"
-            :style="
-              activeCoverAppId === game.appId
-                ? 'view-transition-name: ' + GAME_HERO_VT_NAME
-                : undefined
-            "
-          >
+          <div class="card-cover">
             <img
               v-if="!isBroken(coverOf(game))"
               :src="coverOf(game)"

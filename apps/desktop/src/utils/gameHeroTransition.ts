@@ -74,10 +74,56 @@ export const activeCoverUrl = ref<string | null>(null);
  */
 export const heroTransitionActive = ref(false);
 
+/**
+ * 当前被挂上过渡名的那个 DOM（直接操作，不走响应式）。
+ *
+ * ## 为什么不用响应式状态挂过渡名（卡顿的根因）
+ *
+ * 早先用 `activeCoverAppId === game.appId` 绑定内联 style。改这个 ref 会让
+ * **整个网格重新渲染** —— 库里 76 款游戏就是 76 张卡片一起 diff，
+ * 点一下就能卡住几百毫秒。用户的原话是「数据量太大卡掉了」。
+ *
+ * 现在只在被点的那一个元素上直接写 style.viewTransitionName，
+ * 与卡片数量无关，也不触发任何 Vue 更新。
+ */
+let flownElement: HTMLElement | null = null;
+
 /** 开始一次卡片 → 详情页的交接（网格侧调用）。 */
-export function beginCoverFlight(appId: number, coverUrl: string | null): void {
+export function beginCoverFlight(
+  appId: number,
+  coverUrl: string | null,
+  element?: HTMLElement | null,
+): void {
   activeCoverAppId.value = appId;
   activeCoverUrl.value = coverUrl;
+  // 先摘掉上一次的（连点两张卡时不要留下残留）
+  clearFlownElement();
+  if (element) {
+    element.style.viewTransitionName = GAME_HERO_VT_NAME;
+    flownElement = element;
+  }
+}
+
+/** 摘掉过渡名（不依赖 Vue 渲染）。 */
+export function clearFlownElement(): void {
+  if (flownElement) {
+    flownElement.style.viewTransitionName = "";
+    flownElement = null;
+  }
+}
+
+/**
+ * 在网格里按 appId 找那张卡片的封面元素。
+ *
+ * 返回详情页时用它挂过渡名 —— 网格被 keep-alive 缓存、DOM 还在，
+ * 直接查比等一次重渲染快得多。
+ */
+export function findCardCover(appId: number): HTMLElement | null {
+  try {
+    return document.querySelector<HTMLElement>(`[data-sm-appid="${appId}"] .card-cover`);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -94,6 +140,7 @@ export function beginCoverFlight(appId: number, coverUrl: string | null): void {
  */
 export function endCoverFlight(): void {
   activeCoverAppId.value = null;
+  clearFlownElement();
 }
 
 interface ViewTransitionLike {

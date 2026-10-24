@@ -25,7 +25,7 @@
  *   加载失败用 onerror 降级成占位，绝不留破图；
  * - 所有请求都有骨架 / 错误条 + 重试，不允许静默失败。
  */
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useSettingsStore } from "@/stores/settings";
 import SteamLoginPanel from "@/components/SteamLoginPanel.vue";
@@ -34,9 +34,10 @@ import { formatSize } from "@/utils/format";
 import { capabilities, isDesktop } from "@/capabilities";
 import {
   GAME_HERO_VT_NAME,
-  activeCoverAppId,
   activeCoverUrl,
+  beginCoverFlight,
   endCoverFlight,
+  findCardCover,
   runViewTransition,
 } from "@/utils/gameHeroTransition";
 import { translate } from "@shared/i18n";
@@ -427,10 +428,9 @@ async function goBack(): Promise<void> {
    * 新快照拍到的还是「没名字」的封面，返回就没有飞回动画。
    */
   if (!Number.isNaN(id)) {
-    // 反向也把「这张卡片该显示哪张图」交还网格，确保飞回时两端是同一张图
-    activeCoverAppId.value = id;
-    // 一帧内同步收尾，不是等网络 —— 不会造成返回卡顿
-    await nextTick();
+    // 反向：直接给网格里那张卡挂过渡名（DOM 操作，同步生效，无重渲染）。
+    // 网格被 keep-alive 缓存、DOM 还在，querySelector 比等一次重渲染快得多。
+    beginCoverFlight(id, heroImage.value || null, findCardCover(id));
   }
   const navigate = () => {
     // 有历史就退一步；直接进详情（无历史）时回游戏列表，避免退到空页
@@ -1482,12 +1482,26 @@ watch(
 }
 .hero-title {
   margin: 0;
-  font-size: var(--md-sys-typescale-headline-medium-size);
-  font-weight: var(--md-sys-typescale-headline-medium-weight);
-  line-height: 1.2;
-  /* 标题压在图片 + 遮罩上，用反色令牌而不是 on-surface */
-  color: var(--md-sys-color-inverse-on-surface);
-  text-shadow: 0 1px 12px var(--md-sys-color-scrim);
+  /* 用 display-small 而不是 headline-medium：后者压在 21:9 大图上太小，
+     用户实测反馈「字太小」 */
+  font-size: var(--md-sys-typescale-display-small-size);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: var(--md-sys-typescale-display-small-tracking);
+  /*
+   * 这里不能用主题反色令牌。
+   *
+   * 曾经用 inverse-on-surface：它在深色主题下是**深色**（因为它配的是
+   * inverse-surface 那块浅底），压在亮色游戏封面上几乎没有对比度 ——
+   * 用户看到的就是「标题位置上好像有字，但和背景糊在一起」。
+   *
+   * 图片叠加层是唯一不受主题控制的场景：无论深浅主题，文字都必须足够亮。
+   * 所以用固定浅色 + 双层阴影（近距描边 + 远距柔光），亮图暗图都读得出。
+   */
+  color: #fff;
+  text-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.9),
+    0 2px 18px rgba(0, 0, 0, 0.75);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
