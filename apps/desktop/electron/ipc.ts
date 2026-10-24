@@ -718,10 +718,10 @@ const handlers: Record<string, Handler> = {
       case "appDepots": {
         const appId = Number(payload.appId);
         const cred = await steam.exportCmCredentials();
-        if (!cred) return { ok: false, error: "尚未登录 Steam，无法查询 depot" };
+        if ("error" in cred) return { ok: false, error: cred.error };
         const reply = await callSidecar("steam_app_depots", {
           accountName: cred.accountName,
-          accessToken: cred.accessToken,
+          accessToken: cred.token,
           appId,
         });
         return reply.ok ? reply.data : { ok: false, error: reply.error ?? "查询失败" };
@@ -731,12 +731,12 @@ const handlers: Record<string, Handler> = {
         const installDir = String(payload.installDir ?? "");
         if (!installDir) return { ok: false, error: "未指定安装目录" };
         const cred = await steam.exportCmCredentials();
-        if (!cred) return { ok: false, error: "尚未登录 Steam，无法下载" };
+        if ("error" in cred) return { ok: false, error: cred.error };
 
         // 1) 查 depot 列表
         const depotReply = await callSidecar("steam_app_depots", {
           accountName: cred.accountName,
-          accessToken: cred.accessToken,
+          accessToken: cred.token,
           appId,
         });
         if (!depotReply.ok) {
@@ -748,7 +748,7 @@ const handlers: Record<string, Handler> = {
         // 2) 发起下载（depot key 由后端自动获取）
         const reply = await callSidecar("steam_download", {
           accountName: cred.accountName,
-          accessToken: cred.accessToken,
+          accessToken: cred.token,
           installDir,
           depots: depots.map((d) => ({
             depotId: d.depotId,
@@ -766,12 +766,14 @@ const handlers: Record<string, Handler> = {
           r.ok ? r.data : { connected: false },
         );
       case "cmConnect": {
-        const account = String(payload.accountName ?? "");
-        const token = String(payload.refreshToken ?? "");
-        if (!account || !token) return { connected: false, error: "缺少账号或凭据" };
-        return callSidecar("steam_cm_connect", { accountName: account, refreshToken: token }).then(
-          (r) => (r.ok ? r.data : { connected: false, error: r.error ?? "连接失败" }),
-        );
+        // 走与 appDepots/download 同一条凭据选择逻辑：
+        // CM 只接受 iss=="steam" 的 JWT，不能盲传 refresh_token。
+        const cred = await steam.exportCmCredentials();
+        if ("error" in cred) return { connected: false, error: cred.error };
+        return callSidecar("steam_cm_connect", {
+          accountName: cred.accountName,
+          accessToken: cred.token,
+        }).then((r) => (r.ok ? r.data : { connected: false, error: r.error ?? "连接失败" }));
       }
       case "cmDisconnect":
         return callSidecar("steam_cm_disconnect", {}).then((r) =>

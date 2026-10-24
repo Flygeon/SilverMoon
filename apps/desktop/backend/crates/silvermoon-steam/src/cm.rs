@@ -150,7 +150,13 @@ fn is_probably_jwt(token: &str) -> bool {
 fn describe_connection_error(error: &ConnectionError) -> String {
     // 变体列表照 steam_vent::session::ConnectionError 的真实定义
     match error {
-        ConnectionError::AccessToken(_) => "refresh_token 已失效，请重新登录".to_string(),
+        // ⚠️ 这里曾写成「refresh_token 已失效」，是**错的**且会误导排查：
+        // 传进来的是 access_token，且 AccessTokenError 有 5 种不同原因
+        // （Malformed / InvalidIssuer / Expired / Base64 / Json）。
+        // 把真实子原因带出来，否则用户只看到一句含糊的「登录被拒」。
+        ConnectionError::AccessToken(err) => {
+            format!("登录凭据被 CM 拒绝（{err}）：CM 只接受 iss=steam 的三段式 JWT，请重新登录")
+        }
         ConnectionError::Network(_) => "网络错误（连接 Steam CM 失败）".to_string(),
         ConnectionError::LoginError(_) => format!("登录被拒：{error}"),
         ConnectionError::Aborted => "登录被中断".to_string(),

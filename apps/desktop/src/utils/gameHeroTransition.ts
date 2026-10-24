@@ -35,7 +35,7 @@
  * - 不支持 / 用户开了「减少动效」→ 直接跳转；
  * - 过渡抛错 → 忽略（导航已发生）。
  */
-import { ref } from "vue";
+import { nextTick, ref } from "vue";
 
 /** 两端共用的 `view-transition-name`。 */
 export const GAME_HERO_VT_NAME = "game-cover";
@@ -96,6 +96,22 @@ export function prefersReducedMotion(): boolean {
   }
 }
 
+/**
+ * 等一帧（rAF）。
+ *
+ * 过渡的「新快照」在下一帧布局后才拍，用 setTimeout 等不到真正的布局完成时刻。
+ * 失败环境（jsdom / 老浏览器无 rAF）退化成 setTimeout(0)。
+ */
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame !== "function") {
+      setTimeout(resolve, 0);
+      return;
+    }
+    requestAnimationFrame(() => resolve());
+  });
+}
+
 export interface ViewTransitionHandlers {
   /** 导航本身（必须能在**同一个微任务内**完成，不能 await 网络请求） */
   navigate: () => unknown;
@@ -141,11 +157,28 @@ export async function runViewTransition(handlers: ViewTransitionHandlers): Promi
      * 回调里抛出的异常若没人接，会变成未处理的 Promise rejection
      * （被 main.ts 的全局处理器记成「出错了」），外面的 catch 抓不到。
      */
-    const transition = doc.startViewTransition(() => {
-      // 只做导航；**任何 await 都会让新快照延迟**，点击就会卡。
-      const result = handlers.navigate();
-      // router.push 返回 Promise，但这里不等它 —— 过渡结束由 finished 决定。
-      void result;
+    const transition = doc.startViewTransition(async () => {
+      // ⚠️ **必须 await 导航**，否则浏览器立刻拍新快照，而新路由组件还没挂载 ——
+      // 快照里根本没有 hero 元素，补间无从发生，动画就「不生效」（只剩淡入）。
+      //
+      // 这里的 await 只等「路由解析 + 组件挂载」，**不等任何网络数据**
+      // （详情页自己发请求）。首次进入可能要等懒加载 chunk，之后有缓存。
+      await handlers.navigate();
+      // Vue 的渲染周期（把 hero 元素写进 DOM）
+      await nextTick();
+      /*
+       * 再等**两帧**。
+       *
+       * App.vue 的路由过渡是 `mode="out-in"`：旧页面先离开、新页面才挂载。
+       * 即使我们把时长压成 0s，那也是一次 transitionend，落在下一帧 ——
+       * 只等 nextTick 时新页面可能还没进 DOM，新快照就会拍到旧页面或空白，
+       * 表现就是「有淡入但没有封面飞行」。
+       *
+       * 两帧 ≈ 33ms，用户完全感觉不到；而**不轮询**是关键：
+       * 旧版轮询最多 30 帧（500ms）才是「点击卡住」的真正原因。
+       */
+      await nextFrame();
+      await nextFrame();
     });
     await transition.finished;
   } catch {

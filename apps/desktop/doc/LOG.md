@@ -29,6 +29,31 @@
 > - **教训**: …（踩过的坑，供下一个 AI 避雷）
 > ```
 
+## 2026-10-24（五）· 修 CM 登录被拒 + hero 动画不生效
+
+- **commit**: 见本轮提交
+- **status**: hero 单测 7 项绿、steam 成就 8 项绿；vue-tsc / tsc exit 0；eslint 0 error。
+- **问题一：下载报「无法连接 Steam CM（登录被拒）」**
+  - 根因 A：`exportCmCredentials` 直接把 `access_token` 丢给 sidecar，**没有校验它是否满足
+    `Connection::access` 的硬要求**（必须是三段式 JWT 且 `iss === "steam"`）。
+    早期版本落盘的 access_token 可能是坏的，于是 CM 在 JWT 解析阶段就拒绝。
+  - 根因 B（我的措辞错误）：`describe_connection_error` 把 `AccessToken(_)` 一律说成
+    「refresh_token 已失效」。传进去的明明是 access_token，且 AccessTokenError 有 5 种
+    不同原因（Malformed / InvalidIssuer / Expired / Base64 / Json）。这句话把人往错方向带。
+  - 修法：新增 `isSteamCmToken()` 在**本地**判定，不合格就不发请求；两个候选
+    （access_token 优先 —— `CMsgClientLogon.access_token` 字段语义就是它；refresh_token 兜底）
+    都试一遍。错误里带上每个候选的 iss 实际值，一次就能定位。
+- **问题二：hero 动画完全不生效（上一轮修卡死时改过头）**
+  - 上一轮为了消除 500ms 卡顿，把回调写成 `const r = handlers.navigate(); void r;` ——
+    **不等导航完成**。浏览器于是立刻拍新快照，而新路由组件还没挂载，快照里根本没有
+    hero 元素，补间无从发生，只剩淡入。
+  - 正确做法：`await navigate()` + `nextTick()` + **固定两帧**。
+    两帧 ≈ 33ms 用户无感，且**不轮询** —— 轮询才是卡顿根源，等待本身不是。
+- **教训**：
+  1. 「消除卡顿」不等于「删掉所有等待」。要删的是**不确定时长**的轮询，不是必要的时序等待。
+  2. 传凭据给下层库之前，先按它的**接受条件**本地校验；否则错误从深处冒出来只剩一句含糊拒绝。
+  3. 错误文案必须与事实一致（access_token ≠ refresh_token），否则等于给排查埋雷。
+
 ## 2026-10-24（四）· 修 hero 动画卡死 + 统一 hero 图 + depot key / PICS 打通
 
 - **commit**: 见本轮提交

@@ -450,18 +450,74 @@ export class SteamProtocol {
    *
    * 返回 null 表示未登录或换不出 token。
    */
-  async exportCmCredentials(): Promise<{ accountName: string; accessToken: string } | null> {
+  async exportCmCredentials(): Promise<
+    { accountName: string; token: string; source: string } | { error: string }
+  > {
     const session = this.loadSession();
-    if (!session) return null;
+    if (!session) return { error: "尚未登录 Steam，无法连接 CM" };
     const accountName = session.accountName ?? "";
-    if (!accountName) return null;
+    if (!accountName) return { error: "会话缺少账号名，请重新登录" };
+
+    /*
+     * CM 的 `Connection::access` **只接受 JWT**，且要求 `iss === "steam"`
+     * （见 steam-vent 的 unauthenticated.rs：会 split('.') 取第二段做 base64 + JSON 解析）。
+     *
+     * 所以不能「随便给一个 token」。两个候选都试：
+     * - `refreshToken`：参考实现 Aurelia 登录 CM 用的就是它
+     * - `accessToken`：我们自己用 GenerateAccessTokenForApp 换出来的
+     *
+     * 用 isSteamCmToken 实测哪个真的合格，而不是靠猜。
+     */
+    /*
+     * 顺序有讲究：**access_token 优先**。
+     *
+     * CM logon 发的是 `CMsgClientLogon.access_token` 字段 —— 协议语义上
+     * 它就是要 access_token。参考实现 Aurelia 传 refresh_token 也能连上
+     * （Steam 对这两种 token 都接受），但 access_token 才是这个字段的本意，
+     * 所以先试它；refresh_token 兜底，避免「access_token 换不出来就彻底不能下载」。
+     */
+    const candidates: { source: string; token: string }[] = [
+      { source: "access_token", token: session.accessToken ?? "" },
+      { source: "refresh_token", token: session.refreshToken ?? "" },
+    ];
+
+    // 换一次 token，尽量让 accessToken 候选是新鲜的（失败不影响 refresh 候选）
     try {
-      const accessToken = await this.ensureAccessToken();
-      if (!accessToken) return null;
-      return { accountName, accessToken };
+      const fresh = await this.ensureAccessToken();
+      if (fresh) {
+        const idx = candidates.findIndex((c) => c.source === "access_token");
+        if (idx >= 0) candidates[idx] = { source: "access_token", token: fresh };
+      }
     } catch {
-      return null;
+      // 换不出来就沿用已存的（可能仍有效），不做处理
     }
+
+    for (const candidate of candidates) {
+      if (!candidate.token) continue;
+      if (isSteamCmToken(candidate.token)) {
+        this.options.log?.("[steam] CM 凭据已选用", { source: candidate.source });
+        return { accountName, token: candidate.token, source: candidate.source };
+      }
+    }
+
+    // 一个都不合格：把每个候选的 iss 实际值记下来（iss 不敏感，仅 "steam" 这类标识）
+    this.options.log?.(
+      "[steam] 没有可用于 CM 的凭据",
+      candidates.map((c) => ({
+        source: c.source,
+        present: Boolean(c.token),
+        ...describeTokenShape(c.token),
+      })),
+    );
+
+    // 到这里说明两个候选都不是 CM 能接受的 JWT —— 给出可诊断的信息
+    const shapes = candidates
+      .filter((c) => c.token)
+      .map((c) => `${c.source}: ${JSON.stringify(describeTokenShape(c.token))}`)
+      .join("；");
+    return {
+      error: `登录凭据格式不被 CM 接受，请重新登录（${shapes || "无可用凭据"}）`,
+    };
   }
 
   /** 当前登录态。有会话但 token 换不出来 → `loggedIn:false` + `hasSession:true`。 */
@@ -1295,11 +1351,50 @@ export function describeTokenShape(token: string): Record<string, unknown> {
       shape.claims = claims;
       shape.subType = typeof payload.sub;
       shape.subLength = typeof payload.sub === "string" ? payload.sub.length : null;
+      // iss 是公开标识（"steam" 这类），不是秘密；但它是 CM 唯一的接受条件，
+      // 排查「登录被拒」时必须能直接看到值，否则只能靠猜。
+      shape.iss = typeof payload.iss === "string" ? payload.iss : null;
     } catch {
       shape.payloadParseError = true;
     }
   }
   return shape;
+}
+
+/**
+ * 这个 token 能否被 **CM 的 `Connection::access`** 接受。
+ *
+ * ## 为什么需要这个判断（下载功能踩的坑）
+ *
+ * `steam-vent` 的 `Connection::access` 不是「随便给个 token 就能连」：
+ *
+ * ```text
+ * token.split('.').nth(1)  → base64_url_safe_decode → JSON 解析成 { iss, sub, exp }
+ * 若 iss != "steam"  →  ConnectionError::AccessToken(InvalidIssuer)
+ * 若只有一两段      →  ConnectionError::AccessToken(Malformed)
+ * ```
+ *
+ * 也就是说**必须是 JWT，且签发者必须是 steam**。
+ * 传错 token 的后果是一句含糊的「登录被拒」，看不出真正原因 ——
+ * 所以这里先本地判定，不合格就不发请求、直接给出可读结论。
+ *
+ * 注意：不校验 exp。steam-vent 自己也把 exp 检查注释掉了（TODO），
+ * 是否过期交给 Steam 服务端判，本地判早了反而会把可用 token 拦下。
+ */
+export function isSteamCmToken(token: string): boolean {
+  if (typeof token !== "string" || token.length === 0) return false;
+  const parts = token.split(".");
+  if (parts.length !== 3) return false;
+  try {
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+    const payload = JSON.parse(Buffer.from(padded, "base64").toString("utf8")) as {
+      iss?: unknown;
+    };
+    return payload.iss === "steam";
+  } catch {
+    return false;
+  }
 }
 
 /**
