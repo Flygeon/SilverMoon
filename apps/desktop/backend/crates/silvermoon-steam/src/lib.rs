@@ -28,6 +28,7 @@ pub mod cache;
 pub mod cdn;
 pub mod chunk;
 pub mod cm;
+pub mod cm_login;
 pub mod cm_requests;
 pub mod crypto;
 pub mod depot_key;
@@ -40,6 +41,7 @@ pub use cache::{
 };
 pub use chunk::{process_chunk, ChunkOutcome};
 pub use cm::{CmError, CmManager, CmSession};
+pub use cm_login::{begin_qr as cm_begin_qr, poll_qr as cm_poll_qr, PollOutcome, QrChallenge};
 pub use depot_key::fetch_depot_key;
 pub use downloader::{download_app, safe_join, DepotTask, DownloadProgress, DownloadResult};
 pub use manifest::{ContentManifest, FileMapping, ManifestMetadata};

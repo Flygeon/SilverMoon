@@ -257,6 +257,9 @@ pub fn run() {
             steam::steam_cm_disconnect,
             steam::steam_download,
             steam::steam_app_depots,
+            // CM 侧扫码登录：拿能用于 CM logon 的 token（网页登录的 token 不行）
+            steam::steam_cm_begin_qr,
+            steam::steam_cm_poll_qr,
             novel::novel_search,
             novel::novel_rank,
             novel::novel_category,

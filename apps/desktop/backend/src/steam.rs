@@ -309,3 +309,132 @@ pub struct DepotInfoOut {
     /// u64 超出 JS 安全整数，用字符串过桥
     pub manifest_gid: String,
 }
+
+// ---------------------------------------------------------------------------
+// CM 侧扫码登录
+// ---------------------------------------------------------------------------
+
+/// 扫码登录的挑战信息（回给前端）。
+///
+/// `clientId` / `requestId` 都按字符串过桥：前者是 u64（超出 JS 安全整数），
+/// 后者是二进制（用 hex 表达）。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CmQrChallenge {
+    pub challenge_url: String,
+    pub client_id: String,
+    pub request_id: String,
+    pub interval: f64,
+}
+
+/// 轮询结果（回给前端）。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CmPollResult {
+    /// "pending" | "authorized"
+    pub status: String,
+    pub account_name: Option<String>,
+    pub refresh_token: Option<String>,
+    /// true 表示扫码后在手机上做了确认（前端可据此提示）
+    pub authorized: bool,
+}
+
+/// 发起 **CM 侧**扫码登录。
+///
+/// 与网页登录的区别：这条路走 CM 的匿名连接 + `Authentication.BeginAuthSessionViaQR`，
+/// 拿到的凭据受众是 Steam 客户端，**才能用于 CM logon**（下载的前提）。
+/// 网页登录（HTTPS）拿到的 token 试过会被 Steam 回 `invalid credentials`。
+#[silvermoon_ipc::command]
+pub async fn steam_cm_begin_qr() -> Result<CmQrChallenge, String> {
+    let result = tokio::task::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("创建运行时失败：{e}"))?;
+        runtime
+            .block_on(silvermoon_steam::cm_begin_qr("SilverMoon"))
+            .map(|challenge| CmQrChallenge {
+                challenge_url: challenge.challenge_url,
+                client_id: challenge.client_id.to_string(),
+                request_id: to_hex(&challenge.request_id),
+                interval: challenge.interval,
+            })
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("发起扫码登录失败：{e}"))?;
+    result
+}
+
+/// 轮询扫码状态。未扫码 / 未确认时返回 `status = "pending"`（不是错误）。
+#[silvermoon_ipc::command]
+pub async fn steam_cm_poll_qr(
+    client_id: String,
+    request_id: String,
+) -> Result<CmPollResult, String> {
+    let client_id: u64 = client_id
+        .trim()
+        .parse()
+        .map_err(|_| "clientId 不是合法数字".to_string())?;
+    let request_id =
+        from_hex(request_id.trim()).ok_or_else(|| "requestId 不是合法 hex".to_string())?;
+
+    let result = tokio::task::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("创建运行时失败：{e}"))?;
+        runtime
+            .block_on(silvermoon_steam::cm_poll_qr(client_id, &request_id))
+            .map(|outcome| match outcome {
+                silvermoon_steam::PollOutcome::Pending => CmPollResult {
+                    status: "pending".to_string(),
+                    account_name: None,
+                    refresh_token: None,
+                    authorized: false,
+                },
+                silvermoon_steam::PollOutcome::Authorized {
+                    account_name,
+                    refresh_token,
+                } => CmPollResult {
+                    status: "authorized".to_string(),
+                    account_name: Some(account_name),
+                    refresh_token: Some(refresh_token),
+                    authorized: true,
+                },
+            })
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("轮询扫码状态失败：{e}"))?;
+    result
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn from_hex(text: &str) -> Option<Vec<u8>> {
+    if text.is_empty() || text.len() % 2 != 0 {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    let mut index = 0;
+    while index < bytes.len() {
+        let high = hex_value(bytes[index])?;
+        let low = hex_value(bytes[index + 1])?;
+        out.push((high << 4) | low);
+        index += 2;
+    }
+    Some(out)
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}

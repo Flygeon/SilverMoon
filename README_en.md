@@ -107,7 +107,7 @@ Three processes, with a single plain-text, curl-friendly boundary between host a
 - **Main → backend**: `electron/sidecar.ts` spawns the executable, parses `SILVERMOON_READY {"port":N}` from stdout, and relays commands and events
 - **Backend → main**: `electron/host-server.ts` exposes `POST /_host`, used by Rust to create windows, register tray and hotkeys, and open files
 - Both HTTP servers bind `127.0.0.1` only and share the `X-SilverMoon-Token` authentication header (a fresh random token per launch)
-- The backend registers **187 commands** (`#[silvermoon_ipc::command]`, listed in `backend/src/lib.rs`'s `generate_handler!`), exposed over `POST /cmd` and pushed back via SSE `GET /events`
+- The backend registers **189 commands** (`#[silvermoon_ipc::command]`, listed in `backend/src/lib.rs`'s `generate_handler!`), exposed over `POST /cmd` and pushed back via SSE `GET /events`
 - **Tomato Novel** is a second sidecar (`fqapi/`): line-delimited JSON over stdio, no port at all, started lazily by the host
 
 ### 🚀 Quick start

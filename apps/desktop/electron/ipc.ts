@@ -41,6 +41,8 @@ import {
   steamSettingsState,
   updateSteamSettings,
 } from "./steam";
+import { CM_TOKEN_FILE, clearCmToken, readCmToken, writeCmToken } from "./steam/cm-token";
+import { isSteamCmToken } from "./steam/protocol";
 import { BenchSession, DEFAULT_INTERVAL_MS } from "./bench";
 import { applyNetworkProxy, normalizeProxyConfig } from "./net-proxy";
 
@@ -715,9 +717,59 @@ const handlers: Record<string, Handler> = {
       //
       // 凭据由**主进程**从已加密的会话里取，前端只传 appId ——
       // 不把 refresh_token 暴露到渲染进程（那是长期凭据，等同密码）。
+      // ---- CM 侧扫码登录（拿能用于 CM logon 的 token）----
+      //
+      // 为什么单独一套：网页扫码拿到的 token 受众是 WebAPI，传给 CM 会被
+      // Steam 回 invalid credentials。下载必须用这套（走 CM 匿名连接登录）。
+      case "cmBeginQr":
+        return callSidecar("steam_cm_begin_qr", {}).then((r) =>
+          r.ok ? r.data : { error: r.error ?? "发起扫码登录失败" },
+        );
+      case "cmPollQr": {
+        const clientId = String(payload.clientId ?? "");
+        const requestId = String(payload.requestId ?? "");
+        if (!clientId || !requestId) return { status: "pending" };
+        const reply = await callSidecar("steam_cm_poll_qr", { clientId, requestId });
+        if (!reply.ok) return { error: reply.error ?? "轮询扫码状态失败" };
+        const data = reply.data as {
+          status?: string;
+          accountName?: string;
+          refreshToken?: string;
+        };
+        // 扫码成功：落到加密存储，后续下载直接用
+        if (data.status === "authorized" && data.accountName && data.refreshToken) {
+          try {
+            writeCmToken(path.join(dataDir, CM_TOKEN_FILE), {
+              accountName: data.accountName,
+              refreshToken: data.refreshToken,
+              savedAt: Date.now(),
+            });
+          } catch (error) {
+            log.warn("[steam] 保存 CM 凭据失败", (error as Error)?.message);
+          }
+        }
+        // 不把 refresh_token 回传给渲染进程（它是长期凭据，等同密码）
+        return { status: data.status ?? "pending", accountName: data.accountName ?? "" };
+      }
+      case "cmLoginStatus": {
+        const saved = readCmToken(path.join(dataDir, CM_TOKEN_FILE));
+        return {
+          hasToken: Boolean(saved && isSteamCmToken(saved.refreshToken)),
+          accountName: saved?.accountName ?? "",
+        };
+      }
+      case "cmLogout":
+        clearCmToken(path.join(dataDir, CM_TOKEN_FILE));
+        return { ok: true };
+
       case "appDepots": {
         const appId = Number(payload.appId);
-        const cred = await steam.exportCmCredentials();
+        // CM 扫码登录得到的凭据优先；没有再回退网页 session
+        const cmSaved = readCmToken(path.join(dataDir, CM_TOKEN_FILE));
+        const cred =
+          cmSaved && isSteamCmToken(cmSaved.refreshToken)
+            ? { accountName: cmSaved.accountName, token: cmSaved.refreshToken, source: "cm_login" }
+            : await steam.exportCmCredentials();
         if ("error" in cred) return { ok: false, error: cred.error };
         const reply = await callSidecar("steam_app_depots", {
           accountName: cred.accountName,
@@ -730,8 +782,16 @@ const handlers: Record<string, Handler> = {
         const appId = Number(payload.appId);
         const installDir = String(payload.installDir ?? "");
         if (!installDir) return { ok: false, error: "未指定安装目录" };
-        const cred = await steam.exportCmCredentials();
-        if ("error" in cred) return { ok: false, error: cred.error };
+        // 与 appDepots 同一套凭据选择：CM 扫码登录的优先
+        const cmSaved = readCmToken(path.join(dataDir, CM_TOKEN_FILE));
+        if (!cmSaved || !isSteamCmToken(cmSaved.refreshToken)) {
+          return {
+            ok: false,
+            error: "需要先用「Steam 扫码登录（下载）」授权一次：网页登录的凭据无法用于下载",
+            needCmLogin: true,
+          };
+        }
+        const cred = { accountName: cmSaved.accountName, token: cmSaved.refreshToken };
 
         // 1) 查 depot 列表
         const depotReply = await callSidecar("steam_app_depots", {
