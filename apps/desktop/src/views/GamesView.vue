@@ -5,7 +5,7 @@ import EmptyState from "@/components/EmptyState.vue";
 import SteamLoginPanel from "@/components/SteamLoginPanel.vue";
 import { useSettingsStore } from "@/stores/settings";
 import { useSteamStore, type SteamSort } from "@/stores/steam";
-import { beginCoverFlight, endCoverFlight, runViewTransition } from "@/utils/gameHeroTransition";
+import { rememberCover } from "@/utils/gameHeroTransition";
 import { translate } from "@shared/i18n";
 import type { SteamGame } from "@shared/types";
 
@@ -122,15 +122,10 @@ const hasFilter = computed(() => keyword.value.trim().length > 0);
 
 const router = useRouter();
 
-async function openDetails(game: SteamGame, event?: MouseEvent): Promise<void> {
-  const clicked = event?.currentTarget as HTMLElement | null;
-  const cover = clicked?.querySelector<HTMLElement>(".card-cover") ?? null;
-  beginCoverFlight(game.appId, coverOf(game) || game.headerUrl || null, cover);
-  await runViewTransition({
-    // 只导航，**不等详情页数据**
-    navigate: () => router.push("/games/" + game.appId),
-    cleanup: endCoverFlight,
-  });
+function openDetails(game: SteamGame): void {
+  // 只把封面 URL 交给详情页做首帧占位，不做任何跨页动画。
+  rememberCover(game.appId, coverOf(game) || game.headerUrl || null);
+  void router.push("/games/" + game.appId);
 }
 
 type InstallFilter = "all" | "installed";
@@ -211,12 +206,7 @@ const libraryEmpty = computed(
 );
 </script>
 <template>
-  <!--
-    整页挂 `games-grid-page`：进入详情时这一页整体淡出（封面另有一份补间，
-    见 .card-cover 上的 view-transition-name），避免两页叠在一起。
-    返回时同一条过渡反放 —— 详见 styles 里 ::view-transition-* 规则。
-  -->
-  <div class="games-view" style="view-transition-name: games-grid-page">
+  <div class="games-view">
     <!-- ============================ 首屏加载 ============================ -->
     <div v-if="booting" class="boot-block">
       <m3e-loading-indicator class="lm-loading" />
@@ -414,13 +404,8 @@ const libraryEmpty = computed(
           class="card game-card"
           :title="game.name"
           :data-sm-appid="game.appId"
-          @click="openDetails(game, $event)"
+          @click="openDetails(game)"
         >
-          <!--
-            封面在点击时**用 DOM 直接**挂上 view-transition-name（见 utils/gameHeroTransition.ts）。
-            不要改回 :style 绑 activeCoverAppId —— 那会让整个网格（几十上百张卡片）
-            跟着重渲染，点一下卡几百毫秒，用户原话「数据量太大卡掉了」。
-          -->
           <div class="card-cover">
             <img
               v-if="!isBroken(coverOf(game))"

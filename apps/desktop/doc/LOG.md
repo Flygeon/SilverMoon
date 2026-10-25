@@ -29,6 +29,46 @@
 > - **教训**: …（踩过的坑，供下一个 AI 避雷）
 > ```
 
+## 2026-10-25（一）· Steam 下载续修：CDN 的 manifest 是 zip 包 + 移除游戏 hero 动画
+
+- **commit**: 见本轮提交
+- **status**: 前端已本地验证（typecheck / eslint / 单测）；Rust 仍只能由 CI 编译。
+
+### 1. 下载：manifest 响应要先解封装
+
+- **现象**：上一轮修完 error 透传后，报错变成
+  `depot 2704111: cache5-hkg1.steamcontent.com: 响应不是 manifest（二进制 0x504b0304...（共 76641 字节））`。
+- **根因**：`50 4b 03 04` 是 ZIP 魔数。CDN 对
+  `/depot/<id>/manifest/<gid>/5/<code>` 返回的是**装了 manifest 的单条目 zip**，
+  而代码把响应体直接交给 `ContentManifest::parse`（它只认 Valve 的分节容器）。
+  上一轮新加的错误文案刚好把魔数打了出来，这一轮才能一眼定位。
+- **改动**：
+  - `manifest.rs` 新增 `ContentManifest::parse_response()`：先试明文，失败再按魔数
+    解封装（`PK\x03\x04` → zip 首条目；`1f 8b` → gzip），然后再解析。
+  - `downloader.rs` 改调 `parse_response`。
+  - 新增 4 条单测：zip 封装能解、gzip 封装能解、明文照常走通、
+    垃圾输入返回 None（并断言「裸 parse 对 zip 必须失败」，钉住这个 bug）。
+- **为什么用 zip 而不是自己解 inflate**：`zip` crate 已是本 crate 依赖（chunk 的
+  `PK` 分支在用），复用比再引一个 inflate 实现省事，也不增加依赖面。
+- **未验证**：Rust 未编译；「真实 CDN 响应能否解出可见文件清单」要等装包后实测。
+
+### 2. 移除游戏模块的 hero 动画
+
+- **原因**：用户明确要求「效果不好，全去掉」。前几轮反复调整（同步导航、DOM 直挂过渡名、
+  返回时复用元素引用、诊断日志）都没达到可接受手感，继续投入的收益低于成本。
+- **改动**：
+  - `utils/gameHeroTransition.ts` 收缩为「记住封面 URL」的十几行：`rememberCover` /
+    `clearCover` / `clearCoverUrl` + 三个状态。**删掉** `beginCoverFlight` /
+    `runViewTransition` / `findCardCover` / `GAME_HERO_VT_NAME` / 诊断日志。
+  - `GamesView` / `GameDetailView`：点击与返回改成普通 `router.push` / `router.back`；
+    移除两个页面的 `view-transition-name`、根节点的 `--lm-game-hero-vt*` 内联变量。
+  - `App.vue`：删掉整段 91 行的 `::view-transition-*` 全局样式（含 reduced-motion 兜底）。
+  - 测试改为覆盖新的最小契约（4 条），不再断言 CSS 里存在过渡名。
+- **保留**：`activeCoverUrl` 仍把卡片封面传给详情页做**首帧占位** —— 这与动画无关，
+  是「点进去立刻有图，而不是先灰块再出图」，去掉反而会退步。
+- **教训**：动画参数化到第 4 轮仍不满意时，应该先问「要不要这个动画」，
+  而不是继续调参数。这次是用户先提出的。
+
 ## 2026-10-24（八）· 修 Steam 应用内下载：manifest 不再强依赖 CDN 票据 + 错误不再静默
 
 - **commit**: 见本轮提交
@@ -481,7 +521,7 @@
     手改被 `m3Theme.test.ts` 挡下：**颜色是生成的，不是手写的**（沿用同仓库既有主张）。
   - `scrim` 被 `TOKEN_OVERRIDES` 改成半透明 —— 项目里它直接当蒙层底色用。
 - **教训**：改配色后要同步**皮肤白名单** `skinSchema.ts` 的 `COLOR_TOKEN_GROUPS`
-  （`scrim` / `shadow` 有意排除）。文档真源是 [`doc/M3配色系统.md`](doc/M3配色系统.md)。
+  （`scrim` / `shadow` 有意排除）。文档真源是 [`doc/M3配色系统.md`](M3配色系统.md)。
 
 ---
 

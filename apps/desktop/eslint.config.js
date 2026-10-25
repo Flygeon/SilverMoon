@@ -84,6 +84,8 @@ export default [
       "src/components/SourceSheet.vue",
       "src/components/ContextMenu.vue",
       "src/views/SettingsView.vue",
+      // 设置页拆出的分区子组件：m3e-button 的 icon 槽（同 SettingsView.vue）
+      "src/components/settings/SteamSettingsPanel.vue",
       "src/views/NovelStatsView.vue",
       "src/views/StatsView.vue",
       // B5 按钮体系：图标经 m3e-button / m3e-icon-button 的 icon 槽投影

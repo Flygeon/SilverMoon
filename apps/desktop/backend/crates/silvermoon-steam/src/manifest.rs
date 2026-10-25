@@ -26,6 +26,8 @@
 //! 只需要「读 varint / 跳过未知字段」两件事，用 `prost`/`protobuf` 反而要
 //! 为这些私有结构生成代码。手写 200 行更可控，也能在本机单测覆盖。
 
+use std::io::{Cursor, Read};
+
 use crate::crypto::{decrypt_filename, DEPOT_KEY_LEN};
 
 /// payload section 的 magic
@@ -93,7 +95,56 @@ pub struct ContentManifest {
 /// 文件标志：这是一个目录。
 pub const FLAG_DIRECTORY: u32 = 1;
 
+/// 剥掉 CDN 可能加在 manifest 外层的封装，返回内层字节。
+///
+/// 依次尝试：单条目 zip、gzip。都没有命中返回 `None`（调用方据此报「不是 manifest」）。
+fn unwrap_container(raw: &[u8]) -> Option<Vec<u8>> {
+    if raw.starts_with(b"PK\x03\x04") {
+        return unzip_first_entry(raw);
+    }
+    // gzip：1f 8b
+    if raw.starts_with(&[0x1f, 0x8b]) {
+        let mut out = Vec::new();
+        flate2::read::GzDecoder::new(Cursor::new(raw))
+            .read_to_end(&mut out)
+            .ok()?;
+        return Some(out);
+    }
+    None
+}
+
+/// 取单条目 zip 的第一个条目。
+///
+/// Valve 的 manifest 包固定是「一个条目」，所以不必遍历：
+/// 直接 by_index(0)。读取失败返回 None，由上层报错。
+fn unzip_first_entry(raw: &[u8]) -> Option<Vec<u8>> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(raw)).ok()?;
+    if archive.is_empty() {
+        return None;
+    }
+    let mut entry = archive.by_index(0).ok()?;
+    let mut out = Vec::new();
+    entry.read_to_end(&mut out).ok()?;
+    Some(out)
+}
+
 impl ContentManifest {
+    /// CDN 的 HTTP 响应体 → manifest。
+    ///
+    /// CDN 对 `/depot/<id>/manifest/<gid>/5/<code>` 返回的**不是**裸 manifest：
+    /// 主流节点会套一层单条目 zip（响应首 4 字节为 `PK\x03\x04`），
+    /// 少数边缘节点会直接给明文或 gzip。直接把响应体交给 parse 会失败，
+    /// 报错里只剩一串二进制 —— GameNative 的 cdn_client 也是先 unzip 再解析。
+    ///
+    /// 返回 `None` 表示「不是 manifest」；调用方应把响应体前缀带进错误文案。
+    pub fn parse_response(raw: &[u8]) -> Option<Self> {
+        if let Some(direct) = Self::parse(raw) {
+            return Some(direct);
+        }
+        let unpacked = unwrap_container(raw)?;
+        Self::parse(&unpacked)
+    }
+
     /// 解析原始字节。格式不对返回 `None`（不 panic）。
     pub fn parse(raw: &[u8]) -> Option<Self> {
         let mut manifest = Self::default();
@@ -553,5 +604,67 @@ mod tests {
         let raw = build_manifest();
         let manifest = ContentManifest::parse(&raw).unwrap();
         assert_eq!(manifest.total_bytes(), 11);
+    }
+
+    /// 把字节包成单条目 zip，模拟 CDN 的真实响应。
+    ///
+    /// 用默认选项（Stored）即可：这条用例要验证的是「能被解封装」，
+    /// 不是压缩算法；写成 Deflated 还要多依赖一个写入侧 feature。
+    fn wrap_zip(inner: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut out));
+            writer
+                .start_file("manifest", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            std::io::Write::write_all(&mut writer, inner).unwrap();
+            writer.finish().unwrap();
+        }
+        out
+    }
+
+    fn wrap_gzip(inner: &[u8]) -> Vec<u8> {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut encoder, inner).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    /// CDN 返回的是 zip 包（首 4 字节 50 4b 03 04）。
+    /// 直接喂给 parse 会失败，用户看到的就是一串二进制 —— 线上报错正是这个。
+    #[test]
+    fn parse_response_unwraps_zip() {
+        let raw = build_manifest();
+        let zipped = wrap_zip(&raw);
+        assert_eq!(&zipped[..4], b"PK\x03\x04");
+        // 裸 parse 必须失败，证明「不解封装真的不行」
+        assert!(ContentManifest::parse(&zipped).is_none());
+        let manifest = ContentManifest::parse_response(&zipped).expect("解 zip 后应能解析");
+        assert_eq!(manifest.metadata.depot_id, 7);
+        assert_eq!(manifest.metadata.gid_manifest, 9);
+        assert_eq!(manifest.files.len(), 1);
+    }
+
+    #[test]
+    fn parse_response_unwraps_gzip() {
+        let raw = build_manifest();
+        let gz = wrap_gzip(&raw);
+        assert_eq!(&gz[..2], &[0x1f, 0x8b]);
+        let manifest = ContentManifest::parse_response(&gz).expect("解 gzip 后应能解析");
+        assert_eq!(manifest.metadata.depot_id, 7);
+    }
+
+    /// 明文（部分边缘节点直出）必须照常走通 —— 不能为了支持 zip 把原路径弄坏。
+    #[test]
+    fn parse_response_accepts_plain_bytes() {
+        let raw = build_manifest();
+        let manifest = ContentManifest::parse_response(&raw).expect("明文应能解析");
+        assert_eq!(manifest.metadata.depot_id, 7);
+    }
+
+    /// 既不是 manifest 也不是可识别的封装 → None（调用方据此报「不是 manifest」）。
+    #[test]
+    fn parse_response_rejects_garbage() {
+        assert!(ContentManifest::parse_response(b"<html>error</html>").is_none());
+        assert!(ContentManifest::parse_response(&[]).is_none());
     }
 }

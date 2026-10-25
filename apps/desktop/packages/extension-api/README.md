@@ -1,5 +1,24 @@
 # @silvermoon/extension-api
 
+> ## ⚠️ 未发布、无消费者（2026-10-25 标注）
+>
+> 本包**尚未发布到 npm**（`npm view @silvermoon/extension-api` → 404），
+> 仓库内也**没有任何消费者**：`example/extensions/` 下三个示例
+> （`hello-world` / `disk-lens` / `skin-manager`）都是手写 `postMessage`，没有一个 import 本包；
+> 根 `tsconfig.json` 的 `include` 只有 `src/**` 与 `shared/**`，`packages/**` **不在 typecheck 链路内**
+> （`npm run lint` 的 `eslint .` 会扫到它，但只做 lint、不做类型检查）。
+>
+> **契约真源是宿主实现，不是本包，也不是 `shared/types.ts`**：
+> `backend/src/commands/extension.rs` 的 `ExtManifest`（`#[serde(rename_all = "camelCase")]`）。
+> 三处已存在漂移 —— 例如 `permissions`：Rust `Option<Vec<String>>` 宽松收全部字符串，
+> 本包收窄成 `ExtensionPermission[]`（`KnownPermission | (string & {})`）；
+> `activationEvents` 在 Rust 是**非 Option** 的 `Vec<String>`（省略即空 → 等同 `["onStartup"]`），
+> 而 `shared/types.ts` 写成 `string[] | null`。**改契约请先改 Rust，再同步这里。**
+>
+> 本包自身可编译（`tsc -p packages/extension-api/tsconfig.json --noEmit` 通过），
+> 但这只证明它**自洽**，不证明它与宿主一致。接线（建示例扩展 + 挂 typecheck 进 lint 链）
+> 需要真机验证「示例扩展能被宿主加载」，尚未做 —— 决策与理由见 `doc/LOG.md` 2026-10-25 条目。
+
 银月（SilverMoon）**扩展作者 SDK**：manifest 类型 + 宿主 iframe 桥客户端 + Vite 构建插件。
 
 对应扩展框架契约 **v2**（`EXT_API_VERSION = 2.0.0`）。

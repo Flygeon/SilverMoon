@@ -98,7 +98,28 @@ pub fn describe_body_prefix(bytes: &[u8], max: usize) -> String {
         )
     } else {
         let hex: String = head.iter().take(16).map(|b| format!("{b:02x}")).collect();
-        format!("二进制 0x{hex}（共 {} 字节）", bytes.len())
+        format!(
+            "{}（魔数 0x{hex}，共 {} 字节）",
+            describe_binary_kind(bytes),
+            bytes.len()
+        )
+    }
+}
+
+/// 认出几个「本该被解封装却没解开」的常见魔数。
+///
+/// manifest 正常路径会先解 zip/gzip（见 `ContentManifest::parse_response`），
+/// 所以错误里再出现这些魔数，说明**解封装失败**，而不是「CDN 给了垃圾」——
+/// 这两种情况的排查方向完全不同，必须在文案里分开。
+fn describe_binary_kind(bytes: &[u8]) -> &'static str {
+    const ZIP: &[u8] = b"PK\x03\x04";
+    const GZIP: &[u8] = &[0x1f, 0x8b];
+    if bytes.starts_with(ZIP) {
+        "ZIP 包（解封装失败）"
+    } else if bytes.starts_with(GZIP) {
+        "gzip 流（解封装失败）"
+    } else {
+        "二进制"
     }
 }
 
@@ -356,6 +377,21 @@ mod tests {
         let text = describe_body_prefix(&body, 120);
         assert!(text.contains("0x1f8b"), "实际：{text}");
         assert!(text.contains('8'), "应带上总长度：{text}");
+    }
+
+    /// 线上事故（2026-10-25）：CDN 返回的 manifest 是 zip，错误里只剩「二进制 0x504b0304」。
+    /// 认出魔数能把「解封装失败」和「CDN 给了垃圾」分开，排查方向完全不同。
+    #[test]
+    fn describe_body_prefix_names_known_containers() {
+        let zip = describe_body_prefix(b"PK\x03\x04\x14\x00\x00\x00", 120);
+        assert!(zip.contains("ZIP"), "应认出 zip：{zip}");
+
+        let gzip = describe_body_prefix(&[0x1f, 0x8b, 0x08, 0x00], 120);
+        assert!(gzip.contains("gzip"), "应认出 gzip：{gzip}");
+
+        // 既不是 zip/gzip 也不是文本：保持「二进制」这个中性说法
+        let other = describe_body_prefix(&[0x00, 0x01, 0x02, 0x03], 120);
+        assert!(other.starts_with("二进制"), "实际：{other}");
     }
 
     #[test]

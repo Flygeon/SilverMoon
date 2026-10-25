@@ -6,14 +6,7 @@ import SteamLoginPanel from "@/components/SteamLoginPanel.vue";
 import { useSteamStore } from "@/stores/steam";
 import { formatSize } from "@/utils/format";
 import { capabilities, isDesktop } from "@/capabilities";
-import {
-  GAME_HERO_VT_NAME,
-  activeCoverUrl,
-  beginCoverFlight,
-  endCoverFlight,
-  findCardCover,
-  runViewTransition,
-} from "@/utils/gameHeroTransition";
+import { activeCoverUrl } from "@/utils/gameHeroTransition";
 import { translate } from "@shared/i18n";
 import type { SteamAchievement } from "@shared/types";
 
@@ -257,19 +250,10 @@ const priceText = computed<string>(() => {
   return d.priceText || "—";
 });
 
-async function goBack(): Promise<void> {
-  const id = numericAppId.value;
-  if (!Number.isNaN(id)) {
-    beginCoverFlight(id, heroImage.value || null, findCardCover(id));
-  }
-  const navigate = () => {
-    if (window.history.length > 1) router.back();
-    else void router.push("/games");
-  };
-  await runViewTransition({
-    navigate,
-    cleanup: endCoverFlight,
-  });
+function goBack(): void {
+  // 有历史就退一步；直接进详情（无历史）时回游戏列表，避免退到空页
+  if (window.history.length > 1) router.back();
+  else void router.push("/games");
 }
 
 async function primaryAction(): Promise<void> {
@@ -523,14 +507,7 @@ watch(
 </script>
 
 <template>
-  <div
-    class="detail-view"
-    :style="{
-      '--lm-game-hero-vt': GAME_HERO_VT_NAME,
-      '--lm-game-hero-vt-duration': 'var(--md-sys-motion-duration-spring-spatial)',
-      '--lm-game-hero-vt-easing': 'var(--md-sys-motion-spring-spatial)',
-    }"
-  >
+  <div class="detail-view">
     <div v-if="invalidAppId" class="bar error" role="alert">
       <span class="material-symbols-outlined">error</span>
       <span class="bar-text">{{ t("games.detail.invalidId") }}</span>
@@ -994,7 +971,6 @@ watch(
   max-width: 1280px;
   margin: 0 auto;
   padding-bottom: 32px;
-  view-transition-name: game-detail-page;
 }
 
 .bar {
@@ -1033,7 +1009,6 @@ watch(
   width: 100%;
   aspect-ratio: 21 / 9;
   border-radius: var(--md-sys-shape-corner-large);
-  view-transition-name: game-cover;
 }
 .skeleton-bar {
   display: flex;
@@ -1069,7 +1044,6 @@ watch(
   aspect-ratio: 21 / 9;
   background: var(--md-sys-color-surface-container-high);
   color: var(--md-sys-color-outline);
-  view-transition-name: game-cover;
 }
 .hero-img {
   width: 100%;

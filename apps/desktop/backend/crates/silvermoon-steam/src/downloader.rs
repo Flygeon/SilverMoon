@@ -163,7 +163,7 @@ fn fetch_manifest(
             Ok(bytes) if bytes.is_empty() => {
                 failures.push(format!("{}: 响应体为空", server.host));
             }
-            Ok(bytes) => match ContentManifest::parse(&bytes) {
+            Ok(bytes) => match ContentManifest::parse_response(&bytes) {
                 Some(manifest) => return Ok(manifest),
                 None => failures.push(format!(
                     "{}: 响应不是 manifest（{}）",
