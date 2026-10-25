@@ -3,10 +3,13 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::cdn::{
-    chunk_url, describe_body_prefix, fetch_bytes, fetch_servers, manifest_url, CdnServer,
+    cdn_client, chunk_url, describe_body_prefix, fetch_bytes_with_client, fetch_servers,
+    manifest_url, CdnServer,
 };
 use crate::chunk::process_chunk;
 use crate::cm::CmManager;
@@ -45,6 +48,12 @@ pub struct DownloadResult {
     pub depots: Vec<DepotResult>,
     pub bytes_written: u64,
 }
+
+/// 单个文件内同时在 CDN 上飞行的 chunk 请求数。
+///
+/// Steam chunk 通常约 1 MiB；8 路能把高延迟链路的带宽填起来，同时把内存上限
+/// 控制在一个文件的有限窗口内。文件仍按 manifest 顺序落盘，避免写入竞态。
+const CHUNK_WORKERS: usize = 8;
 
 /// 建目录，并处理「同名文件已存在」的冲突。
 ///
@@ -149,6 +158,135 @@ fn emit_progress(
     });
 }
 
+fn fetch_chunk(
+    client: &reqwest::blocking::Client,
+    task: &DepotTask,
+    servers: &[CdnServer],
+    chunk: &crate::manifest::Chunk,
+    cdn_token: &str,
+) -> Result<Vec<u8>, String> {
+    let mut last_error = String::from("未知错误");
+    for server in servers {
+        let Some(url) = chunk_url(server, task.depot_id, &chunk.sha, cdn_token) else {
+            continue;
+        };
+        match fetch_bytes_with_client(client, &url, 2) {
+            Ok(bytes) if !bytes.is_empty() => {
+                match process_chunk(&bytes, &task.depot_key, chunk.cb_original) {
+                    outcome if outcome.is_ok() => return Ok(outcome.data),
+                    outcome => {
+                        if let Some(error) = outcome.error {
+                            last_error = error;
+                        }
+                    }
+                }
+            }
+            Ok(_) => last_error = "chunk 为空".to_string(),
+            Err(error) => last_error = error.to_string(),
+        }
+    }
+    Err(format!(
+        "chunk {} 下载失败：{last_error}",
+        hex(&chunk.sha)
+    ))
+}
+
+/// 并发抓取一个文件的所有 chunk，并在收到结果时按完成顺序上报进度。
+///
+/// 返回值仍按 manifest 中的 chunk 顺序排列；网络完成顺序不会影响文件内容。
+fn download_file_chunks(
+    task: &DepotTask,
+    file: &crate::manifest::FileMapping,
+    servers: &[CdnServer],
+    cdn_token: &str,
+    done_bytes: u64,
+    depot_total: u64,
+    progress: &mut Option<ProgressFn<'_>>,
+    gate: &mut ProgressGate,
+) -> Result<Vec<u8>, String> {
+    if file.chunks.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let worker_count = CHUNK_WORKERS.min(file.chunks.len()).max(1);
+    let (tx, rx) = mpsc::channel::<(usize, Result<Vec<u8>, String>)>();
+    let mut ordered: Vec<Option<Vec<u8>>> = vec![None; file.chunks.len()];
+
+    thread::scope(|scope| {
+        for worker in 0..worker_count {
+            let tx = tx.clone();
+            scope.spawn(move || {
+                let client = match cdn_client() {
+                    Ok(client) => client,
+                    Err(error) => {
+                        for index in (worker..file.chunks.len()).step_by(worker_count) {
+                            let _ = tx.send((index, Err(error.to_string())));
+                        }
+                        return;
+                    }
+                };
+                for index in (worker..file.chunks.len()).step_by(worker_count) {
+                    let result = fetch_chunk(&client, task, servers, &file.chunks[index], cdn_token);
+                    if tx.send((index, result)).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+        drop(tx);
+
+        let mut received = 0usize;
+        let mut downloaded_file_bytes = 0u64;
+        let mut first_error: Option<String> = None;
+        while received < file.chunks.len() {
+            let (index, result) = rx
+                .recv()
+                .map_err(|_| "chunk 工作线程意外退出".to_string())?;
+            received += 1;
+            match result {
+                Ok(data) => {
+                    downloaded_file_bytes += data.len() as u64;
+                    ordered[index] = Some(data);
+                    if let Some(cb) = progress.as_deref_mut() {
+                        emit_progress(
+                            cb,
+                            gate,
+                            task.depot_id,
+                            done_bytes + downloaded_file_bytes,
+                            depot_total,
+                            &file.filename,
+                        );
+                    }
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+
+        if let Some(error) = first_error {
+            return Err(format!("文件 {} 的 {error}", file.filename));
+        }
+        Ok(())
+    })?;
+
+    assemble_chunks(file, ordered)
+}
+
+fn assemble_chunks(
+    file: &crate::manifest::FileMapping,
+    ordered: Vec<Option<Vec<u8>>>,
+) -> Result<Vec<u8>, String> {
+    let mut file_bytes = Vec::with_capacity(file.size as usize);
+    for data in ordered {
+        let Some(data) = data else {
+            return Err(format!("文件 {} 缺少 chunk 数据", file.filename));
+        };
+        file_bytes.extend_from_slice(&data);
+    }
+    Ok(file_bytes)
+}
+
 fn notes_suffix(notes: &[String]) -> String {
     if notes.is_empty() {
         String::new()
@@ -168,6 +306,15 @@ fn fetch_manifest(
     request_code: u64,
     cdn_token: &str,
 ) -> Result<ContentManifest, ManifestFailure> {
+    let client = match cdn_client() {
+        Ok(client) => client,
+        Err(error) => {
+            return Err(ManifestFailure {
+                reason: error.to_string(),
+                auth_denied: false,
+            })
+        }
+    };
     let mut failures: Vec<String> = Vec::new();
     let mut auth_denied = false;
     let mut tried = 0usize;
@@ -183,7 +330,7 @@ fn fetch_manifest(
             continue;
         };
         tried += 1;
-        match fetch_bytes(&url, 2) {
+        match fetch_bytes_with_client(&client, &url, 2) {
             Ok(bytes) if bytes.is_empty() => {
                 failures.push(format!("{}: 响应体为空", server.host));
             }
@@ -258,8 +405,6 @@ pub fn download_depot(
     };
     let mut done_bytes = 0u64;
     let mut gate = ProgressGate::new();
-    let mut last_error = String::from("未知错误");
-
     for file in &manifest.files {
         if file.flags & FLAG_DIRECTORY == 0 {
             continue;
@@ -289,51 +434,16 @@ pub fn download_depot(
             }
         }
 
-        let mut file_bytes: Vec<u8> = Vec::with_capacity(file.size as usize);
-        for chunk in &file.chunks {
-            let mut chunk_data: Option<Vec<u8>> = None;
-            for server in servers {
-                let Some(url) = chunk_url(server, task.depot_id, &chunk.sha, cdn_token) else {
-                    continue;
-                };
-                match fetch_bytes(&url, 2) {
-                    Ok(bytes) if !bytes.is_empty() => {
-                        match process_chunk(&bytes, &task.depot_key, chunk.cb_original) {
-                            outcome if outcome.is_ok() => {
-                                chunk_data = Some(outcome.data);
-                                break;
-                            }
-                            outcome => {
-                                if let Some(error) = outcome.error {
-                                    last_error = error;
-                                }
-                            }
-                        }
-                    }
-                    Ok(_) => last_error = "chunk 为空".to_string(),
-                    Err(error) => last_error = format!("{error}"),
-                }
-            }
-            let Some(data) = chunk_data else {
-                return Err(format!(
-                    "文件 {} 的 chunk {} 下载失败：{last_error}",
-                    file.filename,
-                    hex(&chunk.sha)
-                ));
-            };
-            file_bytes.extend_from_slice(&data);
-
-            if let Some(cb) = progress.as_deref_mut() {
-                emit_progress(
-                    cb,
-                    &mut gate,
-                    task.depot_id,
-                    done_bytes + file_bytes.len() as u64,
-                    depot_total,
-                    &file.filename,
-                );
-            }
-        }
+        let file_bytes = download_file_chunks(
+            task,
+            file,
+            servers,
+            cdn_token,
+            done_bytes,
+            depot_total,
+            &mut progress,
+            &mut gate,
+        )?;
 
         if file_bytes.len() as u64 != file.size {
             return Err(format!(
@@ -412,6 +522,13 @@ pub fn download_app(
         return Err("CM 会话不可用".to_string());
     };
 
+    let total = tasks.len() as u32;
+    on_progress(DownloadProgress {
+        depots_total: total,
+        current_file: "准备连接 Steam CDN".to_string(),
+        ..Default::default()
+    });
+
     let cell_id = session.cell_id();
     let servers = fetch_servers(cell_id, 10).map_err(|e| format!("{e}"))?;
     if servers.is_empty() {
@@ -422,7 +539,6 @@ pub fn download_app(
         .map_err(|e| format!("创建安装目录 {} 失败：{e}", install_dir.display()))?;
 
     let mut overall = DownloadResult::default();
-    let total = tasks.len() as u32;
     let mut skipped: Vec<String> = Vec::new();
 
     for (index, task) in tasks.iter().enumerate() {
@@ -602,6 +718,33 @@ mod tests {
         let root = Path::new("/install");
         assert!(safe_join(root, "/etc/passwd").is_none());
         assert!(safe_join(root, "").is_none());
+    }
+
+    #[test]
+    fn assemble_chunks_preserves_manifest_order() {
+        let file = crate::manifest::FileMapping {
+            filename: "game.bin".into(),
+            size: 5,
+            ..Default::default()
+        };
+        let bytes = assemble_chunks(
+            &file,
+            vec![Some(b"hel".to_vec()), Some(b"lo".to_vec())],
+        )
+        .expect("chunks should assemble");
+        assert_eq!(bytes, b"hello");
+    }
+
+    #[test]
+    fn assemble_chunks_rejects_missing_result() {
+        let file = crate::manifest::FileMapping {
+            filename: "game.bin".into(),
+            size: 5,
+            ..Default::default()
+        };
+        let error = assemble_chunks(&file, vec![Some(b"hel".to_vec()), None])
+            .expect_err("missing chunk must fail");
+        assert!(error.contains("game.bin"));
     }
 
     /// 线上事故（2026-10-25）：安装目录里已有一个同名的**文件**，

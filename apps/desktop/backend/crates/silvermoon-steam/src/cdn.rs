@@ -211,7 +211,7 @@ fn append_token(url: &mut String, cdn_token: &str) {
 ///
 /// 关掉之后请求也不再发 `Accept-Encoding`，拿到的是**原始字节**，
 /// 解密/解压全部由 `process_chunk` 按自己的魔数判断，不与传输层假设耦合。
-fn cdn_client() -> Result<reqwest::blocking::Client, CdnFetchError> {
+pub fn cdn_client() -> Result<reqwest::blocking::Client, CdnFetchError> {
     reqwest::blocking::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .no_gzip()
@@ -227,6 +227,18 @@ fn cdn_client() -> Result<reqwest::blocking::Client, CdnFetchError> {
 
 pub fn fetch_bytes(url: &str, max_attempts: u32) -> Result<Vec<u8>, CdnFetchError> {
     let client = cdn_client()?;
+    fetch_bytes_with_client(&client, url, max_attempts)
+}
+
+/// 使用已创建的连接池抓取字节。
+///
+/// 下载器会同时请求多个 chunk；复用 client 可以保留 keep-alive 连接，
+/// 避免每个 chunk 都重新创建 TLS/连接池。
+pub fn fetch_bytes_with_client(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    max_attempts: u32,
+) -> Result<Vec<u8>, CdnFetchError> {
 
     let mut last = CdnFetchError::default();
     for attempt in 1..=max_attempts.max(1) {
