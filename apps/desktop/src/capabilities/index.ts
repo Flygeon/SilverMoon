@@ -1644,8 +1644,15 @@ export const capabilities = {
     return capabilities.steam<SteamSettings>({ op: "steamSettings" });
   },
 
-  /** 写 Steam 目录设置（目前只有自定义库目录）。 */
-  setSteamSettings(payload: { customRoots?: string[] }): Promise<SteamSettings> {
+  /** 写 Steam 目录与下载设置。 */
+  setSteamSettings(payload: {
+    customRoots?: string[];
+    downloadFileWorkers?: number;
+    downloadChunkWorkers?: number;
+    downloadMaxRequests?: number;
+    downloadRetries?: number;
+    downloadCdnServers?: number;
+  }): Promise<SteamSettings> {
     return capabilities.steam<SteamSettings>({ op: "setSteamSettings", ...payload });
   },
 

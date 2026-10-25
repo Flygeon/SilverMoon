@@ -35,6 +35,60 @@ export function setSettingsLogger(fn: SteamSettingsOptions["log"]): void {
 export interface SteamSettings {
   /** 用户手动添加的库/安装根目录（可多个）。 */
   customRoots: string[];
+  downloadFileWorkers: number;
+  downloadChunkWorkers: number;
+  downloadMaxRequests: number;
+  downloadRetries: number;
+  downloadCdnServers: number;
+}
+
+const DEFAULTS = {
+  downloadFileWorkers: 3,
+  downloadChunkWorkers: 8,
+  downloadMaxRequests: 32,
+  downloadRetries: 2,
+  downloadCdnServers: 10,
+} as const;
+
+function boundedInteger(value: unknown, fallback: number, min: number, max: number): number {
+  const number = typeof value === "number" && Number.isFinite(value) ? Math.round(value) : fallback;
+  return Math.min(max, Math.max(min, number));
+}
+
+function normalizeSteamSettings(value: Partial<SteamSettings> | null | undefined): SteamSettings {
+  const roots = Array.isArray(value?.customRoots)
+    ? value.customRoots.filter(
+        (root): root is string => typeof root === "string" && root.trim().length > 0,
+      )
+    : [];
+  return {
+    customRoots: roots,
+    downloadFileWorkers: boundedInteger(
+      value?.downloadFileWorkers,
+      DEFAULTS.downloadFileWorkers,
+      1,
+      16,
+    ),
+    downloadChunkWorkers: boundedInteger(
+      value?.downloadChunkWorkers,
+      DEFAULTS.downloadChunkWorkers,
+      1,
+      32,
+    ),
+    downloadMaxRequests: boundedInteger(
+      value?.downloadMaxRequests,
+      DEFAULTS.downloadMaxRequests,
+      1,
+      128,
+    ),
+    downloadRetries: boundedInteger(value?.downloadRetries, DEFAULTS.downloadRetries, 1, 5),
+    downloadCdnServers: boundedInteger(
+      value?.downloadCdnServers,
+      DEFAULTS.downloadCdnServers,
+      1,
+      20,
+    ),
+  };
 }
 
 const FILE_NAME = "steam-settings.json";
@@ -45,18 +99,15 @@ function settingsPath(dataDir: string): string {
 
 /** 读设置；不存在或损坏都返回空设置。 */
 export function readSteamSettings(dataDir: string): SteamSettings {
-  if (!dataDir) return { customRoots: [] };
+  if (!dataDir) return { customRoots: [], ...DEFAULTS };
   const file = settingsPath(dataDir);
-  if (!existsSync(file)) return { customRoots: [] };
+  if (!existsSync(file)) return { customRoots: [], ...DEFAULTS };
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<SteamSettings> | null;
-    const roots = Array.isArray(parsed?.customRoots)
-      ? parsed.customRoots.filter((r): r is string => typeof r === "string" && r.trim().length > 0)
-      : [];
-    return { customRoots: roots };
+    return normalizeSteamSettings(parsed);
   } catch (error) {
     logger?.("[steam] 读取 steam-settings.json 失败，按空设置处理", error);
-    return { customRoots: [] };
+    return { customRoots: [], ...DEFAULTS };
   }
 }
 
@@ -66,7 +117,7 @@ export function writeSteamSettings(dataDir: string, settings: SteamSettings): vo
   const file = settingsPath(dataDir);
   const tmp = `${file}.tmp`;
   try {
-    writeFileSync(tmp, JSON.stringify(settings, null, 2), "utf8");
+    writeFileSync(tmp, JSON.stringify(normalizeSteamSettings(settings), null, 2), "utf8");
     renameSync(tmp, file);
   } catch (error) {
     logger?.("[steam] 写入 steam-settings.json 失败", error);
@@ -79,6 +130,11 @@ export interface SteamSettingsState {
   customRoots: string[];
   /** 是否自动识别到了（而不是靠用户手动添加） */
   detected: boolean;
+  downloadFileWorkers: number;
+  downloadChunkWorkers: number;
+  downloadMaxRequests: number;
+  downloadRetries: number;
+  downloadCdnServers: number;
 }
 
 export function steamSettingsState(dataDir: string): SteamSettingsState {
@@ -87,6 +143,11 @@ export function steamSettingsState(dataDir: string): SteamSettingsState {
   return {
     steamRoot: root,
     customRoots: settings.customRoots,
+    downloadFileWorkers: settings.downloadFileWorkers,
+    downloadChunkWorkers: settings.downloadChunkWorkers,
+    downloadMaxRequests: settings.downloadMaxRequests,
+    downloadRetries: settings.downloadRetries,
+    downloadCdnServers: settings.downloadCdnServers,
     detected: Boolean(root),
   };
 }
@@ -97,9 +158,14 @@ export function updateSteamSettings(
   patch: Partial<SteamSettings>,
 ): SteamSettingsState {
   const current = readSteamSettings(dataDir);
-  const next: SteamSettings = {
+  const next = normalizeSteamSettings({
     customRoots: patch.customRoots ?? current.customRoots,
-  };
+    downloadFileWorkers: patch.downloadFileWorkers ?? current.downloadFileWorkers,
+    downloadChunkWorkers: patch.downloadChunkWorkers ?? current.downloadChunkWorkers,
+    downloadMaxRequests: patch.downloadMaxRequests ?? current.downloadMaxRequests,
+    downloadRetries: patch.downloadRetries ?? current.downloadRetries,
+    downloadCdnServers: patch.downloadCdnServers ?? current.downloadCdnServers,
+  });
   // 去重 + 去空
   const seen = new Set<string>();
   next.customRoots = next.customRoots.filter((r) => {

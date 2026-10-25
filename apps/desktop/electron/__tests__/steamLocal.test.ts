@@ -179,12 +179,67 @@ describe("Steam 设置持久化", () => {
   });
 
   it("没有文件时返回空设置", () => {
-    expect(readSteamSettings(dir).customRoots).toEqual([]);
+    expect(readSteamSettings(dir)).toMatchObject({
+      customRoots: [],
+      downloadFileWorkers: 3,
+      downloadChunkWorkers: 8,
+      downloadMaxRequests: 32,
+      downloadRetries: 2,
+      downloadCdnServers: 10,
+    });
   });
 
   it("写入后读回一致", () => {
-    updateSteamSettings(dir, { customRoots: ["C:\\A", "D:\\B"] });
-    expect(readSteamSettings(dir).customRoots).toEqual(["C:\\A", "D:\\B"]);
+    updateSteamSettings(dir, {
+      customRoots: ["C:\\A", "D:\\B"],
+      downloadFileWorkers: 5,
+      downloadChunkWorkers: 12,
+      downloadMaxRequests: 64,
+      downloadRetries: 4,
+      downloadCdnServers: 15,
+    });
+    expect(readSteamSettings(dir)).toMatchObject({
+      customRoots: ["C:\\A", "D:\\B"],
+      downloadFileWorkers: 5,
+      downloadChunkWorkers: 12,
+      downloadMaxRequests: 64,
+      downloadRetries: 4,
+      downloadCdnServers: 15,
+    });
+  });
+
+  it("写入时将下载参数归一到允许范围", () => {
+    const state = updateSteamSettings(dir, {
+      downloadFileWorkers: 99,
+      downloadChunkWorkers: 0,
+      downloadMaxRequests: 129,
+      downloadRetries: -1,
+      downloadCdnServers: 25,
+    });
+    expect(state).toMatchObject({
+      downloadFileWorkers: 16,
+      downloadChunkWorkers: 1,
+      downloadMaxRequests: 128,
+      downloadRetries: 1,
+      downloadCdnServers: 20,
+    });
+    expect(readSteamSettings(dir)).toMatchObject({
+      downloadFileWorkers: 16,
+      downloadChunkWorkers: 1,
+      downloadMaxRequests: 128,
+      downloadRetries: 1,
+      downloadCdnServers: 20,
+    });
+  });
+
+  it("只更新目录时保留已有下载参数", () => {
+    updateSteamSettings(dir, { downloadMaxRequests: 64, downloadFileWorkers: 7 });
+    updateSteamSettings(dir, { customRoots: ["D:\\SteamLibrary"] });
+    expect(readSteamSettings(dir)).toMatchObject({
+      customRoots: ["D:\\SteamLibrary"],
+      downloadFileWorkers: 7,
+      downloadMaxRequests: 64,
+    });
   });
 
   it("去重（大小写不敏感）并去掉空白项", () => {

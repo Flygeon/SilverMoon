@@ -645,6 +645,7 @@ const handlers: Record<string, Handler> = {
           };
         }
         const cred = { accountName: cmSaved.accountName, token: cmSaved.refreshToken };
+        const steamSettings = readSteamSettings(dataDir);
 
         const depotReply = await callSidecar("steam_app_depots", {
           accountName: cred.accountName,
@@ -667,6 +668,11 @@ const handlers: Record<string, Handler> = {
             depotKey: "",
             appId,
           })),
+          downloadFileWorkers: steamSettings.downloadFileWorkers,
+          downloadChunkWorkers: steamSettings.downloadChunkWorkers,
+          downloadMaxRequests: steamSettings.downloadMaxRequests,
+          downloadRetries: steamSettings.downloadRetries,
+          downloadCdnServers: steamSettings.downloadCdnServers,
         });
         if (reply.ok && (reply.data as { ok?: boolean } | null)?.ok) {
           invalidateLocalLibraryCache();
@@ -697,8 +703,19 @@ const handlers: Record<string, Handler> = {
         const roots = Array.isArray(payload.customRoots)
           ? payload.customRoots.map((r) => String(r))
           : undefined;
+        const settingNumber = (key: string) =>
+          typeof payload[key] === "number" && Number.isFinite(payload[key])
+            ? (payload[key] as number)
+            : undefined;
         invalidateLocalLibraryCache();
-        return updateSteamSettings(dataDir, roots ? { customRoots: roots } : {});
+        return updateSteamSettings(dataDir, {
+          ...(roots ? { customRoots: roots } : {}),
+          downloadFileWorkers: settingNumber("downloadFileWorkers"),
+          downloadChunkWorkers: settingNumber("downloadChunkWorkers"),
+          downloadMaxRequests: settingNumber("downloadMaxRequests"),
+          downloadRetries: settingNumber("downloadRetries"),
+          downloadCdnServers: settingNumber("downloadCdnServers"),
+        });
       }
       case "pickSteamRoot": {
         const result = await dialog.showOpenDialog({

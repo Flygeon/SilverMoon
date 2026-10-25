@@ -1758,6 +1758,11 @@ export interface SteamSettings {
   steamRoot?: string | null;
   /** 用户手动追加的库目录 */
   customRoots: string[];
+  downloadFileWorkers: number;
+  downloadChunkWorkers: number;
+  downloadMaxRequests: number;
+  downloadRetries: number;
+  downloadCdnServers: number;
   /** 是否自动识别成功（决定设置页显示路径还是「未识别」） */
   detected: boolean;
 }

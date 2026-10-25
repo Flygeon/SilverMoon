@@ -49,12 +49,48 @@ pub struct DownloadResult {
     pub bytes_written: u64,
 }
 
-/// 单个文件内同时在 CDN 上飞行的 chunk 请求数。
+/// 同时下载文件数、单文件 chunk 并发与整个 depot 的总请求上限。
 ///
-/// Steam chunk 通常约 1 MiB；8 路能把高延迟链路的带宽填起来，同时把内存上限
-/// 控制在一个文件的有限窗口内。文件仍按 manifest 顺序落盘，避免写入竞态。
-const CHUNK_WORKERS: usize = 8;
-const FILE_WORKERS: usize = 3;
+/// `max_requests` 约束嵌套的文件 / chunk worker，避免两个设置相乘后启动数百个请求。
+/// 文件完成后由主线程落盘，下载中的分块进度也由该线程统一上报。
+#[derive(Debug, Clone, Copy)]
+pub struct DownloadOptions {
+    pub file_workers: usize,
+    pub chunk_workers: usize,
+    pub max_requests: usize,
+    pub retries: u32,
+    pub cdn_servers: u32,
+}
+
+impl Default for DownloadOptions {
+    fn default() -> Self {
+        Self {
+            file_workers: 3,
+            chunk_workers: 8,
+            max_requests: 32,
+            retries: 2,
+            cdn_servers: 10,
+        }
+    }
+}
+
+fn effective_workers(options: DownloadOptions, pending_files: usize) -> (usize, usize) {
+    if pending_files == 0 {
+        return (0, 0);
+    }
+    let request_budget = options.max_requests.clamp(1, 128);
+    let file_workers = options
+        .file_workers
+        .clamp(1, 16)
+        .min(pending_files)
+        .min(request_budget);
+    let chunk_workers = options
+        .chunk_workers
+        .clamp(1, 32)
+        .min(request_budget / file_workers)
+        .max(1);
+    (file_workers, chunk_workers)
+}
 
 /// 建目录，并处理「同名文件已存在」的冲突。
 ///
@@ -165,13 +201,14 @@ fn fetch_chunk(
     servers: &[CdnServer],
     chunk: &crate::manifest::Chunk,
     cdn_token: &str,
+    retries: u32,
 ) -> Result<Vec<u8>, String> {
     let mut last_error = String::from("未知错误");
     for server in servers {
         let Some(url) = chunk_url(server, task.depot_id, &chunk.sha, cdn_token) else {
             continue;
         };
-        match fetch_bytes_with_client(client, &url, 2) {
+        match fetch_bytes_with_client(client, &url, retries) {
             Ok(bytes) if !bytes.is_empty() => {
                 match process_chunk(&bytes, &task.depot_key, chunk.cb_original) {
                     outcome if outcome.is_ok() => return Ok(outcome.data),
@@ -186,10 +223,7 @@ fn fetch_chunk(
             Err(error) => last_error = error.to_string(),
         }
     }
-    Err(format!(
-        "chunk {} 下载失败：{last_error}",
-        hex(&chunk.sha)
-    ))
+    Err(format!("chunk {} 下载失败：{last_error}", hex(&chunk.sha)))
 }
 
 /// 并发抓取一个文件的所有 chunk，并在收到结果时按完成顺序上报进度。
@@ -200,16 +234,14 @@ fn download_file_chunks(
     file: &crate::manifest::FileMapping,
     servers: &[CdnServer],
     cdn_token: &str,
-    done_bytes: u64,
-    depot_total: u64,
-    progress: &mut Option<ProgressFn<'_>>,
-    gate: &mut ProgressGate,
+    options: DownloadOptions,
+    on_chunk_progress: &mut dyn FnMut(u64),
 ) -> Result<Vec<u8>, String> {
     if file.chunks.is_empty() {
         return Ok(Vec::new());
     }
 
-    let worker_count = CHUNK_WORKERS.min(file.chunks.len()).max(1);
+    let worker_count = options.chunk_workers.min(file.chunks.len()).max(1);
     let (tx, rx) = mpsc::channel::<(usize, Result<Vec<u8>, String>)>();
     let mut ordered: Vec<Option<Vec<u8>>> = vec![None; file.chunks.len()];
 
@@ -227,7 +259,14 @@ fn download_file_chunks(
                     }
                 };
                 for index in (worker..file.chunks.len()).step_by(worker_count) {
-                    let result = fetch_chunk(&client, task, servers, &file.chunks[index], cdn_token);
+                    let result = fetch_chunk(
+                        &client,
+                        task,
+                        servers,
+                        &file.chunks[index],
+                        cdn_token,
+                        options.retries,
+                    );
                     if tx.send((index, result)).is_err() {
                         return;
                     }
@@ -248,16 +287,7 @@ fn download_file_chunks(
                 Ok(data) => {
                     downloaded_file_bytes += data.len() as u64;
                     ordered[index] = Some(data);
-                    if let Some(cb) = progress.as_deref_mut() {
-                        emit_progress(
-                            cb,
-                            gate,
-                            task.depot_id,
-                            done_bytes + downloaded_file_bytes,
-                            depot_total,
-                            &file.filename,
-                        );
-                    }
+                    on_chunk_progress(downloaded_file_bytes);
                 }
                 Err(error) => {
                     first_error.get_or_insert(error);
@@ -272,6 +302,17 @@ fn download_file_chunks(
     })?;
 
     assemble_chunks(file, ordered)
+}
+
+enum FileWorkerMessage {
+    Progress {
+        position: usize,
+        downloaded: u64,
+    },
+    Finished {
+        position: usize,
+        bytes: Result<Vec<u8>, String>,
+    },
 }
 
 fn assemble_chunks(
@@ -400,6 +441,7 @@ pub fn download_depot(
     mut manifest: ContentManifest,
     cdn_token: &str,
     mut progress: Option<ProgressFn<'_>>,
+    options: DownloadOptions,
 ) -> Result<DepotResult, String> {
     if servers.is_empty() {
         return Err("没有可用的 CDN 服务器".to_string());
@@ -461,24 +503,34 @@ pub fn download_depot(
         return Ok(result);
     }
 
-    let (tx, rx) = mpsc::channel::<(crate::manifest::FileMapping, PathBuf, Result<Vec<u8>, String>)>();
-    let worker_count = FILE_WORKERS.min(pending.len()).max(1);
+    let (worker_count, chunk_workers) = effective_workers(options, pending.len());
+    let (tx, rx) = mpsc::sync_channel::<FileWorkerMessage>(worker_count.max(1));
+    let worker_options = DownloadOptions {
+        chunk_workers,
+        ..options
+    };
     thread::scope(|scope| {
         for worker in 0..worker_count {
             let tx = tx.clone();
             scope.spawn(move || {
                 for position in (worker..pending.len()).step_by(worker_count) {
-                    let (file, target) = &pending[position];
-                    let bytes = download_file_chunks(
-                        task,
-                        file,
-                        servers,
-                        cdn_token,
-                        0,
-                        depot_total,
-                        &mut None,
-                        &mut ProgressGate::new(),
-                    )
+                    let file = &pending[position].0;
+                    let bytes = {
+                        let mut report_progress = |downloaded| {
+                            let _ = tx.send(FileWorkerMessage::Progress {
+                                position,
+                                downloaded,
+                            });
+                        };
+                        download_file_chunks(
+                            task,
+                            file,
+                            servers,
+                            cdn_token,
+                            worker_options,
+                            &mut report_progress,
+                        )
+                    }
                     .and_then(|bytes| {
                         if bytes.len() as u64 != file.size {
                             Err(format!(
@@ -491,7 +543,10 @@ pub fn download_depot(
                             Ok(bytes)
                         }
                     });
-                    if tx.send((file.clone(), target.clone(), bytes)).is_err() {
+                    if tx
+                        .send(FileWorkerMessage::Finished { position, bytes })
+                        .is_err()
+                    {
                         return;
                     }
                 }
@@ -499,24 +554,51 @@ pub fn download_depot(
         }
         drop(tx);
 
-        for _ in 0..pending.len() {
-            let (file, target, bytes) = rx
+        let mut completed_files = 0;
+        let mut in_flight_bytes = vec![0u64; pending.len()];
+        while completed_files < pending.len() {
+            match rx
                 .recv()
-                .map_err(|_| "文件下载 worker 意外退出".to_string())?;
-            let file_bytes = bytes?;
-            write_file_atomically(&target, &file_bytes)?;
-            result.files_written += 1;
-            result.bytes_written += file_bytes.len() as u64;
-            done_bytes += file_bytes.len() as u64;
-            if let Some(cb) = progress.as_deref_mut() {
-                emit_progress(
-                    cb,
-                    &mut gate,
-                    task.depot_id,
-                    done_bytes,
-                    depot_total,
-                    &file.filename,
-                );
+                .map_err(|_| "文件下载 worker 意外退出".to_string())?
+            {
+                FileWorkerMessage::Progress {
+                    position,
+                    downloaded,
+                } => {
+                    in_flight_bytes[position] = downloaded;
+                    if let Some(cb) = progress.as_deref_mut() {
+                        let active_bytes = in_flight_bytes.iter().sum::<u64>();
+                        emit_progress(
+                            cb,
+                            &mut gate,
+                            task.depot_id,
+                            done_bytes + active_bytes,
+                            depot_total,
+                            &pending[position].0.filename,
+                        );
+                    }
+                }
+                FileWorkerMessage::Finished { position, bytes } => {
+                    let (file, target) = &pending[position];
+                    let file_bytes = bytes?;
+                    write_file_atomically(target, &file_bytes)?;
+                    in_flight_bytes[position] = 0;
+                    result.files_written += 1;
+                    result.bytes_written += file_bytes.len() as u64;
+                    done_bytes += file_bytes.len() as u64;
+                    completed_files += 1;
+                    if let Some(cb) = progress.as_deref_mut() {
+                        let active_bytes = in_flight_bytes.iter().sum::<u64>();
+                        emit_progress(
+                            cb,
+                            &mut gate,
+                            task.depot_id,
+                            done_bytes + active_bytes,
+                            depot_total,
+                            &file.filename,
+                        );
+                    }
+                }
             }
         }
         Ok::<(), String>(())
@@ -545,6 +627,7 @@ pub fn download_app(
     access_token: &str,
     tasks: &[DepotTask],
     install_dir: &Path,
+    options: DownloadOptions,
     mut on_progress: impl FnMut(DownloadProgress),
 ) -> Result<DownloadResult, String> {
     use crate::cm_requests::{fetch_cdn_auth_token, fetch_manifest_request_code};
@@ -565,7 +648,7 @@ pub fn download_app(
     });
 
     let cell_id = session.cell_id();
-    let servers = fetch_servers(cell_id, 10).map_err(|e| format!("{e}"))?;
+    let servers = fetch_servers(cell_id, options.cdn_servers).map_err(|e| format!("{e}"))?;
     if servers.is_empty() {
         return Err("Steam 未返回任何 CDN 服务器".to_string());
     }
@@ -695,6 +778,7 @@ pub fn download_app(
                 p.depots_total = total;
                 on_progress(p);
             }),
+            options,
         ) {
             Ok(result) => {
                 overall.bytes_written += result.bytes_written;
@@ -726,6 +810,26 @@ pub fn download_app(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effective_workers_respects_total_request_budget() {
+        let options = DownloadOptions {
+            file_workers: 16,
+            chunk_workers: 32,
+            max_requests: 10,
+            ..Default::default()
+        };
+        let (files, chunks) = effective_workers(options, 20);
+        assert_eq!((files, chunks), (10, 1));
+        assert!(files * chunks <= options.max_requests);
+    }
+
+    #[test]
+    fn effective_workers_keeps_configured_parallelism_when_budget_allows() {
+        let options = DownloadOptions::default();
+        assert_eq!(effective_workers(options, 20), (3, 8));
+        assert_eq!(effective_workers(options, 0), (0, 0));
+    }
 
     #[test]
     fn safe_join_accepts_normal_relative_paths() {
@@ -762,11 +866,8 @@ mod tests {
             size: 5,
             ..Default::default()
         };
-        let bytes = assemble_chunks(
-            &file,
-            vec![Some(b"hel".to_vec()), Some(b"lo".to_vec())],
-        )
-        .expect("chunks should assemble");
+        let bytes = assemble_chunks(&file, vec![Some(b"hel".to_vec()), Some(b"lo".to_vec())])
+            .expect("chunks should assemble");
         assert_eq!(bytes, b"hello");
     }
 

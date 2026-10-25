@@ -145,6 +145,11 @@ pub async fn steam_download(
     access_token: String,
     install_dir: String,
     depots: Vec<DepotTaskInput>,
+    download_file_workers: Option<usize>,
+    download_chunk_workers: Option<usize>,
+    download_max_requests: Option<usize>,
+    download_retries: Option<u32>,
+    download_cdn_servers: Option<u32>,
 ) -> Result<DownloadOutcome, String> {
     use silvermoon_steam::{download_app, DepotTask};
 
@@ -195,6 +200,13 @@ pub async fn steam_download(
     }
 
     let host = app.clone();
+    let options = silvermoon_steam::downloader::DownloadOptions {
+        file_workers: download_file_workers.unwrap_or(3).clamp(1, 16),
+        chunk_workers: download_chunk_workers.unwrap_or(8).clamp(1, 32),
+        max_requests: download_max_requests.unwrap_or(32).clamp(1, 128),
+        retries: download_retries.unwrap_or(2).clamp(1, 5),
+        cdn_servers: download_cdn_servers.unwrap_or(10).clamp(1, 20),
+    };
     let result = tokio::task::spawn_blocking(move || {
         download_app(
             // 全局 runtime：CM 连接是进程级单例，必须与它同生命周期
@@ -204,6 +216,7 @@ pub async fn steam_download(
             &access_token,
             &tasks,
             &target,
+            options,
             |progress| {
                 // 进度事件名必须与前端 listen 一致（改名不报错、只静默失效）
                 let _ = host.emit(

@@ -32,6 +32,15 @@ const emit = defineEmits<{ notify: [message: string] }>();
 
 const settings = useSettingsStore();
 
+type DownloadSpeedPreset = "slow" | "medium" | "fast" | "blazing" | "custom";
+const DOWNLOAD_SPEED_PRESETS = { slow: 6, medium: 16, fast: 32, blazing: 128 } as const;
+
+function speedPresetFor(maxRequests: number): DownloadSpeedPreset {
+  return (Object.entries(DOWNLOAD_SPEED_PRESETS).find(
+    ([, requests]) => requests === maxRequests,
+  )?.[0] ?? "custom") as DownloadSpeedPreset;
+}
+
 function t(key: string) {
   return translate(settings.lang, key);
 }
@@ -40,17 +49,60 @@ const steamSettings = ref<SteamSettings | null>(null);
 const steamSaving = ref(false);
 /** 未保存的自定义目录草稿（与已保存值分开，取消时可直接丢弃） */
 const steamRootsDraft = ref<string[]>([]);
+const downloadDraft = ref({
+  fileWorkers: 3,
+  chunkWorkers: 8,
+  maxRequests: 32,
+  retries: 2,
+  cdnServers: 10,
+});
+const downloadSpeedPreset = ref<DownloadSpeedPreset>("fast");
+
+function applyDownloadSpeedPreset(): void {
+  const requests =
+    DOWNLOAD_SPEED_PRESETS[downloadSpeedPreset.value as keyof typeof DOWNLOAD_SPEED_PRESETS];
+  if (requests) downloadDraft.value.maxRequests = requests;
+}
+
+function normalizeDownloadDraft(): void {
+  const clamp = (value: number, min: number, max: number) =>
+    Math.min(max, Math.max(min, Number.isFinite(value) ? Math.round(value) : min));
+  downloadDraft.value = {
+    fileWorkers: clamp(downloadDraft.value.fileWorkers, 1, 16),
+    chunkWorkers: clamp(downloadDraft.value.chunkWorkers, 1, 32),
+    maxRequests: clamp(downloadDraft.value.maxRequests, 1, 128),
+    retries: clamp(downloadDraft.value.retries, 1, 5),
+    cdnServers: clamp(downloadDraft.value.cdnServers, 1, 20),
+  };
+}
 
 const steamSettingsDirty = computed(() => {
   const saved = steamSettings.value?.customRoots ?? [];
   const draft = steamRootsDraft.value;
-  return draft.length !== saved.length || draft.some((p, i) => p !== saved[i]);
+  const s = steamSettings.value;
+  return (
+    draft.length !== saved.length ||
+    draft.some((p, i) => p !== saved[i]) ||
+    downloadDraft.value.fileWorkers !== s?.downloadFileWorkers ||
+    downloadDraft.value.chunkWorkers !== s?.downloadChunkWorkers ||
+    downloadDraft.value.maxRequests !== s?.downloadMaxRequests ||
+    downloadDraft.value.retries !== s?.downloadRetries ||
+    downloadDraft.value.cdnServers !== s?.downloadCdnServers
+  );
 });
 
 async function loadSteamSettings(): Promise<void> {
   const res = await capabilities.steamSettings();
   steamSettings.value = res;
   steamRootsDraft.value = [...(res.customRoots ?? [])];
+  downloadDraft.value = {
+    fileWorkers: res.downloadFileWorkers,
+    chunkWorkers: res.downloadChunkWorkers,
+    maxRequests: res.downloadMaxRequests,
+    retries: res.downloadRetries,
+    cdnServers: res.downloadCdnServers,
+  };
+  downloadSpeedPreset.value = speedPresetFor(res.downloadMaxRequests);
 }
 
 async function addSteamRoot(): Promise<void> {
@@ -73,9 +125,24 @@ function removeSteamRoot(index: number): void {
 async function saveSteamSettingsDraft(): Promise<void> {
   steamSaving.value = true;
   try {
-    const res = await capabilities.setSteamSettings({ customRoots: steamRootsDraft.value });
+    const res = await capabilities.setSteamSettings({
+      customRoots: steamRootsDraft.value,
+      downloadFileWorkers: downloadDraft.value.fileWorkers,
+      downloadChunkWorkers: downloadDraft.value.chunkWorkers,
+      downloadMaxRequests: downloadDraft.value.maxRequests,
+      downloadRetries: downloadDraft.value.retries,
+      downloadCdnServers: downloadDraft.value.cdnServers,
+    });
     steamSettings.value = res;
     steamRootsDraft.value = [...(res.customRoots ?? [])];
+    downloadDraft.value = {
+      fileWorkers: res.downloadFileWorkers,
+      chunkWorkers: res.downloadChunkWorkers,
+      maxRequests: res.downloadMaxRequests,
+      retries: res.downloadRetries,
+      cdnServers: res.downloadCdnServers,
+    };
+    downloadSpeedPreset.value = speedPresetFor(res.downloadMaxRequests);
     emit("notify", t("settings.steamSaved"));
   } catch (e) {
     emit("notify", String(e));
@@ -139,6 +206,72 @@ onMounted(() => {
       >
         {{ steamSaving ? t("settings.steamSaving") : t("settings.steamSave") }}
       </m3e-button>
+    </div>
+
+    <h3 class="sub">{{ t("settings.steamDownloadSettings") }}</h3>
+    <p class="hint">{{ t("settings.steamDownloadSettingsHint") }}</p>
+    <div class="download-grid">
+      <label>
+        <span>{{ t("settings.steamDownloadSpeed") }}</span>
+        <select v-model="downloadSpeedPreset" @change="applyDownloadSpeedPreset">
+          <option value="slow">{{ t("settings.steamSpeedSlow") }}</option>
+          <option value="medium">{{ t("settings.steamSpeedMedium") }}</option>
+          <option value="fast">{{ t("settings.steamSpeedFast") }}</option>
+          <option value="blazing">{{ t("settings.steamSpeedBlazing") }}</option>
+          <option value="custom">{{ t("settings.steamSpeedCustom") }}</option>
+        </select>
+      </label>
+      <label>
+        <span>{{ t("settings.steamMaxRequests") }}</span>
+        <input
+          v-model.number="downloadDraft.maxRequests"
+          type="number"
+          min="1"
+          max="128"
+          :disabled="downloadSpeedPreset !== 'custom'"
+          @change="normalizeDownloadDraft"
+        />
+      </label>
+      <label>
+        <span>{{ t("settings.steamFileWorkers") }}</span>
+        <input
+          v-model.number="downloadDraft.fileWorkers"
+          type="number"
+          min="1"
+          max="16"
+          @change="normalizeDownloadDraft"
+        />
+      </label>
+      <label>
+        <span>{{ t("settings.steamChunkWorkers") }}</span>
+        <input
+          v-model.number="downloadDraft.chunkWorkers"
+          type="number"
+          min="1"
+          max="32"
+          @change="normalizeDownloadDraft"
+        />
+      </label>
+      <label>
+        <span>{{ t("settings.steamRetries") }}</span>
+        <input
+          v-model.number="downloadDraft.retries"
+          type="number"
+          min="1"
+          max="5"
+          @change="normalizeDownloadDraft"
+        />
+      </label>
+      <label>
+        <span>{{ t("settings.steamCdnServers") }}</span>
+        <input
+          v-model.number="downloadDraft.cdnServers"
+          type="number"
+          min="1"
+          max="20"
+          @change="normalizeDownloadDraft"
+        />
+      </label>
     </div>
   </div>
 </template>
@@ -212,5 +345,42 @@ m3e-icon-button.danger:hover {
 }
 .actions .material-symbols-outlined {
   font-size: 18px;
+}
+.download-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.download-grid label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-sys-shape-corner-medium);
+  font-size: var(--md-sys-typescale-body-small-size);
+}
+.download-grid input,
+.download-grid select {
+  width: 64px;
+  min-width: 64px;
+  padding: 5px 7px;
+  color: var(--md-sys-color-on-surface);
+  background: var(--md-sys-color-surface);
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: 4px;
+}
+.download-grid select {
+  width: 120px;
+}
+.download-grid input:disabled {
+  opacity: 0.55;
+}
+@media (max-width: 640px) {
+  .download-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

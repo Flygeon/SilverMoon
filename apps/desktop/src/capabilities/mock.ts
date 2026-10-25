@@ -375,6 +375,11 @@ let mockSteamSettings: SteamSettings = {
   steamRoot: "C:/Program Files (x86)/Steam",
   customRoots: ["D:/SteamLibrary"],
   detected: true,
+  downloadFileWorkers: 3,
+  downloadChunkWorkers: 8,
+  downloadMaxRequests: 32,
+  downloadRetries: 2,
+  downloadCdnServers: 10,
 };
 
 function steamGameDetailOf(appId: number): SteamGameDetail {
@@ -497,6 +502,15 @@ export function mockSteam<T>(payload: Record<string, unknown>): T {
           ...mockSteamSettings,
           customRoots: payload.customRoots.map((p) => String(p)),
         };
+      }
+      for (const key of [
+        "downloadFileWorkers",
+        "downloadChunkWorkers",
+        "downloadMaxRequests",
+        "downloadRetries",
+        "downloadCdnServers",
+      ] as const) {
+        if (payload[key] !== undefined) mockSteamSettings[key] = Number(payload[key]);
       }
       return { ...mockSteamSettings } as unknown as T;
     }
