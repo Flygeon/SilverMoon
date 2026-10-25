@@ -29,6 +29,32 @@
 > - **教训**: …（踩过的坑，供下一个 AI 避雷）
 > ```
 
+## 2026-10-25（三）· Steam 下载：VZa 的 LZMA 参数必须从封头读
+
+- **commit**: 见本轮提交
+- **status**: Rust 只能由 CI 编译；本地做过 rustfmt 与逐行走查。新增 2 条 LZMA 单测**未执行**。
+- **现象**：上一轮修完传输层解压后，chunk 已能下载并成功 AES 解密（说明 depot key 正确），
+  但卡在 LZMA：`vza: LZMA 解压失败：lzma error: LZ distance 52259912 is beyond
+  dictionary size 1048576`。
+- **根因**：`VZa` 块里**自带** LZMA 参数，而代码把它写死了。
+  正确的封头布局（照 GameNative `depot_chunk.rs::decompress_vzip`）：
+  ```text
+  [3B "VZa"][4B 版本][5B LZMA props][压缩数据][10B footer，末两字节 "zv"]
+  ```
+  `props[0]` 是 lc/lp/pb 的打包值（`lc + 9*(lp + 5*pb)`），`props[1..5]` 是小端 dict_size。
+  旧代码跳过 8 字节（错误偏移）且固定 `lc=3/lp=0/pb=2` + `dict=1MiB`，
+  真实字典远大于 1MiB，任何回溯距离都越界 —— 报错里的 52259912 就是证据。
+- **改动**：`chunk.rs` 按上述布局解析 props，字典与 lc/lp/pb 全部来自数据；
+  校验 footer 的 `zv` 标记；删掉不再使用的 `LZMA_DICT_SIZE` 常量。
+- **新增测试**：
+  - `lzma_uses_dict_size_from_chunk_header`：用 `lzma_compress` 造真实 .lzma 流拼成 VZa，
+    断言能解出原文。**这条能抓住回归**：`lzma_compress` 默认用 8MiB 字典，
+    写死 1MiB 就会解不出来。
+  - `lzma_rejects_missing_footer`：footer 的 `zv` 被破坏时必须报错而非输出半截数据。
+- **教训**：容器格式里的「固定参数」要当作可疑项。写死 LZMA 参数看起来能跑通小样本，
+  但真实数据一旦用到更大字典就炸，而且错误信息（distance vs dictionary size）
+  指向的是数据本身，很容易误判成「chunk 损坏」。
+
 ## 2026-10-25（二）· Steam 下载：关掉 CDN 请求的自动解压（chunk 是密文）
 
 - **commit**: 见本轮提交
