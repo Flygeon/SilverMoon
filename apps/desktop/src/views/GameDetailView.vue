@@ -408,6 +408,20 @@ async function startInstall(): Promise<void> {
   await runDownload(installDir);
 }
 
+async function repairManagedInstall(): Promise<void> {
+  const installDir = installPath.value;
+  if (!isManagedInstall.value || !installDir || actionBusy.value || steam.downloadBusy) return;
+
+  if (!steam.statusLoaded) await steam.loadStatus();
+  if (!steam.loggedIn) {
+    pendingInstallDir = installDir;
+    showLoginPanel.value = true;
+    return;
+  }
+
+  await runDownload(installDir);
+}
+
 async function retryInstall(): Promise<void> {
   steam.resetDownload();
   await startInstall();
@@ -605,6 +619,15 @@ watch(
             >
               <span slot="icon" class="material-symbols-outlined">download</span>
               {{ t("games.detail.install") }}
+            </m3e-button>
+            <m3e-button
+              v-if="isManagedInstall"
+              variant="tonal"
+              :disabled="actionBusy || steam.downloadBusy"
+              @click="repairManagedInstall"
+            >
+              <span slot="icon" class="material-symbols-outlined">fact_check</span>
+              {{ t("games.detail.verifyRepair") }}
             </m3e-button>
 
             <template v-if="isInstalled">

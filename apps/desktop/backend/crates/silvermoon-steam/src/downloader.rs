@@ -232,7 +232,7 @@ fn fetch_chunk(
 
 fn depot_adler_hash(data: &[u8]) -> u32 {
     const BLOCK: usize = 5552;
-    let mut a = 0u32;
+    let mut a = 1u32;
     let mut b = 0u32;
     for block in data.chunks(BLOCK) {
         for byte in block {
@@ -998,6 +998,7 @@ mod tests {
     #[test]
     fn adler32_matches_known_vector() {
         assert_eq!(depot_adler_hash(b"Wikipedia"), 0x11e6_0398);
+        assert_eq!(depot_adler_hash(b""), 1);
     }
 
     #[test]
