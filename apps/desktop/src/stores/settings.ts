@@ -88,6 +88,13 @@ export type NovelCharset = "gbk" | "big5";
 /** osu! 谱面下载镜像：auto 按官方 → Sayobot → Catboy → NeriNyan 依次回退 */
 export type OsuMirror = "auto" | "official" | "sayobot" | "catboy" | "nerinyan";
 
+export interface SettingsBackupSnapshot {
+  format: "silvermoon-settings";
+  version: 1;
+  exportedAt: string;
+  settings: Record<string, unknown>;
+}
+
 const store = new JsonStore("settings.json");
 
 const DEFAULTS = {
@@ -716,6 +723,66 @@ export const useSettingsStore = defineStore("settings", () => {
     osuOutDir,
   } as const;
 
+  function cloneSettingValue(value: unknown): unknown {
+    return JSON.parse(JSON.stringify(value)) as unknown;
+  }
+
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+  }
+
+  function isCompatibleSettingValue(current: unknown, next: unknown): boolean {
+    if (next === null || next === undefined) return false;
+    if (Array.isArray(current)) return Array.isArray(next);
+    if (current !== null && typeof current === "object") {
+      return isRecord(next);
+    }
+    if (typeof current !== typeof next) return false;
+    return typeof next !== "number" || Number.isFinite(next);
+  }
+
+  /** 导出当前所有持久化设置，不包含 Pinia 运行时字段或动作。 */
+  function exportSnapshot(): SettingsBackupSnapshot {
+    const payload: Record<string, unknown> = {};
+    for (const [key, refObj] of Object.entries(fields)) {
+      payload[key] = cloneSettingValue((refObj as { value: unknown }).value);
+    }
+    return {
+      format: "silvermoon-settings",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      settings: payload,
+    };
+  }
+
+  /**
+   * 导入设置快照。
+   *
+   * 只应用当前版本已知字段，并按现有字段的基础类型过滤异常值，避免一个手写 JSON
+   * 把数组、开关或数字设置写成错误类型。允许直接传入旧版的扁平 settings 对象。
+   */
+  async function importSnapshot(raw: unknown): Promise<{ applied: number; skipped: number }> {
+    if (!isRecord(raw)) throw new Error("invalid-settings-file");
+    const source = isRecord(raw.settings) ? raw.settings : raw;
+    let applied = 0;
+    let skipped = 0;
+
+    for (const [key, value] of Object.entries(source)) {
+      const refObj = (fields as Record<string, unknown>)[key] as { value: unknown } | undefined;
+      if (!refObj || !isCompatibleSettingValue(refObj.value, value)) {
+        skipped += 1;
+        continue;
+      }
+      refObj.value = cloneSettingValue(value);
+      applied += 1;
+    }
+
+    if (applied === 0) throw new Error("empty-settings-file");
+    resolveTheme();
+    await save();
+    return { applied, skipped };
+  }
+
   /**
    * 把网络设置同时推给两条互不相通的网络栈：
    * - Electron session（Chromium：图片 / 视频 / net.fetch）；
@@ -956,6 +1023,8 @@ export const useSettingsStore = defineStore("settings", () => {
     save,
     flushSave,
     applyPatch,
+    exportSnapshot,
+    importSnapshot,
     applyTheme,
     applyColorScheme,
     resolveTheme,

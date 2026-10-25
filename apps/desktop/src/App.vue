@@ -639,7 +639,7 @@ router.afterEach((to) => {
     <div class="app-body">
       <!-- 左侧导航 Rail -->
       <nav
-        v-if="shellChromeVisible && !isDesktopLyricsPage && !isExtensionHostPage"
+        v-if="shellChromeVisible && !isSettingsPage && !isDesktopLyricsPage && !isExtensionHostPage"
         class="nav-rail lm-glass"
         data-lm-region="nav"
       >
@@ -1044,6 +1044,7 @@ router.afterEach((to) => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  padding: 0;
   scrollbar-gutter: auto;
 }
 
