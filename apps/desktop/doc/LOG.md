@@ -29,6 +29,31 @@
 > - **教训**: …（踩过的坑，供下一个 AI 避雷）
 > ```
 
+## 2026-10-25（四）· Steam 下载：安装目录里的同名残留文件会让建目录失败
+
+- **commit**: 见本轮提交
+- **status**: Rust 只能由 CI 编译；本地 rustfmt + 逐行走查。新增 2 条单测**未执行**。
+- **现象**：上一轮修完 LZMA 后，manifest / chunk 下载 / 解密 / 解压全通了，
+  进度走到写盘阶段，报 `depot 2704111: 创建目录失败：当文件已存在时，无法创建该文件。
+  （os error 183）`。用户选的安装目录是 `C:\Program Files (x86)\Steam\steamapps\common\Aniya`。
+- **根因**：该目录里已有一个 **0 字节的 `Aliya_Data` 文件**（上一轮失败留下的），
+  而 manifest 说 `Aliya_Data` 是**目录**。`fs::create_dir_all` 遇到同名文件返回
+  Windows `ERROR_ALREADY_EXISTS`（os error 183），整个 depot 直接失败。
+  实测确认：`Aliya.exe` 672256 字节已正常写入，`Aliya_Data` 是 0 字节文件。
+- **改动**：`downloader.rs` 新增 `ensure_dir()` 替代直接调 `create_dir_all`：
+  已是目录直接返回；路径上是普通文件/符号链接则先删掉再建目录（**manifest 是权威**）。
+  范围约束：只作用于 `safe_join` 校验过的安装目录内路径，只删单个文件、不递归。
+  同时给「写文件」那条路加防护：目标若是**空目录**先 `remove_dir`（非空则如实报错），
+  避免 `fs::rename` 在 Windows 上因同名目录失败。
+- **为什么值得自愈而不是报错让用户手动删**：这类残留极常见（断点续传半截文件、
+  上一版安装残留、用户手建的空文件），而断点续传本身就是本模块的既有能力 ——
+  要求用户先去资源管理器删文件，等于把这个能力废掉。
+- **新增测试**：
+  - `ensure_dir_replaces_conflicting_file`：先造同名 0 字节文件，断言能变成目录，且二次调用幂等。
+  - `ensure_dir_keeps_existing_directory_contents`：已有目录时不能删掉里面的文件。
+- **教训**：断点续传/增量安装必须假设「磁盘上的状态是脏的」。
+  只处理「文件已存在且大小一致就跳过」不够 —— 还要处理**类型冲突**（文件 vs 目录）。
+
 ## 2026-10-25（三）· Steam 下载：VZa 的 LZMA 参数必须从封头读
 
 - **commit**: 见本轮提交

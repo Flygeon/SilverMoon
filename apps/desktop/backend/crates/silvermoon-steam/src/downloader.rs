@@ -46,6 +46,30 @@ pub struct DownloadResult {
     pub bytes_written: u64,
 }
 
+/// 建目录，并处理「同名文件已存在」的冲突。
+///
+/// ## 为什么要单独包一层（线上事故 2026-10-25）
+///
+/// 用户把安装目录选在 `Steam/steamapps/common/Aniya`，该目录里已有
+/// 上一轮留下的零字节 `Aliya_Data` **文件**，而 manifest 里 `Aliya_Data` 是**目录**。
+/// `fs::create_dir_all` 遇到同名文件会返回 Windows 的 `ERROR_ALREADY_EXISTS`
+/// （`os error 183`），整个 depot 因此失败、进度条停在 0%。
+///
+/// 这在真实环境很常见：断点续传的半截文件、用户手建的空文件、上一版残留。
+/// **manifest 是权威**，所以按「目录优先」处理：路径上是普通文件就先删掉再建目录。
+///
+/// 范围约束：只作用于 `safe_join` 校验过的安装目录内路径，且只删单个文件（不递归）。
+fn ensure_dir(path: &Path) -> std::io::Result<()> {
+    if path.is_dir() {
+        return Ok(());
+    }
+    // 存在但不是目录（普通文件 / 符号链接）：manifest 说它是目录，删掉让位
+    if path.symlink_metadata().is_ok() {
+        fs::remove_file(path)?;
+    }
+    fs::create_dir_all(path)
+}
+
 pub fn safe_join(root: &Path, relative: &str) -> Option<PathBuf> {
     if relative.is_empty() {
         return None;
@@ -243,7 +267,7 @@ pub fn download_depot(
         let Some(path) = safe_join(install_dir, &file.filename) else {
             return Err(format!("非法的目录路径：{}", file.filename));
         };
-        fs::create_dir_all(&path).map_err(|e| format!("创建目录 {} 失败：{e}", path.display()))?;
+        ensure_dir(&path).map_err(|e| format!("创建目录 {} 失败：{e}", path.display()))?;
     }
 
     for file in &manifest.files {
@@ -254,7 +278,7 @@ pub fn download_depot(
             return Err(format!("非法的文件路径：{}", file.filename));
         };
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
+            ensure_dir(parent).map_err(|e| format!("创建目录失败：{e}"))?;
         }
 
         if let Ok(meta) = fs::metadata(&target) {
@@ -328,6 +352,12 @@ pub fn download_depot(
                 .write_all(&file_bytes)
                 .map_err(|e| format!("写入 {} 失败：{e}", tmp.display()))?;
             handle.flush().map_err(|e| format!("flush 失败：{e}"))?;
+        }
+        // Windows 上 rename 到「已存在的目录」会失败。manifest 说这里是文件，
+        // 那就把残留的空目录清掉（只删空目录，非空会失败并如实报错，不递归）。
+        if target.is_dir() {
+            fs::remove_dir(&target)
+                .map_err(|e| format!("目标 {} 是目录且无法清空：{e}", target.display()))?;
         }
         fs::rename(&tmp, &target)
             .map_err(|e| format!("重命名到 {} 失败：{e}", target.display()))?;
@@ -572,6 +602,46 @@ mod tests {
         let root = Path::new("/install");
         assert!(safe_join(root, "/etc/passwd").is_none());
         assert!(safe_join(root, "").is_none());
+    }
+
+    /// 线上事故（2026-10-25）：安装目录里已有一个同名的**文件**，
+    /// manifest 说该路径是**目录**，`create_dir_all` 直接 `os error 183` 失败。
+    /// 这类残留很常见（断点续传半截文件、上一版安装残留），必须能自愈。
+    #[test]
+    fn ensure_dir_replaces_conflicting_file() {
+        let base = std::env::temp_dir().join(format!("sm-ensure-dir-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let target = base.join("Aliya_Data");
+
+        // 先造一个同名普通文件（0 字节，正是线上那种残留）
+        fs::write(&target, b"").unwrap();
+        assert!(target.is_file(), "前置条件：应是文件");
+
+        // 首次调用前 create_dir_all 会失败，ensure_dir 必须能把它变成目录
+        ensure_dir(&target).expect("应能把同名文件换成目录");
+        assert!(target.is_dir(), "调用后应是目录");
+
+        // 幂等：已是目录时再调一次不能报错
+        ensure_dir(&target).expect("已是目录时应成功");
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// `ensure_dir` 只删**单个文件**，不能递归删掉已有目录里的内容。
+    #[test]
+    fn ensure_dir_keeps_existing_directory_contents() {
+        let base = std::env::temp_dir().join(format!("sm-ensure-keep-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let inner = base.join("data");
+        fs::create_dir_all(&inner).unwrap();
+        let keep = inner.join("keep.bin");
+        fs::write(&keep, b"payload").unwrap();
+
+        ensure_dir(&inner).expect("已有目录应直接成功");
+        assert!(keep.is_file(), "不能删除目录里已有的文件");
+
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
