@@ -53,7 +53,8 @@ pub struct DownloadResult {
 ///
 /// `max_requests` 约束嵌套的文件 / chunk worker，避免两个设置相乘后启动数百个请求。
 /// 文件完成后由主线程落盘，下载中的分块进度也由该线程统一上报。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct DownloadOptions {
     pub file_workers: usize,
     pub chunk_workers: usize,
@@ -830,6 +831,19 @@ mod tests {
         let options = DownloadOptions::default();
         assert_eq!(effective_workers(options, 20), (3, 8));
         assert_eq!(effective_workers(options, 0), (0, 0));
+    }
+
+    #[test]
+    fn download_options_deserialize_camel_case_and_defaults() {
+        let options: DownloadOptions =
+            serde_json::from_value(serde_json::json!({ "fileWorkers": 7, "maxRequests": 64 }))
+                .expect("download options should deserialize");
+
+        assert_eq!(options.file_workers, 7);
+        assert_eq!(options.chunk_workers, 8);
+        assert_eq!(options.max_requests, 64);
+        assert_eq!(options.retries, 2);
+        assert_eq!(options.cdn_servers, 10);
     }
 
     #[test]

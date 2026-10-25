@@ -145,11 +145,7 @@ pub async fn steam_download(
     access_token: String,
     install_dir: String,
     depots: Vec<DepotTaskInput>,
-    download_file_workers: Option<usize>,
-    download_chunk_workers: Option<usize>,
-    download_max_requests: Option<usize>,
-    download_retries: Option<u32>,
-    download_cdn_servers: Option<u32>,
+    download_options: Option<silvermoon_steam::downloader::DownloadOptions>,
 ) -> Result<DownloadOutcome, String> {
     use silvermoon_steam::{download_app, DepotTask};
 
@@ -200,12 +196,13 @@ pub async fn steam_download(
     }
 
     let host = app.clone();
+    let requested = download_options.unwrap_or_default();
     let options = silvermoon_steam::downloader::DownloadOptions {
-        file_workers: download_file_workers.unwrap_or(3).clamp(1, 16),
-        chunk_workers: download_chunk_workers.unwrap_or(8).clamp(1, 32),
-        max_requests: download_max_requests.unwrap_or(32).clamp(1, 128),
-        retries: download_retries.unwrap_or(2).clamp(1, 5),
-        cdn_servers: download_cdn_servers.unwrap_or(10).clamp(1, 20),
+        file_workers: requested.file_workers.clamp(1, 16),
+        chunk_workers: requested.chunk_workers.clamp(1, 32),
+        max_requests: requested.max_requests.clamp(1, 128),
+        retries: requested.retries.clamp(1, 5),
+        cdn_servers: requested.cdn_servers.clamp(1, 20),
     };
     let result = tokio::task::spawn_blocking(move || {
         download_app(

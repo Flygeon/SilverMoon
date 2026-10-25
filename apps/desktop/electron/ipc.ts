@@ -668,11 +668,13 @@ const handlers: Record<string, Handler> = {
             depotKey: "",
             appId,
           })),
-          downloadFileWorkers: steamSettings.downloadFileWorkers,
-          downloadChunkWorkers: steamSettings.downloadChunkWorkers,
-          downloadMaxRequests: steamSettings.downloadMaxRequests,
-          downloadRetries: steamSettings.downloadRetries,
-          downloadCdnServers: steamSettings.downloadCdnServers,
+          downloadOptions: {
+            fileWorkers: steamSettings.downloadFileWorkers,
+            chunkWorkers: steamSettings.downloadChunkWorkers,
+            maxRequests: steamSettings.downloadMaxRequests,
+            retries: steamSettings.downloadRetries,
+            cdnServers: steamSettings.downloadCdnServers,
+          },
         });
         if (reply.ok && (reply.data as { ok?: boolean } | null)?.ok) {
           invalidateLocalLibraryCache();
