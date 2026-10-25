@@ -512,9 +512,10 @@ pub fn download_depot(
     thread::scope(|scope| {
         for worker in 0..worker_count {
             let tx = tx.clone();
+            let pending_ref = &pending;
             scope.spawn(move || {
-                for position in (worker..pending.len()).step_by(worker_count) {
-                    let file = &pending[position].0;
+                for position in (worker..pending_ref.len()).step_by(worker_count) {
+                    let file = &pending_ref[position].0;
                     let bytes = {
                         let mut report_progress = |downloaded| {
                             let _ = tx.send(FileWorkerMessage::Progress {
