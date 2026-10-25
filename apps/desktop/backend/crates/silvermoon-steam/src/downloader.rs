@@ -54,6 +54,7 @@ pub struct DownloadResult {
 /// Steam chunk 通常约 1 MiB；8 路能把高延迟链路的带宽填起来，同时把内存上限
 /// 控制在一个文件的有限窗口内。文件仍按 manifest 顺序落盘，避免写入竞态。
 const CHUNK_WORKERS: usize = 8;
+const FILE_WORKERS: usize = 3;
 
 /// 建目录，并处理「同名文件已存在」的冲突。
 ///
@@ -287,6 +288,23 @@ fn assemble_chunks(
     Ok(file_bytes)
 }
 
+fn write_file_atomically(target: &Path, bytes: &[u8]) -> Result<(), String> {
+    let tmp = target.with_extension("sm-tmp");
+    {
+        let mut handle =
+            fs::File::create(&tmp).map_err(|e| format!("创建 {} 失败：{e}", tmp.display()))?;
+        handle
+            .write_all(bytes)
+            .map_err(|e| format!("写入 {} 失败：{e}", tmp.display()))?;
+        handle.flush().map_err(|e| format!("flush 失败：{e}"))?;
+    }
+    if target.is_dir() {
+        fs::remove_dir(target)
+            .map_err(|e| format!("目标 {} 是目录且无法清空：{e}", target.display()))?;
+    }
+    fs::rename(&tmp, target).map_err(|e| format!("重命名到 {} 失败：{e}", target.display()))
+}
+
 fn notes_suffix(notes: &[String]) -> String {
     if notes.is_empty() {
         String::new()
@@ -415,6 +433,7 @@ pub fn download_depot(
         ensure_dir(&path).map_err(|e| format!("创建目录 {} 失败：{e}", path.display()))?;
     }
 
+    let mut pending: Vec<(crate::manifest::FileMapping, PathBuf)> = Vec::new();
     for file in &manifest.files {
         if file.flags & FLAG_DIRECTORY != 0 {
             continue;
@@ -425,7 +444,6 @@ pub fn download_depot(
         if let Some(parent) = target.parent() {
             ensure_dir(parent).map_err(|e| format!("创建目录失败：{e}"))?;
         }
-
         if let Ok(meta) = fs::metadata(&target) {
             if meta.is_file() && meta.len() == file.size {
                 result.files_skipped += 1;
@@ -433,59 +451,76 @@ pub fn download_depot(
                 continue;
             }
         }
-
-        let file_bytes = download_file_chunks(
-            task,
-            file,
-            servers,
-            cdn_token,
-            done_bytes,
-            depot_total,
-            &mut progress,
-            &mut gate,
-        )?;
-
-        if file_bytes.len() as u64 != file.size {
-            return Err(format!(
-                "文件 {} 长度不符（{} != {}）",
-                file.filename,
-                file_bytes.len(),
-                file.size
-            ));
-        }
-
-        let tmp = target.with_extension("sm-tmp");
-        {
-            let mut handle =
-                fs::File::create(&tmp).map_err(|e| format!("创建 {} 失败：{e}", tmp.display()))?;
-            handle
-                .write_all(&file_bytes)
-                .map_err(|e| format!("写入 {} 失败：{e}", tmp.display()))?;
-            handle.flush().map_err(|e| format!("flush 失败：{e}"))?;
-        }
-        // Windows 上 rename 到「已存在的目录」会失败。manifest 说这里是文件，
-        // 那就把残留的空目录清掉（只删空目录，非空会失败并如实报错，不递归）。
-        if target.is_dir() {
-            fs::remove_dir(&target)
-                .map_err(|e| format!("目标 {} 是目录且无法清空：{e}", target.display()))?;
-        }
-        fs::rename(&tmp, &target)
-            .map_err(|e| format!("重命名到 {} 失败：{e}", target.display()))?;
-
-        result.files_written += 1;
-        result.bytes_written += file.size;
-        done_bytes += file.size;
-        if let Some(cb) = progress.as_deref_mut() {
-            emit_progress(
-                cb,
-                &mut gate,
-                task.depot_id,
-                done_bytes,
-                depot_total,
-                &file.filename,
-            );
-        }
+        pending.push((file.clone(), target));
     }
+
+    if pending.is_empty() {
+        if let Some(cb) = progress.as_deref_mut() {
+            emit_progress(cb, &mut gate, task.depot_id, depot_total, depot_total, "");
+        }
+        return Ok(result);
+    }
+
+    let (tx, rx) = mpsc::channel::<(crate::manifest::FileMapping, PathBuf, Result<Vec<u8>, String>)>();
+    let worker_count = FILE_WORKERS.min(pending.len()).max(1);
+    thread::scope(|scope| {
+        for worker in 0..worker_count {
+            let tx = tx.clone();
+            scope.spawn(move || {
+                for position in (worker..pending.len()).step_by(worker_count) {
+                    let (file, target) = &pending[position];
+                    let bytes = download_file_chunks(
+                        task,
+                        file,
+                        servers,
+                        cdn_token,
+                        0,
+                        depot_total,
+                        &mut None,
+                        &mut ProgressGate::new(),
+                    )
+                    .and_then(|bytes| {
+                        if bytes.len() as u64 != file.size {
+                            Err(format!(
+                                "文件 {} 长度不符（{} != {}）",
+                                file.filename,
+                                bytes.len(),
+                                file.size
+                            ))
+                        } else {
+                            Ok(bytes)
+                        }
+                    });
+                    if tx.send((file.clone(), target.clone(), bytes)).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+        drop(tx);
+
+        for _ in 0..pending.len() {
+            let (file, target, bytes) = rx
+                .recv()
+                .map_err(|_| "文件下载 worker 意外退出".to_string())?;
+            let file_bytes = bytes?;
+            write_file_atomically(&target, &file_bytes)?;
+            result.files_written += 1;
+            result.bytes_written += file_bytes.len() as u64;
+            done_bytes += file_bytes.len() as u64;
+            if let Some(cb) = progress.as_deref_mut() {
+                emit_progress(
+                    cb,
+                    &mut gate,
+                    task.depot_id,
+                    done_bytes,
+                    depot_total,
+                    &file.filename,
+                );
+            }
+        }
+        Ok::<(), String>(())
+    })?;
 
     Ok(result)
 }
