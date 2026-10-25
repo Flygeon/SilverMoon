@@ -93,7 +93,20 @@ pub struct ContentManifest {
 }
 
 /// 文件标志：这是一个目录。
-pub const FLAG_DIRECTORY: u32 = 1;
+///
+/// ## 这个值不能猜（线上事故 2026-10-25）
+///
+/// 曾写成 `1`，导致**所有目录条目都被当成普通文件**：
+/// 先是写出上千个 0 字节文件（`Aliya_Data` 就是其中之一），
+/// 随后建目录时撞上同名文件报 `os error 183`，整个 depot 失败。
+///
+/// Valve 的 `EDepotFileFlag` 取值：`Directory = 64`、`CustomExecutable = 256`、
+/// `Executable = 32`、`Symlink = 512`。
+///
+/// 实测依据：本机 Steam `depotcache` 的 40 份真实 manifest、55520 个条目里，
+/// `flags=64` 有 2461 个（全是 `audio` / `bin` / `cfg` 这类目录），
+/// **`flags` 带 1 位的条目为 0 个** —— 1 在这个字段里根本不会出现。
+pub const FLAG_DIRECTORY: u32 = 64;
 
 /// 剥掉 CDN 可能加在 manifest 外层的封装，返回内层字节。
 ///
@@ -574,6 +587,30 @@ mod tests {
         assert_eq!(chunk.crc, 0x1234_5678);
         assert_eq!(chunk.cb_original, 11);
         assert_eq!(chunk.cb_compressed, 22);
+    }
+
+    /// 线上事故（2026-10-25）：`FLAG_DIRECTORY` 写成 1，导致所有目录被当文件写，
+    /// 先造出一堆 0 字节文件，再在建目录时撞车报 `os error 183`。
+    ///
+    /// 这条用例钉死数值本身。依据是本机 Steam `depotcache` 的 40 份真实 manifest
+    /// （55520 个条目）：`flags=64` 有 2461 个，全是 `audio`/`bin`/`cfg` 这类目录；
+    /// `flags` 带 1 位的条目为 **0** —— 1 在该字段里根本不会出现。
+    #[test]
+    fn directory_flag_is_64_not_1() {
+        assert_eq!(
+            FLAG_DIRECTORY, 64,
+            "Valve 的 EDepotFileFlag::Directory 是 64"
+        );
+        // 目录条目: 应被判为目录
+        assert_ne!(64 & FLAG_DIRECTORY, 0, "flags=64 必须命中目录位");
+        // 普通文件 / 可执行标记: 不应被判为目录
+        assert_eq!(0 & FLAG_DIRECTORY, 0, "flags=0 是普通文件");
+        assert_eq!(32 & FLAG_DIRECTORY, 0, "flags=32 是可执行，不是目录");
+        assert_eq!(
+            256 & FLAG_DIRECTORY,
+            0,
+            "flags=256 是 CustomExecutable，不是目录"
+        );
     }
 
     #[test]
