@@ -96,7 +96,7 @@ export async function getGameDetail(
       .fetchAppDetails([appId])
       .then((r) => r[String(appId)] ?? null)
       .catch(() => null),
-    Promise.resolve(findInstalled(appId, settings.customRoots)),
+    Promise.resolve(findInstalled(appId, settings.customRoots, dataDir)),
     steam.fetchAchievements(appId).catch(() => null),
   ]);
   return { appId, details, local, achievements };

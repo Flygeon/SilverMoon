@@ -1,8 +1,17 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
 const STATE_FULLY_INSTALLED = 4;
+const MANAGED_INSTALLS_FILE = "steam-managed-installs.json";
 
 export interface SteamLibraryFolder {
   path: string;
@@ -13,7 +22,9 @@ export interface SteamLibraryFolder {
 export interface SteamInstalledGame {
   appId: number;
   name: string;
+  source?: "steam" | "silvermoon";
   installDir?: string | null;
+  installPath?: string | null;
   sizeOnDisk: number;
   lastPlayedAt?: number | null;
   stateFlags: number;
@@ -213,7 +224,9 @@ export function parseAppManifest(
   return {
     appId,
     name,
+    source: "steam",
     installDir: typeof state.installdir === "string" ? state.installdir : null,
+    installPath: null,
     sizeOnDisk: Number(state.SizeOnDisk ?? 0),
     lastPlayedAt: lastPlayedSec > 0 ? lastPlayedSec * 1000 : null,
     stateFlags,
@@ -230,23 +243,27 @@ export function invalidateLocalLibraryCache(): void {
   scanCache = null;
 }
 
-export function scanLocalLibrary(customRoots: string[] = []): SteamLocalLibrary {
-  const key = customRoots.join("|");
+export function scanLocalLibrary(customRoots: string[] = [], dataDir = ""): SteamLocalLibrary {
+  const key = `${customRoots.join("|")}\0${dataDir}`;
   const now = Date.now();
   if (scanCache && scanCache.key === key && now - scanCache.at < SCAN_CACHE_TTL_MS) {
     return scanCache.value;
   }
-  const value = scanLocalLibraryUncached(customRoots);
+  const value = scanLocalLibraryUncached(customRoots, dataDir);
   scanCache = { key, at: Date.now(), value };
   return value;
 }
 
-export function scanLocalLibraryUncached(customRoots: string[] = []): SteamLocalLibrary {
+export function scanLocalLibraryUncached(
+  customRoots: string[] = [],
+  dataDir = "",
+): SteamLocalLibrary {
   const scannedAt = Date.now();
   const { root, candidates } = discoverSteamRoot(customRoots);
+  const managed = readManagedInstalls(dataDir);
   if (!root) {
     return {
-      installed: [],
+      installed: managed,
       steamRoot: null,
       libraries: [],
       scannedAt,
@@ -290,6 +307,12 @@ export function scanLocalLibraryUncached(customRoots: string[] = []): SteamLocal
     });
   }
 
+  for (const game of managed) {
+    if (seenApps.has(game.appId)) continue;
+    seenApps.add(game.appId);
+    installed.push(game);
+  }
+
   installed.sort((a, b) => (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0));
 
   return {
@@ -304,6 +327,123 @@ export function scanLocalLibraryUncached(customRoots: string[] = []): SteamLocal
 export function findInstalled(
   appId: number,
   customRoots: string[] = [],
+  dataDir = "",
 ): SteamInstalledGame | null {
-  return scanLocalLibrary(customRoots).installed.find((g) => g.appId === appId) ?? null;
+  return scanLocalLibrary(customRoots, dataDir).installed.find((g) => g.appId === appId) ?? null;
+}
+
+interface ManagedInstallRecord {
+  appId: number;
+  name: string;
+  installPath: string;
+  sizeOnDisk: number;
+  installedAt: number;
+}
+
+function managedInstallFile(dataDir: string): string {
+  return path.join(dataDir, MANAGED_INSTALLS_FILE);
+}
+
+function readManagedRecords(dataDir: string): ManagedInstallRecord[] {
+  if (!dataDir) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(managedInstallFile(dataDir), "utf8")) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is ManagedInstallRecord => {
+      if (!item || typeof item !== "object") return false;
+      const record = item as Partial<ManagedInstallRecord>;
+      return (
+        Number.isInteger(record.appId) &&
+        Number(record.appId) > 0 &&
+        typeof record.name === "string" &&
+        typeof record.installPath === "string" &&
+        typeof record.sizeOnDisk === "number" &&
+        typeof record.installedAt === "number"
+      );
+    });
+  } catch {
+    return [];
+  }
+}
+
+function directorySize(root: string): number {
+  let total = 0;
+  const pending = [root];
+  while (pending.length) {
+    const current = pending.pop()!;
+    let entries;
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(fullPath);
+      } else if (entry.isFile()) {
+        try {
+          total += statSync(fullPath).size;
+        } catch {
+          // Files may disappear while the directory is being scanned.
+        }
+      }
+    }
+  }
+  return total;
+}
+
+export function registerManagedInstall(
+  dataDir: string,
+  appId: number,
+  name: string,
+  installPath: string,
+): void {
+  if (!dataDir || !Number.isInteger(appId) || appId <= 0) {
+    throw new Error("无法记录无效的游戏安装信息");
+  }
+  const absolutePath = path.resolve(installPath);
+  if (!statSync(absolutePath).isDirectory()) {
+    throw new Error(`安装目录不存在：${absolutePath}`);
+  }
+
+  mkdirSync(dataDir, { recursive: true });
+  const file = managedInstallFile(dataDir);
+  const records = readManagedRecords(dataDir).filter((record) => record.appId !== appId);
+  records.push({
+    appId,
+    name,
+    installPath: absolutePath,
+    sizeOnDisk: directorySize(absolutePath),
+    installedAt: Date.now(),
+  });
+  const temp = `${file}.tmp`;
+  writeFileSync(temp, JSON.stringify(records, null, 2), "utf8");
+  renameSync(temp, file);
+}
+
+function readManagedInstalls(dataDir: string): SteamInstalledGame[] {
+  const manifestPath = dataDir ? managedInstallFile(dataDir) : "";
+  return readManagedRecords(dataDir).flatMap((record) => {
+    const installPath = path.resolve(record.installPath);
+    try {
+      if (!statSync(installPath).isDirectory()) return [];
+    } catch {
+      return [];
+    }
+    return [
+      {
+        appId: record.appId,
+        name: record.name,
+        source: "silvermoon",
+        installDir: path.basename(installPath),
+        installPath,
+        sizeOnDisk: record.sizeOnDisk,
+        lastPlayedAt: null,
+        stateFlags: STATE_FULLY_INSTALLED,
+        libraryPath: path.dirname(installPath),
+        manifestPath,
+      },
+    ];
+  });
 }

@@ -1,7 +1,8 @@
 //! **depot 下载器**：把一份 manifest 落成磁盘上的真实文件。
 
+use sha1::{Digest, Sha1};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
@@ -52,7 +53,7 @@ pub struct DownloadResult {
 /// 同时下载文件数、单文件 chunk 并发与整个 depot 的总请求上限。
 ///
 /// `max_requests` 约束嵌套的文件 / chunk worker，避免两个设置相乘后启动数百个请求。
-/// 文件完成后由主线程落盘，下载中的分块进度也由该线程统一上报。
+/// 文件 worker 将 chunk 按 manifest 偏移写入临时文件，进度由调用线程统一上报。
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct DownloadOptions {
@@ -211,13 +212,15 @@ fn fetch_chunk(
         };
         match fetch_bytes_with_client(client, &url, retries) {
             Ok(bytes) if !bytes.is_empty() => {
-                match process_chunk(&bytes, &task.depot_key, chunk.cb_original) {
-                    outcome if outcome.is_ok() => return Ok(outcome.data),
-                    outcome => {
-                        if let Some(error) = outcome.error {
-                            last_error = error;
-                        }
-                    }
+                let outcome = process_chunk(&bytes, &task.depot_key, chunk.cb_original);
+                if !outcome.is_ok() {
+                    last_error = outcome
+                        .error
+                        .unwrap_or_else(|| "chunk 处理失败".to_string());
+                } else if depot_adler_hash(&outcome.data) != chunk.crc {
+                    last_error = "chunk Adler-32 校验失败".to_string();
+                } else {
+                    return Ok(outcome.data);
                 }
             }
             Ok(_) => last_error = "chunk 为空".to_string(),
@@ -227,26 +230,77 @@ fn fetch_chunk(
     Err(format!("chunk {} 下载失败：{last_error}", hex(&chunk.sha)))
 }
 
-/// 并发抓取一个文件的所有 chunk，并在收到结果时按完成顺序上报进度。
-///
-/// 返回值仍按 manifest 中的 chunk 顺序排列；网络完成顺序不会影响文件内容。
+fn depot_adler_hash(data: &[u8]) -> u32 {
+    const BLOCK: usize = 5552;
+    let mut a = 0u32;
+    let mut b = 0u32;
+    for block in data.chunks(BLOCK) {
+        for byte in block {
+            a += *byte as u32;
+            b += a;
+        }
+        a %= 65521;
+        b %= 65521;
+    }
+    a | (b << 16)
+}
+
+/// 并发抓取文件 chunk，按 manifest 的文件内偏移写入磁盘并及时释放内存。
 fn download_file_chunks(
     task: &DepotTask,
     file: &crate::manifest::FileMapping,
     servers: &[CdnServer],
     cdn_token: &str,
     options: DownloadOptions,
+    temp_path: &Path,
     on_chunk_progress: &mut dyn FnMut(u64),
-) -> Result<Vec<u8>, String> {
+) -> Result<(), String> {
+    // Manifest offsets determine file placement; protobuf entries need not arrive in file order.
+    if file.chunks.is_empty() && file.size != 0 {
+        return Err(format!("文件 {} 没有 chunk 数据", file.filename));
+    }
+    let mut ranges = Vec::with_capacity(file.chunks.len());
+    for chunk in &file.chunks {
+        let end = chunk
+            .offset
+            .checked_add(u64::from(chunk.cb_original))
+            .ok_or_else(|| format!("文件 {} 的 chunk 偏移溢出", file.filename))?;
+        if end > file.size {
+            return Err(format!(
+                "文件 {} 的 chunk 超出文件范围（{} > {}）",
+                file.filename, end, file.size
+            ));
+        }
+        if chunk.cb_original > 0 {
+            ranges.push((chunk.offset, end));
+        }
+    }
+    ranges.sort_unstable();
+    for pair in ranges.windows(2) {
+        if pair[1].0 < pair[0].1 {
+            return Err(format!("文件 {} 的 chunk 范围重叠", file.filename));
+        }
+    }
+
+    let mut output = fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(temp_path)
+        .map_err(|e| format!("创建 {} 失败：{e}", temp_path.display()))?;
+    output
+        .set_len(file.size)
+        .map_err(|e| format!("设置临时文件长度失败：{e}"))?;
+
     if file.chunks.is_empty() {
-        return Ok(Vec::new());
+        output.flush().map_err(|e| format!("flush 失败：{e}"))?;
+        return Ok(());
     }
 
     let worker_count = options.chunk_workers.min(file.chunks.len()).max(1);
     let (tx, rx) = mpsc::channel::<(usize, Result<Vec<u8>, String>)>();
-    let mut ordered: Vec<Option<Vec<u8>>> = vec![None; file.chunks.len()];
 
-    thread::scope(|scope| {
+    let download_result = thread::scope(|scope| -> Result<(), String> {
         for worker in 0..worker_count {
             let tx = tx.clone();
             scope.spawn(move || {
@@ -286,8 +340,20 @@ fn download_file_chunks(
             received += 1;
             match result {
                 Ok(data) => {
+                    let chunk = &file.chunks[index];
+                    if data.len() != chunk.cb_original as usize {
+                        first_error.get_or_insert_with(|| {
+                            format!("文件 {} 的 chunk 长度不符", file.filename)
+                        });
+                        continue;
+                    }
+                    if let Err(error) = write_chunk_at(&mut output, chunk.offset, &data) {
+                        first_error.get_or_insert_with(|| {
+                            format!("写入文件 {} 的 chunk 失败：{error}", file.filename)
+                        });
+                        continue;
+                    }
                     downloaded_file_bytes += data.len() as u64;
-                    ordered[index] = Some(data);
                     on_chunk_progress(downloaded_file_bytes);
                 }
                 Err(error) => {
@@ -300,9 +366,17 @@ fn download_file_chunks(
             return Err(format!("文件 {} 的 {error}", file.filename));
         }
         Ok(())
-    })?;
+    });
 
-    assemble_chunks(file, ordered)
+    if let Err(error) = download_result {
+        drop(output);
+        let _ = fs::remove_file(temp_path);
+        return Err(error);
+    }
+    output
+        .flush()
+        .map_err(|e| format!("flush {} 失败：{e}", temp_path.display()))?;
+    Ok(())
 }
 
 enum FileWorkerMessage {
@@ -312,39 +386,66 @@ enum FileWorkerMessage {
     },
     Finished {
         position: usize,
-        bytes: Result<Vec<u8>, String>,
+        result: Result<(), String>,
     },
 }
 
-fn assemble_chunks(
-    file: &crate::manifest::FileMapping,
-    ordered: Vec<Option<Vec<u8>>>,
-) -> Result<Vec<u8>, String> {
-    let mut file_bytes = Vec::with_capacity(file.size as usize);
-    for data in ordered {
-        let Some(data) = data else {
-            return Err(format!("文件 {} 缺少 chunk 数据", file.filename));
-        };
-        file_bytes.extend_from_slice(&data);
+fn verify_file_content(path: &Path, file: &crate::manifest::FileMapping) -> Result<(), String> {
+    if file.sha_content.is_empty() {
+        return Ok(());
     }
-    Ok(file_bytes)
+    if file.sha_content.len() != 20 {
+        return Err(format!("文件 {} 的 manifest SHA-1 长度无效", file.filename));
+    }
+
+    let mut input =
+        fs::File::open(path).map_err(|e| format!("读取 {} 进行校验失败：{e}", path.display()))?;
+    let mut hasher = Sha1::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = input
+            .read(&mut buffer)
+            .map_err(|e| format!("读取 {} 进行校验失败：{e}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let actual = hasher.finalize();
+    if actual.as_slice() != file.sha_content.as_slice() {
+        return Err(format!(
+            "文件 {} 的 SHA-1 校验失败，内容不完整或已损坏",
+            file.filename
+        ));
+    }
+    Ok(())
 }
 
-fn write_file_atomically(target: &Path, bytes: &[u8]) -> Result<(), String> {
-    let tmp = target.with_extension("sm-tmp");
-    {
-        let mut handle =
-            fs::File::create(&tmp).map_err(|e| format!("创建 {} 失败：{e}", tmp.display()))?;
-        handle
-            .write_all(bytes)
-            .map_err(|e| format!("写入 {} 失败：{e}", tmp.display()))?;
-        handle.flush().map_err(|e| format!("flush 失败：{e}"))?;
-    }
+fn temp_file_path(target: &Path) -> PathBuf {
+    let mut name = target.file_name().unwrap_or_default().to_os_string();
+    name.push(".sm-tmp");
+    target.with_file_name(name)
+}
+
+fn replace_with_temp_file(temp: &Path, target: &Path) -> Result<(), String> {
     if target.is_dir() {
         fs::remove_dir(target)
             .map_err(|e| format!("目标 {} 是目录且无法清空：{e}", target.display()))?;
     }
-    fs::rename(&tmp, target).map_err(|e| format!("重命名到 {} 失败：{e}", target.display()))
+    fs::rename(temp, target).map_err(|e| format!("重命名到 {} 失败：{e}", target.display()))
+}
+
+fn write_chunk_at(output: &mut fs::File, offset: u64, data: &[u8]) -> std::io::Result<()> {
+    output.seek(SeekFrom::Start(offset))?;
+    output.write_all(data)
+}
+
+fn is_existing_file_valid(target: &Path, file: &crate::manifest::FileMapping) -> bool {
+    if file.sha_content.len() != 20 {
+        return false;
+    }
+    fs::metadata(target).is_ok_and(|meta| meta.is_file() && meta.len() == file.size)
+        && verify_file_content(target, file).is_ok()
 }
 
 fn notes_suffix(notes: &[String]) -> String {
@@ -487,12 +588,10 @@ pub fn download_depot(
         if let Some(parent) = target.parent() {
             ensure_dir(parent).map_err(|e| format!("创建目录失败：{e}"))?;
         }
-        if let Ok(meta) = fs::metadata(&target) {
-            if meta.is_file() && meta.len() == file.size {
-                result.files_skipped += 1;
-                done_bytes += file.size;
-                continue;
-            }
+        if is_existing_file_valid(&target, file) {
+            result.files_skipped += 1;
+            done_bytes += file.size;
+            continue;
         }
         pending.push((file.clone(), target));
     }
@@ -517,7 +616,9 @@ pub fn download_depot(
             scope.spawn(move || {
                 for position in (worker..pending_ref.len()).step_by(worker_count) {
                     let file = &pending_ref[position].0;
-                    let bytes = {
+                    let target = &pending_ref[position].1;
+                    let temp_path = temp_file_path(target);
+                    let result = {
                         let mut report_progress = |downloaded| {
                             let _ = tx.send(FileWorkerMessage::Progress {
                                 position,
@@ -530,23 +631,17 @@ pub fn download_depot(
                             servers,
                             cdn_token,
                             worker_options,
+                            &temp_path,
                             &mut report_progress,
                         )
                     }
-                    .and_then(|bytes| {
-                        if bytes.len() as u64 != file.size {
-                            Err(format!(
-                                "文件 {} 长度不符（{} != {}）",
-                                file.filename,
-                                bytes.len(),
-                                file.size
-                            ))
-                        } else {
-                            Ok(bytes)
-                        }
-                    });
+                    .and_then(|_| verify_file_content(&temp_path, file))
+                    .and_then(|_| replace_with_temp_file(&temp_path, target));
+                    if result.is_err() {
+                        let _ = fs::remove_file(&temp_path);
+                    }
                     if tx
-                        .send(FileWorkerMessage::Finished { position, bytes })
+                        .send(FileWorkerMessage::Finished { position, result })
                         .is_err()
                     {
                         return;
@@ -558,6 +653,7 @@ pub fn download_depot(
 
         let mut completed_files = 0;
         let mut in_flight_bytes = vec![0u64; pending.len()];
+        let mut first_error: Option<String> = None;
         while completed_files < pending.len() {
             match rx
                 .recv()
@@ -580,15 +676,20 @@ pub fn download_depot(
                         );
                     }
                 }
-                FileWorkerMessage::Finished { position, bytes } => {
-                    let (file, target) = &pending[position];
-                    let file_bytes = bytes?;
-                    write_file_atomically(target, &file_bytes)?;
+                FileWorkerMessage::Finished {
+                    position,
+                    result: file_result,
+                } => {
+                    let (file, _) = &pending[position];
                     in_flight_bytes[position] = 0;
-                    result.files_written += 1;
-                    result.bytes_written += file_bytes.len() as u64;
-                    done_bytes += file_bytes.len() as u64;
                     completed_files += 1;
+                    if let Err(error) = file_result {
+                        first_error.get_or_insert(error);
+                        continue;
+                    }
+                    result.files_written += 1;
+                    result.bytes_written += file.size;
+                    done_bytes += file.size;
                     if let Some(cb) = progress.as_deref_mut() {
                         let active_bytes = in_flight_bytes.iter().sum::<u64>();
                         emit_progress(
@@ -602,6 +703,9 @@ pub fn download_depot(
                     }
                 }
             }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
         }
         Ok::<(), String>(())
     })?;
@@ -796,6 +900,9 @@ pub fn download_app(
         }
     }
 
+    if !skipped.is_empty() {
+        return Err(format!("下载未完整完成：{}", skipped.join("；")));
+    }
     if overall.depots.is_empty() {
         return Err(format!(
             "没有可下载的内容。{}",
@@ -875,27 +982,41 @@ mod tests {
     }
 
     #[test]
-    fn assemble_chunks_preserves_manifest_order() {
-        let file = crate::manifest::FileMapping {
-            filename: "game.bin".into(),
-            size: 5,
-            ..Default::default()
-        };
-        let bytes = assemble_chunks(&file, vec![Some(b"hel".to_vec()), Some(b"lo".to_vec())])
-            .expect("chunks should assemble");
-        assert_eq!(bytes, b"hello");
+    fn chunks_are_written_at_manifest_offsets_even_when_received_out_of_order() {
+        let path = std::env::temp_dir().join(format!("sm-offset-write-{}", std::process::id()));
+        let mut output = fs::File::create(&path).unwrap();
+        output.set_len(5).unwrap();
+        write_chunk_at(&mut output, 3, b"lo").unwrap();
+        write_chunk_at(&mut output, 0, b"hel").unwrap();
+        output.flush().unwrap();
+        drop(output);
+
+        assert_eq!(fs::read(&path).unwrap(), b"hello");
+        let _ = fs::remove_file(path);
     }
 
     #[test]
-    fn assemble_chunks_rejects_missing_result() {
+    fn adler32_matches_known_vector() {
+        assert_eq!(depot_adler_hash(b"Wikipedia"), 0x11e6_0398);
+    }
+
+    #[test]
+    fn existing_file_is_skipped_only_when_manifest_sha1_matches() {
+        let path = std::env::temp_dir().join(format!("sm-file-sha-{}", std::process::id()));
+        let mut hasher = Sha1::new();
+        hasher.update(b"hello");
         let file = crate::manifest::FileMapping {
             filename: "game.bin".into(),
             size: 5,
+            sha_content: hasher.finalize().to_vec(),
             ..Default::default()
         };
-        let error = assemble_chunks(&file, vec![Some(b"hel".to_vec()), None])
-            .expect_err("missing chunk must fail");
-        assert!(error.contains("game.bin"));
+
+        fs::write(&path, b"jello").unwrap();
+        assert!(!is_existing_file_valid(&path, &file));
+        fs::write(&path, b"hello").unwrap();
+        assert!(is_existing_file_valid(&path, &file));
+        let _ = fs::remove_file(path);
     }
 
     /// 线上事故（2026-10-25）：安装目录里已有一个同名的**文件**，

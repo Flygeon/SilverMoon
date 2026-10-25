@@ -15,7 +15,14 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { parseVdf, readLibraryFolders, parseAppManifest, scanLocalLibrary } from "../steam/local";
+import {
+  parseVdf,
+  readLibraryFolders,
+  parseAppManifest,
+  scanLocalLibrary,
+  scanLocalLibraryUncached,
+  registerManagedInstall,
+} from "../steam/local";
 import { readSteamSettings, updateSteamSettings, steamSettingsState } from "../steam/settings";
 
 describe("parseVdf：Valve KeyValues", () => {
@@ -164,6 +171,37 @@ describe("scanLocalLibrary：找不到 Steam 时的降级", () => {
     expect(Array.isArray(result.installed)).toBe(true);
     // 本机装了 Steam 时会扫到；没装时应有 warning。两种都不能抛。
     expect(result.scannedAt).toBeGreaterThan(0);
+  });
+});
+
+describe("SilverMoon 管理的下载", () => {
+  let dataDir: string;
+  let installPath: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "sm-managed-game-"));
+    installPath = path.join(dataDir, "installed-game");
+    mkdirSync(installPath, { recursive: true });
+    writeFileSync(path.join(installPath, "game.exe"), "binary", "utf8");
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("download record makes the game appear installed with its direct path", () => {
+    registerManagedInstall(dataDir, 987654321, "Managed Game", installPath);
+
+    const library = scanLocalLibraryUncached(["Z:\\missing-steam-library"], dataDir);
+    expect(library.installed).toContainEqual(
+      expect.objectContaining({
+        appId: 987654321,
+        name: "Managed Game",
+        source: "silvermoon",
+        installPath,
+        sizeOnDisk: 6,
+      }),
+    );
   });
 });
 

@@ -239,30 +239,32 @@ pub fn fetch_bytes_with_client(
     url: &str,
     max_attempts: u32,
 ) -> Result<Vec<u8>, CdnFetchError> {
-
     let mut last = CdnFetchError::default();
     for attempt in 1..=max_attempts.max(1) {
         match client.get(url).header("User-Agent", USER_AGENT).send() {
             Ok(response) => {
                 let status = response.status();
                 if status.is_success() {
-                    return response
-                        .bytes()
-                        .map(|b| b.to_vec())
-                        .map_err(|e| CdnFetchError {
-                            transport: Some(format!("读取响应失败：{e}")),
-                            ..Default::default()
-                        });
-                }
-                let code = status.as_u16();
-                let body = response.bytes().map(|b| b.to_vec()).unwrap_or_default();
-                last = CdnFetchError {
-                    status: Some(code),
-                    body_prefix: describe_body_prefix(&body, BODY_PREFIX_LEN),
-                    transport: None,
-                };
-                if code < 500 {
-                    return Err(last);
+                    match response.bytes() {
+                        Ok(bytes) => return Ok(bytes.to_vec()),
+                        Err(error) => {
+                            last = CdnFetchError {
+                                transport: Some(format!("读取响应失败：{error}")),
+                                ..Default::default()
+                            };
+                        }
+                    }
+                } else {
+                    let code = status.as_u16();
+                    let body = response.bytes().map(|b| b.to_vec()).unwrap_or_default();
+                    last = CdnFetchError {
+                        status: Some(code),
+                        body_prefix: describe_body_prefix(&body, BODY_PREFIX_LEN),
+                        transport: None,
+                    };
+                    if code < 500 {
+                        return Err(last);
+                    }
                 }
             }
             Err(error) => {
@@ -283,6 +285,7 @@ pub fn fetch_bytes_with_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
 
     fn https_server(host: &str) -> CdnServer {
         CdnServer {
@@ -430,5 +433,34 @@ mod tests {
         let text = describe_body_prefix(&long, 10);
         assert!(text.contains("aaaaaaaaaa"), "实际：{text}");
         assert!(!text.contains("aaaaaaaaaaa"), "应截断：{text}");
+    }
+
+    #[test]
+    fn retries_when_success_response_body_is_truncated() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            for (length, body) in [(10, "bad"), (3, "ok!")] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request);
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n{body}"
+                )
+                .unwrap();
+                stream.flush().unwrap();
+            }
+        });
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .unwrap();
+
+        let bytes = fetch_bytes_with_client(&client, &format!("http://{address}/chunk"), 2)
+            .expect("second response should succeed");
+        assert_eq!(bytes, b"ok!");
+        server.join().unwrap();
     }
 }

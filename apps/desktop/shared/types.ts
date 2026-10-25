@@ -1672,8 +1672,12 @@ export interface SteamQrChallenge {
 export interface SteamInstalledGame {
   appId: number;
   name: string;
+  /** 安装来源；SilverMoon 直下的文件未生成 Steam appmanifest。 */
+  source?: "steam" | "silvermoon";
   /** 安装目录名（libraryPath/steamapps/common/<installDir>） */
   installDir?: string | null;
+  /** 直接下载时的绝对路径；Steam appmanifest 安装由 libraryPath/installDir 推导。 */
+  installPath?: string | null;
   /** 磁盘占用（**字节**，注意与 playtimeMinutes 的单位区分） */
   sizeOnDisk: number;
   /** 最近运行时间（毫秒时间戳），来自 manifest 的 LastPlayed */

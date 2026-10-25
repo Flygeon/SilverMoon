@@ -25,6 +25,7 @@ import {
   scanLocalLibrary,
   invalidateLocalLibraryCache,
   findInstalled,
+  registerManagedInstall,
   launchGame,
   installGame,
   openInSteam,
@@ -533,7 +534,7 @@ const handlers: Record<string, Handler> = {
 
       case "localLibrary": {
         const settings = readSteamSettings(dataDir);
-        return scanLocalLibrary(settings.customRoots);
+        return scanLocalLibrary(settings.customRoots, dataDir);
       }
       case "launchGame":
         return launchGame(Number(payload.appId));
@@ -542,7 +543,7 @@ const handlers: Record<string, Handler> = {
       case "openInSteam": {
         const appId = Number(payload.appId);
         const settings = readSteamSettings(dataDir);
-        const installed = Boolean(findInstalled(appId, settings.customRoots));
+        const installed = findInstalled(appId, settings.customRoots, dataDir)?.source === "steam";
         return openInSteam(appId, installed);
       }
       case "achievements":
@@ -677,6 +678,18 @@ const handlers: Record<string, Handler> = {
           },
         });
         if (reply.ok && (reply.data as { ok?: boolean } | null)?.ok) {
+          let name = path.basename(installDir);
+          try {
+            const details = await steam.fetchAppDetails([appId]);
+            name = details[String(appId)]?.name || name;
+          } catch {
+            // Download completion and local installation tracking do not depend on store metadata.
+          }
+          try {
+            registerManagedInstall(dataDir, appId, name, installDir);
+          } catch (error) {
+            log.warn("[steam] 游戏已下载，但本地安装记录写入失败：", error);
+          }
           invalidateLocalLibraryCache();
         }
         return reply.ok ? reply.data : { ok: false, error: reply.error ?? "下载失败" };

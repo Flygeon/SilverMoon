@@ -61,6 +61,7 @@ const installed = computed(() => {
 });
 
 const isInstalled = computed(() => !!installed.value);
+const isManagedInstall = computed(() => installed.value?.source === "silvermoon");
 const coverFromGrid = computed<string>(() => {
   const url = activeCoverUrl.value;
   return typeof url === "string" ? url : "";
@@ -261,9 +262,15 @@ async function primaryAction(): Promise<void> {
   if (Number.isNaN(id) || actionBusy.value) return;
   actionBusy.value = true;
   try {
+    if (isManagedInstall.value) {
+      await capabilities.openFile(installPath.value);
+      return;
+    }
     const res = isInstalled.value ? await steam.launch(id) : await steam.install(id);
     if (!res.ok) notify(res.message || t("games.detail.actionFailed"));
     else if (res.message) notify(res.message);
+  } catch {
+    notify(t("games.detail.actionFailed"));
   } finally {
     actionBusy.value = false;
   }
@@ -289,6 +296,7 @@ async function copyText(text: string): Promise<void> {
 const installPath = computed<string>(() => {
   const g = installed.value;
   if (!g) return "";
+  if (g.installPath) return g.installPath;
   if (!g.installDir) return g.libraryPath;
   const sep = g.libraryPath.includes("\\") ? "\\" : "/";
   return [g.libraryPath, "steamapps", "common", g.installDir].join(sep);
@@ -584,8 +592,10 @@ watch(
               :disabled="actionBusy"
               @click="primaryAction"
             >
-              <span slot="icon" class="material-symbols-outlined">play_arrow</span>
-              {{ t("games.detail.play") }}
+              <span slot="icon" class="material-symbols-outlined">
+                {{ isManagedInstall ? "folder_open" : "play_arrow" }}
+              </span>
+              {{ t(isManagedInstall ? "games.detail.openFolder" : "games.detail.play") }}
             </m3e-button>
             <m3e-button
               v-else
