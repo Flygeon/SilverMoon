@@ -202,14 +202,31 @@ fn append_token(url: &mut String, cdn_token: &str) {
     url.push_str(cdn_token.strip_prefix('?').unwrap_or(cdn_token));
 }
 
-pub fn fetch_bytes(url: &str, max_attempts: u32) -> Result<Vec<u8>, CdnFetchError> {
-    let client = reqwest::blocking::Client::builder()
+/// CDN 取字节用的 HTTP client。
+///
+/// **必须关掉所有自动解压**：Steam CDN 的 chunk 是 AES 密文，
+/// 但某些边缘节点会给它带上 `Content-Encoding: gzip`。开着 gzip 时
+/// reqwest 会按那个头去解压密文，直接报 `error decoding response body` ——
+/// 线上（2026-10-25）就是死在这里，且 manifest 反而正常（它本来就是 zip 包）。
+///
+/// 关掉之后请求也不再发 `Accept-Encoding`，拿到的是**原始字节**，
+/// 解密/解压全部由 `process_chunk` 按自己的魔数判断，不与传输层假设耦合。
+fn cdn_client() -> Result<reqwest::blocking::Client, CdnFetchError> {
+    reqwest::blocking::Client::builder()
         .timeout(REQUEST_TIMEOUT)
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
+        .no_zstd()
         .build()
         .map_err(|e| CdnFetchError {
             transport: Some(format!("创建 HTTP 客户端失败：{e}")),
             ..Default::default()
-        })?;
+        })
+}
+
+pub fn fetch_bytes(url: &str, max_attempts: u32) -> Result<Vec<u8>, CdnFetchError> {
+    let client = cdn_client()?;
 
     let mut last = CdnFetchError::default();
     for attempt in 1..=max_attempts.max(1) {

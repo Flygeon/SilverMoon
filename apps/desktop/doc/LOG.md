@@ -29,6 +29,27 @@
 > - **教训**: …（踩过的坑，供下一个 AI 避雷）
 > ```
 
+## 2026-10-25（二）· Steam 下载：关掉 CDN 请求的自动解压（chunk 是密文）
+
+- **commit**: 见本轮提交
+- **status**: Rust 只能由 CI 编译；本地做过 rustfmt 与逐行走查。
+- **现象**：上一轮修完 zip 后 manifest 已能解析（报错里出现了文件名 `Aliya.exe` 与
+  某个 chunk 的 SHA），但紧接着下载 chunk 报
+  `网络错误：读取响应失败：error decoding response body`，进度条停在 0%。
+- **根因**：`reqwest` 开了 `gzip` feature，会发 `Accept-Encoding` 并按响应的
+  `Content-Encoding` 自动解压。Steam CDN 的 chunk 是 **AES 密文**，
+  但某些边缘节点仍给它带上 `Content-Encoding: gzip`（缓存层行为），
+  于是 reqwest 拿密文当 gzip 流解，报 `error decoding response body`。
+  manifest 之所以没事：它本身就是 zip 包，走的是另一条判断路径。
+- **改动**：`cdn.rs` 抽出 `cdn_client()`，对 CDN 拉字节的请求关闭
+  `no_gzip / no_brotli / no_deflate / no_zstd`，拿原始字节；
+  解密与解压全部交给 `process_chunk` 按自己的魔数判断，不与传输层假设耦合。
+  `fetch_servers`（WebAPI 的 JSON）**保持**自动解压 —— 那是正常需要 gzip 的接口。
+- **为什么不在拿到字节后再兜底**：reqwest 的解压在 `.bytes()` 内部完成，
+  失败时原始字节已经丢了，拿不到可以自己解的东西。必须在 client 层关。
+- **教训**：判断「响应体解析失败」时先问「这是传输层在解压，还是我们在解析」。
+  这次是前者，而 `error decoding response body` 正是 reqwest 的原文措辞。
+
 ## 2026-10-25（一）· Steam 下载续修：CDN 的 manifest 是 zip 包 + 移除游戏 hero 动画
 
 - **commit**: 见本轮提交
