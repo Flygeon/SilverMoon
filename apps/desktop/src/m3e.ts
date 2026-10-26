@@ -19,6 +19,7 @@
 // - m3e-snackbar：底部短提示（创作页保存/导出反馈）
 // - m3e-search-bar：搜索栏（在线小说三个源共用，见 NovelSearchBar.vue）
 // - m3e-select / m3e-option：下拉选择（小说源渠道切换）；须与 form-field 搭配
+import "@m3e/web/app-bar";
 import "@m3e/web/bottom-sheet";
 import "@m3e/web/button";
 import "@m3e/web/button-group";
