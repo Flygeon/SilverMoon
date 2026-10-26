@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1140" viewBox="0 0 1600 1140" fill="#e2e5ef">
+  <defs>
+    <style>
+      @font-face { font-family: SMIcons; src: url('../../../src/assets/fonts/material-symbols-rounded.woff2'); font-weight: 300 500; }
+      @font-face { font-family: SMText; src: url('../../../src/assets/fonts/SarasaGothicSC-Regular.woff'); }
+      text { font-family: SMText, 'Microsoft YaHei', sans-serif; }
+      .icon { font-family: SMIcons; font-size: 24px; font-weight: 400; font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+      .small { font-size: 12px; fill: #a7abb4; }
+      .body { font-size: 14px; }
+      .muted { fill: #a7abb4; }
+      .label { font-size: 14px; font-weight: 500; }
+      .board { fill: #2e333a; }
+      .board-note { fill: #5b5f67; font-size: 12px; }
+      .primary { fill: #b1c8ec; }
+    </style>
+    <clipPath id="window"><rect x="80" y="140" width="1440" height="900" rx="16"/></clipPath>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="14" stdDeviation="20" flood-color="#172e4a" flood-opacity=".16"/></filter>
+  </defs>
+  <rect width="1600" height="1140" fill="#e8ecf3"/>
+  <text x="80" y="53" font-size="12" letter-spacing="3" fill="#426089">SILVERMOON / DESKTOP LANGUAGE</text>
+  <text x="80" y="104" font-size="28" class="board">换一种主题，仍然是同一种语言。</text>
+  <text x="1520" y="66" font-size="14" text-anchor="end" class="board">02 / 深色 · 设置</text>
+  <text x="1520" y="96" class="board-note" text-anchor="end">v0.1 · 设计评审稿 · 2026.10.26</text>
+  <rect x="80" y="140" width="1440" height="900" rx="16" fill="#0c0e12" filter="url(#shadow)"/>
+  <g clip-path="url(#window)">
+    <rect x="80" y="140" width="1440" height="48" fill="#111318"/>
+    <text x="104" y="172" class="icon primary">blur_on</text><text x="140" y="170" class="label">银月 SilverMoon</text>
+    <text x="1380" y="172" class="icon muted">remove</text><text x="1430" y="172" class="icon muted">crop_square</text><text x="1480" y="172" class="icon muted">close</text>
+    <rect x="80" y="188" width="240" height="772" fill="#111318"/>
+    <text x="104" y="224" class="small">我的资料库</text>
+    <text x="116" y="272" class="icon muted">image</text><text x="156" y="270" class="label">图片</text>
+    <text x="116" y="328" class="icon muted">movie</text><text x="156" y="326" class="label">视频</text>
+    <text x="116" y="384" class="icon muted">music_note</text><text x="156" y="382" class="label">音乐</text>
+    <text x="116" y="440" class="icon muted">menu_book</text><text x="156" y="438" class="label">书籍</text>
+    <text x="116" y="496" class="icon muted">sports_esports</text><text x="156" y="494" class="label">游戏</text>
+    <text x="104" y="562" class="small">整理与工具</text>
+    <text x="116" y="608" class="icon muted">favorite</text><text x="156" y="606" class="label">收藏</text>
+    <text x="116" y="664" class="icon muted">history</text><text x="156" y="662" class="label">历史记录</text>
+    <text x="116" y="720" class="icon muted">apps</text><text x="156" y="718" class="label">百宝箱</text>
+    <text x="116" y="776" class="icon muted">extension</text><text x="156" y="774" class="label">扩展</text>
+    <circle cx="112" cy="850" r="4" fill="#a2d2a3"/><text x="126" y="854" class="small">本地资料库 · 已同步</text>
+    <rect x="96" y="882" width="208" height="48" rx="24" fill="#313c4c"/><text x="116" y="920" class="icon" fill="#b5c0d4" style="font-variation-settings:'FILL' 1">settings</text><text x="156" y="918" class="label" fill="#b5c0d4">设置</text>
+    <text x="352" y="250" font-size="32">设置</text><text x="352" y="281" class="body muted">让银月按你的习惯工作。</text>
+    <rect x="1128" y="222" width="360" height="48" rx="24" fill="#161a1f"/><text x="1144" y="254" class="icon muted">search</text><text x="1184" y="251" class="body muted">搜索设置</text>
+    <rect x="352" y="318" width="192" height="48" rx="24" fill="#313c4c"/><text x="368" y="350" class="icon" fill="#b5c0d4">palette</text><text x="408" y="347" class="label" fill="#b5c0d4">外观</text>
+    <text x="368" y="406" class="icon muted">music_note</text><text x="408" y="403" class="label muted">播放与歌词</text>
+    <text x="368" y="462" class="icon muted">folder</text><text x="408" y="459" class="label muted">媒体库</text>
+    <text x="368" y="518" class="icon muted">public</text><text x="408" y="515" class="label muted">在线内容源</text>
+    <text x="368" y="574" class="icon muted">extension</text><text x="408" y="571" class="label muted">扩展</text>
+    <text x="368" y="630" class="icon muted">key</text><text x="408" y="627" class="label muted">快捷键</text>
+    <text x="368" y="686" class="icon muted">info</text><text x="408" y="683" class="label muted">关于</text>
+    <text x="568" y="343" font-size="22">外观</text><text x="568" y="371" class="body muted">统一主题、密度和动态效果；更改即时生效。</text>
+    <rect x="568" y="396" width="920" height="360" rx="20" fill="#161a1f"/>
+    <text x="592" y="434" font-size="16">界面主题</text><text x="592" y="459" class="body muted">跟随系统，或固定使用浅色 / 深色。</text>
+    <rect x="1144" y="416" width="96" height="40" rx="20" fill="#313c4c"/><text x="1192" y="441" class="label" text-anchor="middle" fill="#b5c0d4">浅色</text>
+    <rect x="1244" y="416" width="96" height="40" rx="12" fill="#b1c8ec"/><text x="1260" y="444" class="icon" fill="#2b415f">check</text><text x="1298" y="441" class="label" text-anchor="middle" fill="#2b415f">深色</text>
+    <rect x="1344" y="416" width="120" height="40" rx="20" fill="#313c4c"/><text x="1404" y="441" class="label" text-anchor="middle" fill="#b5c0d4">跟随系统</text>
+    <path d="M592 484H1464" stroke="#444850" stroke-opacity=".5"/>
+    <text x="592" y="522" font-size="16">主题色</text><text x="592" y="547" class="body muted">以海蓝为种子，生成完整的深浅色方案。</text>
+    <circle cx="1216" cy="528" r="20" fill="#b1c8ec"/><text x="1204" y="536" class="icon" fill="#2b415f">check</text>
+    <circle cx="1272" cy="528" r="20" fill="#a2d2a3"/><circle cx="1328" cy="528" r="20" fill="#e6b7cc"/><circle cx="1384" cy="528" r="20" fill="#e7c281"/><circle cx="1440" cy="528" r="20" fill="none" stroke="#71757e"/><text x="1428" y="536" class="icon muted">add</text>
+    <path d="M592 572H1464" stroke="#444850" stroke-opacity=".5"/>
+    <text x="592" y="610" font-size="16">界面密度</text><text x="592" y="635" class="body muted">调整控件与列表间距，保持文字清晰可读。</text>
+    <rect x="1232" y="592" width="112" height="40" rx="20" fill="#b1c8ec"/><text x="1248" y="620" class="icon" fill="#2b415f">check</text><text x="1294" y="617" class="label" fill="#2b415f" text-anchor="middle">默认</text>
+    <rect x="1348" y="592" width="116" height="40" rx="20" fill="#313c4c"/><text x="1406" y="617" class="label" fill="#b5c0d4" text-anchor="middle">紧凑</text>
+    <path d="M592 660H1464" stroke="#444850" stroke-opacity=".5"/>
+    <text x="592" y="698" font-size="16">减少动态效果</text><text x="592" y="723" class="body muted">收敛页面位移与封面飞行，保留必要的状态反馈。</text>
+    <rect x="1412" y="685" width="52" height="32" rx="16" fill="#b1c8ec"/><circle cx="1444" cy="701" r="12" fill="#2b415f"/><text x="1435" y="707" class="icon" style="font-size:18px" fill="#b1c8ec">check</text>
+    <text x="568" y="804" font-size="22">阅读与可访问性</text>
+    <rect x="568" y="828" width="920" height="88" rx="20" fill="#161a1f"/><text x="592" y="865" font-size="16">界面缩放</text><text x="592" y="890" class="body muted">同时放大文字与操作区域，不改变你的媒体文件。</text>
+    <rect x="1344" y="848" width="120" height="48" rx="12" fill="#22262d"/><text x="1360" y="878" class="label">100%</text><text x="1428" y="880" class="icon muted">expand_more</text>
+    <rect x="80" y="960" width="1440" height="80" fill="#161a1f"/>
+    <rect x="104" y="976" width="48" height="48" rx="8" fill="#d56843"/><circle cx="137" cy="987" r="8" fill="#efd89b"/><path d="M104 1014 128 990 152 1014V1024H104Z" fill="#773f3a"/>
+    <text x="168" y="994" class="label">迟来的夏天</text><text x="168" y="1017" class="small">After Hours</text><text x="344" y="1008" class="icon muted">favorite</text>
+    <text x="680" y="995" class="icon muted">skip_previous</text><rect x="728" y="968" width="64" height="40" rx="20" fill="#b1c8ec"/><text x="748" y="995" class="icon" fill="#2b415f">pause</text><text x="816" y="995" class="icon muted">skip_next</text>
+    <text x="610" y="1026" class="small">01:24</text><rect x="656" y="1019" width="352" height="4" rx="2" fill="#444850"/><rect x="656" y="1019" width="120" height="4" rx="2" fill="#b1c8ec"/><circle cx="776" cy="1021" r="5" fill="#b1c8ec"/><text x="1024" y="1026" class="small">04:08</text>
+    <text x="1232" y="1005" class="small">音量</text><rect x="1272" y="998" width="88" height="4" rx="2" fill="#444850"/><rect x="1272" y="998" width="56" height="4" rx="2" fill="#b1c8ec"/><text x="1404" y="1008" class="icon muted">queue_music</text><text x="1464" y="1008" class="icon muted">expand_less</text>
+  </g>
+  <text x="80" y="1088" class="body board">同一应用壳 / 连续设置行 / 稳定文字层级 / 语义主题 / 清楚的选中反馈</text>
+  <text x="80" y="1113" class="board-note">设置按组组织；密度与减少动态效果是拟议体验，确认后再实现。</text>
+  <text x="1520" y="1090" class="board-note" text-anchor="end">静态概念预览 · 非运行界面 · 控件外形待库适配验证</text>
+</svg>

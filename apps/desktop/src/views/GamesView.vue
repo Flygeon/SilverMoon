@@ -656,7 +656,7 @@ const libraryEmpty = computed(
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 20px 16px;
+  gap: var(--lm-layout-grid-row-gap) var(--lm-layout-grid-column-gap);
 }
 .card {
   display: flex;

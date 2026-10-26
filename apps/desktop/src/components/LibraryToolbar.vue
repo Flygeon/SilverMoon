@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 列表页工具栏：搜索、排序、扫描入口与进度 */
-import { ref, watch } from "vue";
+import { onActivated, onBeforeUnmount, onDeactivated, ref, watch } from "vue";
+import SearchField from "@/components/SearchField.vue";
 import { useLibraryStore, type SortKey } from "@/stores/library";
 import { useSettingsStore } from "@/stores/settings";
 import { translate } from "@shared/i18n";
@@ -17,22 +18,41 @@ function t(key: string) {
 }
 
 const SORTS: { key: SortKey; label: string }[] = [
-  { key: "name", label: "名称" },
-  { key: "mtime", label: "修改时间" },
-  { key: "size", label: "大小" },
-  { key: "taken_at", label: "拍摄时间" },
+  { key: "name", label: "library.sortName" },
+  { key: "mtime", label: "library.sortModified" },
+  { key: "size", label: "library.sortSize" },
+  { key: "taken_at", label: "library.sortTaken" },
 ];
 
 // 输入防抖，避免每敲一个字就查一次库
 const term = ref(library.search);
 let timer: number | null = null;
+function cancelPendingSearch() {
+  if (timer !== null) window.clearTimeout(timer);
+  timer = null;
+}
 watch(term, (v) => {
-  if (timer !== null) clearTimeout(timer);
+  cancelPendingSearch();
+  if (v === library.search) return;
   timer = window.setTimeout(() => {
+    timer = null;
     library.search = v;
     emit("changed");
   }, 260);
 });
+// 空状态清除与其他库页面的查询同样反映到输入框，避免残留旧词。
+watch(
+  () => library.search,
+  (value) => {
+    cancelPendingSearch();
+    term.value = value;
+  },
+);
+onActivated(() => {
+  term.value = library.search;
+});
+onDeactivated(cancelPendingSearch);
+onBeforeUnmount(cancelPendingSearch);
 
 function pickSort(key: SortKey) {
   if (library.sortBy === key) {
@@ -43,21 +63,16 @@ function pickSort(key: SortKey) {
   }
   emit("changed");
 }
-
-function clearSearch() {
-  term.value = "";
-}
 </script>
 
 <template>
   <div class="toolbar">
-    <div class="search">
-      <span class="material-symbols-outlined">search</span>
-      <input v-model="term" type="text" :placeholder="t('actions.search')" spellcheck="false" />
-      <button v-if="term" class="clear" @click="clearSearch">
-        <span class="material-symbols-outlined">close</span>
-      </button>
-    </div>
+    <SearchField
+      v-model="term"
+      class="search"
+      :placeholder="t('actions.search')"
+      :clear-label="t('actions.clearSearch')"
+    />
 
     <div class="sorts">
       <m3e-filter-chip
@@ -67,7 +82,7 @@ function clearSearch() {
         :selected="library.sortBy === s.key"
         @click.prevent="pickSort(s.key)"
       >
-        {{ s.label }}
+        {{ t(s.label) }}
         <span
           v-if="library.sortBy === s.key"
           slot="trailing-icon"
@@ -77,7 +92,7 @@ function clearSearch() {
       </m3e-filter-chip>
     </div>
 
-    <span class="count tabular-nums">{{ props.count }} 项</span>
+    <span class="count tabular-nums">{{ props.count }} {{ t("library.items") }}</span>
 
     <div class="spacer"></div>
 
@@ -106,59 +121,22 @@ function clearSearch() {
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--lm-layout-toolbar-gap);
   flex-wrap: wrap;
-  margin-bottom: 20px;
+  margin-bottom: var(--lm-layout-toolbar-content-gap);
 }
 
 .search {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 40px;
-  padding: 0 12px;
-  border-radius: var(--md-sys-shape-corner-extra-large);
-  background: var(--md-sys-color-surface-container);
-  color: var(--md-sys-color-on-surface-variant);
-  transition:
-    background var(--md-sys-motion-duration-short),
-    box-shadow var(--md-sys-motion-duration-short);
-  min-width: 240px;
-}
-.search:focus-within {
-  background: var(--md-sys-color-surface-container-high);
-  box-shadow: 0 0 0 2px var(--md-sys-color-primary);
-}
-.search .material-symbols-outlined {
-  font-size: 20px;
-}
-.search input {
-  flex: 1;
-  border: none;
-  outline: none;
-  background: transparent;
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-medium-size);
+  flex: 0 1 var(--lm-search-width);
+  width: var(--lm-search-width);
+  max-width: 100%;
   min-width: 0;
-}
-.clear {
-  display: flex;
-  border: none;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  padding: 2px;
-  border-radius: 50%;
-}
-.clear:hover {
-  background: var(--md-sys-color-surface-container-highest);
 }
 
 .sorts {
   display: flex;
-  gap: 6px;
+  gap: var(--lm-layout-control-gap);
+  flex-wrap: wrap;
 }
 .count {
   font-size: var(--md-sys-typescale-body-small-size);
@@ -191,7 +169,7 @@ function clearSearch() {
    on-secondary-container 文字 + 无描边，与改造前 .chip.active 一致）；
    下面把度量对齐改造前的 .chip（含选中时组件会占用 icon 槽展示勾选标记所需的 with-icon 内边距） */
 .sorts m3e-filter-chip {
-  --m3e-chip-container-height: 32px;
+  --m3e-chip-container-height: var(--lm-filter-chip-height);
   --m3e-chip-padding-start: 12px;
   --m3e-chip-padding-end: 12px;
   --m3e-chip-with-icon-padding-start: 12px;

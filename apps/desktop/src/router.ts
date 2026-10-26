@@ -43,4 +43,12 @@ const router = createRouter({
   ],
 });
 
+// 开发专用：正式构建消除该路由与组件，不向用户增加未经评审的产品入口。
+if (import.meta.env.DEV) {
+  router.addRoute({
+    path: "/__design",
+    component: () => import("@/views/DesignSystemView.vue"),
+  });
+}
+
 export default router;

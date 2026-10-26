@@ -6,6 +6,7 @@ import { usePixivStore } from "@/stores/pixiv";
 import { translate } from "@shared/i18n";
 import type { PixivIllust, PixivTrendTag } from "@shared/types";
 import PixivCard from "@/components/PixivCard.vue";
+import SearchField from "@/components/SearchField.vue";
 import PixivDetailPanel from "@/components/PixivDetailPanel.vue";
 
 const settings = useSettingsStore();
@@ -81,7 +82,7 @@ function pickRank(m: RankMode) {
 
 async function doSearch() {
   const w = searchWord.value.trim();
-  if (!w) return;
+  if (!w || pixiv.loading) return;
   await pixiv.search(w, { sort: searchSort.value });
   pixiv.view = "search";
 }
@@ -333,10 +334,11 @@ function backToHome() {
       </div>
 
       <div class="search-bar">
-        <input
+        <SearchField
           v-model="searchWord"
           :placeholder="t('pixiv.searchPlaceholder')"
-          @keyup.enter="doSearch"
+          :clear-label="t('actions.clearSearch')"
+          @submit="doSearch"
         />
         <m3e-button variant="filled" size="small" :disabled="pixiv.loading" @click="doSearch">
           <span v-if="pixiv.loading" slot="icon" class="material-symbols-outlined spin"
@@ -419,10 +421,11 @@ function backToHome() {
       </div>
 
       <div class="search-bar">
-        <input
+        <SearchField
           v-model="searchWord"
           :placeholder="t('pixiv.searchPlaceholder')"
-          @keyup.enter="doSearch"
+          :clear-label="t('actions.clearSearch')"
+          @submit="doSearch"
         />
         <m3e-button variant="tonal" size="small" :disabled="pixiv.loading" @click="doSearch">
           <span v-if="pixiv.loading" slot="icon" class="material-symbols-outlined spin"
@@ -588,21 +591,9 @@ function backToHome() {
   display: flex;
   gap: 8px;
 }
-.search-bar input {
+.search-bar > :first-child {
   flex: 1;
   min-width: 0;
-  height: 40px;
-  padding: 0 14px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-extra-large);
-  background: var(--md-sys-color-surface-container);
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-medium-size);
-  outline: none;
-}
-.search-bar input:focus {
-  border-color: var(--md-sys-color-primary);
 }
 .sort-row {
   display: flex;
@@ -665,7 +656,7 @@ function backToHome() {
 .pixiv-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 16px;
+  gap: var(--lm-layout-poster-gap);
 }
 .load-more {
   display: flex;

@@ -9,6 +9,7 @@
  */
 import { computed, onActivated, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import SegmentedTabs from "@/components/SegmentedTabs.vue";
+import SearchField from "@/components/SearchField.vue";
 import BilibiliCard from "@/components/BilibiliCard.vue";
 import BilibiliVideoView from "@/components/BilibiliVideoView.vue";
 import BilibiliUserView from "@/components/BilibiliUserView.vue";
@@ -214,20 +215,14 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
 <template>
   <div class="bili-root">
     <SegmentedTabs v-model="innerTab" :tabs="innerTabs">
+      <template v-if="innerTab === 'feed'" #actions>
+        <m3e-button variant="tonal" size="small" :disabled="feedBusy" @click="bili.loadFeed(true)">
+          <span slot="icon" class="material-symbols-outlined">refresh</span>
+          {{ t("bili.refresh") }}
+        </m3e-button>
+      </template>
       <!-- ============================ 推荐 ============================ -->
       <template v-if="innerTab === 'feed'">
-        <div class="toolbar">
-          <m3e-button
-            variant="tonal"
-            size="small"
-            :disabled="feedBusy"
-            @click="bili.loadFeed(true)"
-          >
-            <span slot="icon" class="material-symbols-outlined">refresh</span>
-            {{ t("bili.refresh") }}
-          </m3e-button>
-        </div>
-
         <div v-if="bili.feed.length" class="grid">
           <BilibiliCard v-for="v in bili.feed" :key="v.bvid + v.aid" :video="v" @open="openVideo" />
         </div>
@@ -271,15 +266,13 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
       <!-- ============================ 搜索 ============================ -->
       <template v-else-if="innerTab === 'search'">
         <div class="toolbar search-bar">
-          <m3e-form-field class="search-field" variant="filled">
-            <input
-              v-model="searchInput"
-              type="search"
-              :placeholder="t('bili.searchPlaceholder')"
-              spellcheck="false"
-              @keydown.enter.prevent="submitSearch"
-            />
-          </m3e-form-field>
+          <SearchField
+            v-model="searchInput"
+            class="search-field"
+            :placeholder="t('bili.searchPlaceholder')"
+            :clear-label="t('actions.clearSearch')"
+            @submit="submitSearch"
+          />
           <m3e-button variant="filled" size="small" @click="submitSearch">
             <span slot="icon" class="material-symbols-outlined">search</span>
             {{ t("bili.searchBtn") }}
@@ -388,32 +381,23 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
-  margin-bottom: 14px;
+  gap: var(--lm-layout-toolbar-gap);
+  margin-bottom: var(--lm-layout-toolbar-content-gap);
+  flex-wrap: wrap;
 }
 
 .search-bar {
   justify-content: flex-start;
 }
 .search-field {
-  flex: 1;
+  flex: 1 1 var(--lm-search-width);
   min-width: 0;
-  --m3e-form-field-container-height: 40px;
-}
-.search-field input {
-  width: 100%;
-  border: none;
-  background: transparent;
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-medium-size);
-  outline: none;
 }
 
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 20px 16px;
+  gap: var(--lm-layout-grid-row-gap) var(--lm-layout-grid-column-gap);
 }
 
 .sentinel {

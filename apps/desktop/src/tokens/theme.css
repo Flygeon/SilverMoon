@@ -244,11 +244,63 @@
   --lm-content-pad: 24px;
   --lm-titlebar-height: 48px;
 
+  /* 桌面产品几何：颜色仍由配色内核生成，组件内部形状不套间距阶梯。 */
+  --lm-space-2: 2px;
+  --lm-space-4: 4px;
+  --lm-space-8: 8px;
+  --lm-space-12: 12px;
+  --lm-space-16: 16px;
+  --lm-space-20: 20px;
+  --lm-space-24: 24px;
+  --lm-space-32: 32px;
+  --lm-layout-control-gap: var(--lm-space-8);
+  --lm-layout-toolbar-gap: var(--lm-space-12);
+  --lm-layout-toolbar-content-gap: var(--lm-space-20);
+  --lm-layout-group-gap: var(--lm-space-24);
+  --lm-layout-grid-column-gap: var(--lm-space-16);
+  --lm-layout-grid-row-gap: var(--lm-space-20);
+  --lm-layout-poster-gap: var(--lm-space-16);
+  --lm-search-height: 40px;
+  --lm-search-width: 240px;
+  --lm-filter-chip-height: 32px;
+  --lm-settings-nav-width: 256px;
+  --lm-settings-item-gap: 3px;
+  --lm-settings-group-radius: var(--md-sys-shape-corner-extra-large);
+  --lm-settings-item-radius: var(--md-sys-shape-corner-small);
+  --lm-settings-row-gap: 14px;
+  --lm-settings-row-height: 44px;
+  --lm-settings-search-height: 44px;
+  --lm-focus-width: 2px;
+  --lm-focus-offset: 2px;
+  --lm-content-overlay-surface: rgba(0, 0, 0, 0.72);
+  --lm-content-overlay-color: #fff;
+  --lm-content-control-surface: rgba(0, 0, 0, 0.4);
+  --lm-content-control-hover: rgba(0, 0, 0, 0.6);
+  --lm-content-gradient-top: rgba(0, 0, 0, 0.35);
+  --lm-content-favorite-color: #ff6b81;
+  --lm-overlay-scrim: rgba(0, 0, 0, 0.32);
+  --lm-motion-feedback: 140ms;
+  --lm-motion-card: 220ms;
+  --lm-layer-sticky: 40;
+  --lm-layer-player: 200;
+  --lm-layer-overlay: 2400;
+  --lm-layer-overlay-panel: 2401;
+  --lm-layer-notification: 3000;
+
   /* 播放器令牌（Apple Music 蓝本，写死勿改） */
   --am-ease-out-back: cubic-bezier(0.25, 0.8, 0.25, 1);
   --am-ease-lyric: cubic-bezier(0.19, 0.11, 0, 1);
   --am-lyric-offset: 0px;
   --am-line-gap: 20px;
+}
+
+/* 语义色别名须在显式主题边界重算，不能继承父主题已解析的颜色。 */
+:root,
+[data-theme] {
+  --lm-text-secondary: var(--md-sys-color-on-surface-variant);
+  --lm-media-placeholder-surface: var(--md-sys-color-surface-container);
+  --lm-media-placeholder-color: var(--md-sys-color-outline);
+  --lm-focus-color: var(--md-sys-color-primary);
 }
 
 /* 深色主题 */
@@ -436,7 +488,7 @@ body {
 .lm-novel-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 16px;
+  gap: var(--lm-layout-poster-gap);
 }
 
 /* 填充态图标（导航选中项） */

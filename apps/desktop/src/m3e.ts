@@ -27,6 +27,7 @@ import "@m3e/web/breadcrumb";
 import "@m3e/web/card";
 import "@m3e/web/chips";
 import "@m3e/web/dialog";
+import "@m3e/web/core";
 import "@m3e/web/form-field";
 import "@m3e/web/icon-button";
 import "@m3e/web/list";

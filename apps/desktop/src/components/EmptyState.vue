@@ -76,7 +76,7 @@ const isAlert = computed(() => props.variant === "error" || props.variant === "o
   text-align: center;
   padding: 48px 28px;
   min-height: 240px;
-  border-radius: 20px;
+  border-radius: var(--lm-shape-card);
   background: var(--md-sys-color-surface-container-low);
   box-shadow: inset 0 0 0 1px var(--lm-hairline);
   animation: lm-rise 420ms var(--md-sys-motion-spring-spatial) both;
@@ -91,14 +91,14 @@ const isAlert = computed(() => props.variant === "error" || props.variant === "o
   font-size: 28px;
   color: var(--md-sys-color-on-surface-variant);
   background: var(--md-sys-color-surface-container-high);
-  margin-bottom: 16px;
+  margin-bottom: var(--lm-space-16);
 }
 .icon-alert {
   color: var(--md-sys-color-error);
   background: color-mix(in srgb, var(--md-sys-color-error) 10%, transparent);
 }
 .title {
-  font-size: 17px;
+  font-size: var(--md-sys-typescale-title-medium-size);
   font-weight: 500;
   color: var(--md-sys-color-on-surface);
   margin: 0;
@@ -112,7 +112,9 @@ const isAlert = computed(() => props.variant === "error" || props.variant === "o
 }
 .actions {
   display: flex;
-  gap: 8px;
-  margin-top: 18px;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--lm-layout-control-gap);
+  margin-top: var(--lm-space-20);
 }
 </style>

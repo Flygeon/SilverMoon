@@ -52,11 +52,14 @@ withDefaults(
 .row {
   display: flex;
   align-items: center;
-  gap: 14px;
-  min-height: 48px;
+  gap: var(--lm-settings-row-gap);
+  min-height: var(--lm-settings-row-height);
+  flex-wrap: wrap;
 }
 .row-label {
   flex: 1;
-  font-size: var(--md-sys-typescale-body-medium-size);
+  min-width: min(100%, 160px);
+  overflow-wrap: anywhere;
+  font-size: var(--md-sys-typescale-body-large-size);
 }
 </style>

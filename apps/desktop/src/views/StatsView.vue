@@ -6,6 +6,8 @@ import { useSettingsStore } from "@/stores/settings";
 import { capabilities, isDesktop } from "@/capabilities";
 import { formatListenDuration, formatDuration } from "@/utils/format";
 import { translate } from "@shared/i18n";
+import SearchField from "@/components/SearchField.vue";
+import SelectField from "@/components/SelectField.vue";
 import type { ListenSourceStat, ListenStats, TopTrackStat } from "@shared/types";
 
 const settings = useSettingsStore();
@@ -600,29 +602,28 @@ function piePath(cx: number, cy: number, r: number, startAngle: number, endAngle
         <!-- 控制栏 -->
         <div class="top-controls">
           <div class="search-box">
-            <span class="material-symbols-outlined search-icon">search</span>
-            <input
+            <SearchField
               v-model="query"
               :placeholder="t('stats.searchPlaceholder')"
-              class="search-input"
+              :clear-label="t('actions.clearSearch')"
             />
           </div>
           <div class="sort-group">
-            <select v-model="sourceFilter" class="sort-select" :title="t('stats.sourceAll')">
-              <option v-for="opt in SOURCE_OPTIONS" :key="opt.value" :value="opt.value">
-                {{ t(opt.label) }}
-              </option>
-            </select>
-            <select v-model="trackSort" class="sort-select" :title="t('stats.sortPlays')">
-              <option v-for="opt in SORT_OPTIONS" :key="opt.value" :value="opt.value">
-                {{ t(opt.label) }}
-              </option>
-            </select>
-            <select v-model="limitKey" class="sort-select" :title="t('stats.limit20')">
-              <option v-for="opt in LIMIT_OPTIONS" :key="opt.value" :value="opt.value">
-                {{ t(opt.label) }}
-              </option>
-            </select>
+            <SelectField
+              v-model="sourceFilter"
+              :label="t('stats.sourceAll')"
+              :options="SOURCE_OPTIONS.map((opt) => ({ value: opt.value, label: t(opt.label) }))"
+            />
+            <SelectField
+              v-model="trackSort"
+              :label="t('stats.sortPlays')"
+              :options="SORT_OPTIONS.map((opt) => ({ value: opt.value, label: t(opt.label) }))"
+            />
+            <SelectField
+              v-model="limitKey"
+              :label="t('stats.limit20')"
+              :options="LIMIT_OPTIONS.map((opt) => ({ value: opt.value, label: t(opt.label) }))"
+            />
           </div>
         </div>
 
@@ -1041,50 +1042,14 @@ function piePath(cx: number, cy: number, r: number, startAngle: number, endAngle
   flex: 1;
   min-width: 160px;
 }
-.search-icon {
-  position: absolute;
-  left: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 15px;
-  color: var(--md-sys-color-on-surface-variant);
-  opacity: 0.65;
-  pointer-events: none;
-}
-.search-input {
-  width: 100%;
-  padding: 8px 12px 8px 34px;
-  border: none;
-  border-radius: 999px;
-  background: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-on-surface);
-  font-size: 14px;
-  font-family: inherit;
-  outline: none;
-}
-.search-input::placeholder {
-  color: var(--md-sys-color-on-surface-variant);
-  opacity: 0.55;
-}
 .sort-group {
   display: flex;
-  gap: 6px;
+  gap: var(--lm-layout-control-gap);
   flex-wrap: wrap;
 }
-.sort-select {
-  padding: 6px 12px;
-  border: none;
-  border-radius: 999px;
-  background: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-on-surface);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  font-family: inherit;
-  outline: none;
-}
-.sort-select:hover {
-  background: var(--md-sys-color-surface-container-highest);
+.sort-group > * {
+  width: 160px;
+  max-width: 100%;
 }
 
 /* 排行列表：容器与行的外观交给 m3e-list(segmented)，这里只覆盖令牌与原观感对齐 */

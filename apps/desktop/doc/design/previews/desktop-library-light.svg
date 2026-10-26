@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1140" viewBox="0 0 1600 1140" fill="#2e333a">
+  <defs>
+    <style>
+      @font-face { font-family: SMIcons; src: url('../../../src/assets/fonts/material-symbols-rounded.woff2'); font-weight: 300 500; }
+      @font-face { font-family: SMText; src: url('../../../src/assets/fonts/SarasaGothicSC-Regular.woff'); }
+      text { font-family: SMText, 'Microsoft YaHei', sans-serif; }
+      .icon { font-family: SMIcons; font-size: 24px; font-weight: 400; font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+      .small { font-size: 12px; fill: #5b5f67; }
+      .body { font-size: 14px; }
+      .muted { fill: #5b5f67; }
+      .label { font-size: 14px; font-weight: 500; }
+      .white { fill: #f8f8ff; }
+    </style>
+    <clipPath id="window"><rect x="80" y="140" width="1440" height="900" rx="16"/></clipPath>
+    <clipPath id="album"><rect width="176" height="176" rx="20"/></clipPath>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="14" stdDeviation="20" flood-color="#304968" flood-opacity=".12"/></filter>
+    <symbol id="art-a" viewBox="0 0 176 176">
+      <rect width="176" height="176" fill="#d56843"/><circle cx="129" cy="44" r="36" fill="#efd89b"/>
+      <path d="M-12 142 87 42 188 144V190H-12Z" fill="#773f3a"/><path d="M-8 168 87 74 180 170" fill="none" stroke="#ebad76" stroke-width="2"/>
+      <text x="18" y="30" font-size="9" letter-spacing="3" fill="#fff1d3">AFTER HOURS</text><text x="18" y="156" font-size="16" fill="#fff1d3">迟来的夏天</text>
+    </symbol>
+    <symbol id="art-b" viewBox="0 0 176 176">
+      <rect width="176" height="176" fill="#213d4c"/><circle cx="132" cy="43" r="19" fill="#ead7b2"/>
+      <path d="M0 114 40 62 80 112 111 78 176 128V176H0Z" fill="#6e9695"/><path d="M0 143 59 102 110 143 176 102V176H0Z" fill="#3f676b"/>
+      <path d="M0 155Q45 143 88 155T176 155M0 166Q45 154 88 166T176 166" stroke="#b7d1c5" stroke-width="1" fill="none"/>
+      <text x="18" y="29" font-size="10" letter-spacing="4" fill="#e4e8d7">STILL WATER</text>
+    </symbol>
+    <symbol id="art-c" viewBox="0 0 176 176">
+      <rect width="176" height="176" fill="#e7a3ae"/><circle cx="91" cy="101" r="70" fill="#8b4256"/><circle cx="91" cy="101" r="49" fill="#d5788f"/><circle cx="91" cy="101" r="28" fill="#f3cbba"/>
+      <path d="M112 9 156 169" stroke="#f7e6d4" stroke-width="2"/><text x="16" y="28" font-size="16" fill="#542d3f">柔软的回声</text>
+    </symbol>
+    <symbol id="art-d" viewBox="0 0 176 176">
+      <rect width="176" height="176" fill="#dadcc4"/><path d="M88 176V38M88 112C27 112 18 48 18 48C79 48 88 112 88 112M88 135C147 135 158 72 158 72C99 72 88 135 88 135" fill="#5d7555" stroke="#5d7555" stroke-width="3"/>
+      <text x="16" y="28" font-size="10" letter-spacing="3" fill="#33492f">SLOW GROWTH</text>
+    </symbol>
+    <symbol id="art-e" viewBox="0 0 176 176">
+      <rect width="176" height="176" fill="#252c3b"/><path d="M0 37H176M0 72H176M0 107H176M0 142H176M35 0V176M70 0V176M105 0V176M140 0V176" stroke="#465162" stroke-width="1"/>
+      <circle cx="88" cy="88" r="49" fill="none" stroke="#9bbbc7" stroke-width="2"/><circle cx="88" cy="88" r="36" fill="none" stroke="#9bbbc7"/><circle cx="88" cy="88" r="22" fill="#dcd6bf"/>
+      <text x="16" y="162" font-size="10" letter-spacing="2" fill="#dcd6bf">ORBIT / 04</text>
+    </symbol>
+    <symbol id="art-f" viewBox="0 0 176 176">
+      <rect width="176" height="176" fill="#e6c78c"/><rect x="24" y="31" width="49" height="120" rx="24" fill="#6d8692"/><rect x="88" y="31" width="63" height="120" rx="31" fill="#ab5f46"/><circle cx="88" cy="88" r="32" fill="#e5ddc7"/>
+      <text x="16" y="20" font-size="9" letter-spacing="2" fill="#59452f">BETWEEN THE LINES</text>
+    </symbol>
+  </defs>
+  <rect width="1600" height="1140" fill="#e8ecf3"/>
+  <text x="80" y="53" font-size="12" letter-spacing="3" fill="#426089">SILVERMOON / DESKTOP LANGUAGE</text>
+  <text x="80" y="104" font-size="28">内容是主角，界面有秩序。</text>
+  <text x="1520" y="66" font-size="14" text-anchor="end">01 / 浅色 · 本地音乐</text>
+  <text x="1520" y="96" class="small" text-anchor="end">v0.1 · 设计评审稿 · 2026.10.26</text>
+  <rect x="80" y="140" width="1440" height="900" rx="16" fill="#f9f9fe" filter="url(#shadow)"/>
+  <g clip-path="url(#window)">
+    <rect x="80" y="140" width="1440" height="48" fill="#f2f3fa"/>
+    <text x="104" y="172" class="icon" fill="#426089">blur_on</text><text x="140" y="170" class="label">银月 SilverMoon</text>
+    <text x="1380" y="172" class="icon muted">remove</text><text x="1430" y="172" class="icon muted">crop_square</text><text x="1480" y="172" class="icon muted">close</text>
+    <rect x="80" y="188" width="240" height="772" fill="#f2f3fa"/>
+    <text x="104" y="224" class="small">我的资料库</text>
+    <text x="116" y="272" class="icon muted">image</text><text x="156" y="270" class="label">图片</text>
+    <text x="116" y="328" class="icon muted">movie</text><text x="156" y="326" class="label">视频</text>
+    <rect x="96" y="346" width="208" height="48" rx="24" fill="#d8e3f8"/>
+    <text x="116" y="384" class="icon" fill="#475263" style="font-variation-settings:'FILL' 1">music_note</text><text x="156" y="382" class="label" fill="#475263">音乐</text><text x="280" y="381" class="small" text-anchor="end">128</text>
+    <text x="116" y="440" class="icon muted">menu_book</text><text x="156" y="438" class="label">书籍</text>
+    <text x="116" y="496" class="icon muted">sports_esports</text><text x="156" y="494" class="label">游戏</text>
+    <text x="104" y="562" class="small">整理与工具</text>
+    <text x="116" y="608" class="icon muted">favorite</text><text x="156" y="606" class="label">收藏</text>
+    <text x="116" y="664" class="icon muted">history</text><text x="156" y="662" class="label">历史记录</text>
+    <text x="116" y="720" class="icon muted">apps</text><text x="156" y="718" class="label">百宝箱</text>
+    <text x="116" y="776" class="icon muted">extension</text><text x="156" y="774" class="label">扩展</text>
+    <circle cx="112" cy="850" r="4" fill="#3d6842"/><text x="126" y="854" class="small">本地资料库 · 已同步</text>
+    <text x="116" y="920" class="icon muted">settings</text><text x="156" y="918" class="label">设置</text>
+    <text x="352" y="250" font-size="32">音乐</text><text x="352" y="281" class="body muted">128 张专辑 · 1,426 首歌曲，收藏在本地。</text>
+    <rect x="1016" y="222" width="328" height="48" rx="24" fill="#eceef5"/><text x="1032" y="254" class="icon muted">search</text><text x="1072" y="251" class="body muted">搜索专辑、歌手或歌曲</text>
+    <rect x="1360" y="226" width="128" height="40" rx="20" fill="#426089"/><text x="1376" y="254" class="icon white">add</text><text x="1412" y="251" class="label white">导入音乐</text>
+    <rect x="352" y="310" width="112" height="40" rx="20" fill="#426089"/><text x="408" y="335" class="label white" text-anchor="middle">本地音乐</text>
+    <rect x="468" y="310" width="112" height="40" rx="12" fill="#d8e3f8"/><text x="524" y="335" class="label" text-anchor="middle" fill="#475263">在线音乐</text>
+    <rect x="584" y="310" width="112" height="40" rx="20" fill="#d8e3f8"/><text x="640" y="335" class="label" text-anchor="middle" fill="#475263">播放列表</text>
+    <rect x="352" y="374" width="80" height="32" rx="16" fill="#d8e3f8"/><text x="364" y="397" class="icon" font-size="20" fill="#475263">check</text><text x="394" y="395" class="label" fill="#475263">全部</text>
+    <rect x="440" y="374" width="96" height="32" rx="16" fill="none" stroke="#aeb2bb"/><text x="488" y="395" class="body" text-anchor="middle">最近添加</text>
+    <rect x="544" y="374" width="80" height="32" rx="16" fill="none" stroke="#aeb2bb"/><text x="584" y="395" class="body" text-anchor="middle">无损</text>
+    <text x="1264" y="395" class="body muted">按最近添加</text><text x="1348" y="398" class="icon muted">expand_more</text>
+    <rect x="1392" y="366" width="48" height="48" rx="24" fill="#d8e3f8"/><text x="1404" y="398" class="icon" fill="#475263">grid_view</text><text x="1452" y="398" class="icon muted">view_list</text>
+    <g transform="translate(352 432)"><g clip-path="url(#album)"><use href="#art-a" width="176" height="176"/></g><text y="204" class="body">迟来的夏天</text><text y="228" class="small">After Hours · 12 首</text></g>
+    <g transform="translate(544 432)"><g clip-path="url(#album)"><use href="#art-b" width="176" height="176"/></g><text y="204" class="body">Still Water</text><text y="228" class="small">北岸 · 9 首</text></g>
+    <g transform="translate(736 432)"><g clip-path="url(#album)"><use href="#art-c" width="176" height="176"/></g><text y="204" class="body">柔软的回声</text><text y="228" class="small">眠 · 8 首</text></g>
+    <g transform="translate(928 432)"><g clip-path="url(#album)"><use href="#art-d" width="176" height="176"/></g><text y="204" class="body">Slow Growth</text><text y="228" class="small">Moss Garden · 10 首</text></g>
+    <g transform="translate(1120 432)"><g clip-path="url(#album)"><use href="#art-e" width="176" height="176"/></g><text y="204" class="body">Orbit / 04</text><text y="228" class="small">Low Satellite · 11 首</text></g>
+    <g transform="translate(1312 432)"><g clip-path="url(#album)"><use href="#art-f" width="176" height="176"/></g><text y="204" class="body">Between the Lines</text><text y="228" class="small">Paper House · 7 首</text></g>
+    <g transform="translate(352 700)"><g clip-path="url(#album)"><use href="#art-e" width="176" height="176"/></g><text y="204" class="body">夜航笔记</text><text y="228" class="small">Low Satellite · 6 首</text></g>
+    <g transform="translate(544 700)"><g clip-path="url(#album)"><use href="#art-d" width="176" height="176"/></g><text y="204" class="body">树林里的星期日</text><text y="228" class="small">Moss Garden · 12 首</text></g>
+    <g transform="translate(736 700)"><g clip-path="url(#album)"><use href="#art-f" width="176" height="176"/></g><text y="204" class="body">无声的房间</text><text y="228" class="small">Paper House · 8 首</text></g>
+    <g transform="translate(928 700)"><g clip-path="url(#album)"><use href="#art-b" width="176" height="176"/></g><text y="204" class="body">山间来信</text><text y="228" class="small">北岸 · 10 首</text></g>
+    <g transform="translate(1120 700)"><g clip-path="url(#album)"><use href="#art-a" width="176" height="176"/></g><text y="204" class="body">落日以前</text><text y="228" class="small">After Hours · 9 首</text></g>
+    <g transform="translate(1312 700)"><g clip-path="url(#album)"><use href="#art-c" width="176" height="176"/></g><text y="204" class="body">未完待续</text><text y="228" class="small">眠 · 7 首</text></g>
+    <rect x="80" y="960" width="1440" height="80" fill="#eceef5"/>
+    <g transform="translate(104 976)"><svg width="48" height="48" viewBox="0 0 176 176"><g clip-path="url(#album)"><use href="#art-a" width="176" height="176"/></g></svg></g>
+    <text x="168" y="994" class="label">迟来的夏天</text><text x="168" y="1017" class="small">After Hours</text><text x="344" y="1008" class="icon muted">favorite</text>
+    <text x="680" y="995" class="icon muted">skip_previous</text><rect x="728" y="968" width="64" height="40" rx="20" fill="#426089"/><text x="748" y="995" class="icon white">pause</text><text x="816" y="995" class="icon muted">skip_next</text>
+    <text x="610" y="1026" class="small">01:24</text><rect x="656" y="1019" width="352" height="4" rx="2" fill="#cbd3df"/><rect x="656" y="1019" width="120" height="4" rx="2" fill="#426089"/><circle cx="776" cy="1021" r="5" fill="#426089"/><text x="1024" y="1026" class="small">04:08</text>
+    <text x="1232" y="1005" class="small">音量</text><rect x="1272" y="998" width="88" height="4" rx="2" fill="#cbd3df"/><rect x="1272" y="998" width="56" height="4" rx="2" fill="#426089"/><text x="1404" y="1008" class="icon muted">queue_music</text><text x="1464" y="1008" class="icon muted">expand_less</text>
+  </g>
+  <text x="80" y="1088" class="body">240 导航 / 32 页面边距 / 16 卡片间距 / 40 主按钮 / 80 播放条</text>
+  <text x="80" y="1113" class="small">统一表面与选择态，让内容提供色彩；所有尺寸均为逻辑像素。</text>
+  <text x="1520" y="1090" class="small" text-anchor="end">静态概念预览 · 非运行界面 · 封面与条目为演示</text>
+</svg>

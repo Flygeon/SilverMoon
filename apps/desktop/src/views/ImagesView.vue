@@ -99,9 +99,9 @@ function clearSearch() {
         <EmptyState
           v-else-if="library.search"
           icon="search_off"
-          :title="`未找到与「${library.search}」匹配的图片`"
-          description="试试其它关键词，或清除搜索条件。"
-          action-label="清除搜索"
+          :title="t('library.imageNoResults')"
+          :description="`${library.search} — ${t('library.noResultsHint')}`"
+          :action-label="t('actions.clearSearch')"
           @action="clearSearch"
         />
 
@@ -109,13 +109,9 @@ function clearSearch() {
           v-else
           icon="image"
           :title="t('library.empty')"
-          :description="
-            hasScanDirs
-              ? '已配置扫描目录，点击开始扫描以建立图片索引。'
-              : '尚未配置扫描目录。请先在设置中添加要索引的文件夹。'
-          "
+          :description="hasScanDirs ? t('library.imageScanHint') : t('library.configureScanHint')"
           :action-label="hasScanDirs ? t('actions.scan') : ''"
-          secondary-label="前往设置"
+          :secondary-label="t('library.openSettings')"
           @action="library.startScan()"
           @secondary="router.push('/settings')"
         />

@@ -88,8 +88,8 @@ function select(value: string) {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
+  gap: var(--lm-space-16);
+  margin-bottom: var(--lm-layout-toolbar-content-gap);
 }
 .page-head-text {
   min-width: 0;

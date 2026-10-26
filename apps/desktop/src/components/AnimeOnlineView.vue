@@ -12,6 +12,7 @@ import { useAnimeStore } from "@/stores/anime";
 import { useBangumiCollectStore } from "@/stores/bangumiCollect";
 import { translate } from "@shared/i18n";
 import AnimeCard from "@/components/AnimeCard.vue";
+import SearchField from "@/components/SearchField.vue";
 import AnimeCollectionPanel from "@/components/AnimeCollectionPanel.vue";
 import AnimeInfoPanel from "@/components/AnimeInfoPanel.vue";
 import SourceSheet from "@/components/SourceSheet.vue";
@@ -130,7 +131,7 @@ async function openInfo(s: BangumiSubject, ev?: MouseEvent) {
 /** 开始 Bangumi 搜索（带排序） */
 async function doSearch() {
   const kw = keyword.value.trim();
-  if (!kw) return;
+  if (!kw || searchLoading.value || anime.searchLoading) return;
   searchLoading.value = true;
   try {
     await anime.searchBangumi(kw, sort.value);
@@ -427,10 +428,11 @@ function backFromEpisodes() {
       </div>
 
       <div class="search-bar">
-        <input
+        <SearchField
           v-model="keyword"
           :placeholder="t('anime.searchPlaceholder')"
-          @keyup.enter="doSearch"
+          :clear-label="t('actions.clearSearch')"
+          @submit="doSearch"
         />
         <m3e-button
           variant="filled"
@@ -602,7 +604,7 @@ function backFromEpisodes() {
 .anime-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 16px;
+  gap: var(--lm-layout-poster-gap);
 }
 .search-head {
   display: flex;
@@ -627,23 +629,12 @@ function backFromEpisodes() {
 }
 .search-bar {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: var(--lm-layout-control-gap);
 }
-.search-bar input {
+.search-bar > :first-child {
   flex: 1;
   min-width: 0;
-  height: 40px;
-  padding: 0 14px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-extra-large);
-  background: var(--md-sys-color-surface-container);
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-medium-size);
-  outline: none;
-}
-.search-bar input:focus {
-  border-color: var(--md-sys-color-primary);
 }
 .search-bar .material-symbols-outlined {
   font-size: 18px;

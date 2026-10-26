@@ -110,31 +110,30 @@ watch(
 
 <template>
   <div class="seg-wrap" :class="{ bare }">
-    <m3e-button-group
-      v-if="!hideTabs"
-      ref="groupRef"
-      class="online-tabs"
-      variant="connected"
-      size="medium"
-    >
-      <m3e-button
-        v-for="tab in tabs"
-        :key="tab.value"
-        class="seg"
-        :class="{ active: tab.value === modelValue }"
-        shape="round"
-        size="medium"
-        :disabled="disabled"
-        :variant="tab.value === modelValue ? 'filled' : 'tonal'"
-        type="button"
-        @click="select(tab.value)"
-      >
-        <span v-if="tab.icon" slot="icon" class="material-symbols-outlined seg-icon">{{
-          tab.icon
-        }}</span>
-        <span class="seg-text">{{ tab.label }}</span>
-      </m3e-button>
-    </m3e-button-group>
+    <div v-if="!hideTabs" class="tabs-toolbar" :class="{ 'has-actions': !!$slots.actions }">
+      <m3e-button-group ref="groupRef" class="online-tabs" variant="connected" size="medium">
+        <m3e-button
+          v-for="tab in tabs"
+          :key="tab.value"
+          class="seg"
+          :class="{ active: tab.value === modelValue }"
+          shape="round"
+          size="medium"
+          :disabled="disabled"
+          :variant="tab.value === modelValue ? 'filled' : 'tonal'"
+          type="button"
+          @click="select(tab.value)"
+        >
+          <span v-if="tab.icon" slot="icon" class="material-symbols-outlined seg-icon">{{
+            tab.icon
+          }}</span>
+          <span class="seg-text">{{ tab.label }}</span>
+        </m3e-button>
+      </m3e-button-group>
+      <div v-if="$slots.actions" class="tabs-actions">
+        <slot name="actions" />
+      </div>
+    </div>
 
     <div v-if="!bare" class="tabs-panels">
       <Transition :name="`tabs-${dir}`">
@@ -147,6 +146,23 @@ watch(
 </template>
 
 <style scoped>
+.tabs-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--lm-layout-toolbar-gap);
+  margin-bottom: 14px;
+  min-width: 0;
+}
+.tabs-toolbar.has-actions {
+  margin-bottom: var(--lm-layout-toolbar-content-gap);
+}
+.tabs-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--lm-layout-control-gap);
+  margin-inline-start: auto;
+}
 .online-tabs {
   /* 连通按钮组令牌：间距 3dp、内侧圆角 8dp、按钮高约 36dp（对齐原分段控件）、图标 18dp、图标-文字 8dp */
   --m3e-connected-button-group-spacing: 3px;
@@ -159,10 +175,10 @@ watch(
   --m3e-button-icon-size: 18px;
   --m3e-button-icon-label-space: 8px;
   display: inline-flex;
-  margin-bottom: 14px;
+  max-width: 100%;
 }
 /* bare 模式：设置项单选行里不需要面板下方的留白 */
-.seg-wrap.bare .online-tabs {
+.seg-wrap.bare .tabs-toolbar {
   margin-bottom: 0;
 }
 .seg-icon {

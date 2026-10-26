@@ -307,7 +307,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 20px 16px;
+  gap: var(--lm-layout-grid-row-gap) var(--lm-layout-grid-column-gap);
 }
 .more-row {
   display: flex;

@@ -79,6 +79,7 @@ export default [
     // 属性（web components 的插槽机制），并非 Vue 2 已废弃的具名插槽语法，故关闭该规则
     files: [
       "src/components/SegmentedTabs.vue",
+      "src/components/SelectField.vue",
       "src/views/TreasureView.vue",
       "src/components/TextPrompt.vue",
       "src/components/SourceSheet.vue",
@@ -142,6 +143,8 @@ export default [
       "src/components/NovelFqapiView.vue",
       // 在线小说共享搜索栏：m3e-search-bar 的 leading/input 槽、m3e-button 的 icon 槽
       "src/components/NovelSearchBar.vue",
+      // 桌面共享搜索输入：m3e-search-bar 的原生 leading / input 槽
+      "src/components/SearchField.vue",
       // 标签 chip：m3e-assist-chip 无子槽，但同组件的 slot 约定保持一致
       "src/components/NovelTagChips.vue",
     ],

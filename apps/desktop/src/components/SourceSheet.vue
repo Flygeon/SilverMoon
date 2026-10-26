@@ -6,6 +6,8 @@
  * 卡片头部更多操作：别名检索 / 手动检索 / 在浏览器中打开。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import ModalSurface from "./ModalSurface.vue";
+import SearchField from "./SearchField.vue";
 import { useSettingsStore } from "@/stores/settings";
 import { useAnimeStore } from "@/stores/anime";
 import { translate } from "@shared/i18n";
@@ -135,29 +137,20 @@ const aliasList = computed(() => props.subject?.alias?.slice(0, 12) ?? []);
 // open=true，真正的显示发生在 updated() 里无条件的 showPopover()；元素在「打开
 // 瞬间」被 Vue/Lit 时序错开（KeepAlive 移出/移回、SegmentedTabs 过渡）时会抛
 // InvalidStateError 或被静默吞掉，表现为「点开始观看毫无反应」。自绘面板用
-// Teleport 挂到 body，不触碰 popover / 顶层 / inert，彻底消除这类生命周期竞态。
+// Teleport 挂到 body，不触碰 popover / 顶层；焦点、背景 inert 和锁滚由 ModalSurface 负责。
 
 const opened = ref(false);
-/** 打开前的 body overflow，关闭时还原（面板打开期间锁背景滚动） */
-let prevOverflow = "";
-
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") requestClose();
-}
+let openFrame = 0;
 
 /** 挂载即打开：父用 v-if 控制挂载，挂载后下一帧置 opened 触发入场过渡 */
 onMounted(() => {
-  prevOverflow = document.body.style.overflow;
-  document.body.style.overflow = "hidden";
-  window.addEventListener("keydown", onKeydown);
-  requestAnimationFrame(() => {
+  openFrame = requestAnimationFrame(() => {
     opened.value = true;
   });
 });
 
 onBeforeUnmount(() => {
-  window.removeEventListener("keydown", onKeydown);
-  document.body.style.overflow = prevOverflow;
+  cancelAnimationFrame(openFrame);
 });
 
 /** 请求关闭：先播收起动画，动画结束（after-leave）再由模板 emit('close') 通知父卸载 */
@@ -172,21 +165,27 @@ function requestClose() {
       <div v-if="opened" class="sheet-scrim" @click="requestClose"></div>
     </Transition>
     <Transition name="sheet-panel" @after-leave="emit('close')">
-      <div v-if="opened" class="source-sheet" role="dialog" aria-modal="true">
+      <ModalSurface
+        v-if="opened"
+        class="source-sheet"
+        :label="t('anime.sourceSheetTitle')"
+        @close="requestClose"
+      >
         <div class="sheet-handle" aria-hidden="true"></div>
         <div class="sheet-head">
           <span class="sheet-title">{{ t("anime.sourceSheetTitle") }}</span>
-          <button class="close" :title="t('anime.exit')" @click="requestClose">
-            <span class="material-symbols-outlined">close</span>
-          </button>
+          <m3e-icon-button :aria-label="t('anime.exit')" @click="requestClose">
+            <span class="material-symbols-outlined" aria-hidden="true">close</span>
+          </m3e-icon-button>
         </div>
 
         <div class="sheet-body">
           <div class="kw-row">
-            <input
+            <SearchField
               v-model="topKeyword"
               :placeholder="t('anime.manualSearch')"
-              @keyup.enter="doRequeryAll"
+              :clear-label="t('actions.clearSearch')"
+              @submit="doRequeryAll"
             />
             <m3e-button
               variant="tonal"
@@ -279,10 +278,12 @@ function requestClose() {
                     >
                   </div>
                   <div class="manual-row">
-                    <input
-                      v-model="manualKeyword[result.pluginName]"
+                    <SearchField
+                      :model-value="manualKeyword[result.pluginName] || ''"
                       :placeholder="t('anime.manualSearch')"
-                      @keyup.enter="doManualSearch(result.pluginName)"
+                      :clear-label="t('actions.clearSearch')"
+                      @update:model-value="manualKeyword[result.pluginName] = $event"
+                      @submit="doManualSearch(result.pluginName)"
                     />
                     <m3e-button
                       variant="tonal"
@@ -297,7 +298,7 @@ function requestClose() {
             </m3e-card>
           </div>
         </div>
-      </div>
+      </ModalSurface>
     </Transition>
   </Teleport>
 </template>
@@ -308,8 +309,8 @@ function requestClose() {
 .sheet-scrim {
   position: fixed;
   inset: 0;
-  z-index: 2400;
-  background: rgba(0, 0, 0, 0.32);
+  z-index: var(--lm-layer-overlay);
+  background: var(--lm-overlay-scrim);
 }
 .sheet-scrim-enter-active,
 .sheet-scrim-leave-active {
@@ -323,7 +324,7 @@ function requestClose() {
   position: fixed;
   left: 50%;
   bottom: 0;
-  z-index: 2401;
+  z-index: var(--lm-layer-overlay-panel);
   display: flex;
   flex-direction: column;
   width: min(680px, 100%);
@@ -371,20 +372,6 @@ function requestClose() {
   font-size: var(--md-sys-typescale-title-medium-size);
   font-weight: 500;
 }
-.close {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: transparent;
-  color: var(--md-sys-color-on-surface-variant);
-  cursor: pointer;
-}
-.close:hover {
-  background: var(--md-sys-color-surface-container);
-}
 .state {
   padding: 32px 0;
   text-align: center;
@@ -401,18 +388,9 @@ function requestClose() {
   gap: 6px;
   margin-bottom: 12px;
 }
-.kw-row input {
+.kw-row > :first-child {
   flex: 1;
   min-width: 0;
-  height: 38px;
-  padding: 0 12px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-small);
-  background: var(--md-sys-color-surface-container);
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-small-size);
-  outline: none;
 }
 .cards {
   display: flex;
@@ -568,19 +546,11 @@ function requestClose() {
 }
 .manual-row {
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: var(--lm-layout-control-gap);
 }
-.manual-row input {
+.manual-row > :first-child {
   flex: 1;
   min-width: 0;
-  height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-small);
-  background: var(--md-sys-color-surface-container);
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-small-size);
-  outline: none;
 }
 </style>

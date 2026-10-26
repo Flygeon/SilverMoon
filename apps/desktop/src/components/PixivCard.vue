@@ -1,125 +1,74 @@
-// 移植自 Pixez（GPL-3.0），本仓库 GPL-3.0-only，兼容。
+<!-- 移植自 Pixez（GPL-3.0），本仓库 GPL-3.0-only，兼容。 -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useSettingsStore } from "@/stores/settings";
 import { usePixivStore } from "@/stores/pixiv";
 import { translate } from "@shared/i18n";
 import type { PixivIllust } from "@shared/types";
+import MediaCardShell from "./MediaCardShell.vue";
 
 const props = defineProps<{ illust: PixivIllust }>();
 defineEmits<{ (e: "open"): void }>();
-
 const settings = useSettingsStore();
 const pixiv = usePixivStore();
 const src = ref("");
+const bmLabel = computed(() => translate(settings.lang, "pixiv.totalBookmarks"));
 
-const t = (key: string) => translate(settings.lang, key);
-const bmLabel = computed(() => t("pixiv.totalBookmarks"));
-
-onMounted(async () => {
-  try {
-    src.value = await pixiv.imageUrl(pixiv.coverUrl(props.illust));
-  } catch {
+watch(
+  () => pixiv.coverUrl(props.illust),
+  async (url, _previous, onCleanup) => {
+    let current = true;
+    onCleanup(() => (current = false));
     src.value = "";
-  }
-});
+    try {
+      const resolved = await pixiv.imageUrl(url);
+      if (current) src.value = resolved;
+    } catch {
+      // 代理或授权失败保留占位；卡片仍能打开详情。
+    }
+  },
+  { immediate: true },
+);
 </script>
 
 <template>
-  <button class="pixiv-card" @click="$emit('open')">
-    <div class="cover">
-      <img v-if="src" :src="src" :alt="illust.title" loading="lazy" />
-      <span v-else class="material-symbols-outlined">image</span>
-    </div>
-    <div class="meta">
-      <div class="title" :title="illust.title">{{ illust.title }}</div>
+  <MediaCardShell
+    class="pixiv-card"
+    :title="illust.title"
+    :cover="src"
+    icon="image"
+    aspect="square"
+    @open="$emit('open')"
+  >
+    <template #metadata>
       <div class="sub">
         <span class="bm" :title="bmLabel">
-          <span class="material-symbols-outlined">bookmark</span>{{ illust.totalBookmarks }}
+          <span class="material-symbols-outlined" aria-hidden="true">bookmark</span
+          >{{ illust.totalBookmarks }}
         </span>
         <span class="author" :title="illust.user.name">{{ illust.user.name }}</span>
       </div>
-    </div>
-  </button>
+    </template>
+  </MediaCardShell>
 </template>
 
 <style scoped>
-.pixiv-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-  outline: none;
-}
-.pixiv-card:focus-visible {
-  outline: 2px solid var(--md-sys-color-primary);
-  outline-offset: 4px;
-  border-radius: var(--lm-shape-card);
-}
-.cover {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  aspect-ratio: 1 / 1;
-  border-radius: var(--lm-shape-card);
-  overflow: hidden;
-  background: var(--md-sys-color-surface-container);
-  box-shadow: inset 0 0 0 1px var(--lm-hairline);
-  color: var(--md-sys-color-outline);
-  transition:
-    transform 220ms var(--md-sys-motion-spring-soft),
-    box-shadow 220ms var(--md-sys-motion-spring-effects-fast);
-}
-.pixiv-card:hover .cover {
-  transform: translateY(-4px) scale(1.015);
-  box-shadow:
-    var(--md-elevation-3),
-    inset 0 0 0 1px var(--lm-hairline);
-}
-.pixiv-card:active .cover {
-  transform: translateY(-1px) scale(0.995);
-}
-.cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.cover .material-symbols-outlined {
-  font-size: 36px;
-}
-.meta {
-  min-width: 0;
-}
-.title {
-  font-size: var(--md-sys-typescale-body-medium-size);
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .sub {
-  margin-top: 2px;
+  margin-top: var(--lm-space-2);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--lm-layout-control-gap);
   font-size: var(--md-sys-typescale-body-small-size);
-  color: var(--md-sys-color-on-surface-variant);
+  color: var(--lm-text-secondary);
 }
 .bm {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--lm-space-2);
   flex-shrink: 0;
 }
 .bm .material-symbols-outlined {
-  font-size: 14px;
+  font-size: var(--md-sys-typescale-body-medium-size);
 }
 .author {
   min-width: 0;

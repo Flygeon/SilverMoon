@@ -1,0 +1,534 @@
+{
+  "src/App.vue": {
+    "literalColors": 0,
+    "literalLayout": 22,
+    "vendorInternals": 0,
+    "rawControls": 3,
+    "globalLayers": 3
+  },
+  "src/components/AmllLyricsView.vue": {
+    "literalColors": 2,
+    "literalLayout": 2,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/components/AnimeCollectionPanel.vue": {
+    "literalColors": 0,
+    "literalLayout": 18,
+    "vendorInternals": 0,
+    "rawControls": 4,
+    "globalLayers": 0
+  },
+  "src/components/AnimeEpisodesPanel.vue": {
+    "literalColors": 0,
+    "literalLayout": 11,
+    "vendorInternals": 0,
+    "rawControls": 2,
+    "globalLayers": 0
+  },
+  "src/components/AnimeInfoPanel.vue": {
+    "literalColors": 0,
+    "literalLayout": 18,
+    "vendorInternals": 0,
+    "rawControls": 2,
+    "globalLayers": 0
+  },
+  "src/components/AnimeOnlineView.vue": {
+    "literalColors": 0,
+    "literalLayout": 15,
+    "vendorInternals": 0,
+    "rawControls": 2,
+    "globalLayers": 0
+  },
+  "src/components/AnimePlayer.vue": {
+    "literalColors": 15,
+    "literalLayout": 9,
+    "vendorInternals": 0,
+    "rawControls": 5,
+    "globalLayers": 3
+  },
+  "src/components/AnimeRuleManager.vue": {
+    "literalColors": 0,
+    "literalLayout": 13,
+    "vendorInternals": 0,
+    "rawControls": 3,
+    "globalLayers": 1
+  },
+  "src/components/AppToast.vue": {
+    "literalColors": 0,
+    "literalLayout": 2,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 1
+  },
+  "src/components/AudioEffectsPanel.vue": {
+    "literalColors": 1,
+    "literalLayout": 31,
+    "vendorInternals": 0,
+    "rawControls": 11,
+    "globalLayers": 1
+  },
+  "src/components/BilibiliAiSummary.vue": {
+    "literalColors": 0,
+    "literalLayout": 11,
+    "vendorInternals": 0,
+    "rawControls": 1,
+    "globalLayers": 0
+  },
+  "src/components/BilibiliCard.vue": {
+    "literalColors": 0,
+    "literalLayout": 7,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/components/BilibiliComments.vue": {
+    "literalColors": 0,
+    "literalLayout": 35,
+    "vendorInternals": 0,
+    "rawControls": 10,
+    "globalLayers": 0
+  },
+  "src/components/BilibiliDynamics.vue": {
+    "literalColors": 0,
+    "literalLayout": 39,
+    "vendorInternals": 0,
+    "rawControls": 4,
+    "globalLayers": 0
+  },
+  "src/components/BilibiliMinePanel.vue": {
+    "literalColors": 0,
+    "literalLayout": 17,
+    "vendorInternals": 0,
+    "rawControls": 2,
+    "globalLayers": 0
+  },
+  "src/components/BilibiliOnlineView.vue": {
+    "literalColors": 1,
+    "literalLayout": 9,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 1
+  },
+  "src/components/BilibiliRelatedList.vue": {
+    "literalColors": 2,
+    "literalLayout": 10,
+    "vendorInternals": 0,
+    "rawControls": 1,
+    "globalLayers": 0
+  },
+  "src/components/BilibiliReplyComposer.vue": {
+    "literalColors": 0,
+    "literalLayout": 11,
+    "vendorInternals": 0,
+    "rawControls": 1,
+    "globalLayers": 0
+  },
+  "src/components/BilibiliSearchHistory.vue": {
+    "literalColors": 0,
+    "literalLayout": 9,
+    "vendorInternals": 0,
+    "rawControls": 5,
+    "globalLayers": 0
+  },
+  "src/components/BilibiliUserView.vue": {
+    "literalColors": 0,
+    "literalLayout": 14,
+    "vendorInternals": 0,
+    "rawControls": 1,
+    "globalLayers": 1
+  },
+  "src/components/BilibiliVideoView.vue": {
+    "literalColors": 6,
+    "literalLayout": 35,
+    "vendorInternals": 0,
+    "rawControls": 9,
+    "globalLayers": 1
+  },
+  "src/components/BookReader.vue": {
+    "literalColors": 6,
+    "literalLayout": 33,
+    "vendorInternals": 0,
+    "rawControls": 15,
+    "globalLayers": 6
+  },
+  "src/components/CommentsPanel.vue": {
+    "literalColors": 1,
+    "literalLayout": 17,
+    "vendorInternals": 0,
+    "rawControls": 2,
+    "globalLayers": 1
+  },
+  "src/components/DrawingBoard.vue": {
+    "literalColors": 1,
+    "literalLayout": 21,
+    "vendorInternals": 0,
+    "rawControls": 2,
+    "globalLayers": 0
+  },
+  "src/components/DrawingStudio.vue": {
+    "literalColors": 1,
+    "literalLayout": 9,
+    "vendorInternals": 0,
+    "rawControls": 2,
+    "globalLayers": 0
+  },
+  "src/components/EmptyState.vue": {
+    "literalColors": 0,
+    "literalLayout": 2,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/components/ExtensionEmbed.vue": {
+    "literalColors": 0,
+    "literalLayout": 2,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/components/ExtensionSlot.vue": {
+    "literalColors": 1,
+    "literalLayout": 4,
+    "vendorInternals": 0,
+    "rawControls": 1,
+    "globalLayers": 0
+  },
+  "src/components/FluidBackground.vue": {
+    "literalColors": 2,
+    "literalLayout": 0,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/components/KugouFeed.vue": {
+    "literalColors": 0,
+    "literalLayout": 15,
+    "vendorInternals": 0,
+    "rawControls": 2,
+    "globalLayers": 0
+  },
+  "src/components/LibraryToolbar.vue": {
+    "literalColors": 0,
+    "literalLayout": 1,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/components/LyricsView.vue": {
+    "literalColors": 8,
+    "literalLayout": 4,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/components/MarkdownPreview.vue": {
+    "literalColors": 0,
+    "literalLayout": 29,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/components/MediaGrid.vue": {
+    "literalColors": 1,
+    "literalLayout": 9,
+    "vendorInternals": 0,
+    "rawControls": 1,
+    "globalLayers": 0
+  },
+  "src/components/MediaViewer.vue": {
+    "literalColors": 13,
+    "literalLayout": 9,
+    "vendorInternals": 0,
+    "rawControls": 6,
+    "globalLayers": 1
+  },
+  "src/components/MiniPlayer.vue": {
+    "literalColors": 1,
+    "literalLayout": 3,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 1
+  },
+  "src/components/MusicTagDialog.vue": {
+    "literalColors": 1,
+    "literalLayout": 34,
+    "vendorInternals": 0,
+    "rawControls": 16,
+    "globalLayers": 2
+  },
+  "src/components/NovelBqgView.vue": {
+    "literalColors": 0,
+    "literalLayout": 11,
+    "vendorInternals": 0,
+    "rawControls": 1,
+    "globalLayers": 0
+  },
+  "src/components/NovelDetailPanel.vue": {
+    "literalColors": 0,
+    "literalLayout": 18,
+    "vendorInternals": 0,
+    "rawControls": 2,
+    "globalLayers": 0
+  },
+  "src/components/NovelFqapiView.vue": {
+    "literalColors": 0,
+    "literalLayout": 18,
+    "vendorInternals": 0,
+    "rawControls": 1,
+    "globalLayers": 0
+  },
+  "src/components/NovelOnlineView.vue": {
+    "literalColors": 0,
+    "literalLayout": 10,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/components/NovelReader.vue": {
+    "literalColors": 1,
+    "literalLayout": 12,
+    "vendorInternals": 0,
+    "rawControls": 8,
+    "globalLayers": 2
+  },
+  "src/components/NovelShelfView.vue": {
+    "literalColors": 0,
+    "literalLayout": 5,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/components/NovelTagChips.vue": {
+    "literalColors": 0,
+    "literalLayout": 1,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/components/NowPlayingFeed.vue": {
+    "literalColors": 2,
+    "literalLayout": 13,
+    "vendorInternals": 0,
+    "rawControls": 3,
+    "globalLayers": 0
+  },
+  "src/components/PageHeader.vue": {
+    "literalColors": 0,
+    "literalLayout": 4,
+    "vendorInternals": 0,
+    "rawControls": 1,
+    "globalLayers": 0
+  },
+  "src/components/PixivDetailPanel.vue": {
+    "literalColors": 8,
+    "literalLayout": 30,
+    "vendorInternals": 0,
+    "rawControls": 6,
+    "globalLayers": 1
+  },
+  "src/components/PixivOnlineView.vue": {
+    "literalColors": 0,
+    "literalLayout": 25,
+    "vendorInternals": 0,
+    "rawControls": 6,
+    "globalLayers": 0
+  },
+  "src/components/PlatformBar.vue": {
+    "literalColors": 0,
+    "literalLayout": 9,
+    "vendorInternals": 0,
+    "rawControls": 1,
+    "globalLayers": 0
+  },
+  "src/components/SegmentedTabs.vue": {
+    "literalColors": 0,
+    "literalLayout": 1,
+    "vendorInternals": 3,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/components/settings/SteamSettingsPanel.vue": {
+    "literalColors": 0,
+    "literalLayout": 16,
+    "vendorInternals": 0,
+    "rawControls": 6,
+    "globalLayers": 0
+  },
+  "src/components/SourceSheet.vue": {
+    "literalColors": 1,
+    "literalLayout": 23,
+    "vendorInternals": 0,
+    "rawControls": 6,
+    "globalLayers": 0
+  },
+  "src/components/SteamLoginPanel.vue": {
+    "literalColors": 0,
+    "literalLayout": 7,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/components/TrackList.vue": {
+    "literalColors": 0,
+    "literalLayout": 4,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/components/WindowControls.vue": {
+    "literalColors": 9,
+    "literalLayout": 0,
+    "vendorInternals": 0,
+    "rawControls": 3,
+    "globalLayers": 0
+  },
+  "src/components/WindowTitleBar.vue": {
+    "literalColors": 0,
+    "literalLayout": 5,
+    "vendorInternals": 0,
+    "rawControls": 3,
+    "globalLayers": 2
+  },
+  "src/components/WritingStudio.vue": {
+    "literalColors": 3,
+    "literalLayout": 16,
+    "vendorInternals": 0,
+    "rawControls": 1,
+    "globalLayers": 0
+  },
+  "src/views/DesktopLyrics.vue": {
+    "literalColors": 12,
+    "literalLayout": 11,
+    "vendorInternals": 0,
+    "rawControls": 4,
+    "globalLayers": 0
+  },
+  "src/views/ExtensionHost.vue": {
+    "literalColors": 0,
+    "literalLayout": 2,
+    "vendorInternals": 0,
+    "rawControls": 1,
+    "globalLayers": 0
+  },
+  "src/views/ExtensionPage.vue": {
+    "literalColors": 1,
+    "literalLayout": 1,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/views/ExtensionsView.vue": {
+    "literalColors": 8,
+    "literalLayout": 23,
+    "vendorInternals": 0,
+    "rawControls": 6,
+    "globalLayers": 0
+  },
+  "src/views/FavoritesView.vue": {
+    "literalColors": 0,
+    "literalLayout": 2,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/views/FoldersView.vue": {
+    "literalColors": 0,
+    "literalLayout": 10,
+    "vendorInternals": 0,
+    "rawControls": 1,
+    "globalLayers": 0
+  },
+  "src/views/GameDetailView.vue": {
+    "literalColors": 2,
+    "literalLayout": 66,
+    "vendorInternals": 0,
+    "rawControls": 6,
+    "globalLayers": 0
+  },
+  "src/views/GamesView.vue": {
+    "literalColors": 0,
+    "literalLayout": 30,
+    "vendorInternals": 0,
+    "rawControls": 1,
+    "globalLayers": 0
+  },
+  "src/views/HistoryView.vue": {
+    "literalColors": 0,
+    "literalLayout": 2,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/views/MusicView.vue": {
+    "literalColors": 4,
+    "literalLayout": 44,
+    "vendorInternals": 0,
+    "rawControls": 26,
+    "globalLayers": 3
+  },
+  "src/views/NovelStatsView.vue": {
+    "literalColors": 0,
+    "literalLayout": 18,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/views/OsuView.vue": {
+    "literalColors": 0,
+    "literalLayout": 27,
+    "vendorInternals": 0,
+    "rawControls": 2,
+    "globalLayers": 0
+  },
+  "src/views/PlayerView.vue": {
+    "literalColors": 36,
+    "literalLayout": 36,
+    "vendorInternals": 0,
+    "rawControls": 14,
+    "globalLayers": 1
+  },
+  "src/views/PresetMarket.vue": {
+    "literalColors": 0,
+    "literalLayout": 10,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/views/SettingsView.vue": {
+    "literalColors": 1,
+    "literalLayout": 52,
+    "vendorInternals": 0,
+    "rawControls": 4,
+    "globalLayers": 1
+  },
+  "src/views/StatsView.vue": {
+    "literalColors": 1,
+    "literalLayout": 61,
+    "vendorInternals": 0,
+    "rawControls": 7,
+    "globalLayers": 0
+  },
+  "src/views/TrashView.vue": {
+    "literalColors": 0,
+    "literalLayout": 3,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/views/TreasureView.vue": {
+    "literalColors": 0,
+    "literalLayout": 5,
+    "vendorInternals": 0,
+    "rawControls": 0,
+    "globalLayers": 0
+  },
+  "src/views/WebDavView.vue": {
+    "literalColors": 0,
+    "literalLayout": 10,
+    "vendorInternals": 0,
+    "rawControls": 2,
+    "globalLayers": 1
+  }
+}

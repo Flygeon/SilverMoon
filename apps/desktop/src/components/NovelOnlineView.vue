@@ -308,7 +308,7 @@ onMounted(() => {
 .novel-online {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: var(--lm-layout-toolbar-content-gap);
   animation: lm-rise 340ms var(--md-sys-motion-easing-emphasized-decelerate) both;
 }
 .error {

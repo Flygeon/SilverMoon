@@ -59,7 +59,8 @@ function settle(v: string | null) {
   resolvePrompt(v);
 }
 
-function confirm() {
+function confirm(event?: KeyboardEvent) {
+  if (event?.isComposing || event?.keyCode === 229) return;
   if (!value.value.trim()) return;
   intent = "ok";
   void (dialogRef.value as M3eDialog | null)?.hide();
@@ -92,18 +93,21 @@ function onClosed() {
       @closed="onClosed"
     >
       <span slot="header">{{ prompt.title }}</span>
-      <input
-        ref="inputRef"
-        v-model="value"
-        class="dlg-input"
-        maxlength="64"
-        @keydown.enter="confirm"
-      />
+      <m3e-form-field class="prompt-field" variant="outlined">
+        <label slot="label">{{ prompt.title }}</label>
+        <input
+          ref="inputRef"
+          v-model="value"
+          :aria-label="prompt.title"
+          maxlength="64"
+          @keydown.enter="confirm"
+        />
+      </m3e-form-field>
       <div slot="actions" end>
         <m3e-button variant="text" size="small" @click="cancel">{{
           t("actions.cancel")
         }}</m3e-button>
-        <m3e-button variant="tonal" size="small" :disabled="!value.trim()" @click="confirm">
+        <m3e-button variant="tonal" size="small" :disabled="!value.trim()" @click="confirm()">
           {{ t("actions.confirm") }}
         </m3e-button>
       </div>
@@ -115,19 +119,8 @@ function onClosed() {
 .text-prompt {
   --m3e-dialog-min-width: 360px;
 }
-.dlg-input {
+.prompt-field {
   width: 100%;
-  padding: 10px 14px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-small);
-  background: transparent;
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-medium-size);
-  outline: none;
-}
-.dlg-input:focus {
-  border-color: var(--md-sys-color-primary);
-  box-shadow: 0 0 0 1px var(--md-sys-color-primary);
+  --m3e-form-field-width: 100%;
 }
 </style>

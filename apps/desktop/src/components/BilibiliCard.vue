@@ -101,7 +101,7 @@ const showSkeleton = computed(() => shouldLoad.value && !coverLoaded.value && !!
 .bili-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--lm-layout-control-gap);
   padding: 0;
   border: none;
   background: transparent;
@@ -112,8 +112,8 @@ const showSkeleton = computed(() => shouldLoad.value && !coverLoaded.value && !!
   outline: none;
 }
 .bili-card:focus-visible {
-  outline: 2px solid var(--md-sys-color-primary);
-  outline-offset: 4px;
+  outline: var(--lm-focus-width) solid var(--lm-focus-color);
+  outline-offset: var(--lm-space-4);
   border-radius: var(--lm-shape-card);
 }
 
@@ -130,8 +130,8 @@ const showSkeleton = computed(() => shouldLoad.value && !coverLoaded.value && !!
   box-shadow: inset 0 0 0 1px var(--lm-hairline);
   color: var(--md-sys-color-outline);
   transition:
-    transform 220ms var(--md-sys-motion-spring-soft, var(--md-sys-motion-spring-spatial)),
-    box-shadow 220ms var(--md-sys-motion-spring-effects-fast);
+    transform var(--lm-motion-card) var(--md-sys-motion-spring-soft),
+    box-shadow var(--lm-motion-card) var(--md-sys-motion-spring-effects-fast);
 }
 .bili-card:hover .cover {
   transform: translateY(-4px) scale(1.015);
@@ -173,8 +173,8 @@ const showSkeleton = computed(() => shouldLoad.value && !coverLoaded.value && !!
   bottom: 6px;
   padding: 1px 6px;
   border-radius: var(--md-sys-shape-corner-extra-small);
-  background: rgba(0, 0, 0, 0.72);
-  color: #fff;
+  background: var(--lm-content-overlay-surface);
+  color: var(--lm-content-overlay-color);
   font-size: 11px;
   line-height: 16px;
 }

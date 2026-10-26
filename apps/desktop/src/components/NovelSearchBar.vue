@@ -19,6 +19,9 @@
  * 次级动作 —— 搜索不是页面主行动，不该用 filled 抢戏）。
  */
 import { computed, ref } from "vue";
+import SearchField from "./SearchField.vue";
+import { useSettingsStore } from "@/stores/settings";
+import { translate } from "@shared/i18n";
 
 const props = withDefaults(
   defineProps<{
@@ -45,16 +48,11 @@ const emit = defineEmits<{
 }>();
 
 const keyword = ref("");
-const bar = ref<HTMLElement | null>(null);
+const bar = ref<InstanceType<typeof SearchField> | null>(null);
+const settings = useSettingsStore();
+const clearLabel = computed(() => translate(settings.lang, "actions.clearSearch"));
 
 const buttonLabel = computed(() => (props.busy ? props.busyLabel : props.label));
-
-/** 从 m3e-search-bar 的 input 槽里取真实 <input>：组件把输入框交给调用方提供。 */
-function innerInput(): HTMLInputElement | null {
-  const host = bar.value;
-  if (!host) return null;
-  return host.querySelector("input");
-}
 
 function submit() {
   const text = keyword.value.trim();
@@ -62,37 +60,24 @@ function submit() {
   emit("search", text);
 }
 
-function onInput(e: Event) {
-  const target = e.target as HTMLInputElement | null;
-  keyword.value = target?.value ?? "";
-}
-
-/** 清空（m3e-search-bar 的 clear 事件）。 */
-function onClear() {
-  keyword.value = "";
-}
-
 /** 供外部（如「再搜一次」）读取当前词。 */
 function current(): string {
   return keyword.value.trim();
 }
 
-defineExpose({ current, focus: () => innerInput()?.focus() });
+defineExpose({ current, focus: () => bar.value?.focus() });
 </script>
 
 <template>
   <div class="novel-search">
-    <m3e-search-bar ref="bar" class="bar" clearable @clear="onClear">
-      <m3e-icon slot="leading" name="search"></m3e-icon>
-      <input
-        slot="input"
-        :value="keyword"
-        :placeholder="placeholder"
-        type="text"
-        @input="onInput"
-        @keyup.enter="submit"
-      />
-    </m3e-search-bar>
+    <SearchField
+      ref="bar"
+      v-model="keyword"
+      class="bar"
+      :placeholder="placeholder"
+      :clear-label="clearLabel"
+      @submit="submit"
+    />
     <m3e-button variant="tonal" size="small" :disabled="busy" @click="submit">
       <span slot="icon" class="material-symbols-outlined">search</span>
       {{ buttonLabel }}
@@ -103,15 +88,12 @@ defineExpose({ current, focus: () => innerInput()?.focus() });
 <style scoped>
 .novel-search {
   display: flex;
-  gap: 8px;
+  gap: var(--lm-layout-control-gap);
   align-items: center;
 }
 
 .bar {
   flex: 1;
   min-width: 0;
-  /* 高度与按钮对齐（small 按钮 32px，这里给 40px 保持输入舒适） */
-  --m3e-search-bar-container-height: 40px;
-  /* MD3 search bar 默认就是 full 圆角（胶囊），保持组件默认即可 */
 }
 </style>

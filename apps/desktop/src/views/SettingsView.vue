@@ -27,6 +27,7 @@ import AudioEffectsPanel from "@/components/AudioEffectsPanel.vue";
 import SteamSettingsPanel from "@/components/settings/SteamSettingsPanel.vue";
 import SegmentedTabs from "@/components/SegmentedTabs.vue";
 import SettingRow from "@/components/SettingRow.vue";
+import SearchField from "@/components/SearchField.vue";
 import {
   capabilities,
   type BenchStatus,
@@ -935,30 +936,27 @@ onBeforeUnmount(() => {
         （我记得有个开关叫…）—— 两者不能互相替代。
       -->
       <div class="settings-search">
-        <span class="material-symbols-outlined settings-search-icon">search</span>
-        <input
+        <SearchField
           v-model="settingsQuery"
-          type="search"
+          variant="settings"
           :placeholder="t('settings.searchPlaceholder')"
-          :aria-label="t('settings.searchPlaceholder')"
-          spellcheck="false"
+          :clear-label="t('actions.clearSearch')"
         />
       </div>
-      <div v-if="settingsQuery.trim()" class="settings-hits">
+      <m3e-action-list v-if="settingsQuery.trim()" class="settings-hits">
         <p v-if="!settingsHits.length" class="settings-hit-empty">
           {{ t("settings.searchNoResult") }}
         </p>
-        <button
+        <m3e-list-action
           v-for="hit in settingsHits"
           :key="hit.key"
-          type="button"
           class="settings-hit"
           @click="goToSetting(hit)"
         >
           <span class="settings-hit-label">{{ hit.label }}</span>
-          <span class="settings-hit-where">{{ hit.where }}</span>
-        </button>
-      </div>
+          <span slot="supporting-text" class="settings-hit-where">{{ hit.where }}</span>
+        </m3e-list-action>
+      </m3e-action-list>
       <m3e-nav-menu v-else>
         <m3e-nav-menu-item-group v-for="group in settingNav" :key="group.titleKey">
           <div slot="label" class="settings-nav-group">{{ t(group.titleKey) }}</div>
@@ -3376,7 +3374,7 @@ onBeforeUnmount(() => {
  */
 .settings-view {
   display: grid;
-  grid-template-columns: 256px minmax(0, 1fr);
+  grid-template-columns: var(--lm-settings-nav-width) minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   /* 必须是 stretch（默认）：左栏/右栏要撑满第 2 行，才能各自成为等高滚动容器。
      旧布局是 sticky + start 对齐，那套在「两栏各自滚动」下不再成立。 */
@@ -3446,15 +3444,15 @@ onBeforeUnmount(() => {
 }
 .settings-option-list {
   overflow: visible;
-  --m3e-segmented-list-container-shape: 28px;
-  --m3e-segmented-list-segment-gap: 3px;
+  --m3e-segmented-list-container-shape: var(--lm-settings-group-radius);
+  --m3e-segmented-list-segment-gap: var(--lm-settings-item-gap);
   --m3e-segmented-list-item-container-color: var(--md-sys-color-surface-container-low);
-  --m3e-segmented-list-item-container-shape: 8px;
-  --m3e-segmented-list-item-hover-container-shape: 8px;
-  --m3e-segmented-list-item-focus-container-shape: 8px;
-  --m3e-segmented-list-item-selected-container-shape: 8px;
-  --m3e-list-item-leading-space: 24px;
-  --m3e-list-item-trailing-space: 24px;
+  --m3e-segmented-list-item-container-shape: var(--lm-settings-item-radius);
+  --m3e-segmented-list-item-hover-container-shape: var(--lm-settings-item-radius);
+  --m3e-segmented-list-item-focus-container-shape: var(--lm-settings-item-radius);
+  --m3e-segmented-list-item-selected-container-shape: var(--lm-settings-item-radius);
+  --m3e-list-item-leading-space: var(--lm-space-24);
+  --m3e-list-item-trailing-space: var(--lm-space-24);
   --m3e-list-item-between-space: 0px;
   --m3e-list-block-padding: 0px;
   --m3e-list-item-one-line-top-space: 12px;
@@ -3476,36 +3474,16 @@ onBeforeUnmount(() => {
   font-size: var(--md-sys-typescale-body-large-size);
 }
 .settings-option-content :deep(.row) {
-  min-height: 44px;
+  min-height: var(--lm-settings-row-height);
+  flex-wrap: wrap;
+}
+.settings-option-content :deep(.row-label) {
+  min-width: min(100%, 160px);
+  overflow-wrap: anywhere;
 }
 /* ---- 设置搜索 ---- */
 .settings-search {
-  position: relative;
-  display: flex;
-  align-items: center;
-  margin-bottom: 8px;
-}
-.settings-search-icon {
-  position: absolute;
-  left: 10px;
-  font-size: 18px;
-  color: var(--md-sys-color-on-surface-variant);
-  pointer-events: none;
-}
-.settings-search input {
-  width: 100%;
-  height: 44px;
-  padding: 0 10px 0 34px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-full);
-  background: var(--md-sys-color-surface-container-low);
-  color: var(--md-sys-color-on-surface);
-  font: inherit;
-  font-size: var(--md-sys-typescale-body-small-size);
-  outline: none;
-}
-.settings-search input:focus {
-  border-color: var(--md-sys-color-primary);
+  margin-bottom: var(--lm-layout-control-gap);
 }
 .settings-hits {
   display: flex;
@@ -3518,20 +3496,10 @@ onBeforeUnmount(() => {
   overscroll-behavior: contain;
 }
 .settings-hit {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 7px 10px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-small);
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.settings-hit:hover {
-  background: var(--md-sys-color-surface-container-high);
+  --m3e-list-item-container-shape: var(--lm-settings-item-radius);
+  --m3e-list-item-leading-space: var(--lm-space-12);
+  --m3e-list-item-trailing-space: var(--lm-space-12);
+  --m3e-list-item-font-size: var(--md-sys-typescale-body-small-size);
 }
 .settings-hit-label {
   font-size: var(--md-sys-typescale-body-small-size);
@@ -3664,8 +3632,8 @@ onBeforeUnmount(() => {
 .row {
   display: flex;
   align-items: center;
-  gap: 14px;
-  min-height: 48px;
+  gap: var(--lm-settings-row-gap);
+  min-height: var(--lm-settings-row-height);
 }
 .row-label {
   flex: 1;

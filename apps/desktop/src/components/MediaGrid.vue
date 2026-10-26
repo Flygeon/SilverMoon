@@ -326,7 +326,7 @@ function subtitleOf(item: MediaEntry): string {
               <button
                 class="fav"
                 :class="{ on: v.item.favorite }"
-                :title="v.item.favorite ? '取消收藏' : '收藏'"
+                :title="t(v.item.favorite ? 'context.unfavorite' : 'context.favorite')"
                 @click.stop="emit('favorite', v.item)"
               >
                 <span class="material-symbols-outlined" :class="{ filled: v.item.favorite }"
@@ -368,7 +368,7 @@ function subtitleOf(item: MediaEntry): string {
   left: 50%;
   bottom: 28px;
   transform: translateX(-50%);
-  z-index: 40;
+  z-index: var(--lm-layer-sticky);
   max-width: min(70vw, 520px);
   padding: 10px 18px;
   border-radius: var(--md-sys-shape-corner-full, 999px);
@@ -411,7 +411,7 @@ function subtitleOf(item: MediaEntry): string {
 
 .skeleton-grid {
   display: grid;
-  gap: 20px 16px;
+  gap: var(--lm-layout-grid-row-gap) var(--lm-layout-grid-column-gap);
 }
 
 .cell {
@@ -472,8 +472,8 @@ function subtitleOf(item: MediaEntry): string {
   bottom: 8px;
   padding: 2px 7px;
   border-radius: var(--md-sys-shape-corner-small);
-  background: rgba(0, 0, 0, 0.68);
-  color: #fff;
+  background: var(--lm-content-overlay-surface);
+  color: var(--lm-content-overlay-color);
   font-size: 11px;
   font-weight: 500;
 }
@@ -486,7 +486,7 @@ function subtitleOf(item: MediaEntry): string {
   justify-content: flex-end;
   padding: 6px;
   opacity: 0;
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.35) 0%, transparent 40%);
+  background: linear-gradient(to bottom, var(--lm-content-gradient-top) 0%, transparent 40%);
   transition: opacity var(--md-sys-motion-duration-short);
 }
 .cell:hover .overlay,
@@ -507,22 +507,22 @@ function subtitleOf(item: MediaEntry): string {
   height: 34px;
   border: none;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.4);
-  color: #fff;
+  background: var(--lm-content-control-surface);
+  color: var(--lm-content-overlay-color);
   cursor: pointer;
   transition:
     transform 140ms var(--md-sys-motion-spring),
     background 160ms var(--md-sys-motion-spring-effects-fast);
 }
 .fav:hover {
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--lm-content-control-hover);
   transform: scale(1.1);
 }
 .fav .material-symbols-outlined {
   font-size: 19px;
 }
 .fav.on {
-  color: #ff6b81;
+  color: var(--lm-content-favorite-color);
 }
 
 .meta {

@@ -12,6 +12,7 @@
  *    （曾经的真实缺陷：ConnectNamedPipe 无限阻塞导致 splash 永不消失）。
  */
 import { createServer, type Server } from "node:net";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -29,16 +30,18 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 /**
- * 起一个冒充「启动器端」的 Unix domain socket 服务。
+ * 起一个冒充「启动器端」的本地 IPC 服务。
  *
- * Windows 命名管道无法在 POSIX 上建立，但**协议字节流完全一致**
- * （一行一条、\n 结尾），所以用 Unix socket 验协议对话是有效等价物。
+ * Windows 使用命名管道，POSIX 使用 Unix socket；两者的协议字节流一致
+ * （一行一条、\n 结尾），因此各平台都能执行同一组真实握手断言。
  * 返回 socket 路径，可直接作为 --splash-pipe 的值（绝对路径会原样透传）。
  */
 function fakeLauncher(onReady: (reply: (msg: string) => void) => void): Promise<string> {
-  const dir = mkdtempSync(path.join(tmpdir(), "sm-splash-"));
-  const sockPath = path.join(dir, "pipe");
-  return new Promise((resolve) => {
+  const sockPath =
+    process.platform === "win32"
+      ? `\\\\.\\pipe\\sm-splash-${randomUUID()}`
+      : path.join(mkdtempSync(path.join(tmpdir(), "sm-splash-")), "pipe");
+  return new Promise((resolve, reject) => {
     const server = createServer((socket) => {
       socket.setEncoding("utf8");
       let buf = "";
@@ -51,6 +54,7 @@ function fakeLauncher(onReady: (reply: (msg: string) => void) => void): Promise<
       });
     });
     servers.push(server);
+    server.once("error", reject);
     server.listen(sockPath, () => resolve(sockPath));
   });
 }
