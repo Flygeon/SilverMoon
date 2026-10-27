@@ -2,9 +2,11 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createApp, h, nextTick, reactive, ref, type App } from "vue";
 import BilibiliVideoView from "../BilibiliVideoView.vue";
+import BilibiliUserView from "../BilibiliUserView.vue";
 
 const actions = vi.hoisted(() => ({
   closeVideo: vi.fn(),
+  closeUser: vi.fn(),
   toggleLike: vi.fn(),
   toggleFavorite: vi.fn(),
   addCoin: vi.fn(),
@@ -17,6 +19,9 @@ const actions = vi.hoisted(() => ({
 }));
 const bili = reactive({
   ...actions,
+  current: null as { bvid: string } | null,
+  userCard: null,
+  userStatus: "idle",
   detail: {
     title: "Video preview",
     desc: "Description",
@@ -64,6 +69,7 @@ beforeEach(() => {
   bili.acting = {};
   bili.playStatus = "ready";
   bili.playError = "";
+  bili.current = null;
   host = document.createElement("div");
   document.body.append(host);
   app = createApp({ render: () => h(BilibiliVideoView) });
@@ -127,4 +133,19 @@ it("返回、UP 主、分 P、受控清晰度和失败重试仍使用原入口",
   await nextTick();
   host.querySelector<HTMLElement>(".player-overlay m3e-button")!.click();
   expect(actions.selectQuality).toHaveBeenLastCalledWith(64);
+});
+
+it("UP 主官方返回仍关闭主页，视频覆盖时 Escape 不连关主页", async () => {
+  app.unmount();
+  app = createApp({ render: () => h(BilibiliUserView) });
+  app.mount(host);
+  bili.current = { bvid: "preview" };
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+  expect(actions.closeUser).not.toHaveBeenCalled();
+  bili.current = null;
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+  expect(actions.closeUser).toHaveBeenCalledTimes(1);
+  host.querySelector<HTMLElement>(".head m3e-icon-button")!.click();
+  expect(actions.closeUser).toHaveBeenCalledTimes(2);
+  expect(host.querySelector("button")).toBeNull();
 });

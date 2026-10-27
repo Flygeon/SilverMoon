@@ -40,9 +40,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 <template>
   <div class="user-view">
     <header class="head lm-glass">
-      <button class="head-btn" type="button" :title="t('bili.close')" @click="close">
+      <m3e-icon-button
+        class="head-btn"
+        variant="standard"
+        size="small"
+        :title="t('bili.close')"
+        :aria-label="t('bili.close')"
+        @click="close"
+      >
         <span class="material-symbols-outlined">arrow_back</span>
-      </button>
+      </m3e-icon-button>
       <span class="head-title" :title="card?.name || ''">{{
         card?.name || t("bili.userHome")
       }}</span>
@@ -166,10 +173,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 
 .head {
   flex: none;
+  box-sizing: border-box;
+  height: var(--lm-titlebar-height);
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
+  gap: var(--lm-space-12);
+  padding: 0 var(--lm-space-16);
   border-bottom: 1px solid var(--lm-hairline);
   -webkit-app-region: drag;
 }
@@ -186,24 +195,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 }
 .head-btn {
   flex: none;
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: transparent;
-  color: var(--md-sys-color-on-surface-variant);
-  cursor: pointer;
   -webkit-app-region: no-drag;
-  transition: background 160ms var(--md-sys-motion-spring-effects-fast);
-}
-.head-btn:hover {
-  background: var(--md-sys-color-surface-container-high);
-}
-.head-btn .material-symbols-outlined {
-  font-size: 20px;
 }
 
 .content {
@@ -211,8 +203,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 20px 22px 40px;
+  gap: var(--lm-space-20);
+  padding: var(--lm-space-20) var(--lm-space-24) var(--lm-space-32);
   overflow-y: auto;
   scrollbar-gutter: stable;
 }
@@ -220,8 +212,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 .profile {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 20px 22px;
+  gap: var(--lm-space-16);
+  padding: var(--lm-space-20) var(--lm-space-24);
   border-radius: var(--md-sys-shape-corner-large);
   background: var(--md-sys-color-surface-container-low);
   box-shadow: inset 0 0 0 1px var(--lm-hairline);

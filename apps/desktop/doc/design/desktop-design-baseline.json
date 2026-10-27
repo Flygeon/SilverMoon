@@ -127,9 +127,9 @@
   },
   "src/components/BilibiliUserView.vue": {
     "literalColors": 0,
-    "literalLayout": 14,
+    "literalLayout": 8,
     "vendorInternals": 0,
-    "rawControls": 1,
+    "rawControls": 0,
     "globalLayers": 1
   },
   "src/components/BilibiliVideoView.vue": {
