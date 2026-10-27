@@ -160,10 +160,10 @@ async function importFromRepo(entry: RepoEntry) {
 <template>
   <div class="anime-rules">
     <div class="head">
-      <button class="back" @click="emit('back')">
-        <span class="material-symbols-outlined">arrow_back</span>
+      <m3e-button variant="text" size="small" @click="emit('back')">
+        <span slot="icon" class="material-symbols-outlined">arrow_back</span>
         {{ t("anime.back") }}
-      </button>
+      </m3e-button>
     </div>
 
     <!-- 已装规则 -->
@@ -217,12 +217,16 @@ async function importFromRepo(entry: RepoEntry) {
     <!-- 导入 -->
     <section class="section">
       <h3 class="section-title">{{ t("anime.rule.importJson") }}</h3>
-      <textarea
-        v-model="json"
-        :placeholder="t('anime.rule.importPlaceholder')"
-        rows="8"
-        spellcheck="false"
-      ></textarea>
+      <m3e-form-field variant="outlined" class="rule-input">
+        <label slot="label">{{ t("anime.rule.importJson") }}</label>
+        <textarea
+          v-model="json"
+          :aria-label="t('anime.rule.importJson')"
+          :placeholder="t('anime.rule.importPlaceholder')"
+          rows="8"
+          spellcheck="false"
+        ></textarea>
+      </m3e-form-field>
       <p v-if="saveError" class="error">{{ saveError }}</p>
       <div class="actions">
         <m3e-button variant="tonal" size="small" :disabled="!json.trim()" @click="saveRule">
@@ -242,6 +246,7 @@ async function importFromRepo(entry: RepoEntry) {
         <button
           v-for="entry in repoItems"
           :key="entry.name"
+          type="button"
           class="repo-row"
           :disabled="importingName === entry.name"
           @click="importFromRepo(entry)"
@@ -283,22 +288,6 @@ async function importFromRepo(entry: RepoEntry) {
 .head {
   display: flex;
   align-items: center;
-}
-.back {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 10px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-medium);
-  background: transparent;
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-medium-size);
-  cursor: pointer;
-}
-.back:hover {
-  background: var(--md-sys-color-surface-container);
 }
 .section {
   display: flex;
@@ -397,22 +386,14 @@ async function importFromRepo(entry: RepoEntry) {
   opacity: 1;
   --m3e-standard-icon-button-icon-color: var(--md-sys-color-error);
 }
-textarea {
+.rule-input {
   width: 100%;
-  padding: 12px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-medium);
-  background: var(--md-sys-color-surface-container);
-  color: var(--md-sys-color-on-surface);
+}
+.rule-input textarea {
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   font-size: var(--md-sys-typescale-body-small-size);
   line-height: 1.5;
   resize: vertical;
-  outline: none;
-  box-sizing: border-box;
-}
-textarea:focus {
-  border-color: var(--md-sys-color-primary);
 }
 .actions {
   display: flex;

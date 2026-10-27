@@ -36,9 +36,9 @@
   },
   "src/components/AnimeOnlineView.vue": {
     "literalColors": 0,
-    "literalLayout": 15,
+    "literalLayout": 10,
     "vendorInternals": 0,
-    "rawControls": 2,
+    "rawControls": 0,
     "globalLayers": 0
   },
   "src/components/AnimePlayer.vue": {
@@ -50,9 +50,9 @@
   },
   "src/components/AnimeRuleManager.vue": {
     "literalColors": 0,
-    "literalLayout": 13,
+    "literalLayout": 10,
     "vendorInternals": 0,
-    "rawControls": 3,
+    "rawControls": 1,
     "globalLayers": 1
   },
   "src/components/AppToast.vue": {
@@ -120,9 +120,9 @@
   },
   "src/components/BilibiliReplyComposer.vue": {
     "literalColors": 0,
-    "literalLayout": 11,
+    "literalLayout": 10,
     "vendorInternals": 0,
-    "rawControls": 1,
+    "rawControls": 0,
     "globalLayers": 0
   },
   "src/components/BilibiliSearchHistory.vue": {
@@ -330,9 +330,9 @@
   },
   "src/components/PixivOnlineView.vue": {
     "literalColors": 0,
-    "literalLayout": 25,
+    "literalLayout": 21,
     "vendorInternals": 0,
-    "rawControls": 6,
+    "rawControls": 0,
     "globalLayers": 0
   },
   "src/components/PlatformBar.vue": {
@@ -358,9 +358,9 @@
   },
   "src/components/SourceSheet.vue": {
     "literalColors": 1,
-    "literalLayout": 23,
+    "literalLayout": 19,
     "vendorInternals": 0,
-    "rawControls": 6,
+    "rawControls": 2,
     "globalLayers": 0
   },
   "src/components/SteamLoginPanel.vue": {
@@ -498,16 +498,16 @@
   },
   "src/views/SettingsView.vue": {
     "literalColors": 1,
-    "literalLayout": 52,
+    "literalLayout": 49,
     "vendorInternals": 0,
-    "rawControls": 4,
+    "rawControls": 3,
     "globalLayers": 1
   },
   "src/views/StatsView.vue": {
-    "literalColors": 1,
-    "literalLayout": 61,
+    "literalColors": 0,
+    "literalLayout": 47,
     "vendorInternals": 0,
-    "rawControls": 7,
+    "rawControls": 0,
     "globalLayers": 0
   },
   "src/views/TrashView.vue": {

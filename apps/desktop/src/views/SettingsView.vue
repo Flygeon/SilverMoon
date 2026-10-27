@@ -42,6 +42,7 @@ import { translate } from "@shared/i18n";
 import { fetchTrending } from "@/utils/bangumiApi";
 import { SETTINGS_INDEX } from "@/views/settingsIndex.generated";
 import { matchSettings, type SettingsHit } from "@/views/settingsSearch";
+import { findSettingTarget } from "@/views/settingsTarget";
 import type { FfmpegStatus } from "@shared/types";
 import { listen } from "@/ipc/events";
 
@@ -886,7 +887,7 @@ const settingsHits = computed<SettingsHit[]>(() =>
 );
 
 /** 刚刚跳转过去、正在闪烁高亮的那一项 */
-const flashKey = ref<string | null>(null);
+let flashedElement: HTMLElement | null = null;
 let flashTimer: number | null = null;
 
 /** 跳到具体某一项：切分类 → 等 DOM 换出 → 滚动并闪烁高亮。 */
@@ -895,16 +896,21 @@ async function goToSetting(hit: SettingsHit) {
   settingsQuery.value = "";
   // 目标卡片此刻还没渲染出来（v-if 刚翻转），必须等一次 DOM 更新再找锚点
   await nextTick();
-  const el = document.querySelector('[data-setting="' + hit.key + '"]');
+  const section = document.getElementById(hit.section);
+  const el = section ? findSettingTarget(section, hit.key, t(hit.key)) : null;
   // block:"center" 在最近的滚动祖先里居中；这里最近的滚动祖先就是 .settings-body，
   // 所以跳转只会滚右栏，不会把左栏或整页带走。
-  el?.scrollIntoView({ block: "center", behavior: "smooth" });
+  el?.scrollIntoView({
+    block: "center",
+    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
+  });
+  flashedElement?.classList.remove("setting-flash");
   el?.classList.add("setting-flash");
-  flashKey.value = hit.key;
+  flashedElement = el;
   if (flashTimer !== null) window.clearTimeout(flashTimer);
   flashTimer = window.setTimeout(() => {
-    document.querySelector('[data-setting="' + hit.key + '"]')?.classList.remove("setting-flash");
-    flashKey.value = null;
+    flashedElement?.classList.remove("setting-flash");
+    flashedElement = null;
     flashTimer = null;
   }, 1600);
 }
@@ -970,13 +976,26 @@ onBeforeUnmount(() => {
             <span slot="label" class="settings-nav-label">{{ t(item.labelKey) }}</span>
           </m3e-nav-menu-item>
         </m3e-nav-menu-item-group>
-
-        <!--
-          扩展注册的设置入口（contributes.ui surface="slot" slot="settings.sidebar"）。
-          扩展想给自己的设置做个页面，就在这里冒一行 —— 不必再自己弹窗，用户也找得到。
-        -->
-        <ExtensionSlot slot="settings.sidebar" mode="entry" />
       </m3e-nav-menu>
+      <nav
+        v-if="!settingsQuery.trim()"
+        class="settings-compact-nav"
+        :aria-label="t('settings.title')"
+      >
+        <template v-for="group in settingNav" :key="group.titleKey">
+          <m3e-filter-chip
+            v-for="item in group.items"
+            :key="item.id"
+            :selected="activeSection === item.id"
+            @click.prevent="selectSection(item.id)"
+          >
+            <span slot="icon" class="material-symbols-outlined">{{ item.icon }}</span>
+            {{ t(item.labelKey) }}
+          </m3e-filter-chip>
+        </template>
+      </nav>
+      <!-- 只挂载一份扩展入口，保持原有路由与生命周期。 -->
+      <ExtensionSlot v-if="!settingsQuery.trim()" slot="settings.sidebar" mode="entry" />
     </aside>
 
     <!--
@@ -3519,7 +3538,7 @@ onBeforeUnmount(() => {
  * 用 :deep() 是因为目标行可能来自 SettingRow 子组件（scoped 不穿透），
  * 也可能仍是本文件里的裸行 —— 两种都要能高亮。
  */
-.settings-view :deep([data-setting].setting-flash) {
+.settings-view :deep(.setting-flash) {
   animation: setting-flash 1.6s ease-out;
   border-radius: var(--md-sys-shape-corner-small);
 }
@@ -3527,9 +3546,11 @@ onBeforeUnmount(() => {
   0%,
   60% {
     background: var(--md-sys-color-primary-container);
+    --m3e-segmented-list-item-container-color: var(--md-sys-color-primary-container);
   }
   100% {
     background: transparent;
+    --m3e-segmented-list-item-container-color: var(--md-sys-color-surface-container-low);
   }
 }
 
@@ -3561,6 +3582,9 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   font-size: var(--md-sys-typescale-body-medium-size);
   font-weight: 500;
+}
+.settings-compact-nav {
+  display: none;
 }
 
 .card {
@@ -3952,20 +3976,22 @@ m3e-icon-button.danger:hover {
   .settings-body {
     height: auto;
     overflow: visible;
-    padding-bottom: 0;
+    padding: var(--lm-space-16) var(--lm-content-pad) var(--lm-space-24);
   }
-  /* 窄屏把纵向导航菜单摊平成横向可滚动的胶囊行 */
+  /* 库的 nav-menu 内部只支持纵向布局；紧凑导航使用官方筛选 Chip。 */
   .settings-nav m3e-nav-menu {
+    display: none;
+  }
+  .settings-compact-nav {
     display: flex;
     flex-direction: row;
-    gap: 6px;
+    gap: var(--lm-layout-control-gap);
     overflow-x: auto;
     overflow-y: hidden;
+    padding-bottom: var(--lm-space-8);
   }
-  .settings-nav m3e-nav-menu {
-    --m3e-nav-menu-item-height: 44px;
-    --m3e-nav-menu-item-padding: 14px;
-    --m3e-nav-menu-item-icon-size: 22px;
+  .settings-compact-nav m3e-filter-chip {
+    flex: none;
   }
   .settings-nav-group {
     display: none;

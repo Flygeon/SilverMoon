@@ -135,9 +135,9 @@ defineExpose({ replyToComment, cancelReply });
       <div v-if="replyTo" class="reply-hint">
         <span class="material-symbols-outlined">reply</span>
         {{ t("bili.replyingTo") }}<strong>{{ replyTo.name }}</strong>
-        <button class="cancel" type="button" @click="cancelReply">
+        <m3e-button class="cancel" variant="text" size="small" @click="cancelReply">
           {{ t("bili.cancelReply") }}
-        </button>
+        </m3e-button>
       </div>
 
       <div class="row">
@@ -232,14 +232,6 @@ defineExpose({ replyToComment, cancelReply });
 }
 .cancel {
   margin-left: auto;
-  padding: 2px 10px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: transparent;
-  color: var(--md-sys-color-primary);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-label-large-size);
-  cursor: pointer;
 }
 
 .row {

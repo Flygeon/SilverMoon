@@ -420,10 +420,10 @@ function backFromEpisodes() {
     <!-- 搜索：Bangumi 番剧搜索 -->
     <template v-else-if="view === 'search'">
       <div class="search-head">
-        <button class="back" @click="view = 'home'">
-          <span class="material-symbols-outlined">arrow_back</span>
+        <m3e-button variant="text" size="small" @click="view = 'home'">
+          <span slot="icon" class="material-symbols-outlined">arrow_back</span>
           {{ t("anime.back") }}
-        </button>
+        </m3e-button>
         <h2 class="page-title">{{ t("anime.searchPageTitle") }}</h2>
       </div>
 
@@ -610,22 +610,6 @@ function backFromEpisodes() {
   display: flex;
   align-items: center;
   gap: 10px;
-}
-.back {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 10px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-medium);
-  background: transparent;
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-medium-size);
-  cursor: pointer;
-}
-.back:hover {
-  background: var(--md-sys-color-surface-container);
 }
 .search-bar {
   display: flex;

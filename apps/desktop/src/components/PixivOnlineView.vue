@@ -173,10 +173,10 @@ function backToHome() {
     <!-- 我的收藏 -->
     <template v-else-if="pixiv.view === 'bookmarks'">
       <div class="search-head">
-        <button class="back" @click="backToHome">
-          <span class="material-symbols-outlined">arrow_back</span>
+        <m3e-button variant="text" size="small" @click="backToHome">
+          <span slot="icon" class="material-symbols-outlined">arrow_back</span>
           {{ t("pixiv.back") }}
-        </button>
+        </m3e-button>
         <h2 class="page-title">{{ t("pixiv.myBookmarks") }}</h2>
       </div>
       <div v-if="pixiv.loading && !pixiv.bookmarkItems.length" class="state">
@@ -217,10 +217,10 @@ function backToHome() {
     <!-- 关注流 -->
     <template v-else-if="pixiv.view === 'follow'">
       <div class="search-head">
-        <button class="back" @click="backToHome">
-          <span class="material-symbols-outlined">arrow_back</span>
+        <m3e-button variant="text" size="small" @click="backToHome">
+          <span slot="icon" class="material-symbols-outlined">arrow_back</span>
           {{ t("pixiv.back") }}
-        </button>
+        </m3e-button>
         <h2 class="page-title">{{ t("pixiv.followFeed") }}</h2>
       </div>
       <div v-if="pixiv.loading && !pixiv.followItems.length" class="state">
@@ -261,10 +261,10 @@ function backToHome() {
     <!-- 作者页 -->
     <template v-else-if="pixiv.view === 'user'">
       <div class="search-head">
-        <button class="back" @click="backToHome">
-          <span class="material-symbols-outlined">arrow_back</span>
+        <m3e-button variant="text" size="small" @click="backToHome">
+          <span slot="icon" class="material-symbols-outlined">arrow_back</span>
           {{ t("pixiv.back") }}
-        </button>
+        </m3e-button>
         <h2 class="page-title">{{ pixiv.userDetail?.user.name || "" }}</h2>
       </div>
 
@@ -326,10 +326,10 @@ function backToHome() {
     <!-- 搜索结果 -->
     <template v-else-if="pixiv.view === 'search'">
       <div class="search-head">
-        <button class="back" @click="backToHome">
-          <span class="material-symbols-outlined">arrow_back</span>
+        <m3e-button variant="text" size="small" @click="backToHome">
+          <span slot="icon" class="material-symbols-outlined">arrow_back</span>
           {{ t("pixiv.back") }}
-        </button>
+        </m3e-button>
         <h2 class="page-title">{{ t("pixiv.search") }}</h2>
       </div>
 
@@ -560,22 +560,6 @@ function backToHome() {
   display: flex;
   align-items: center;
   gap: 10px;
-}
-.back {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 10px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-medium);
-  background: transparent;
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-medium-size);
-  cursor: pointer;
-}
-.back:hover {
-  background: var(--md-sys-color-surface-container);
 }
 .page-title {
   margin: 0;

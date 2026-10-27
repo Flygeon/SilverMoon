@@ -8,6 +8,7 @@ import { formatListenDuration, formatDuration } from "@/utils/format";
 import { translate } from "@shared/i18n";
 import SearchField from "@/components/SearchField.vue";
 import SelectField from "@/components/SelectField.vue";
+import SegmentedTabs from "@/components/SegmentedTabs.vue";
 import type { ListenSourceStat, ListenStats, TopTrackStat } from "@shared/types";
 
 const settings = useSettingsStore();
@@ -348,44 +349,24 @@ function piePath(cx: number, cy: number, r: number, startAngle: number, endAngle
   <div class="view">
     <header class="page-head">
       <h2>{{ t("nav.stats") }}</h2>
-      <div v-if="isDesktop" class="period-tabs">
-        <button
-          v-for="p in PERIODS"
-          :key="p.id"
-          class="period-tab"
-          :class="{ active: period === p.id }"
-          @click="period = p.id"
-        >
-          {{ t(p.label) }}
-        </button>
-      </div>
+      <SegmentedTabs
+        v-if="isDesktop"
+        v-model="period"
+        :tabs="PERIODS.map((p) => ({ value: p.id, label: t(p.label) }))"
+        bare
+      />
     </header>
 
     <!-- 自定义日期 -->
     <div v-if="isDesktop && isCustom" class="custom-date-row">
-      <input
-        type="date"
-        :value="fromDate"
-        class="date-input"
-        @change="
-          (e) => {
-            fromDate = (e.target as HTMLInputElement).value;
-            void loadData();
-          }
-        "
-      />
-      <span class="date-sep">~</span>
-      <input
-        type="date"
-        :value="toDate"
-        class="date-input"
-        @change="
-          (e) => {
-            toDate = (e.target as HTMLInputElement).value;
-            void loadData();
-          }
-        "
-      />
+      <m3e-form-field variant="outlined" class="date-field">
+        <label slot="label">{{ t("stats.fromDate") }}</label>
+        <input v-model.lazy="fromDate" type="date" :aria-label="t('stats.fromDate')" />
+      </m3e-form-field>
+      <m3e-form-field variant="outlined" class="date-field">
+        <label slot="label">{{ t("stats.toDate") }}</label>
+        <input v-model.lazy="toDate" type="date" :aria-label="t('stats.toDate')" />
+      </m3e-form-field>
     </div>
 
     <!-- 浏览器预览空态 -->
@@ -686,53 +667,16 @@ function piePath(cx: number, cy: number, r: number, startAngle: number, endAngle
   margin: 0;
 }
 
-/* 时段分段 */
-.period-tabs {
-  display: inline-flex;
-  gap: 2px;
-  padding: 3px;
-  border-radius: 999px;
-  background: var(--md-sys-color-surface-container-high);
-}
-.period-tab {
-  padding: 6px 14px;
-  border: none;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--md-sys-color-on-surface-variant);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition:
-    background 0.15s var(--md-sys-motion-spring-effects-fast),
-    color 0.15s var(--md-sys-motion-spring-effects-fast);
-}
-.period-tab.active {
-  background: var(--md-sys-color-surface-container);
-  color: var(--md-sys-color-on-surface);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-.period-tab:hover {
-  color: var(--md-sys-color-on-surface);
-}
-
 /* 自定义日期 */
 .custom-date-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 16px;
+  gap: var(--lm-layout-control-gap);
+  margin-bottom: var(--lm-space-16);
 }
-.date-input {
-  padding: 6px 10px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: 8px;
-  font-size: 13px;
-  background: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-on-surface);
-}
-.date-sep {
-  color: var(--md-sys-color-on-surface-variant);
+.date-field {
+  max-width: 100%;
 }
 
 /* 空态 */

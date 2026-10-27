@@ -56,7 +56,7 @@ const showSkeleton = computed(() => shouldLoad.value && !coverLoaded.value && !!
 </script>
 
 <template>
-  <button ref="coverRoot" class="bili-card" @click="$emit('open', video)">
+  <button ref="coverRoot" type="button" class="bili-card" @click="$emit('open', video)">
     <div class="cover">
       <!-- 骨架屏：图片解码前铺一层微光块，尺寸由 .cover 的 16:9 决定，不会跳版 -->
       <div v-if="showSkeleton" class="lm-skeleton cover-skeleton"></div>

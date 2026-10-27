@@ -324,9 +324,11 @@ function subtitleOf(item: MediaEntry): string {
 
             <div class="overlay" :class="{ pinned: v.item.favorite }" data-hero-skip>
               <button
+                type="button"
                 class="fav"
                 :class="{ on: v.item.favorite }"
                 :title="t(v.item.favorite ? 'context.unfavorite' : 'context.favorite')"
+                :aria-label="t(v.item.favorite ? 'context.unfavorite' : 'context.favorite')"
                 @click.stop="emit('favorite', v.item)"
               >
                 <span class="material-symbols-outlined" :class="{ filled: v.item.favorite }"

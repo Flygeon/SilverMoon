@@ -31,8 +31,8 @@ const settings = useSettingsStore();
 const anime = useAnimeStore();
 const t = (key: string) => translate(settings.lang, key);
 
-/** 展开的源：有结果的默认展开，点卡片头切换 */
-const expanded = ref<Set<string>>(new Set());
+/** 有结果的源默认展开；显式开合优先于结果状态。 */
+const expanded = ref<Record<string, boolean>>({});
 /** 展开「更多操作」行的源 */
 const moreOpen = ref<Set<string>>(new Set());
 /** 「手动检索」输入框的关键字 */
@@ -74,16 +74,13 @@ function statusInfo(result: (typeof anime.sourceSearch)[number]): {
 
 /** 某源是否已展开（默认展开所有有结果的卡） */
 function isExpanded(name: string) {
-  if (expanded.value.has(name)) return true;
+  if (Object.prototype.hasOwnProperty.call(expanded.value, name)) return expanded.value[name];
   const r = anime.sourceSearch.find((s) => s.pluginName === name);
   return r?.status === "success" && r.items.length > 0;
 }
 
 function toggle(name: string) {
-  const next = new Set(expanded.value);
-  if (next.has(name)) next.delete(name);
-  else next.add(name);
-  expanded.value = next;
+  expanded.value = { ...expanded.value, [name]: !isExpanded(name) };
 }
 
 function toggleMore(name: string) {
@@ -220,7 +217,12 @@ function requestClose() {
               variant="filled"
             >
               <!-- 卡片头：源名 + 状态 -->
-              <button class="card-head" @click="toggle(result.pluginName)">
+              <button
+                type="button"
+                class="card-head"
+                :aria-expanded="isExpanded(result.pluginName)"
+                @click="toggle(result.pluginName)"
+              >
                 <span class="src-name">{{ result.pluginName }}</span>
                 <span
                   class="src-status"
@@ -239,6 +241,7 @@ function requestClose() {
                 v-for="(item, i) in result.items.slice(0, 12)"
                 v-show="isExpanded(result.pluginName)"
                 :key="i"
+                type="button"
                 class="result-row"
                 @click="pick(result.pluginName, item)"
               >
@@ -248,33 +251,48 @@ function requestClose() {
 
               <!-- 更多操作 -->
               <div v-show="isExpanded(result.pluginName)" class="more-area">
-                <button class="more-toggle" @click="toggleMore(result.pluginName)">
+                <m3e-icon-button
+                  class="more-toggle lm-icon-btn-sm"
+                  size="small"
+                  :aria-label="t('actions.more')"
+                  :title="t('actions.more')"
+                  :aria-expanded="moreOpen.has(result.pluginName)"
+                  @click="toggleMore(result.pluginName)"
+                >
                   <span class="material-symbols-outlined">more_vert</span>
-                </button>
+                </m3e-icon-button>
 
                 <div v-if="moreOpen.has(result.pluginName)" class="more-panel">
                   <div class="more-actions">
-                    <button
+                    <m3e-button
                       v-if="aliasList.length"
-                      class="act"
+                      variant="outlined"
+                      size="small"
                       @click="doAliasSearch(result.pluginName, aliasList[0])"
                     >
                       {{ t("anime.aliasSearch") }}
-                    </button>
-                    <button class="act" @click="doManualSearch(result.pluginName)">
+                    </m3e-button>
+                    <m3e-button
+                      variant="outlined"
+                      size="small"
+                      @click="doManualSearch(result.pluginName)"
+                    >
                       {{ t("anime.manualSearch") }}
-                    </button>
-                    <button class="act" @click="openInBrowser(result.pluginName)">
+                    </m3e-button>
+                    <m3e-button
+                      variant="outlined"
+                      size="small"
+                      @click="openInBrowser(result.pluginName)"
+                    >
                       {{ t("anime.openInBrowser") }}
-                    </button>
+                    </m3e-button>
                   </div>
                   <div v-if="aliasList.length" class="alias-row">
-                    <span
+                    <m3e-assist-chip
                       v-for="a in aliasList"
                       :key="a"
-                      class="alias-chip"
                       @click="doAliasSearch(result.pluginName, a)"
-                      >{{ a }}</span
+                      >{{ a }}</m3e-assist-chip
                     >
                   </div>
                   <div class="manual-row">
@@ -489,19 +507,7 @@ function requestClose() {
   padding: 6px 8px;
 }
 .more-toggle {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
   margin-left: auto;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: transparent;
-  color: var(--md-sys-color-on-surface-variant);
-  cursor: pointer;
-}
-.more-toggle:hover {
-  background: var(--md-sys-color-surface-container-high);
 }
 .more-panel {
   display: flex;
@@ -514,35 +520,10 @@ function requestClose() {
   flex-wrap: wrap;
   gap: 8px;
 }
-.act {
-  padding: 5px 12px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-full);
-  background: transparent;
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-label-small-size);
-  cursor: pointer;
-}
-.act:hover {
-  color: var(--md-sys-color-primary);
-  border-color: var(--md-sys-color-primary);
-}
 .alias-row {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-}
-.alias-chip {
-  padding: 3px 10px;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: var(--md-sys-color-surface-container-highest);
-  color: var(--md-sys-color-on-surface-variant);
-  font-size: var(--md-sys-typescale-label-small-size);
-  cursor: pointer;
-}
-.alias-chip:hover {
-  color: var(--md-sys-color-primary);
 }
 .manual-row {
   display: flex;
