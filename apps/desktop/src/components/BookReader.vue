@@ -1190,6 +1190,14 @@ const PDF_MODES = [
   flex-wrap: wrap;
   gap: var(--lm-space-2);
 }
+.reader m3e-icon-button {
+  /* 全局适配在控件自身定义这些变量，必须在同一 host 上覆盖，不能只靠父级继承。 */
+  --m3e-standard-icon-button-icon-color: var(--reader-fg);
+  --m3e-standard-icon-button-hover-icon-color: var(--reader-fg);
+  --m3e-standard-icon-button-hover-state-layer-color: var(--reader-fg);
+  --m3e-standard-icon-button-focus-icon-color: var(--reader-fg);
+  --m3e-standard-icon-button-focus-state-layer-color: var(--reader-fg);
+}
 .rbtn.active {
   position: relative;
   z-index: 25;
