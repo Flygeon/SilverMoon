@@ -815,9 +815,15 @@ const PDF_MODES = [
     }"
   >
     <header class="bar">
-      <button class="rbtn" title="关闭 (Esc)" @click="emit('close')">
+      <m3e-icon-button
+        class="rbtn"
+        size="small"
+        aria-label="关闭"
+        title="关闭 (Esc)"
+        @click="emit('close')"
+      >
         <span class="material-symbols-outlined">close</span>
-      </button>
+      </m3e-icon-button>
       <div class="title" :title="item?.path">
         {{ novelSource?.title || item?.title || item?.name }}
       </div>
@@ -840,27 +846,33 @@ const PDF_MODES = [
       </div>
       <div class="tools">
         <!-- 目录侧边栏（EPUB / 在线文本） -->
-        <button
+        <m3e-icon-button
           v-if="kind === 'epub' || kind === 'text'"
           class="rbtn"
           :class="{ active: sidebarOpen }"
+          size="small"
+          :variant="sidebarOpen ? 'tonal' : 'standard'"
+          :aria-expanded="sidebarOpen"
+          aria-label="目录"
           title="目录"
           @click="sidebarOpen = !sidebarOpen"
         >
           <span class="material-symbols-outlined">toc</span>
-        </button>
+        </m3e-icon-button>
         <!-- PDF 阅读模式切换 -->
         <div v-if="kind === 'pdf'" class="modes">
-          <button
+          <m3e-icon-button
             v-for="m in PDF_MODES"
             :key="m.key"
-            class="mode-btn"
-            :class="{ active: mode === m.key }"
+            size="small"
+            :variant="mode === m.key ? 'tonal' : 'standard'"
+            :aria-pressed="mode === m.key"
+            :aria-label="m.label"
             :title="m.label"
             @click="settings.pdfReadMode = m.key"
           >
             <span class="material-symbols-outlined">{{ m.icon }}</span>
-          </button>
+          </m3e-icon-button>
         </div>
         <!-- 背景颜色切换：直接展示在顶栏 -->
         <div class="swatches" title="背景颜色">
@@ -871,27 +883,40 @@ const PDF_MODES = [
             :class="{ active: settings.readerTheme === k }"
             :style="{ background: READER_THEMES[k].bg }"
             :title="READER_THEMES[k].label"
+            :aria-label="READER_THEMES[k].label"
+            :aria-pressed="settings.readerTheme === k"
+            type="button"
             @click="settings.readerTheme = k"
           ></button>
         </div>
-        <button class="rbtn" title="缩小" @click="setZoom(-0.2)">
+        <m3e-icon-button size="small" aria-label="缩小" title="缩小" @click="setZoom(-0.2)">
           <span class="material-symbols-outlined">zoom_out</span>
-        </button>
-        <button class="rbtn" title="放大" @click="setZoom(0.2)">
+        </m3e-icon-button>
+        <m3e-icon-button size="small" aria-label="放大" title="放大" @click="setZoom(0.2)">
           <span class="material-symbols-outlined">zoom_in</span>
-        </button>
+        </m3e-icon-button>
         <!-- 更多设置二级菜单（字号/字体/行距/段间距） -->
-        <button
+        <m3e-icon-button
           class="rbtn"
           :class="{ active: menuOpen }"
+          size="small"
+          :variant="menuOpen ? 'tonal' : 'standard'"
+          :aria-expanded="menuOpen"
+          aria-label="阅读设置"
           title="阅读设置"
           @click="menuOpen = !menuOpen"
         >
           <span class="material-symbols-outlined">tune</span>
-        </button>
-        <button v-if="item" class="rbtn" title="用系统应用打开" @click="openExternally">
+        </m3e-icon-button>
+        <m3e-icon-button
+          v-if="item"
+          size="small"
+          aria-label="用系统应用打开"
+          title="用系统应用打开"
+          @click="openExternally"
+        >
           <span class="material-symbols-outlined">open_in_new</span>
-        </button>
+        </m3e-icon-button>
       </div>
     </header>
 
@@ -911,15 +936,14 @@ const PDF_MODES = [
         <div class="set-row">
           <span class="set-label">字体</span>
           <div class="set-chips">
-            <button
+            <m3e-filter-chip
               v-for="k in READER_FONT_KEYS"
               :key="k"
-              class="chip"
-              :class="{ active: settings.readerFont === k }"
-              @click="settings.readerFont = k"
+              :selected="settings.readerFont === k"
+              @click.prevent="settings.readerFont = k"
             >
               {{ READER_FONTS[k].label }}
-            </button>
+            </m3e-filter-chip>
           </div>
         </div>
         <div class="set-row">
@@ -1065,15 +1089,45 @@ const PDF_MODES = [
       </div>
 
       <!-- 左/右点击翻页热区；中间留空保持内容可交互 -->
-      <button v-if="canNav" class="tapzone left" @click="onTapZone('prev')"></button>
-      <button v-if="canNav" class="tapzone right" @click="onTapZone('next')"></button>
+      <button
+        v-if="canNav"
+        class="tapzone left"
+        type="button"
+        aria-label="上一页"
+        tabindex="-1"
+        @click="onTapZone('prev')"
+      ></button>
+      <button
+        v-if="canNav"
+        class="tapzone right"
+        type="button"
+        aria-label="下一页"
+        tabindex="-1"
+        @click="onTapZone('next')"
+      ></button>
 
-      <button v-if="canNav" class="nav prev" title="上一页 (←)" @click="prevPage">
+      <m3e-icon-button
+        v-if="canNav"
+        class="nav prev"
+        variant="tonal"
+        size="small"
+        aria-label="上一页"
+        title="上一页 (←)"
+        @click="prevPage"
+      >
         <span class="material-symbols-outlined">chevron_left</span>
-      </button>
-      <button v-if="canNav" class="nav next" title="下一页 (→)" @click="nextPage">
+      </m3e-icon-button>
+      <m3e-icon-button
+        v-if="canNav"
+        class="nav next"
+        variant="tonal"
+        size="small"
+        aria-label="下一页"
+        title="下一页 (→)"
+        @click="nextPage"
+      >
         <span class="material-symbols-outlined">chevron_right</span>
-      </button>
+      </m3e-icon-button>
     </div>
   </div>
 </template>
@@ -1082,7 +1136,16 @@ const PDF_MODES = [
 .reader {
   position: fixed;
   inset: 0;
-  z-index: 200;
+  z-index: var(--lm-layer-player);
+  /* 阅读纸色独立于应用种子色；这里只映射官方公开令牌。 */
+  --m3e-icon-button-icon-color: var(--reader-fg);
+  --m3e-icon-button-hover-icon-color: var(--reader-fg);
+  --m3e-icon-button-hover-state-layer-color: var(--reader-fg);
+  --m3e-icon-button-focus-icon-color: var(--reader-fg);
+  --m3e-icon-button-focus-state-layer-color: var(--reader-fg);
+  --m3e-icon-button-pressed-icon-color: var(--reader-fg);
+  --m3e-icon-button-pressed-state-layer-color: var(--reader-fg);
+  --m3e-tonal-icon-button-container-color: color-mix(in srgb, var(--reader-fg) 18%, transparent);
   display: flex;
   flex-direction: column;
   background: var(--reader-bg);
@@ -1123,31 +1186,13 @@ const PDF_MODES = [
 }
 .tools {
   display: flex;
-  gap: 2px;
-}
-.rbtn {
-  display: flex;
   align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  transition: background 160ms var(--md-sys-motion-spring-effects-fast);
-}
-.rbtn:hover {
-  background: color-mix(in srgb, var(--reader-fg) 14%, transparent);
+  flex-wrap: wrap;
+  gap: var(--lm-space-2);
 }
 .rbtn.active {
   position: relative;
   z-index: 25;
-  background: color-mix(in srgb, var(--reader-fg) 18%, transparent);
-}
-.rbtn .material-symbols-outlined {
-  font-size: 20px;
 }
 
 /* 顶栏背景色切换：一行色板 */
@@ -1227,28 +1272,15 @@ const PDF_MODES = [
   flex: 1;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-}
-.set-chips .chip {
-  height: 28px;
-  padding: 0 12px;
-  border-radius: 14px;
-  border: 1px solid color-mix(in srgb, var(--reader-fg) 24%, transparent);
-  background: transparent;
-  color: var(--reader-fg);
-  font-family: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 160ms var(--md-sys-motion-spring-effects-fast);
-}
-.set-chips .chip:hover {
-  background: color-mix(in srgb, var(--reader-fg) 10%, transparent);
-}
-.set-chips .chip.active {
-  background: var(--reader-fg);
-  color: var(--reader-bg);
-  border-color: transparent;
-  font-weight: 500;
+  gap: var(--lm-space-8);
+  --m3e-chip-unselected-label-text-color: var(--reader-fg);
+  --m3e-chip-selected-label-text-color: var(--reader-bg);
+  --m3e-chip-selected-leading-icon-color: var(--reader-bg);
+  --m3e-chip-selected-container-color: var(--reader-fg);
+  --m3e-chip-selected-container-hover-color: var(--reader-bg);
+  --m3e-chip-selected-container-focus-color: var(--reader-bg);
+  --m3e-chip-unselected-state-layer-hover-color: var(--reader-fg);
+  --m3e-chip-unselected-state-layer-focus-color: var(--reader-fg);
 }
 .pop-enter-active,
 .pop-leave-active {
@@ -1396,35 +1428,8 @@ const PDF_MODES = [
 
 .modes {
   display: flex;
-  gap: 2px;
-  padding: 2px;
-  margin-right: 4px;
-  border-radius: 18px;
-  background: color-mix(in srgb, var(--reader-fg) 10%, transparent);
-}
-.mode-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: color-mix(in srgb, var(--reader-fg) 65%, transparent);
-  cursor: pointer;
-  transition: all 160ms var(--md-sys-motion-spring-effects-fast);
-}
-.mode-btn:hover {
-  color: var(--reader-fg);
-  background: color-mix(in srgb, var(--reader-fg) 14%, transparent);
-}
-.mode-btn.active {
-  background: var(--reader-fg);
-  color: var(--reader-bg);
-}
-.mode-btn .material-symbols-outlined {
-  font-size: 18px;
+  gap: var(--lm-space-2);
+  margin-right: var(--lm-space-4);
 }
 
 .epub-host {
@@ -1529,29 +1534,12 @@ m3e-loading-indicator.reader-loading {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  width: 44px;
-  height: 44px;
-  border: none;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--reader-fg) 12%, transparent);
-  color: var(--reader-fg);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 160ms var(--md-sys-motion-spring-effects-fast);
   z-index: 2;
-}
-.nav:hover {
-  background: color-mix(in srgb, var(--reader-fg) 24%, transparent);
 }
 .prev {
   left: 8px;
 }
 .next {
   right: 8px;
-}
-.nav .material-symbols-outlined {
-  font-size: 26px;
 }
 </style>

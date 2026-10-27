@@ -148,10 +148,10 @@
   },
   "src/components/BookReader.vue": {
     "literalColors": 6,
-    "literalLayout": 33,
+    "literalLayout": 25,
     "vendorInternals": 0,
-    "rawControls": 15,
-    "globalLayers": 6
+    "rawControls": 5,
+    "globalLayers": 5
   },
   "src/components/CommentsPanel.vue": {
     "literalColors": 1,
