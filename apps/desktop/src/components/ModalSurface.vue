@@ -7,6 +7,7 @@ defineProps<{ label: string }>();
 const emit = defineEmits<{ close: [] }>();
 const surface = ref<HTMLElement | null>(null);
 const { onEscape } = useModalLayer(surface, () => emit("close"));
+defineExpose({ focus: () => surface.value?.focus() });
 </script>
 
 <template>

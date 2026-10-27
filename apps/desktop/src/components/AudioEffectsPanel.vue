@@ -3,13 +3,14 @@
  * 音效面板：EQ + 低音增强 + 混响 + 立体声宽度 + 预设管理。
  * 用于全屏播放器右侧栏与设置页，保持一致 MD3 视觉。
  */
-import { ref } from "vue";
+import { nextTick, ref } from "vue";
 import { useAudioEffectsStore } from "@/stores/audioEffects";
 import { useSettingsStore } from "@/stores/settings";
 import { capabilities, isDesktop } from "@/capabilities";
 import { translate } from "@shared/i18n";
 import { save } from "@/ipc/dialog";
 import { writeTextFile } from "@/ipc/fs";
+import ModalSurface from "@/components/ModalSurface.vue";
 
 const effects = useAudioEffectsStore();
 const settings = useSettingsStore();
@@ -19,6 +20,7 @@ const shareStatus = ref<"copied" | "failed" | "imported" | "invalid" | null>(nul
 
 // ---- 分享弹窗 ----
 const sharePopupPresetId = ref<string | null>(null);
+const shareSurface = ref<{ focus(): void } | null>(null);
 const uploadPopupPresetId = ref<string | null>(null);
 const uploadName = ref("");
 const uploadDesc = ref("");
@@ -115,6 +117,8 @@ function openUploadPopup(id: string) {
   uploadStatus.value = "idle";
   uploadError.value = "";
   sharePopupPresetId.value = null;
+  // 步骤切换会移除当前焦点按钮；将焦点留在同一弹层，Escape 和 Tab 才继续可用。
+  void nextTick(() => shareSurface.value?.focus());
 }
 
 async function saveUploadJson() {
@@ -241,39 +245,49 @@ const frequencyLabel = (hz: number) => (hz >= 1000 ? `${(hz / 1000).toFixed(0)}k
             <m3e-assist-chip class="chip user" @click="applyPreset(p.id)">
               {{ p.name }}
             </m3e-assist-chip>
-            <button
-              class="preset-action"
+            <m3e-icon-button
+              class="preset-action lm-icon-btn-sm"
+              size="small"
+              :aria-label="t('player.effectsShare')"
               :title="t('player.effectsShare')"
               @click="showSharePopup(p.id)"
             >
               <span class="material-symbols-outlined">ios_share</span>
-            </button>
-            <button
-              class="preset-action preset-delete"
+            </m3e-icon-button>
+            <m3e-icon-button
+              class="preset-action preset-delete lm-icon-btn-sm"
+              size="small"
+              :aria-label="t('player.effectsDelete')"
               :title="t('player.effectsDelete')"
               @click="deletePreset(p.id)"
             >
               <span class="material-symbols-outlined">close</span>
-            </button>
+            </m3e-icon-button>
           </span>
         </div>
         <div class="save-preset">
-          <input
-            v-model="newPresetName"
-            :placeholder="t('player.effectsSaveName')"
-            @keyup.enter="savePreset"
-          />
+          <m3e-form-field variant="outlined" class="preset-field">
+            <label slot="label">{{ t("player.effectsSaveName") }}</label>
+            <input
+              v-model="newPresetName"
+              :aria-label="t('player.effectsSaveName')"
+              @keydown.enter="if (!$event.isComposing) savePreset();"
+            />
+          </m3e-form-field>
           <m3e-button variant="tonal" size="small" @click="savePreset">
             <span slot="icon" class="material-symbols-outlined">save</span>
             {{ t("player.effectsSave") }}
           </m3e-button>
         </div>
         <div class="import-preset">
-          <input
-            v-model="importCode"
-            :placeholder="t('player.effectsImportCode')"
-            @keyup.enter="importPreset"
-          />
+          <m3e-form-field variant="outlined" class="preset-field">
+            <label slot="label">{{ t("player.effectsImportCode") }}</label>
+            <input
+              v-model="importCode"
+              :aria-label="t('player.effectsImportCode')"
+              @keydown.enter="if (!$event.isComposing) importPreset();"
+            />
+          </m3e-form-field>
           <m3e-button variant="tonal" size="small" @click="importPreset">
             <span slot="icon" class="material-symbols-outlined">input</span>
             {{ t("player.effectsImport") }}
@@ -341,87 +355,100 @@ const frequencyLabel = (hz: number) => (hz >= 1000 ? `${(hz / 1000).toFixed(0)}k
       </m3e-button>
     </fieldset>
 
-    <!-- 分享选择弹窗 -->
+    <!-- 同一弹层承载分享与上传步骤，切换步骤保留触发器与焦点边界。 -->
     <Teleport to="body">
-      <div v-if="sharePopupPresetId" class="popup-overlay" @click.self="closeSharePopup">
-        <div class="popup-card">
-          <h4 class="popup-title">{{ t("player.effectsShare") }}</h4>
-          <div class="popup-actions">
-            <button class="popup-opt" @click="copyShareCode(sharePopupPresetId!)">
-              <span class="material-symbols-outlined">content_copy</span>
-              <span class="popup-opt-label">{{ t("player.effectsShareCopy") }}</span>
-            </button>
-            <button class="popup-opt" @click="openUploadPopup(sharePopupPresetId!)">
-              <span class="material-symbols-outlined">cloud_upload</span>
-              <span class="popup-opt-label">{{ t("player.effectsShareUpload") }}</span>
-            </button>
+      <div
+        v-if="sharePopupPresetId || uploadPopupPresetId"
+        class="popup-overlay"
+        @click.self="closeSharePopup"
+      >
+        <ModalSurface
+          ref="shareSurface"
+          class="popup-card"
+          :class="{ 'upload-card': uploadPopupPresetId }"
+          :label="t(uploadPopupPresetId ? 'player.effectsShareUpload' : 'player.effectsShare')"
+          @close="closeSharePopup"
+        >
+          <h4 class="popup-title">
+            {{ t(uploadPopupPresetId ? "player.effectsShareUpload" : "player.effectsShare") }}
+          </h4>
+          <div v-if="sharePopupPresetId" class="popup-actions">
+            <m3e-button variant="tonal" @click="copyShareCode(sharePopupPresetId)">
+              <span slot="icon" class="material-symbols-outlined">content_copy</span>
+              {{ t("player.effectsShareCopy") }}
+            </m3e-button>
+            <m3e-button variant="tonal" @click="openUploadPopup(sharePopupPresetId)">
+              <span slot="icon" class="material-symbols-outlined">cloud_upload</span>
+              {{ t("player.effectsShareUpload") }}
+            </m3e-button>
           </div>
-          <button class="popup-close" @click="closeSharePopup">
-            <span class="material-symbols-outlined">close</span>
-          </button>
-        </div>
-      </div>
-    </Teleport>
-
-    <!-- 上传至预设市场弹窗 -->
-    <Teleport to="body">
-      <div v-if="uploadPopupPresetId" class="popup-overlay" @click.self="closeSharePopup">
-        <div class="popup-card upload-card">
-          <h4 class="popup-title">{{ t("player.effectsShareUpload") }}</h4>
-          <p class="upload-hint">{{ t("player.effectsUploadHint") }}</p>
-
-          <label class="upload-field">
-            <span>{{ t("player.effectsUploadName") }}</span>
-            <input v-model="uploadName" :placeholder="t('player.effectsUploadNamePlaceholder')" />
-          </label>
-          <label class="upload-field">
-            <span>{{ t("player.effectsUploadDesc") }}</span>
-            <textarea
-              v-model="uploadDesc"
-              :placeholder="t('player.effectsUploadDescPlaceholder')"
-              rows="3"
-            />
-          </label>
-          <label class="upload-field">
-            <span>{{ t("player.effectsUploadShareCode") }}</span>
-            <input v-model="uploadShareCode" readonly class="readonly-input" />
-          </label>
-
-          <div v-if="uploadError" class="upload-error">{{ uploadError }}</div>
-          <div v-if="uploadStatus === 'saved'" class="upload-success">
-            <span class="material-symbols-outlined">check_circle</span>
-            {{ t("player.effectsUploadSaved") }}
-          </div>
-
-          <div class="upload-actions">
-            <m3e-button
-              variant="filled"
-              size="small"
-              :disabled="uploadStatus === 'saving' || uploadStatus === 'saved'"
-              @click="saveUploadJson"
-            >
-              <span
-                v-if="uploadStatus === 'saving'"
-                slot="icon"
-                class="material-symbols-outlined spinning"
-                >sync</span
+          <template v-else>
+            <p class="upload-hint">{{ t("player.effectsUploadHint") }}</p>
+            <m3e-form-field class="upload-field" variant="outlined">
+              <label slot="label">{{ t("player.effectsUploadName") }}</label>
+              <input
+                v-model="uploadName"
+                :aria-label="t('player.effectsUploadName')"
+                :placeholder="t('player.effectsUploadNamePlaceholder')"
+              />
+            </m3e-form-field>
+            <m3e-form-field class="upload-field" variant="outlined">
+              <label slot="label">{{ t("player.effectsUploadDesc") }}</label>
+              <textarea
+                v-model="uploadDesc"
+                :aria-label="t('player.effectsUploadDesc')"
+                :placeholder="t('player.effectsUploadDescPlaceholder')"
+                rows="3"
+              />
+            </m3e-form-field>
+            <m3e-form-field class="upload-field" variant="outlined">
+              <label slot="label">{{ t("player.effectsUploadShareCode") }}</label>
+              <input
+                v-model="uploadShareCode"
+                :aria-label="t('player.effectsUploadShareCode')"
+                readonly
+              />
+            </m3e-form-field>
+            <div v-if="uploadError" class="upload-error">{{ uploadError }}</div>
+            <div v-if="uploadStatus === 'saved'" class="upload-success">
+              <span class="material-symbols-outlined">check_circle</span>
+              {{ t("player.effectsUploadSaved") }}
+            </div>
+            <div class="upload-actions">
+              <m3e-button
+                variant="filled"
+                size="small"
+                :disabled="uploadStatus === 'saving' || uploadStatus === 'saved'"
+                @click="saveUploadJson"
               >
-              <span v-else slot="icon" class="material-symbols-outlined">save</span>
-              {{
-                uploadStatus === "saved"
-                  ? t("player.effectsUploadSaved")
-                  : t("player.effectsUploadSave")
-              }}
-            </m3e-button>
-            <m3e-button variant="text" size="small" @click="closeSharePopup">
-              {{ t("actions.cancel") }}
-            </m3e-button>
-          </div>
-
-          <button class="popup-close" @click="closeSharePopup">
+                <span
+                  v-if="uploadStatus === 'saving'"
+                  slot="icon"
+                  class="material-symbols-outlined spinning"
+                  >sync</span
+                >
+                <span v-else slot="icon" class="material-symbols-outlined">save</span>
+                {{
+                  uploadStatus === "saved"
+                    ? t("player.effectsUploadSaved")
+                    : t("player.effectsUploadSave")
+                }}
+              </m3e-button>
+              <m3e-button variant="text" size="small" @click="closeSharePopup">
+                {{ t("actions.cancel") }}
+              </m3e-button>
+            </div>
+          </template>
+          <m3e-icon-button
+            class="popup-close lm-icon-btn-sm"
+            size="small"
+            :aria-label="t('actions.close')"
+            :title="t('actions.close')"
+            @click="closeSharePopup"
+          >
             <span class="material-symbols-outlined">close</span>
-          </button>
-        </div>
+          </m3e-icon-button>
+        </ModalSurface>
       </div>
     </Teleport>
   </div>
@@ -501,58 +528,27 @@ const frequencyLabel = (hz: number) => (hz >= 1000 ? `${(hz / 1000).toFixed(0)}k
   gap: 2px;
 }
 .preset-action {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--md-sys-color-on-surface-variant);
-  cursor: pointer;
-  opacity: 0.65;
-  transition:
-    background var(--md-sys-motion-duration-short),
-    color var(--md-sys-motion-duration-short);
+  flex: none;
 }
-.preset-action:hover {
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
-  opacity: 1;
-}
-.preset-delete:hover {
-  background: var(--md-sys-color-error-container);
-  color: var(--md-sys-color-error);
-  opacity: 1;
-}
-.preset-action .material-symbols-outlined {
-  font-size: 14px;
+.preset-delete {
+  --m3e-standard-icon-button-icon-color: var(--md-sys-color-error);
 }
 
 .save-preset {
   display: flex;
-  gap: 8px;
-  margin-top: 2px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--lm-layout-control-gap);
 }
 .import-preset {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--lm-layout-control-gap);
 }
-.import-preset input {
+.preset-field {
   flex: 1;
   min-width: 0;
-  padding: 8px 12px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-small);
-  background: transparent;
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-small-size);
-  outline: none;
-}
-.import-preset input:focus {
-  border-color: var(--md-sys-color-primary);
 }
 .import-preset m3e-button {
   --m3e-button-small-container-height: 36px;
@@ -568,21 +564,6 @@ const frequencyLabel = (hz: number) => (hz >= 1000 ? `${(hz / 1000).toFixed(0)}k
 .share-status.invalid,
 .share-status.failed {
   color: var(--md-sys-color-error);
-}
-.save-preset input {
-  flex: 1;
-  min-width: 0;
-  padding: 8px 12px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-small);
-  background: transparent;
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-small-size);
-  outline: none;
-}
-.save-preset input:focus {
-  border-color: var(--md-sys-color-primary);
 }
 .save-preset m3e-button {
   --m3e-button-small-container-height: 36px;
@@ -657,11 +638,11 @@ const frequencyLabel = (hz: number) => (hz >= 1000 ? `${(hz / 1000).toFixed(0)}k
 .popup-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9999;
+  z-index: var(--lm-layer-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.48);
+  background: var(--lm-overlay-scrim);
   backdrop-filter: blur(2px);
   animation: popup-fade 180ms var(--md-sys-motion-spring-effects-fast);
 }
@@ -682,7 +663,7 @@ const frequencyLabel = (hz: number) => (hz >= 1000 ? `${(hz / 1000).toFixed(0)}k
   max-width: 90vw;
   max-height: 80vh;
   overflow-y: auto;
-  padding: 24px 28px 20px;
+  padding: var(--lm-space-24);
   border-radius: var(--lm-shape-dialog);
   background: var(--md-sys-color-surface-container-high);
   box-shadow: var(--md-elevation-3);
@@ -700,6 +681,7 @@ const frequencyLabel = (hz: number) => (hz >= 1000 ? `${(hz / 1000).toFixed(0)}k
 }
 .popup-title {
   margin: 0;
+  padding-inline-end: var(--lm-space-32);
   font-size: var(--md-sys-typescale-title-medium-size);
   font-weight: 500;
 }
@@ -708,48 +690,10 @@ const frequencyLabel = (hz: number) => (hz >= 1000 ? `${(hz / 1000).toFixed(0)}k
   flex-direction: column;
   gap: 6px;
 }
-.popup-opt {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-medium);
-  background: transparent;
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-medium-size);
-  cursor: pointer;
-  text-align: left;
-  transition: background 120ms var(--md-sys-motion-spring-effects-fast);
-}
-.popup-opt:hover {
-  background: var(--md-sys-color-surface-container-highest);
-}
-.popup-opt .material-symbols-outlined {
-  font-size: 22px;
-  color: var(--md-sys-color-primary);
-}
-.popup-opt-label {
-  font-weight: 500;
-}
 .popup-close {
   position: absolute;
-  top: 12px;
-  right: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--md-sys-color-on-surface-variant);
-  cursor: pointer;
-}
-.popup-close:hover {
-  background: var(--md-sys-color-surface-container-highest);
+  top: var(--lm-space-12);
+  right: var(--lm-space-12);
 }
 
 /* ---- 上传弹窗 ---- */
@@ -763,34 +707,10 @@ const frequencyLabel = (hz: number) => (hz >= 1000 ? `${(hz / 1000).toFixed(0)}k
   line-height: 1.5;
 }
 .upload-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: var(--md-sys-typescale-body-small-size);
-  color: var(--md-sys-color-on-surface-variant);
-}
-.upload-field input,
-.upload-field textarea {
-  padding: 8px 12px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-medium);
-  background: var(--md-sys-color-surface-container);
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-medium-size);
-  outline: none;
-  transition: border-color 120ms var(--md-sys-motion-spring-effects-fast);
-}
-.upload-field input:focus,
-.upload-field textarea:focus {
-  border-color: var(--md-sys-color-primary);
+  width: 100%;
 }
 .upload-field textarea {
   resize: vertical;
-}
-.upload-field .readonly-input {
-  background: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-on-surface-variant);
 }
 .upload-error {
   padding: 8px 12px;

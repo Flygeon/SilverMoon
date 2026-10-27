@@ -63,11 +63,11 @@
     "globalLayers": 1
   },
   "src/components/AudioEffectsPanel.vue": {
-    "literalColors": 1,
-    "literalLayout": 31,
+    "literalColors": 0,
+    "literalLayout": 21,
     "vendorInternals": 0,
-    "rawControls": 11,
-    "globalLayers": 1
+    "rawControls": 0,
+    "globalLayers": 0
   },
   "src/components/BilibiliAiSummary.vue": {
     "literalColors": 0,
