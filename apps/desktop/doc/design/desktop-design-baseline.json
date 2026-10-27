@@ -252,11 +252,11 @@
     "globalLayers": 1
   },
   "src/components/MusicTagDialog.vue": {
-    "literalColors": 1,
-    "literalLayout": 34,
+    "literalColors": 0,
+    "literalLayout": 27,
     "vendorInternals": 0,
-    "rawControls": 16,
-    "globalLayers": 2
+    "rawControls": 1,
+    "globalLayers": 0
   },
   "src/components/NovelBqgView.vue": {
     "literalColors": 0,

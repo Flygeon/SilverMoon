@@ -6,11 +6,13 @@
  * （applyTagDialog / resetTagDialog / searchTagCandidates …），组件负责把它们接到按钮上
  * 并把结果翻译成 toast。
  *
- * 自绘遮罩 + 面板（同 SourceSheet）：@m3e/web 的弹出层依赖原生 Popover API，在
- * 打开瞬间遇到 keep-alive / 过渡时会抛 InvalidStateError；标签表单重、要能滚，
- * 自己控制层级与滚动更稳。
+ * 保留可滚动的产品面板；焦点、背景锁与 Escape 复用 ModalSurface，
+ * 输入与操作组合官方 m3e 控件，业务流程仍由原 composable 持有。
  */
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed } from "vue";
+import ModalSurface from "@/components/ModalSurface.vue";
+import SearchField from "@/components/SearchField.vue";
+import SelectField from "@/components/SelectField.vue";
 import { translate } from "@shared/i18n";
 import { useSettingsStore } from "@/stores/settings";
 import { useAppToast } from "@/components/AppToast.vue";
@@ -39,6 +41,9 @@ const { show } = useAppToast();
 function t(key: string): string {
   return translate(settings.lang, key);
 }
+const modeOptions = computed(() =>
+  MUSIC_TAG_MODE_OPTIONS.map((option) => ({ value: option.value, label: t(option.labelKey) })),
+);
 
 /** 表单里逐字段渲染（label 走冻结的 i18n 键名） */
 const FIELDS: { key: keyof MusicTagFields; label: string }[] = [
@@ -79,35 +84,6 @@ const coverPreview = computed(() => {
   return "";
 });
 
-/** 面板开合过渡 + 锁背景滚动 + Esc 关闭 */
-const opened = ref(false);
-let prevOverflow = "";
-
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") close();
-}
-
-watch(
-  () => dialog.visible,
-  (v) => {
-    if (v) {
-      prevOverflow = document.body.style.overflow;
-      document.body.style.overflow = "hidden";
-      window.addEventListener("keydown", onKeydown);
-      requestAnimationFrame(() => (opened.value = true));
-    } else {
-      opened.value = false;
-      window.removeEventListener("keydown", onKeydown);
-      document.body.style.overflow = prevOverflow;
-    }
-  },
-);
-
-onBeforeUnmount(() => {
-  window.removeEventListener("keydown", onKeydown);
-  document.body.style.overflow = prevOverflow;
-});
-
 function close() {
   closeMusicTagDialog();
 }
@@ -137,6 +113,7 @@ async function onReset() {
 }
 
 async function onSearch() {
+  if (dialog.searching) return;
   const err = await searchTagCandidates();
   if (err) {
     show(err, { tone: "error" });
@@ -185,15 +162,14 @@ async function onPickCover() {
 <template>
   <Teleport to="body">
     <Transition name="mtd-scrim">
-      <div v-if="opened" class="mtd-scrim" @click="close"></div>
+      <div v-if="dialog.visible" class="mtd-scrim" @click="close"></div>
     </Transition>
     <Transition name="mtd-panel">
-      <div
-        v-if="opened"
+      <ModalSurface
+        v-if="dialog.visible"
         class="music-tag-dialog"
-        role="dialog"
-        aria-modal="true"
-        :aria-label="t('musicTag.dialogTitle')"
+        :label="t('musicTag.dialogTitle')"
+        @close="close"
       >
         <header class="mtd-head">
           <span class="material-symbols-outlined head-icon">sell</span>
@@ -206,9 +182,15 @@ async function onPickCover() {
               <span class="head-name">{{ dialog.target?.label ?? "" }}</span>
             </div>
           </div>
-          <button class="mtd-close" :title="t('musicTag.close')" @click="close">
+          <m3e-icon-button
+            class="mtd-close lm-icon-btn-sm"
+            size="small"
+            :aria-label="t('musicTag.close')"
+            :title="t('musicTag.close')"
+            @click="close"
+          >
             <span class="material-symbols-outlined">close</span>
-          </button>
+          </m3e-icon-button>
         </header>
 
         <div class="mtd-body">
@@ -216,38 +198,51 @@ async function onPickCover() {
           <section class="mtd-section">
             <h3 class="section-title">{{ t("musicTag.fetchFromApi") }}</h3>
             <div class="search-row">
-              <select v-model="dialog.mode" class="mtd-select" :title="t('musicTag.source')">
-                <option v-for="opt in MUSIC_TAG_MODE_OPTIONS" :key="opt.value" :value="opt.value">
-                  {{ t(opt.labelKey) }}
-                </option>
-              </select>
-              <input
-                v-model="dialog.keyword"
-                class="mtd-input"
-                :placeholder="t('musicTag.keyword')"
-                spellcheck="false"
-                @keydown.enter="onSearch"
+              <SelectField
+                v-model="dialog.mode"
+                class="mtd-select"
+                :label="t('musicTag.source')"
+                :options="modeOptions"
               />
-              <button class="mtd-btn tonal" :disabled="dialog.searching" @click="onSearch">
-                <span class="material-symbols-outlined" :class="{ spin: dialog.searching }">
+              <SearchField
+                v-model="dialog.keyword"
+                class="mtd-search"
+                :placeholder="t('musicTag.keyword')"
+                :clear-label="t('actions.clearSearch')"
+                :aria-busy="dialog.searching"
+                @submit="onSearch"
+              />
+              <m3e-button
+                variant="tonal"
+                size="small"
+                :disabled="dialog.searching"
+                @click="onSearch"
+              >
+                <span
+                  slot="icon"
+                  class="material-symbols-outlined"
+                  :class="{ spin: dialog.searching }"
+                >
                   {{ dialog.searching ? "progress_activity" : "search" }}
                 </span>
                 {{ dialog.searching ? t("musicTag.searching") : t("musicTag.search") }}
-              </button>
-              <button
-                class="mtd-btn outlined"
+              </m3e-button>
+              <m3e-button
+                variant="outlined"
+                size="small"
                 :disabled="dialog.fetchingWordLyrics"
                 :title="t('musicTag.wordLyricsHint')"
                 @click="onFetchWordLyricsAuto"
               >
                 <span
+                  slot="icon"
                   class="material-symbols-outlined"
                   :class="{ spin: dialog.fetchingWordLyrics }"
                 >
                   {{ dialog.fetchingWordLyrics ? "progress_activity" : "award_star" }}
                 </span>
                 {{ t("musicTag.wordLyrics") }}
-              </button>
+              </m3e-button>
             </div>
             <p v-if="dialog.error" class="mtd-error">
               <span class="material-symbols-outlined">error</span>{{ dialog.error }}
@@ -262,7 +257,7 @@ async function onPickCover() {
                 :key="`${r.source}:${r.songId}:${i}`"
                 class="result-row"
               >
-                <button class="result-main" @click="pickSearchResult(r)">
+                <button type="button" class="result-main" @click="pickSearchResult(r)">
                   <span class="result-title">
                     <span class="result-source">{{ t(musicTagSourceLabelKey(r.source)) }}</span>
                     {{ r.title || "—" }}
@@ -271,22 +266,26 @@ async function onPickCover() {
                     {{ [r.artist, r.album, r.year].filter(Boolean).join(" · ") }}
                   </span>
                 </button>
-                <button
-                  class="result-act"
+                <m3e-icon-button
+                  class="result-act lm-icon-btn-sm"
+                  size="small"
+                  :aria-label="t('musicTag.lyrics')"
                   :title="t('musicTag.lyrics')"
                   :disabled="dialog.fetchingLyrics"
                   @click="onFetchLyrics(r)"
                 >
                   <span class="material-symbols-outlined">lyrics</span>
-                </button>
-                <button
-                  class="result-act"
+                </m3e-icon-button>
+                <m3e-icon-button
+                  class="result-act lm-icon-btn-sm"
+                  size="small"
+                  :aria-label="t('musicTag.wordLyrics')"
                   :title="t('musicTag.wordLyrics')"
                   :disabled="dialog.fetchingWordLyrics"
                   @click="onFetchWordLyrics(r)"
                 >
                   <span class="material-symbols-outlined">award_star</span>
-                </button>
+                </m3e-icon-button>
               </li>
             </ul>
             <p v-else-if="dialog.searching" class="mtd-muted">{{ t("musicTag.searching") }}</p>
@@ -303,26 +302,28 @@ async function onPickCover() {
               <div class="cover-actions">
                 <span class="mtd-muted">{{ coverStatusText }}</span>
                 <div class="btn-row">
-                  <button class="mtd-btn outlined" @click="onPickCover">
-                    <span class="material-symbols-outlined">add_photo_alternate</span>
+                  <m3e-button variant="outlined" size="small" @click="onPickCover">
+                    <span slot="icon" class="material-symbols-outlined">add_photo_alternate</span>
                     {{ t("musicTag.pickCover") }}
-                  </button>
-                  <button
-                    class="mtd-btn text"
+                  </m3e-button>
+                  <m3e-button
+                    variant="text"
+                    size="small"
                     :disabled="dialog.coverMode === 'remove'"
                     @click="removeCover"
                   >
-                    <span class="material-symbols-outlined">hide_image</span>
+                    <span slot="icon" class="material-symbols-outlined">hide_image</span>
                     {{ t("musicTag.removeCover") }}
-                  </button>
-                  <button
+                  </m3e-button>
+                  <m3e-button
                     v-if="dialog.coverMode !== 'keep'"
-                    class="mtd-btn text"
+                    variant="text"
+                    size="small"
                     @click="keepCover"
                   >
-                    <span class="material-symbols-outlined">undo</span>
+                    <span slot="icon" class="material-symbols-outlined">undo</span>
                     {{ t("musicTag.coverKeep") }}
-                  </button>
+                  </m3e-button>
                 </div>
               </div>
             </div>
@@ -332,64 +333,77 @@ async function onPickCover() {
           <section class="mtd-section">
             <h3 class="section-title">{{ t("musicTag.fields") }}</h3>
             <div class="field-grid">
-              <label v-for="f in FIELDS" :key="f.key" class="mtd-field">
-                <span class="mtd-label">{{ t(f.label) }}</span>
+              <m3e-form-field v-for="f in FIELDS" :key="f.key" class="mtd-field" variant="outlined">
+                <label slot="label">{{ t(f.label) }}</label>
                 <input
                   v-model="dialog.fields[f.key]"
-                  class="mtd-input"
+                  :aria-label="t(f.label)"
                   type="text"
                   spellcheck="false"
                   autocomplete="off"
                 />
-              </label>
+              </m3e-form-field>
             </div>
-            <label v-for="key in TEXTAREAS" :key="key" class="mtd-field lyrics-field">
-              <span class="mtd-label">
+            <m3e-form-field
+              v-for="key in TEXTAREAS"
+              :key="key"
+              class="mtd-field lyrics-field"
+              variant="outlined"
+            >
+              <label slot="label" class="mtd-label">
                 {{ t("musicTag.lyrics") }}
                 <!-- 逐字与逐行分开标记：用户一眼能看出写进文件的是不是词级时间轴 -->
                 <span v-if="dialog.lyricsWordLevel" class="lrc-tag word">
                   {{ t("musicTag.wordLevelTag") }}
                 </span>
                 <span v-else-if="dialog.lyricsFromApi" class="lrc-tag">LRC</span>
-              </span>
+              </label>
               <textarea
                 v-model="dialog.fields[key]"
-                class="mtd-input mtd-textarea"
+                class="mtd-textarea"
+                :aria-label="t('musicTag.lyrics')"
                 rows="6"
                 spellcheck="false"
                 :placeholder="t('musicTag.lyricsPlaceholder')"
                 @input="onLyricsEdited"
               ></textarea>
-            </label>
+            </m3e-form-field>
           </section>
         </div>
 
         <footer class="mtd-foot">
-          <button
-            class="mtd-btn text danger"
+          <m3e-button
+            class="danger"
+            variant="text"
+            size="small"
             :disabled="dialog.applying || !canReset"
             @click="onReset"
           >
-            <span class="material-symbols-outlined">restart_alt</span>
+            <span slot="icon" class="material-symbols-outlined">restart_alt</span>
             {{ t("musicTag.reset") }}
-          </button>
+          </m3e-button>
           <div class="foot-right">
-            <button class="mtd-btn text" :disabled="dialog.applying" @click="close">
+            <m3e-button variant="text" size="small" :disabled="dialog.applying" @click="close">
               {{ t("musicTag.cancel") }}
-            </button>
-            <button
-              class="mtd-btn filled"
+            </m3e-button>
+            <m3e-button
+              variant="filled"
+              size="small"
               :disabled="dialog.applying || !canApply"
               @click="onApply"
             >
-              <span class="material-symbols-outlined" :class="{ spin: dialog.applying }">
+              <span
+                slot="icon"
+                class="material-symbols-outlined"
+                :class="{ spin: dialog.applying }"
+              >
                 {{ dialog.applying ? "progress_activity" : "save" }}
               </span>
               {{ dialog.applying ? t("musicTag.applying") : t("musicTag.apply") }}
-            </button>
+            </m3e-button>
           </div>
         </footer>
-      </div>
+      </ModalSurface>
     </Transition>
   </Teleport>
 </template>
@@ -398,8 +412,8 @@ async function onPickCover() {
 .mtd-scrim {
   position: fixed;
   inset: 0;
-  z-index: 2500;
-  background: rgba(0, 0, 0, 0.42);
+  z-index: var(--lm-layer-overlay);
+  background: var(--lm-overlay-scrim);
 }
 .mtd-scrim-enter-active,
 .mtd-scrim-leave-active {
@@ -414,7 +428,7 @@ async function onPickCover() {
   position: fixed;
   left: 50%;
   top: 50%;
-  z-index: 2501;
+  z-index: var(--lm-layer-overlay-panel);
   display: flex;
   flex-direction: column;
   width: min(760px, calc(100vw - 32px));
@@ -485,18 +499,6 @@ async function onPickCover() {
 }
 .mtd-close {
   flex: none;
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: transparent;
-  color: var(--md-sys-color-on-surface-variant);
-  cursor: pointer;
-}
-.mtd-close:hover {
-  background: var(--md-sys-color-surface-container);
 }
 
 /* ---- 可滚动主体 ---- */
@@ -551,32 +553,17 @@ async function onPickCover() {
 /* 搜索行 */
 .search-row {
   display: flex;
-  gap: 8px;
-}
-.mtd-select,
-.mtd-input {
-  min-width: 0;
-  height: 38px;
-  padding: 0 12px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-small);
-  background: var(--md-sys-color-surface-container);
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-small-size);
-  outline: none;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--lm-layout-control-gap);
 }
 .mtd-select {
   flex: none;
-  width: 116px;
+  width: 176px;
 }
-.mtd-input:focus,
-.mtd-select:focus {
-  border-color: var(--md-sys-color-primary);
-  box-shadow: 0 0 0 1px var(--md-sys-color-primary);
-}
-.search-row .mtd-input {
-  flex: 1;
+.mtd-search {
+  flex: 1 1 180px;
+  min-width: 0;
 }
 
 .result-list {
@@ -641,19 +628,7 @@ async function onPickCover() {
 }
 .result-act {
   flex: none;
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  margin-right: 8px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: transparent;
-  color: var(--md-sys-color-primary);
-  cursor: pointer;
-}
-.result-act:hover {
-  background: var(--md-sys-color-surface-container-high);
+  margin-right: var(--lm-space-8);
 }
 
 /* 封面 */
@@ -700,10 +675,8 @@ async function onPickCover() {
   gap: 10px;
 }
 .mtd-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
   min-width: 0;
+  width: 100%;
 }
 .mtd-label {
   display: flex;
@@ -727,8 +700,6 @@ async function onPickCover() {
   margin-top: 10px;
 }
 .mtd-textarea {
-  height: auto;
-  padding: 10px 12px;
   line-height: 1.5;
   resize: vertical;
   font-family: inherit;
@@ -749,45 +720,9 @@ async function onPickCover() {
   display: flex;
   gap: 8px;
 }
-.mtd-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 36px;
-  padding: 0 16px;
-  border: 1px solid transparent;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: transparent;
-  color: var(--md-sys-color-primary);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-label-large-size);
-  cursor: pointer;
-  transition: background 160ms var(--md-sys-motion-spring-effects-fast);
-}
-.mtd-btn .material-symbols-outlined {
-  font-size: 18px;
-}
-.mtd-btn.filled {
-  background: var(--md-sys-color-primary);
-  color: var(--md-sys-color-on-primary);
-}
-.mtd-btn.tonal {
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
-}
-.mtd-btn.outlined {
-  border-color: var(--md-sys-color-outline-variant);
-  color: var(--md-sys-color-on-surface);
-}
-.mtd-btn.text:hover {
-  background: var(--md-sys-color-surface-container);
-}
-.mtd-btn.danger {
-  color: var(--md-sys-color-error);
-}
-.mtd-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+.danger {
+  --m3e-text-button-label-text-color: var(--md-sys-color-error);
+  --m3e-text-button-icon-color: var(--md-sys-color-error);
 }
 .spin {
   animation: mtd-spin 1s linear infinite;

@@ -110,6 +110,8 @@ export default [
       "src/components/BilibiliReplyComposer.vue",
       "src/components/BilibiliSearchHistory.vue",
       "src/components/AudioEffectsPanel.vue",
+      // 标签编辑器：官方 form-field 的 label 与 Button 的 icon 原生插槽
+      "src/components/MusicTagDialog.vue",
       "src/components/LibraryToolbar.vue",
       // 页面标题下拉：m3e-menu-item 的 icon / trailing-icon 槽
       "src/components/PageHeader.vue",
