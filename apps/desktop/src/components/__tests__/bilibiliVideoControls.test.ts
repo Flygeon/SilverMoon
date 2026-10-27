@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createApp, h, nextTick, reactive, ref, type App } from "vue";
+import { createApp, nextTick, reactive, ref, type App } from "vue";
 import BilibiliVideoView from "../BilibiliVideoView.vue";
 import BilibiliUserView from "../BilibiliUserView.vue";
 
@@ -72,7 +72,7 @@ beforeEach(() => {
   bili.current = null;
   host = document.createElement("div");
   document.body.append(host);
-  app = createApp({ render: () => h(BilibiliVideoView) });
+  app = createApp(BilibiliVideoView);
   app.mount(host);
 });
 afterEach(() => {
@@ -137,7 +137,7 @@ it("返回、UP 主、分 P、受控清晰度和失败重试仍使用原入口",
 
 it("UP 主官方返回仍关闭主页，视频覆盖时 Escape 不连关主页", async () => {
   app.unmount();
-  app = createApp({ render: () => h(BilibiliUserView) });
+  app = createApp(BilibiliUserView);
   app.mount(host);
   bili.current = { bvid: "preview" };
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
