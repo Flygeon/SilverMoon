@@ -155,9 +155,9 @@ async function appeal(): Promise<void> {
     <div v-else-if="bili.replyStatus === 'error' && !bili.replies.length" class="state error">
       <span class="material-symbols-outlined">error</span>
       <span>{{ bili.replyError || t("bili.replyFailed") }}</span>
-      <button class="link" type="button" @click="bili.loadReplies(true)">
+      <m3e-button variant="text" size="small" @click="bili.loadReplies(true)">
         {{ t("bili.retry") }}
-      </button>
+      </m3e-button>
     </div>
 
     <p v-else-if="!bili.replies.length" class="state">{{ t("bili.noComments") }}</p>
@@ -190,53 +190,53 @@ async function appeal(): Promise<void> {
           <p class="text">{{ r.message }}</p>
 
           <div class="acts">
-            <button
-              class="act btn"
-              :class="{ on: r.liked }"
-              type="button"
+            <m3e-button
+              :variant="r.liked ? 'tonal' : 'text'"
+              size="small"
+              :aria-pressed="r.liked"
               :title="t('bili.likeCount')"
               :disabled="!!bili.acting['reply-like-' + r.rpid]"
               @click="bili.toggleReplyLike(r)"
             >
-              <span class="material-symbols-outlined">thumb_up</span>
+              <span slot="icon" class="material-symbols-outlined">thumb_up</span>
               <span class="tabular-nums">{{ biliCount(r.like) }}</span>
-            </button>
-            <button
-              class="act btn"
-              type="button"
+            </m3e-button>
+            <m3e-button
+              variant="text"
+              size="small"
               :title="t('bili.replyAction')"
               @click="replyTo(r)"
             >
-              <span class="material-symbols-outlined">reply</span>
+              <span slot="icon" class="material-symbols-outlined">reply</span>
               {{ t("bili.replyAction") }}
-            </button>
+            </m3e-button>
             <!-- 手动复查：对单条评论再跑一次可见性判断（自动复查只发生在新评论发出后） -->
-            <button
-              class="act btn"
-              type="button"
+            <m3e-button
+              variant="text"
+              size="small"
               :title="t('bili.antifraudManual')"
               :disabled="bili.antifraudChecking"
               @click="recheck(r)"
             >
-              <span class="material-symbols-outlined">fact_check</span>
+              <span slot="icon" class="material-symbols-outlined">fact_check</span>
               {{ t("bili.antifraudManual") }}
-            </button>
-            <button
+            </m3e-button>
+            <m3e-button
               v-if="!subExpanded(r) && r.replyCount"
-              class="act btn"
-              type="button"
+              variant="text"
+              size="small"
               @click="bili.loadSubReplies(r.rpid)"
             >
               {{ t("bili.repliesPrefix") }}{{ r.replyCount }}{{ t("bili.repliesSuffix") }}
-            </button>
-            <button
+            </m3e-button>
+            <m3e-button
               v-else-if="subExpanded(r)"
-              class="act btn"
-              type="button"
+              variant="text"
+              size="small"
               @click="bili.loadSubReplies(r.rpid)"
             >
               {{ t("bili.collapse") }}
-            </button>
+            </m3e-button>
           </div>
 
           <!-- 楼中楼 -->
@@ -245,36 +245,40 @@ async function appeal(): Promise<void> {
               <span class="sub-head">
                 <span class="sub-name" :class="{ up: s.isUp }">{{ s.author.name }}</span>
                 <span v-if="s.isUp" class="badge up sm">UP</span>
-                <button
+                <m3e-button
                   class="sub-like tabular-nums"
-                  :class="{ on: s.liked }"
-                  type="button"
+                  :variant="s.liked ? 'tonal' : 'text'"
+                  size="small"
+                  :aria-pressed="s.liked"
                   :title="t('bili.likeCount')"
                   :disabled="!!bili.acting['reply-like-' + s.rpid]"
                   @click="bili.toggleReplyLike(s)"
                 >
-                  <span class="material-symbols-outlined">thumb_up</span>{{ biliCount(s.like) }}
-                </button>
+                  <span slot="icon" class="material-symbols-outlined">thumb_up</span>
+                  {{ biliCount(s.like) }}
+                </m3e-button>
               </span>
               <span class="sub-text">{{ s.message }}</span>
-              <button
+              <m3e-button
                 class="sub-reply"
-                type="button"
+                variant="text"
+                size="small"
                 :title="t('bili.replyAction')"
                 @click="replyToSub(r, s)"
               >
                 {{ t("bili.replyAction") }}
-              </button>
+              </m3e-button>
             </div>
-            <button
+            <m3e-button
               v-if="subMore(r)"
               class="link"
-              type="button"
+              variant="text"
+              size="small"
               :disabled="bili.subBusy[r.rpid]"
               @click="bili.loadSubReplies(r.rpid, true)"
             >
               {{ bili.subBusy[r.rpid] ? t("bili.loading") : t("bili.loadMore") }}
-            </button>
+            </m3e-button>
           </div>
         </div>
       </li>
@@ -293,15 +297,15 @@ async function appeal(): Promise<void> {
         <span class="material-symbols-outlined">error</span>
         {{ bili.replyError || t("bili.replyFailed") }}
       </p>
-      <button
+      <m3e-button
         v-if="!bili.replyEnd"
-        class="link big"
-        type="button"
+        variant="tonal"
+        size="small"
         :disabled="bili.replyLoadingMore"
         @click="bili.loadMoreReplies()"
       >
         {{ bili.replyLoadingMore ? t("bili.loading") : t("bili.loadMoreComments") }}
-      </button>
+      </m3e-button>
       <span v-else class="end">{{ t("bili.noMoreComments") }}</span>
     </div>
 
@@ -536,66 +540,13 @@ async function appeal(): Promise<void> {
 
 .acts {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 14px;
-  margin-top: 6px;
-  font-size: 11.5px;
-  color: var(--md-sys-color-on-surface-variant);
-}
-.act {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-.act.on {
-  color: var(--md-sys-color-primary);
-}
-/* 点赞按钮：可点 + 满足 M3 最小触达（原来 14px 高，几乎点不中） */
-.act.btn {
-  min-height: 28px;
-  padding: 0 4px;
-  border-radius: var(--md-sys-shape-corner-full);
-  transition: background 160ms var(--md-sys-motion-spring-effects-fast);
-}
-.act.btn:hover:not(:disabled) {
-  background: var(--md-sys-color-surface-container-high);
-}
-.act.btn:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-.act .material-symbols-outlined {
-  font-size: 14px;
-}
-.btn {
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font-family: inherit;
-  font-size: inherit;
-  cursor: pointer;
-}
-.btn:hover {
-  color: var(--md-sys-color-primary);
-}
-/* 「回复」按钮：比点赞数更靠后，视觉上更轻 */
-.act.btn .material-symbols-outlined {
-  font-size: 14px;
+  gap: var(--lm-layout-control-gap);
+  margin-top: var(--lm-space-8);
 }
 .sub-reply {
   align-self: flex-start;
-  margin-top: 1px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--md-sys-color-on-surface-variant);
-  font-family: inherit;
-  font-size: 11.5px;
-  cursor: pointer;
-}
-.sub-reply:hover {
-  color: var(--md-sys-color-primary);
 }
 
 .subs {
@@ -627,33 +578,7 @@ async function appeal(): Promise<void> {
   color: var(--md-sys-color-primary);
 }
 .sub-like {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  min-height: 24px;
   margin-left: auto;
-  padding: 0 4px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: transparent;
-  color: var(--md-sys-color-outline);
-  font-family: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-.sub-like:hover:not(:disabled) {
-  background: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-primary);
-}
-.sub-like.on {
-  color: var(--md-sys-color-primary);
-}
-.sub-like:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-.sub-like .material-symbols-outlined {
-  font-size: 12px;
 }
 .sub-text {
   color: var(--md-sys-color-on-surface);
@@ -662,35 +587,13 @@ async function appeal(): Promise<void> {
 
 .link {
   align-self: flex-start;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--md-sys-color-primary);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-label-large-size);
-  cursor: pointer;
-}
-.link:disabled {
-  color: var(--md-sys-color-on-surface-variant);
-  cursor: default;
 }
 
 .more {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
   padding: 4px 0 8px;
-}
-.link.big {
-  align-self: center;
-  padding: 8px 20px;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
-  font-weight: 500;
-}
-.link.big:hover:not(:disabled) {
-  background: var(--md-sys-color-secondary-container);
-  filter: brightness(1.06);
 }
 .more-error {
   display: flex;

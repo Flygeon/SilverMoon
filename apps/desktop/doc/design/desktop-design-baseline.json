@@ -85,9 +85,9 @@
   },
   "src/components/BilibiliComments.vue": {
     "literalColors": 0,
-    "literalLayout": 35,
+    "literalLayout": 27,
     "vendorInternals": 0,
-    "rawControls": 10,
+    "rawControls": 0,
     "globalLayers": 0
   },
   "src/components/BilibiliDynamics.vue": {
@@ -462,11 +462,11 @@
     "globalLayers": 0
   },
   "src/views/MusicView.vue": {
-    "literalColors": 4,
-    "literalLayout": 44,
+    "literalColors": 1,
+    "literalLayout": 24,
     "vendorInternals": 0,
-    "rawControls": 26,
-    "globalLayers": 3
+    "rawControls": 5,
+    "globalLayers": 0
   },
   "src/views/NovelStatsView.vue": {
     "literalColors": 0,

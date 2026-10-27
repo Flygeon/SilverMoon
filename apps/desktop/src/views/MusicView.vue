@@ -11,6 +11,8 @@ import KugouFeed from "@/components/KugouFeed.vue";
 import PlatformBar from "@/components/PlatformBar.vue";
 import CachedCover from "@/components/CachedCover.vue";
 import SegmentedTabs from "@/components/SegmentedTabs.vue";
+import SearchField from "@/components/SearchField.vue";
+import ModalSurface from "@/components/ModalSurface.vue";
 import { useLibraryStore } from "@/stores/library";
 import { usePlayerStore } from "@/stores/player";
 import { useSettingsStore } from "@/stores/settings";
@@ -773,43 +775,53 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
         <!-- 网易云：云盘 + 我的歌单 + 本地 + 预设 + 用户歌单 -->
         <template v-else>
           <div class="online-grid">
-            <button
-              v-for="c in playlistCards"
-              :key="c.key"
-              class="song-card"
-              @click="openPlaylist(c)"
-              @contextmenu="onPlaylistContext($event, c)"
-            >
+            <div v-for="c in playlistCards" :key="c.key" class="playlist-card">
               <button
+                class="song-card"
+                type="button"
+                @click="openPlaylist(c)"
+                @contextmenu="onPlaylistContext($event, c)"
+              >
+                <div class="thumb">
+                  <CachedCover v-if="coverOf(c)" :url="coverOf(c)" :alt="c.name" />
+                  <span v-else class="placeholder material-symbols-outlined">
+                    {{
+                      c.key === "local"
+                        ? "library_music"
+                        : c.key === "cloud"
+                          ? "cloud"
+                          : "queue_music"
+                    }}
+                  </span>
+                </div>
+                <div class="s-meta">
+                  <div class="s-title" :title="c.name">{{ c.name }}</div>
+                  <div class="s-artist">{{ subtitleOf(c) }}</div>
+                </div>
+              </button>
+              <m3e-icon-button
                 v-if="c.key.startsWith('user:')"
                 class="p-remove"
+                variant="tonal"
+                size="small"
+                :aria-label="t('online.removePlaylist')"
                 :title="t('online.removePlaylist')"
-                @click.stop="removePlaylist(c.id!)"
+                @click="removePlaylist(c.id!)"
               >
                 <span class="material-symbols-outlined">close</span>
-              </button>
-              <div class="thumb">
-                <CachedCover v-if="coverOf(c)" :url="coverOf(c)" :alt="c.name" />
-                <span v-else class="placeholder material-symbols-outlined">
-                  {{
-                    c.key === "local"
-                      ? "library_music"
-                      : c.key === "cloud"
-                        ? "cloud"
-                        : "queue_music"
-                  }}
-                </span>
-              </div>
-              <div class="s-meta">
-                <div class="s-title" :title="c.name">{{ c.name }}</div>
-                <div class="s-artist">{{ subtitleOf(c) }}</div>
-              </div>
-            </button>
+              </m3e-icon-button>
+            </div>
           </div>
 
           <div class="add-playlist">
-            <input v-model="addId" :placeholder="t('online.addId')" />
-            <input v-model="addName" :placeholder="t('online.addName')" />
+            <m3e-form-field variant="outlined">
+              <span slot="label">{{ t("online.addId") }}</span>
+              <input v-model="addId" :aria-label="t('online.addId')" />
+            </m3e-form-field>
+            <m3e-form-field variant="outlined">
+              <span slot="label">{{ t("online.addName") }}</span>
+              <input v-model="addName" :aria-label="t('online.addName')" />
+            </m3e-form-field>
             <m3e-button variant="tonal" size="small" @click="addPlaylist">
               <span slot="icon" class="material-symbols-outlined">add</span>
               {{ t("online.addBtn") }}
@@ -830,10 +842,11 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
       <!-- 搜索根 -->
       <template v-if="showOnlineRoot && tab === 'search'">
         <div class="search-bar">
-          <input
+          <SearchField
             v-model="searchQuery"
             :placeholder="t('online.searchPlaceholder')"
-            @keyup.enter="doSearch"
+            :clear-label="t('actions.clearSearch')"
+            @submit="doSearch"
           />
           <m3e-button variant="tonal" size="small" @click="doSearch">
             <span slot="icon" class="material-symbols-outlined">search</span>
@@ -859,22 +872,26 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
           {{ detail.songs.length }} {{ t("online.tracks") }}
         </span>
         <div v-if="detail.type !== 'local'" class="segmented view-toggle">
-          <button
-            class="seg"
-            :class="{ active: settings.musicViewMode === 'grid' }"
+          <m3e-icon-button
+            size="small"
+            :variant="settings.musicViewMode === 'grid' ? 'tonal' : 'standard'"
+            :aria-pressed="settings.musicViewMode === 'grid'"
+            :aria-label="t('settings.musicViewMode_grid')"
             :title="t('settings.musicViewMode_grid')"
             @click="settings.musicViewMode = 'grid'"
           >
             <span class="material-symbols-outlined">grid_view</span>
-          </button>
-          <button
-            class="seg"
-            :class="{ active: settings.musicViewMode === 'list' }"
+          </m3e-icon-button>
+          <m3e-icon-button
+            size="small"
+            :variant="settings.musicViewMode === 'list' ? 'tonal' : 'standard'"
+            :aria-pressed="settings.musicViewMode === 'list'"
+            :aria-label="t('settings.musicViewMode_list')"
             :title="t('settings.musicViewMode_list')"
             @click="settings.musicViewMode = 'list'"
           >
             <span class="material-symbols-outlined">view_list</span>
-          </button>
+          </m3e-icon-button>
         </div>
       </div>
 
@@ -960,13 +977,15 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
         <m3e-loading-indicator class="lm-loading" />
         {{ t("online.loading") }}
       </div>
-      <button
+      <m3e-button
         v-if="detail.type === 'cloud' && !detail.loadingMore && netease.cloudHasMore"
         class="load-more"
+        variant="tonal"
+        size="small"
         @click="loadMoreCloud"
       >
         {{ t("netease.loadMore") }}
-      </button>
+      </m3e-button>
     </template>
 
     <!-- 本地音乐（原模式 或 点开「本地音乐」歌单） -->
@@ -974,22 +993,26 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
       <div class="local-head">
         <LibraryToolbar :count="library.totalFor('audio')" @changed="load" />
         <div class="segmented view-toggle">
-          <button
-            class="seg"
-            :class="{ active: settings.musicViewMode === 'grid' }"
+          <m3e-icon-button
+            size="small"
+            :variant="settings.musicViewMode === 'grid' ? 'tonal' : 'standard'"
+            :aria-pressed="settings.musicViewMode === 'grid'"
+            :aria-label="t('settings.musicViewMode_grid')"
             :title="t('settings.musicViewMode_grid')"
             @click="settings.musicViewMode = 'grid'"
           >
             <span class="material-symbols-outlined">grid_view</span>
-          </button>
-          <button
-            class="seg"
-            :class="{ active: settings.musicViewMode === 'list' }"
+          </m3e-icon-button>
+          <m3e-icon-button
+            size="small"
+            :variant="settings.musicViewMode === 'list' ? 'tonal' : 'standard'"
+            :aria-pressed="settings.musicViewMode === 'list'"
+            :aria-label="t('settings.musicViewMode_list')"
             :title="t('settings.musicViewMode_list')"
             @click="settings.musicViewMode = 'list'"
           >
             <span class="material-symbols-outlined">view_list</span>
-          </button>
+          </m3e-icon-button>
         </div>
       </div>
 
@@ -1045,33 +1068,33 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
       />
     </template>
 
-    <!-- 网易云登录弹窗（扫码 / 手机号） -->
-    <transition name="qr-fade">
+    <!-- 登录层必须在主内容 inert 边界之外，卡片保留 lm-rise 入场。 -->
+    <Teleport to="body">
       <div v-if="netease.qrOpen" class="qr-mask" @click.self="netease.closeQr()">
-        <div class="qr-card">
+        <ModalSurface class="qr-card" :label="t('netease.loginTitle')" @close="netease.closeQr()">
           <h3>{{ t("netease.loginTitle") }}</h3>
           <!-- 切换 tab -->
           <div class="phone-tabs">
-            <button
-              :class="['phone-tab', { active: netease.authTab === 'qr' }]"
-              @click="
+            <m3e-filter-chip
+              :selected="netease.authTab === 'qr'"
+              @click.prevent="
                 netease.authTab = 'qr';
                 netease.phoneError = '';
               "
             >
-              <span class="material-symbols-outlined">qr_code</span>
+              <span slot="icon" class="material-symbols-outlined">qr_code</span>
               {{ t("netease.qrTab") }}
-            </button>
-            <button
-              :class="['phone-tab', { active: netease.authTab === 'phone' }]"
-              @click="
+            </m3e-filter-chip>
+            <m3e-filter-chip
+              :selected="netease.authTab === 'phone'"
+              @click.prevent="
                 netease.authTab = 'phone';
                 netease.phoneError = '';
               "
             >
-              <span class="material-symbols-outlined">smartphone</span>
+              <span slot="icon" class="material-symbols-outlined">smartphone</span>
               {{ t("netease.phoneTab") }}
-            </button>
+            </m3e-filter-chip>
           </div>
 
           <!-- 扫码登录 -->
@@ -1118,43 +1141,55 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
           <!-- 手机号登录 -->
           <template v-else>
             <div class="phone-form">
-              <input
-                v-model="netease.phone"
-                type="tel"
-                inputmode="numeric"
-                maxlength="11"
-                placeholder="手机号"
-                class="phone-input"
-                @keyup.enter="netease.sendSmsCaptcha()"
-              />
-              <div class="sms-row">
+              <m3e-form-field variant="outlined">
+                <span slot="label">手机号</span>
                 <input
-                  v-model="netease.smsCode"
-                  type="text"
+                  v-model="netease.phone"
+                  type="tel"
                   inputmode="numeric"
-                  maxlength="6"
-                  placeholder="短信验证码"
-                  class="phone-input sms-input"
-                  @keyup.enter="netease.phoneLogin()"
+                  maxlength="11"
+                  aria-label="手机号"
+                  autocomplete="tel-national"
+                  @keydown.enter="
+                    !$event.isComposing && $event.keyCode !== 229 && netease.sendSmsCaptcha()
+                  "
                 />
-                <button
-                  class="sms-btn"
+              </m3e-form-field>
+              <div class="sms-row">
+                <m3e-form-field variant="outlined">
+                  <span slot="label">短信验证码</span>
+                  <input
+                    v-model="netease.smsCode"
+                    type="text"
+                    inputmode="numeric"
+                    maxlength="6"
+                    aria-label="短信验证码"
+                    autocomplete="one-time-code"
+                    @keydown.enter="
+                      !$event.isComposing && $event.keyCode !== 229 && netease.phoneLogin()
+                    "
+                  />
+                </m3e-form-field>
+                <m3e-button
+                  variant="tonal"
+                  size="small"
                   :disabled="netease.smsSending || netease.smsCooldown > 0"
                   @click="netease.sendSmsCaptcha()"
                 >
                   <template v-if="netease.smsCooldown > 0"> {{ netease.smsCooldown }}s </template>
                   <template v-else-if="netease.smsSending"> 发送中… </template>
                   <template v-else> 获取验证码 </template>
-                </button>
+                </m3e-button>
               </div>
               <p v-if="netease.phoneError" class="phone-error">{{ netease.phoneError }}</p>
-              <button
-                class="phone-login-btn"
+              <m3e-button
+                variant="filled"
+                size="small"
                 :disabled="netease.phoneLogging"
                 @click="netease.phoneLogin()"
               >
                 {{ netease.phoneLogging ? "登录中…" : "登录" }}
-              </button>
+              </m3e-button>
               <div class="phone-actions">
                 <m3e-button variant="text" size="small" @click="netease.closeQr()">
                   {{ t("actions.cancel") }}
@@ -1162,36 +1197,36 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
               </div>
             </div>
           </template>
-        </div>
+        </ModalSurface>
       </div>
-    </transition>
+    </Teleport>
 
     <!-- 酷狗登录弹窗（扫码 / 手机号）；复用与网易云弹窗同一套浮层样式 -->
-    <transition name="qr-fade">
+    <Teleport to="body">
       <div v-if="kugou.qrOpen" class="qr-mask" @click.self="kugou.closeQr()">
-        <div class="qr-card">
+        <ModalSurface class="qr-card" :label="t('kugou.loginTitle')" @close="kugou.closeQr()">
           <h3>{{ t("kugou.loginTitle") }}</h3>
           <div class="phone-tabs">
-            <button
-              :class="['phone-tab', { active: kugou.authTab === 'qr' }]"
-              @click="
+            <m3e-filter-chip
+              :selected="kugou.authTab === 'qr'"
+              @click.prevent="
                 kugou.authTab = 'qr';
                 kugou.phoneError = '';
               "
             >
-              <span class="material-symbols-outlined">qr_code</span>
+              <span slot="icon" class="material-symbols-outlined">qr_code</span>
               {{ t("kugou.qrTab") }}
-            </button>
-            <button
-              :class="['phone-tab', { active: kugou.authTab === 'phone' }]"
-              @click="
+            </m3e-filter-chip>
+            <m3e-filter-chip
+              :selected="kugou.authTab === 'phone'"
+              @click.prevent="
                 kugou.authTab = 'phone';
                 kugou.phoneError = '';
               "
             >
-              <span class="material-symbols-outlined">smartphone</span>
+              <span slot="icon" class="material-symbols-outlined">smartphone</span>
               {{ t("kugou.phoneTab") }}
-            </button>
+            </m3e-filter-chip>
           </div>
 
           <!-- 扫码登录 -->
@@ -1235,43 +1270,53 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
           <!-- 手机号登录 -->
           <template v-else>
             <div class="phone-form">
-              <input
-                v-model="kugou.phone"
-                type="tel"
-                inputmode="numeric"
-                maxlength="11"
-                placeholder="手机号"
-                class="phone-input"
-                @keyup.enter="kugou.sendSms()"
-              />
-              <div class="sms-row">
+              <m3e-form-field variant="outlined">
+                <span slot="label">手机号</span>
                 <input
-                  v-model="kugou.smsCode"
-                  type="text"
+                  v-model="kugou.phone"
+                  type="tel"
                   inputmode="numeric"
-                  maxlength="6"
-                  placeholder="短信验证码"
-                  class="phone-input sms-input"
-                  @keyup.enter="kugou.phoneLogin()"
+                  maxlength="11"
+                  aria-label="手机号"
+                  autocomplete="tel-national"
+                  @keydown.enter="!$event.isComposing && $event.keyCode !== 229 && kugou.sendSms()"
                 />
-                <button
-                  class="sms-btn"
+              </m3e-form-field>
+              <div class="sms-row">
+                <m3e-form-field variant="outlined">
+                  <span slot="label">短信验证码</span>
+                  <input
+                    v-model="kugou.smsCode"
+                    type="text"
+                    inputmode="numeric"
+                    maxlength="6"
+                    aria-label="短信验证码"
+                    autocomplete="one-time-code"
+                    @keydown.enter="
+                      !$event.isComposing && $event.keyCode !== 229 && kugou.phoneLogin()
+                    "
+                  />
+                </m3e-form-field>
+                <m3e-button
+                  variant="tonal"
+                  size="small"
                   :disabled="kugou.smsSending || kugou.smsCooldown > 0"
                   @click="kugou.sendSms()"
                 >
                   <template v-if="kugou.smsCooldown > 0"> {{ kugou.smsCooldown }}s </template>
                   <template v-else-if="kugou.smsSending"> 发送中… </template>
                   <template v-else> 获取验证码 </template>
-                </button>
+                </m3e-button>
               </div>
               <p v-if="kugou.phoneError" class="phone-error">{{ kugou.phoneError }}</p>
-              <button
-                class="phone-login-btn"
+              <m3e-button
+                variant="filled"
+                size="small"
                 :disabled="kugou.phoneLogging"
                 @click="kugou.phoneLogin()"
               >
                 {{ kugou.phoneLogging ? "登录中…" : "登录" }}
-              </button>
+              </m3e-button>
               <div class="phone-actions">
                 <m3e-button variant="text" size="small" @click="kugou.closeQr()">
                   {{ t("actions.cancel") }}
@@ -1279,9 +1324,9 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
               </div>
             </div>
           </template>
-        </div>
+        </ModalSurface>
       </div>
-    </transition>
+    </Teleport>
 
     <transition name="toast">
       <div v-if="download.active" class="dl-progress">
@@ -1326,60 +1371,45 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
 .add-playlist {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 22px;
+  align-items: center;
+  gap: var(--lm-layout-control-gap);
+  margin-top: var(--lm-layout-group-gap);
 }
-.add-playlist input,
-.search-bar input {
+.add-playlist m3e-form-field {
   flex: 1;
-  min-width: 160px;
-  padding: 10px 14px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-small);
-  background: transparent;
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-medium-size);
-  outline: none;
-}
-.add-playlist input:focus,
-.search-bar input:focus {
-  border-color: var(--md-sys-color-primary);
+  min-width: min(100%, 160px);
 }
 
+.playlist-card {
+  position: relative;
+  min-width: 0;
+}
+.playlist-card .song-card {
+  width: 100%;
+}
 .p-remove {
   position: absolute;
-  top: 6px;
-  right: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: none;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.45);
-  color: #fff;
-  cursor: pointer;
+  top: var(--lm-space-4);
+  right: var(--lm-space-4);
   opacity: 0;
-  transition:
-    opacity var(--md-sys-motion-duration-short),
-    background 160ms var(--md-sys-motion-spring-effects-fast);
+  transition: opacity var(--md-sys-motion-duration-short);
 }
-.song-card:hover .p-remove {
+.playlist-card:hover .p-remove,
+.playlist-card:focus-within .p-remove {
   opacity: 1;
-}
-.p-remove:hover {
-  background: var(--md-sys-color-error);
-}
-.p-remove .material-symbols-outlined {
-  font-size: 16px;
 }
 
 .search-bar {
   display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
+  align-items: center;
+  gap: var(--lm-layout-control-gap);
+  margin-bottom: var(--lm-space-16);
+}
+.search-bar .search-field {
+  flex: 1;
+}
+.search-bar m3e-button {
+  flex: none;
 }
 
 .loading {
@@ -1595,30 +1625,8 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
 }
 .view-toggle {
   display: flex;
-  gap: 2px;
+  gap: var(--lm-space-2);
   flex: none;
-  padding: 3px;
-  border-radius: var(--lm-shape-button);
-  background: var(--md-sys-color-surface-container);
-}
-.view-toggle .seg {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 30px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-medium);
-  background: transparent;
-  color: var(--md-sys-color-on-surface-variant);
-  cursor: pointer;
-}
-.view-toggle .seg.active {
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
-}
-.view-toggle .material-symbols-outlined {
-  font-size: 18px;
 }
 
 .error-bar {
@@ -1659,7 +1667,7 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
   background: var(--md-sys-color-surface-container-high);
   color: var(--md-sys-color-on-surface);
   box-shadow: var(--md-elevation-3);
-  z-index: 100;
+  z-index: var(--lm-layer-notification);
 }
 .dl-head {
   display: flex;
@@ -1724,7 +1732,7 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
   color: var(--md-sys-color-inverse-on-surface);
   box-shadow: var(--md-elevation-3);
   font-size: var(--md-sys-typescale-body-medium-size);
-  z-index: 100;
+  z-index: var(--lm-layer-notification);
 }
 .toast-enter-active,
 .toast-leave-active {
@@ -1740,20 +1748,22 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
 .qr-mask {
   position: fixed;
   inset: 0;
-  z-index: 300;
+  z-index: var(--lm-layer-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--lm-overlay-scrim);
   backdrop-filter: blur(6px);
 }
 .qr-card {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
-  min-width: 300px;
-  padding: 24px 28px 18px;
+  gap: var(--lm-space-16);
+  width: min(100% - var(--lm-space-32), 380px);
+  max-height: calc(100dvh - var(--lm-space-32));
+  overflow-y: auto;
+  padding: var(--lm-space-24);
   background: var(--md-sys-color-surface-container-high);
   border-radius: var(--md-sys-shape-corner-extra-large);
   box-shadow: var(--md-elevation-3);
@@ -1802,89 +1812,32 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
 /* ---- 手机号登录 tab ---- */
 .phone-tabs {
   display: flex;
-  gap: 4px;
-  width: 100%;
-  background: var(--md-sys-color-surface-container);
-  border-radius: var(--md-sys-shape-corner-full);
-  padding: 3px;
-}
-.phone-tab {
-  flex: 1;
-  display: flex;
-  align-items: center;
   justify-content: center;
-  gap: 4px;
-  padding: 6px 10px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: transparent;
-  color: var(--md-sys-color-on-surface-variant);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-label-small-size);
-  cursor: pointer;
-  transition: all var(--md-sys-motion-duration-short) var(--md-sys-motion-spring-effects-fast);
-}
-.phone-tab.active {
-  background: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-on-surface);
-  box-shadow: var(--md-elevation-1);
-}
-.phone-tab .material-symbols-outlined {
-  font-size: 16px;
+  flex-wrap: wrap;
+  gap: var(--lm-layout-control-gap);
+  width: 100%;
 }
 .phone-form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--lm-space-12);
   width: 100%;
 }
-.phone-input {
-  height: 40px;
+.phone-form > m3e-form-field {
   width: 100%;
-  padding: 0 14px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-medium);
-  background: var(--md-sys-color-surface);
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-small-size);
-  outline: none;
-  box-sizing: border-box;
-  transition: border-color var(--md-sys-motion-duration-short)
-    var(--md-sys-motion-spring-effects-fast);
-}
-.phone-input:focus {
-  border-color: var(--md-sys-color-primary);
 }
 .sms-row {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: var(--lm-layout-control-gap);
   width: 100%;
 }
-.sms-input {
+.sms-row m3e-form-field {
   flex: 1;
   min-width: 0;
 }
-.sms-btn {
-  height: 40px;
-  padding: 0 14px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-label-small-size);
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all var(--md-sys-motion-duration-short) var(--md-sys-motion-spring-effects-fast);
-}
-.sms-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.sms-btn:hover:not(:disabled) {
-  background: var(--md-sys-color-surface-container-highest);
+.sms-row m3e-button {
+  flex: none;
 }
 .phone-error {
   font-size: var(--md-sys-typescale-body-small-size);
@@ -1892,57 +1845,15 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
   text-align: center;
   margin: 0;
 }
-.phone-login-btn {
-  height: 40px;
-  width: 100%;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: var(--md-sys-color-primary);
-  color: var(--md-sys-color-on-primary);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-label-large-size);
-  font-weight: 500;
-  cursor: pointer;
-  transition: all var(--md-sys-motion-duration-short) var(--md-sys-motion-spring-effects-fast);
-}
-.phone-login-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.phone-login-btn:hover:not(:disabled) {
-  opacity: 0.92;
-}
 .phone-actions {
   display: flex;
   justify-content: center;
 }
 
-.qr-fade-enter-active,
-.qr-fade-leave-active {
-  transition: opacity 200ms var(--md-sys-motion-spring-effects-fast);
-}
-.qr-fade-enter-from,
-.qr-fade-leave-to {
-  opacity: 0;
-}
-
 /* 云盘加载更多 */
 .load-more {
   display: block;
-  margin: 18px auto 8px;
-  padding: 9px 22px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-full);
-  background: transparent;
-  color: var(--md-sys-color-on-surface-variant);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-label-large-size);
-  cursor: pointer;
-  transition: all var(--md-sys-motion-duration-short) var(--md-sys-motion-spring-effects-fast);
-}
-.load-more:hover {
-  background: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-on-surface);
+  margin: var(--lm-space-16) auto var(--lm-space-8);
 }
 /* ── 窄屏 ─────────────────────────────────────────────────────────── */
 @media (max-width: 720px) {
@@ -1951,9 +1862,7 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   }
   .qr-card {
-    min-width: 0;
-    width: min(88vw, 320px);
-    padding: 20px 18px 16px;
+    padding: var(--lm-space-20);
   }
   .qr-img-wrap {
     width: min(58vw, 200px);
@@ -1963,7 +1872,7 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
 
 /* 触摸设备上 :hover 永远不触发 —— 只靠 hover 显形的删除按钮等于不存在 */
 @media (hover: none) {
-  .song-card .p-remove {
+  .playlist-card .p-remove {
     opacity: 1;
   }
 }
