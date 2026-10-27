@@ -723,11 +723,18 @@ const metaItems = computed(() => {
       :style="ambilightStyle"
     />
 
-    <!-- 顶栏（用原生 button：浮层里的操作必须 100% 可点，不依赖自定义元素的事件转发） -->
+    <!-- 官方图标按钮仍在 host 上显式 no-drag，保留浮层标题栏拖拽边界。 -->
     <header class="head lm-glass">
-      <button class="head-btn" type="button" :title="t('bili.close')" @click="close">
+      <m3e-icon-button
+        class="head-btn"
+        variant="standard"
+        size="small"
+        :title="t('bili.close')"
+        :aria-label="t('bili.close')"
+        @click="close"
+      >
         <span class="material-symbols-outlined">arrow_back</span>
-      </button>
+      </m3e-icon-button>
       <span class="head-title" :title="title">{{ title }}</span>
       <span class="spacer" />
       <!--
@@ -845,61 +852,78 @@ const metaItems = computed(() => {
 
             <!-- 互动：点赞 / 投币 / 收藏 / 分享（对应参考布局里那排胶囊按钮） -->
             <div class="actions">
-              <button
+              <m3e-button
                 class="act"
-                :class="{ on: bili.relation?.liked }"
-                type="button"
+                :variant="bili.relation?.liked ? 'tonal' : 'outlined'"
+                size="small"
                 :title="t('bili.likeAction')"
+                :aria-label="t('bili.likeAction')"
+                :aria-pressed="!!bili.relation?.liked"
                 :disabled="bili.acting.like"
                 @click="bili.toggleLike()"
               >
-                <span class="material-symbols-outlined">thumb_up</span>
+                <span slot="icon" class="material-symbols-outlined">thumb_up</span>
                 <span class="tabular-nums">{{ biliCount(detail.stat.like) }}</span>
-              </button>
+              </m3e-button>
 
               <div class="act-wrap">
-                <button
+                <m3e-button
                   class="act"
-                  :class="{ on: (bili.relation?.coin ?? 0) > 0 }"
-                  type="button"
+                  :variant="(bili.relation?.coin ?? 0) > 0 ? 'tonal' : 'outlined'"
+                  size="small"
                   :title="t('bili.coinAction')"
+                  :aria-label="t('bili.coinAction')"
+                  :aria-expanded="coinOpen"
+                  :disabled="bili.acting.coin"
                   @click="coinOpen = !coinOpen"
                 >
-                  <span class="material-symbols-outlined">monetization_on</span>
+                  <span slot="icon" class="material-symbols-outlined">monetization_on</span>
                   <span class="tabular-nums">{{ biliCount(detail.stat.coin) }}</span>
-                </button>
+                </m3e-button>
                 <Transition name="coin-pop">
                   <div v-if="coinOpen" class="coin-pop lm-glass">
-                    <button class="coin-opt" type="button" @click="sendCoin(1)">
-                      <span class="material-symbols-outlined">monetization_on</span>
+                    <m3e-button
+                      variant="text"
+                      size="small"
+                      :disabled="bili.acting.coin"
+                      @click="sendCoin(1)"
+                    >
+                      <span slot="icon" class="material-symbols-outlined">monetization_on</span>
                       {{ t("bili.coinOne") }}
-                    </button>
-                    <button class="coin-opt" type="button" @click="sendCoin(2)">
-                      <span class="material-symbols-outlined">monetization_on</span>
+                    </m3e-button>
+                    <m3e-button
+                      variant="text"
+                      size="small"
+                      :disabled="bili.acting.coin"
+                      @click="sendCoin(2)"
+                    >
+                      <span slot="icon" class="material-symbols-outlined">monetization_on</span>
                       {{ t("bili.coinTwo") }}
-                    </button>
+                    </m3e-button>
                   </div>
                 </Transition>
               </div>
 
-              <button
+              <m3e-button
                 class="act"
-                :class="{ on: bili.relation?.favored }"
-                type="button"
+                :variant="bili.relation?.favored ? 'tonal' : 'outlined'"
+                size="small"
                 :title="t('bili.favAction')"
+                :aria-label="t('bili.favAction')"
+                :aria-pressed="!!bili.relation?.favored"
                 :disabled="bili.acting.fav"
                 @click="bili.toggleFavorite()"
               >
-                <span class="material-symbols-outlined">{{
+                <span slot="icon" class="material-symbols-outlined">{{
                   bili.relation?.favored ? "star" : "star_border"
                 }}</span>
                 <span class="tabular-nums">{{ biliCount(detail.stat.favorite) }}</span>
-              </button>
+              </m3e-button>
 
-              <button class="act" type="button" @click="bili.shareVideo()">
-                <span class="material-symbols-outlined">share</span>
+              <m3e-button variant="outlined" size="small" @click="bili.shareVideo()">
+                <span slot="icon" class="material-symbols-outlined">share</span>
                 {{ t("bili.share") }}
-              </button>
+              </m3e-button>
             </div>
 
             <div v-if="qualities.length" class="block">
@@ -1000,10 +1024,12 @@ const metaItems = computed(() => {
 
 .head {
   flex: none;
+  box-sizing: border-box;
+  height: var(--lm-titlebar-height);
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
+  gap: var(--lm-space-12);
+  padding: 0 var(--lm-space-16);
   border-bottom: 1px solid var(--lm-hairline);
   /* 与 WindowTitleBar 同一套做法：留白处即窗口拖拽区（浮层盖在标题栏上，
      顶层那条 drag 区域仍在生效），可点元素必须显式 no-drag —— 见下 */
@@ -1022,33 +1048,9 @@ const metaItems = computed(() => {
 }
 .head-btn {
   flex: none;
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: transparent;
-  color: var(--md-sys-color-on-surface-variant);
-  cursor: pointer;
   /* 关键：不排除拖拽的话，按钮落在标题栏那条 drag 区域里，点击会被当成拖窗口
      （表现就是「点了没反应」）。WindowTitleBar 的 .tb-actions 同理。 */
   -webkit-app-region: no-drag;
-  transition: background 160ms var(--md-sys-motion-spring-effects-fast);
-}
-.head-btn:hover {
-  background: var(--md-sys-color-surface-container-high);
-}
-.head-btn:focus-visible {
-  outline: 2px solid var(--md-sys-color-primary);
-  outline-offset: -2px;
-}
-.head-btn .material-symbols-outlined {
-  font-size: 20px;
-}
-.head-btn.off {
-  opacity: 0.45;
 }
 
 /* 左栏（播放器 / 信息 / 评论） + 右栏（相关推荐）：一栏放不下就折成上下 */
@@ -1058,9 +1060,9 @@ const metaItems = computed(() => {
   display: flex;
   align-items: flex-start;
   flex-wrap: wrap;
-  gap: 22px;
+  gap: var(--lm-layout-group-gap);
   /* 左右留白要够：氛围光会向两侧外扩，padding 太小光晕会被视口边缘切掉 */
-  padding: 18px 22px 40px;
+  padding: var(--lm-space-20) var(--lm-space-24) var(--lm-space-32);
   overflow-y: auto;
   scrollbar-gutter: stable;
 }
@@ -1076,7 +1078,7 @@ const metaItems = computed(() => {
   /* 评论区很长，右栏跟着滚就没法边看边选了 */
   position: sticky;
   top: 0;
-  padding: 10px;
+  padding: var(--lm-space-12);
   border-radius: var(--lm-shape-card);
   background: var(--md-sys-color-surface-container-low);
   box-shadow: inset 0 0 0 1px var(--lm-hairline);
@@ -1234,7 +1236,7 @@ const metaItems = computed(() => {
 
 /* 滚动交给 .content（整页一起滚），这里只负责信息区的排版 */
 .detail-body {
-  padding: 16px 0 0;
+  padding: var(--lm-space-16) 0 0;
 }
 .detail-loading {
   display: flex;
@@ -1290,47 +1292,8 @@ const metaItems = computed(() => {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin-top: 14px;
-}
-.act {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 34px;
-  padding: 0 14px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-label-large-size);
-  cursor: pointer;
-  transition:
-    background 160ms var(--md-sys-motion-spring-effects-fast),
-    transform 200ms var(--md-sys-motion-spring-spatial-fast);
-}
-.act:hover:not(:disabled) {
-  background: var(--md-sys-color-surface-container-highest);
-}
-.act:active:not(:disabled) {
-  transform: scale(0.96);
-}
-.act:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-.act:focus-visible {
-  outline: 2px solid var(--md-sys-color-primary);
-  outline-offset: 2px;
-}
-/* 已激活（已赞 / 已投币 / 已收藏）：走主色容器，一眼能看出状态 */
-.act.on {
-  background: var(--md-sys-color-primary-container);
-  color: var(--md-sys-color-on-primary-container);
-}
-.act .material-symbols-outlined {
-  font-size: 18px;
+  gap: var(--lm-layout-control-gap);
+  margin-top: var(--lm-space-16);
 }
 
 .act-wrap {
@@ -1339,36 +1302,15 @@ const metaItems = computed(() => {
 .coin-pop {
   position: absolute;
   left: 0;
-  bottom: calc(100% + 8px);
+  bottom: calc(100% + var(--lm-space-8));
   z-index: 5;
   display: flex;
   flex-direction: column;
   min-width: 132px;
-  padding: 6px;
+  padding: var(--lm-space-8);
   border: 1px solid var(--lm-hairline);
   border-radius: var(--md-sys-shape-corner-medium);
   box-shadow: var(--md-elevation-3);
-}
-.coin-opt {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-small);
-  background: transparent;
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-medium-size);
-  text-align: left;
-  cursor: pointer;
-}
-.coin-opt:hover {
-  background: var(--md-sys-color-surface-container-high);
-}
-.coin-opt .material-symbols-outlined {
-  font-size: 18px;
-  color: var(--md-sys-color-primary);
 }
 .coin-pop-enter-active,
 .coin-pop-leave-active {

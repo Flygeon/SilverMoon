@@ -27,40 +27,48 @@ const confirmClear = ref(false);
         <span class="material-symbols-outlined">history</span>
         {{ t("bili.searchHistory") }}
       </span>
-      <button v-if="!confirmClear" class="clear" type="button" @click="confirmClear = true">
+      <m3e-button v-if="!confirmClear" variant="text" size="small" @click="confirmClear = true">
         {{ t("bili.clearHistory") }}
-      </button>
+      </m3e-button>
       <span v-else class="clear-confirm">
         {{ t("bili.clearHistoryConfirm") }}
-        <button
-          class="clear"
-          type="button"
+        <m3e-button
+          variant="text"
+          size="small"
           @click="
             bili.clearSearchHistory();
             confirmClear = false;
           "
         >
           {{ t("bili.confirm") }}
-        </button>
-        <button class="clear" type="button" @click="confirmClear = false">
+        </m3e-button>
+        <m3e-button variant="text" size="small" @click="confirmClear = false">
           {{ t("bili.cancelReply") }}
-        </button>
+        </m3e-button>
       </span>
     </div>
 
     <div class="chips">
-      <span v-for="word in bili.searchHistory" :key="word" class="chip">
-        <button class="chip-main" type="button" :title="word" @click="emit('pick', word)">
-          {{ word }}
-        </button>
-        <button
+      <span
+        v-for="word in bili.searchHistory"
+        :key="word"
+        class="history-item"
+        role="group"
+        :aria-label="word"
+      >
+        <m3e-assist-chip class="chip-main" :title="word" @click="emit('pick', word)">
+          <span class="word">{{ word }}</span>
+        </m3e-assist-chip>
+        <m3e-icon-button
           class="chip-x"
-          type="button"
+          variant="standard"
+          size="small"
           :title="t('bili.removeHistory')"
+          :aria-label="`${t('bili.removeHistory')}: ${word}`"
           @click.stop="bili.removeSearchHistory(word)"
         >
           <span class="material-symbols-outlined">close</span>
-        </button>
+        </m3e-icon-button>
       </span>
     </div>
   </section>
@@ -70,44 +78,33 @@ const confirmClear = ref(false);
 .search-history {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--lm-space-8);
   /* 上接搜索栏、下接结果区 / 空状态：两侧都要留白，否则会和 EmptyState 的上边框
      贴在一起（EmptyState 自带 padding，但它是同级块，margin 不会自动产生） */
-  margin: 6px 0 20px;
+  margin: var(--lm-space-8) 0 var(--lm-space-20);
 }
 .head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: var(--lm-space-12);
 }
 .label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--lm-space-8);
   font-size: var(--md-sys-typescale-label-large-size);
   color: var(--md-sys-color-on-surface-variant);
 }
 .label .material-symbols-outlined {
   font-size: 17px;
 }
-.clear {
-  padding: 2px 10px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: transparent;
-  color: var(--md-sys-color-primary);
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-label-large-size);
-  cursor: pointer;
-}
-.clear:hover {
-  background: var(--md-sys-color-surface-container-high);
-}
 .clear-confirm {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  flex-wrap: wrap;
+  gap: var(--lm-space-4);
   font-size: var(--md-sys-typescale-label-large-size);
   color: var(--md-sys-color-on-surface-variant);
 }
@@ -115,53 +112,25 @@ const confirmClear = ref(false);
 .chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--lm-space-8);
 }
-.chip {
+.history-item {
   display: inline-flex;
   align-items: center;
-  max-width: 220px;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-on-surface);
-  overflow: hidden;
-  transition: background 160ms var(--md-sys-motion-spring-effects-fast);
-}
-.chip:hover {
-  background: var(--md-sys-color-surface-container-highest);
+  max-width: 100%;
+  gap: var(--lm-space-2);
 }
 .chip-main {
   min-width: 0;
+}
+.word {
+  display: block;
   max-width: 180px;
-  padding: 6px 4px 6px 14px;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font-family: inherit;
-  font-size: var(--md-sys-typescale-body-small-size);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  cursor: pointer;
 }
 .chip-x {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  margin-right: 6px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--md-sys-color-on-surface-variant);
-  cursor: pointer;
-}
-.chip-x:hover {
-  background: var(--md-sys-color-surface-container);
-  color: var(--md-sys-color-error);
-}
-.chip-x .material-symbols-outlined {
-  font-size: 14px;
+  flex: none;
 }
 </style>
