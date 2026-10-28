@@ -3,7 +3,6 @@ import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { usePlayerStore } from "@/stores/player";
 import { useNeteaseStore } from "@/stores/netease";
-import PlayerControlIcon from "@/components/PlayerControlIcon.vue";
 import { formatTime } from "@/utils/format";
 import { hasPendingHero, landHeroFlight, releaseHeroFlight } from "@/utils/heroTransition";
 
@@ -131,19 +130,38 @@ function seek(e: MouseEvent) {
         >
           <span class="material-symbols-outlined" :class="{ filled: liked }">favorite</span>
         </m3e-icon-button>
-        <m3e-icon-button size="small" title="上一首" @click="player.previous()">
+        <m3e-icon-button
+          class="skip"
+          variant="tonal"
+          size="small"
+          title="上一首"
+          aria-label="上一首"
+          @click="player.previous()"
+        >
           <span class="material-symbols-outlined filled">skip_previous</span>
         </m3e-icon-button>
         <m3e-icon-button
           class="play"
           variant="filled"
+          shape="square"
+          width="wide"
           size="small"
           :title="player.playing ? '暂停' : '播放'"
+          :aria-label="player.playing ? '暂停' : '播放'"
           @click="player.togglePlay()"
         >
-          <PlayerControlIcon :name="player.playing ? 'pause' : 'play'" />
+          <span class="material-symbols-outlined filled">
+            {{ player.playing ? "pause" : "play_arrow" }}
+          </span>
         </m3e-icon-button>
-        <m3e-icon-button size="small" title="下一首" @click="player.next()">
+        <m3e-icon-button
+          class="skip"
+          variant="tonal"
+          size="small"
+          title="下一首"
+          aria-label="下一首"
+          @click="player.next()"
+        >
           <span class="material-symbols-outlined filled">skip_next</span>
         </m3e-icon-button>
         <m3e-icon-button size="small" title="展开播放器" @click="expandToPlayer">
@@ -275,22 +293,23 @@ function seek(e: MouseEvent) {
 .controls {
   display: flex;
   align-items: center;
-  gap: 2px;
+  flex: none;
+  gap: var(--lm-layout-control-gap);
+  --m3e-tonal-icon-button-container-color: var(--md-sys-color-primary-container);
+  --m3e-tonal-icon-button-icon-color: var(--md-sys-color-on-primary-container);
+}
+.controls .skip,
+.controls .play {
+  --m3e-icon-button-small-container-height: 40px;
+  --m3e-icon-button-small-icon-size: 24px;
+  --m3e-icon-button-small-default-leading-space: 8px;
+  --m3e-icon-button-small-default-trailing-space: 8px;
 }
 .controls .play {
-  --m3e-icon-button-small-container-height: 44px;
-  --m3e-icon-button-small-default-leading-space: 10px;
-  --m3e-icon-button-small-default-trailing-space: 10px;
-  --m3e-filled-icon-button-container-color: var(--md-sys-color-primary-container);
-  --m3e-filled-icon-button-icon-color: var(--md-sys-color-on-primary-container);
-}
-.controls .play:hover {
-  filter: brightness(1.08);
-}
-.controls .play .player-control-icon {
-  width: 26px;
-  height: 23px;
-  filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.18));
+  --m3e-icon-button-small-wide-leading-space: 20px;
+  --m3e-icon-button-small-wide-trailing-space: 20px;
+  --m3e-filled-icon-button-container-color: var(--md-sys-color-primary);
+  --m3e-filled-icon-button-icon-color: var(--md-sys-color-on-primary);
 }
 /* 图标 20px 时把左右留白补到 10px，维持 40×40 正圆 */
 .like {
@@ -305,6 +324,20 @@ function seek(e: MouseEvent) {
 @media (max-width: 720px) {
   .time {
     display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .body {
+    gap: var(--lm-space-8);
+    padding: 0 var(--lm-space-12);
+  }
+  .cover {
+    width: 40px;
+    height: 40px;
+  }
+  .controls {
+    gap: var(--lm-space-4);
   }
 }
 </style>

@@ -13,7 +13,6 @@ import {
   startHeroFlight,
 } from "@/utils/heroTransition";
 import LyricsView from "@/components/LyricsView.vue";
-import PlayerControlIcon from "@/components/PlayerControlIcon.vue";
 import AudioEffectsPanel from "@/components/AudioEffectsPanel.vue";
 import CommentsPanel from "@/components/CommentsPanel.vue";
 import { formatDuration } from "@/utils/format";
@@ -340,10 +339,30 @@ onBeforeUnmount(() => {
 
         <div class="controls">
           <div class="ctrl-group left">
-            <button
-              class="side-btn"
+            <m3e-icon-button
+              class="aux-btn"
+              variant="tonal"
+              shape="square"
+              size="small"
+              :class="{ active: player.shuffleMode }"
+              :title="t('player.shuffle')"
+              :aria-label="t('player.shuffle')"
+              :aria-pressed="player.shuffleMode"
+              @click="player.toggleShuffle()"
+            >
+              <span class="material-symbols-outlined" :class="{ filled: player.shuffleMode }"
+                >shuffle</span
+              >
+            </m3e-icon-button>
+            <m3e-icon-button
+              class="aux-btn"
+              variant="tonal"
+              shape="square"
+              size="small"
               :class="{ active: player.repeatMode !== 'off' }"
               :title="t('player.repeat')"
+              :aria-label="t('player.repeat')"
+              :aria-pressed="player.repeatMode !== 'off'"
               @click="player.cycleRepeat()"
             >
               <span
@@ -351,48 +370,75 @@ onBeforeUnmount(() => {
                 :class="{ filled: player.repeatMode !== 'off' }"
                 >{{ player.repeatMode === "one" ? "repeat_one" : "repeat" }}</span
               >
-            </button>
-            <button
-              class="side-btn"
-              :class="{ active: player.shuffleMode }"
-              :title="t('player.shuffle')"
-              @click="player.toggleShuffle()"
-            >
-              <span class="material-symbols-outlined" :class="{ filled: player.shuffleMode }"
-                >shuffle</span
-              >
-            </button>
+            </m3e-icon-button>
           </div>
           <div class="ctrl-group center">
-            <button class="side-btn" :title="t('player.prev')" @click="player.previous()">
+            <m3e-icon-button
+              class="skip-btn"
+              variant="tonal"
+              size="medium"
+              :title="t('player.prev')"
+              :aria-label="t('player.prev')"
+              @click="player.previous()"
+            >
               <span class="material-symbols-outlined filled">skip_previous</span>
-            </button>
-            <button
+            </m3e-icon-button>
+            <m3e-icon-button
               class="main-btn"
+              variant="filled"
+              shape="square"
+              width="wide"
+              size="medium"
               :title="player.playing ? t('player.pause') : t('player.play')"
+              :aria-label="player.playing ? t('player.pause') : t('player.play')"
               @click="player.togglePlay()"
             >
-              <PlayerControlIcon :name="player.playing ? 'pause' : 'play'" />
-            </button>
-            <button class="side-btn" :title="t('player.next')" @click="player.next()">
+              <span class="material-symbols-outlined filled">
+                {{ player.playing ? "pause" : "play_arrow" }}
+              </span>
+            </m3e-icon-button>
+            <m3e-icon-button
+              class="skip-btn"
+              variant="tonal"
+              size="medium"
+              :title="t('player.next')"
+              :aria-label="t('player.next')"
+              @click="player.next()"
+            >
               <span class="material-symbols-outlined filled">skip_next</span>
-            </button>
+            </m3e-icon-button>
           </div>
           <div class="ctrl-group right">
+            <m3e-icon-button
+              class="aux-btn speed"
+              variant="tonal"
+              shape="square"
+              size="small"
+              :title="t('player.speed')"
+              :aria-label="`${t('player.speed')} ${speed}x`"
+              @click="cycleSpeed"
+            >
+              <span>{{ speed }}x</span>
+            </m3e-icon-button>
             <!-- 功能面板：向上悬浮展开歌词 / 队列 / 音效 + 逐字方案 + 翻译 -->
             <div ref="panelAnchor" class="panel-anchor" @pointerdown.stop>
-              <button
-                class="side-btn panel-toggle"
+              <m3e-icon-button
+                class="aux-btn panel-toggle"
+                variant="tonal"
+                shape="square"
+                size="small"
                 :class="{ active: panelOpen }"
                 :title="t('player.tools')"
                 :aria-label="t('player.tools')"
+                :aria-expanded="panelOpen"
+                aria-controls="player-tools-panel"
                 @click="panelOpen = !panelOpen"
               >
                 <span class="material-symbols-outlined">tune</span>
-              </button>
+              </m3e-icon-button>
 
               <Transition name="panel-pop">
-                <div v-if="panelOpen" class="tools-panel">
+                <div v-if="panelOpen" id="player-tools-panel" class="tools-panel">
                   <div class="segment">
                     <button
                       class="seg-btn"
@@ -451,7 +497,6 @@ onBeforeUnmount(() => {
                 </div>
               </Transition>
             </div>
-            <button class="side-btn speed" @click="cycleSpeed">{{ speed }}x</button>
           </div>
         </div>
       </div>
@@ -554,21 +599,10 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
 }
-.panel-toggle:hover {
-  opacity: 1;
-}
-.panel-toggle.active {
-  opacity: 1;
-  color: #fff;
-}
-.panel-toggle .material-symbols-outlined {
-  font-size: 21px;
-}
 .tools-panel {
   position: absolute;
   bottom: calc(100% + 12px);
-  left: 50%;
-  transform: translateX(-50%);
+  right: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -603,7 +637,7 @@ onBeforeUnmount(() => {
 .panel-pop-enter-from,
 .panel-pop-leave-to {
   opacity: 0;
-  transform: translateX(-50%) translateY(10px) scale(0.94);
+  transform: translateY(10px) scale(0.94);
 }
 .player-body {
   height: 100%;
@@ -739,75 +773,70 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   width: 425px;
-  margin-top: 16px;
+  gap: var(--lm-layout-control-gap);
+  margin-top: var(--lm-space-20);
+  /* 播放页始终是暗色背景；固定色角色保留种子色，同时不受应用明暗反转。 */
+  --m3e-tonal-icon-button-container-color: var(--md-sys-color-on-primary-fixed-variant);
+  --m3e-tonal-icon-button-icon-color: var(--md-sys-color-primary-fixed);
+  --m3e-tonal-icon-button-hover-icon-color: var(--m3e-tonal-icon-button-icon-color);
+  --m3e-tonal-icon-button-focus-icon-color: var(--m3e-tonal-icon-button-icon-color);
+  --m3e-tonal-icon-button-pressed-icon-color: var(--m3e-tonal-icon-button-icon-color);
+  --m3e-tonal-icon-button-hover-state-layer-color: var(--m3e-tonal-icon-button-icon-color);
+  --m3e-tonal-icon-button-focus-state-layer-color: var(--m3e-tonal-icon-button-icon-color);
+  --m3e-tonal-icon-button-pressed-state-layer-color: var(--m3e-tonal-icon-button-icon-color);
+  --m3e-filled-icon-button-container-color: var(--md-sys-color-primary-fixed);
+  --m3e-filled-icon-button-icon-color: var(--md-sys-color-on-primary-fixed);
+  --m3e-filled-icon-button-hover-icon-color: var(--md-sys-color-on-primary-fixed);
+  --m3e-filled-icon-button-focus-icon-color: var(--md-sys-color-on-primary-fixed);
+  --m3e-filled-icon-button-pressed-icon-color: var(--md-sys-color-on-primary-fixed);
+  --m3e-filled-icon-button-hover-state-layer-color: var(--md-sys-color-on-primary-fixed);
+  --m3e-filled-icon-button-focus-state-layer-color: var(--md-sys-color-on-primary-fixed);
+  --m3e-filled-icon-button-pressed-state-layer-color: var(--md-sys-color-on-primary-fixed);
 }
 .ctrl-group {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex: none;
+  gap: var(--lm-layout-control-gap);
+}
+/* 形状、涟漪与交互状态由 M3E 提供，仅用官方令牌调整密度。 */
+.controls m3e-icon-button {
+  flex: none;
 }
 .main-btn {
-  width: 64px;
-  height: 64px;
-  border-radius: 50%;
-  border: 1px solid color-mix(in srgb, var(--md-sys-color-primary) 70%, transparent);
-  background: var(--md-sys-color-primary);
-  color: var(--md-sys-color-on-primary);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: var(--md-elevation-2);
-  transition:
-    transform 200ms var(--md-sys-motion-spring),
-    box-shadow 200ms var(--md-sys-motion-spring-effects-fast);
+  --m3e-icon-button-medium-container-height: 64px;
+  --m3e-icon-button-medium-icon-size: 32px;
+  --m3e-icon-button-medium-wide-leading-space: 36px;
+  --m3e-icon-button-medium-wide-trailing-space: 36px;
 }
-.main-btn .player-control-icon {
-  width: 34px;
-  height: 30px;
-  filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.2));
+.skip-btn {
+  --m3e-icon-button-medium-container-height: 56px;
+  --m3e-icon-button-medium-icon-size: 28px;
+  --m3e-icon-button-medium-default-leading-space: 14px;
+  --m3e-icon-button-medium-default-trailing-space: 14px;
 }
-.main-btn:hover {
-  transform: scale(1.04);
-  box-shadow: var(--md-elevation-3);
+.aux-btn {
+  --m3e-icon-button-small-container-height: 40px;
+  --m3e-icon-button-small-icon-size: 20px;
+  --m3e-icon-button-small-default-leading-space: 10px;
+  --m3e-icon-button-small-default-trailing-space: 10px;
+  --m3e-tonal-icon-button-container-color: color-mix(
+    in srgb,
+    var(--md-sys-color-primary-fixed) 9%,
+    transparent
+  );
+  --m3e-tonal-icon-button-icon-color: var(--md-sys-color-primary-fixed-dim);
 }
-.main-btn:active {
-  transform: scale(0.8);
-}
-.side-btn {
-  width: 44px;
-  height: 44px;
-  border: 1px solid color-mix(in srgb, var(--md-sys-color-on-surface) 22%, transparent);
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--md-sys-color-surface-container-high) 72%, transparent);
-  color: var(--md-sys-color-on-surface);
-  opacity: 0.9;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.25));
-}
-.side-btn .material-symbols-outlined {
-  font-size: 21px;
-  font-variation-settings:
-    "FILL" 1,
-    "wght" 500,
-    "GRAD" 0,
-    "opsz" 24;
-}
-.side-btn.active {
-  opacity: 1;
-  color: var(--md-sys-color-primary);
-  border-color: var(--md-sys-color-primary);
-  background: color-mix(in srgb, var(--md-sys-color-primary-container) 72%, transparent);
-}
-.side-btn:active {
-  transform: scale(0.8);
+.aux-btn.active {
+  --m3e-tonal-icon-button-container-color: var(--md-sys-color-on-primary-fixed-variant);
+  --m3e-tonal-icon-button-icon-color: var(--md-sys-color-primary-fixed);
 }
 .speed {
-  font-size: 13px;
-  width: 44px;
+  width: 40px;
+  font-weight: 600;
+  --m3e-icon-button-small-icon-size: 14px;
+  --m3e-icon-button-small-default-leading-space: 0px;
+  --m3e-icon-button-small-default-trailing-space: 0px;
 }
 .segment {
   display: flex;
@@ -1014,6 +1043,23 @@ onBeforeUnmount(() => {
   .tools-panel {
     min-width: 0;
     width: min(88vw, 340px);
+  }
+}
+
+/* 小于完整控制区时才换行，主控保持居中且不压缩点击目标。 */
+@media (max-width: 480px) {
+  .controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--lm-layout-control-gap);
+  }
+  .ctrl-group.center {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    justify-self: center;
+  }
+  .ctrl-group.right {
+    justify-self: end;
   }
 }
 
