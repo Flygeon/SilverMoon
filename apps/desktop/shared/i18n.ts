@@ -202,7 +202,7 @@ export const messages = {
       dark: "深色",
       colorScheme: "配色方案",
       colorSchemeHint:
-        "以一个种子色实时生成整套 Material You 配色（Tonal Spot · M3 Expressive，标准对比度），深色 / 浅色各自成表。色板显示的是点下去**实际得到**的主色。",
+        "每个方案展示主色、次色和第三色；背景与卡片随所选色调一起变化，深浅主题分别生成。",
       colorCustom: "自定义",
       colorSeed_blue: "海蓝",
       colorSeed_teal: "青碧",
@@ -1693,7 +1693,7 @@ export const messages = {
       dark: "Dark",
       colorScheme: "Color Scheme",
       colorSchemeHint:
-        "Generates the full Material You palette from one seed color (Tonal Spot · M3 Expressive, standard contrast), with separate light and dark tables. Swatches show the primary you'll actually get.",
+        "Each scheme previews its primary, secondary and tertiary colors. Backgrounds and cards follow the selected hue, with separate light and dark palettes.",
       colorCustom: "Custom",
       colorSeed_blue: "Ocean",
       colorSeed_teal: "Teal",

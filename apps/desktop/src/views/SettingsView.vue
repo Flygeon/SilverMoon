@@ -28,6 +28,7 @@ import SteamSettingsPanel from "@/components/settings/SteamSettingsPanel.vue";
 import SegmentedTabs from "@/components/SegmentedTabs.vue";
 import SettingRow from "@/components/SettingRow.vue";
 import SearchField from "@/components/SearchField.vue";
+import ThemePalettePicker from "@/components/ThemePalettePicker.vue";
 import {
   capabilities,
   type BenchStatus,
@@ -37,7 +38,6 @@ import {
 import { formatSize } from "@/utils/format";
 import { activeSkinDoc, skinModeLock, skinSafeMode } from "@/utils/skinRuntime";
 import { SB_CATEGORIES } from "@/utils/sponsorBlock";
-import { primaryOfSeed } from "@shared/m3-theme";
 import { translate } from "@shared/i18n";
 import { fetchTrending } from "@/utils/bangumiApi";
 import { SETTINGS_INDEX } from "@/views/settingsIndex.generated";
@@ -429,32 +429,6 @@ function setTheme(mode: ThemeMode) {
 
 // ---- 配色方案（Material You 种子色）----
 //
-// 色板展示**由该种子实际生成的主色**（Tonal Spot 的 primary），而不是用户的原始输入色。
-// 原因：Tonal Spot 会把任意种子收敛到固定的彩度/明度档位，铺原色会让「色板」与
-// 「点下去之后看到的主色」不一致 —— 例如琥珀 #8F4C00 实际生成的是 #865327（更闷的赭），
-// 玫瑰 #B3261E 生成的是 #8c4e46（偏砖）。这里用 primaryOfSeed() 现算，色板即所得；
-// 深浅各取各的（深色 tone 80），所以切换主题时色板会跟着变一变，这是预期行为。
-const COLOR_SEEDS = [
-  { key: "blue", hex: "#1A5C9E" },
-  { key: "teal", hex: "#00696E" },
-  { key: "violet", hex: "#6750A4" },
-  { key: "green", hex: "#4C662B" },
-  { key: "amber", hex: "#8F4C00" },
-  { key: "rose", hex: "#B3261E" },
-  { key: "pink", hex: "#8B4A6C" },
-] as const;
-
-/** 种子 → 该种子在当前模式下的实际主色（非法/未加载时退回原值）。
- *  明暗取自 store 的 resolvedDark（响应式），不读 <html data-theme> ——
- *  那是普通属性，切主题后 computed 不会重算。 */
-function seedPreview(hex: string): string {
-  return primaryOfSeed(hex, settings.resolvedDark) ?? hex;
-}
-
-const isCustomSeed = computed(
-  () => !COLOR_SEEDS.some((c) => c.hex.toLowerCase() === settings.seedColor.toLowerCase()),
-);
-
 /** 系统强调色（UDA 读取）：平台不支持或未探测到时为 null */
 const desktopEnv = useDesktopStore();
 const systemAccentHex = computed(() => {
@@ -474,11 +448,6 @@ function pickSeed(hex: string) {
 function pickSystemSeed() {
   settings.seedSource = "system";
   settings.applyTheme(settings.theme);
-}
-
-function onCustomSeed(event: Event) {
-  settings.seedSource = "manual";
-  settings.applyColorScheme((event.target as HTMLInputElement).value);
 }
 
 // ---- 皮肤（方案书 §9）----
@@ -1024,6 +993,7 @@ onBeforeUnmount(() => {
                     </div>
                     <SegmentedTabs
                       bare
+                      subtle
                       :model-value="settings.theme"
                       :tabs="themeTabs"
                       :disabled="themeLocked"
@@ -1039,7 +1009,7 @@ onBeforeUnmount(() => {
                     <div class="row-label">
                       <span>{{ t("settings.language") }}</span>
                     </div>
-                    <SegmentedTabs v-model="settings.lang" bare :tabs="langTabs" />
+                    <SegmentedTabs v-model="settings.lang" bare subtle :tabs="langTabs" />
                   </div></div
               ></m3e-list-item>
               <m3e-list-item class="settings-option"
@@ -1048,58 +1018,21 @@ onBeforeUnmount(() => {
                     <div class="row-label">
                       <span>{{ t("settings.colorScheme") }}</span>
                     </div>
-                    <div class="swatches" :class="{ disabled: seedLocked }">
-                      <button
-                        v-for="c in COLOR_SEEDS"
-                        :key="c.key"
-                        class="swatch"
-                        :class="{
-                          active: settings.seedColor.toLowerCase() === c.hex.toLowerCase(),
-                        }"
-                        :style="{ '--sw': seedPreview(c.hex) }"
-                        :title="t('settings.colorSeed_' + c.key)"
-                        :aria-label="t('settings.colorSeed_' + c.key)"
-                        :disabled="seedLocked"
-                        @click="pickSeed(c.hex)"
-                      >
-                        <span class="material-symbols-outlined">check</span>
-                      </button>
-                      <label
-                        class="swatch custom"
-                        :class="{ active: isCustomSeed && settings.seedSource !== 'system' }"
-                        :style="{ '--sw': seedPreview(settings.seedColor) }"
-                        :title="t('settings.colorCustom')"
-                      >
-                        <span class="material-symbols-outlined">{{
-                          isCustomSeed ? "check" : "colorize"
-                        }}</span>
-                        <input
-                          type="color"
-                          :value="settings.seedColor"
-                          :disabled="seedLocked"
-                          @input="onCustomSeed"
-                        />
-                      </label>
-                      <!-- 系统强调色（UDA）：平台支持时作为第三个种子来源出现 -->
-                      <button
-                        v-if="systemAccentHex"
-                        class="swatch"
-                        :class="{ active: settings.seedSource === 'system' }"
-                        :style="{ '--sw': seedPreview(systemAccentHex ?? '#1A5C9E') }"
-                        :title="t('settings.system')"
-                        :aria-label="t('settings.system')"
-                        :disabled="seedLocked"
-                        @click="pickSystemSeed()"
-                      >
-                        <span class="material-symbols-outlined">check</span>
-                      </button>
-                    </div>
                   </div>
                   <p class="hint">
                     {{ seedLocked ? t("settings.skinSeedLocked") : t("settings.colorSchemeHint") }}
                   </p>
-                </div></m3e-list-item
-              >
+                  <ThemePalettePicker
+                    :seed="settings.seedColor"
+                    :source="settings.seedSource"
+                    :dark="settings.resolvedDark"
+                    :lang="settings.lang"
+                    :system-seed="systemAccentHex"
+                    :disabled="seedLocked"
+                    @select="pickSeed"
+                    @system="pickSystemSeed"
+                  /></div
+              ></m3e-list-item>
               <m3e-list-item class="settings-option"
                 ><div class="settings-option-content">
                   <div class="row">
@@ -1108,6 +1041,7 @@ onBeforeUnmount(() => {
                     </div>
                     <SegmentedTabs
                       bare
+                      subtle
                       :model-value="settings.closeToTray ? 'tray' : 'quit'"
                       :tabs="closeActionTabs"
                       @update:model-value="settings.closeToTray = $event === 'tray'"
@@ -3748,76 +3682,6 @@ onBeforeUnmount(() => {
 }
 .switch-row m3e-switch {
   flex: none;
-}
-
-/* 配色方案色板 */
-.swatches {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  justify-content: flex-end;
-}
-.swatch {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  background: var(--sw, var(--md-sys-color-primary));
-  /* 勾选标记压在主色圆点上：用 on-primary 而不是写死白（浅色种子下白勾会糊） */
-  color: var(--md-sys-color-on-primary);
-  cursor: pointer;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--md-sys-color-on-surface) 12%, transparent);
-  transition:
-    transform 160ms var(--md-sys-motion-spring),
-    box-shadow 160ms var(--md-sys-motion-spring-effects-fast);
-}
-.swatch:hover {
-  transform: scale(1.12);
-}
-.swatch:active {
-  transform: scale(0.94);
-}
-.swatch .material-symbols-outlined {
-  font-size: 18px;
-  opacity: 0;
-  transform: scale(0.4);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-  transition:
-    opacity 160ms var(--md-sys-motion-spring-effects-fast),
-    transform 160ms var(--md-sys-motion-spring);
-}
-.swatch.active {
-  box-shadow:
-    0 0 0 2px var(--md-sys-color-surface),
-    0 0 0 4px var(--sw, var(--md-sys-color-primary));
-}
-.swatch.active .material-symbols-outlined {
-  opacity: 1;
-  transform: scale(1);
-}
-/* 自定义色：原生取色器铺满圆点但透明，仅保留点击唤起 */
-.swatch.custom .material-symbols-outlined {
-  opacity: 1;
-  transform: scale(1);
-}
-.swatch.custom input[type="color"] {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  border: none;
-  opacity: 0;
-  cursor: pointer;
-}
-/* 种子色被皮肤门控时整组置灰 */
-.swatches.disabled {
-  opacity: 0.4;
-  pointer-events: none;
 }
 
 .dir-list {

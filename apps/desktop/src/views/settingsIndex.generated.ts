@@ -262,7 +262,6 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   { key: "settings.steamSpeedMedium", section: "settings-steam" },
   { key: "settings.steamSpeedSlow", section: "settings-steam" },
   { key: "settings.steamTitle", section: "settings-steam" },
-  { key: "settings.system", section: "settings-appearance" },
   { key: "settings.taskbarLyricsDownload", section: "settings-dlyrics" },
   { key: "settings.taskbarLyricsGuide", section: "settings-dlyrics" },
   { key: "settings.taskbarLyricsNote", section: "settings-dlyrics" },

@@ -773,6 +773,7 @@ router.afterEach((to) => {
 
     <MiniPlayer
       v-if="player.song && shellChromeVisible && !isDesktopLyricsPage && !isExtensionHostPage"
+      :style="isSettingsPage ? { left: 0 } : undefined"
     />
 
     <!-- 全局 M3 右键菜单、文本输入框与写标签对话框（Teleport 到 body） -->
@@ -1036,16 +1037,18 @@ router.afterEach((to) => {
    解法是给 .settings-view 显式 width:100%（见 SettingsView.vue），
    而不是把父级改回 block —— 那样扩展块就没法参与高度分配了。
 
-   注意：这里**不要**另写 padding-bottom 给迷你播放条留位 —— 上面的
-   .has-player .main-content 已经给了 calc(--lm-miniplayer-height + --lm-content-pad)，
-   再写一条更具体的规则去覆盖它只会把 --lm-content-pad 吃掉。
-   旧代码的问题恰恰是「自己猜高度」（max-height: calc(100vh - 120px)），别再重复这个错。 */
+   设置页没有外层内容内边距；播放条的预留空间由下方组合选择器单独处理，
+   避免 padding:0 重置 .has-player 的 padding-bottom。 */
 .settings-page .main-content {
   display: flex;
   flex-direction: column;
   overflow: hidden;
   padding: 0;
   scrollbar-gutter: auto;
+}
+
+.settings-page.has-player .main-content {
+  padding-bottom: var(--lm-miniplayer-height);
 }
 
 /* 扩展宿主页（专用窗口 label="extension"）：

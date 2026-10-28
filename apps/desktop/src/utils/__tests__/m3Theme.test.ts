@@ -11,12 +11,15 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { Contrast, Hct, argbFromHex } from "@material/material-color-utilities";
 import {
   ACCENT_ROLES,
   DEFAULT_SEED_COLOR,
   M3_COLOR_ROLES,
   M3_SCHEME,
   TOKEN_OVERRIDES,
+  SURFACE_TONES,
+  cssTokensFromSeed,
   defaultScheme,
   normalizeSeedHex,
   primaryOfSeed,
@@ -120,6 +123,63 @@ describe("theme.css 与内核一致", () => {
   it("scrim 保持半透明（项目语义：蒙层不能被不透明黑顶掉）", () => {
     expect(defaultScheme(false)["--md-sys-color-scrim"]).toMatch(/^rgba\(/);
     expect(defaultScheme(true)["--md-sys-color-scrim"]).toMatch(/^rgba\(/);
+  });
+});
+
+describe("随种子变化的有色表面", () => {
+  const seeds = ["#1A5C9E", "#00696E", "#6750A4", "#4C662B", "#8F4C00", "#B3261E", "#8B4A6C"];
+  const hct = (hex: string) => Hct.fromInt(argbFromHex(hex));
+
+  it("背景有可辨认的主题色，且切换种子会更新整个表面色阶", () => {
+    for (const dark of [false, true]) {
+      const backgrounds = new Set<string>();
+      for (const seed of seeds) {
+        const actual = cssTokensFromSeed(seed, dark);
+        const background = actual["--md-sys-color-background"];
+        backgrounds.add(background);
+        const official = schemeFromSeed(seed, dark)["--md-sys-color-background"];
+        expect(hct(background).chroma).toBeGreaterThan(hct(official).chroma);
+        expect(background).toBe(actual["--md-sys-color-surface"]);
+        for (const [role, tones] of Object.entries(SURFACE_TONES)) {
+          expect(hct(actual["--md-sys-color-" + role]).tone).toBeCloseTo(
+            dark ? tones.dark : tones.light,
+            0,
+          );
+        }
+      }
+      expect(backgrounds.size).toBe(seeds.length);
+    }
+  });
+
+  it("七种预设的明暗表面均保留正文和次要文字的 AA 对比度", () => {
+    for (const seed of seeds) {
+      for (const dark of [false, true]) {
+        const actual = cssTokensFromSeed(seed, dark);
+        for (const role of Object.keys(SURFACE_TONES)) {
+          const background = hct(actual["--md-sys-color-" + role]).tone;
+          for (const text of ["on-surface", "on-surface-variant"]) {
+            const ratio = Contrast.ratioOfTones(
+              background,
+              hct(actual["--md-sys-color-" + text]).tone,
+            );
+            expect(ratio, seed + "/" + dark + "/" + role + "/" + text).toBeGreaterThanOrEqual(4.5);
+          }
+        }
+      }
+    }
+  });
+
+  it("强调色仍使用官方算法，低彩度种子不被强行染色", () => {
+    for (const dark of [false, true]) {
+      const actual = cssTokensFromSeed(DEFAULT_SEED_COLOR, dark);
+      const official = schemeFromSeed(DEFAULT_SEED_COLOR, dark);
+      for (const role of ["primary", "secondary", "tertiary", "error"]) {
+        expect(actual["--md-sys-color-" + role]).toBe(official["--md-sys-color-" + role]);
+      }
+      const gray = cssTokensFromSeed("#777777", dark);
+      expect(hct(gray["--md-sys-color-background"]).chroma).toBeLessThan(4);
+    }
+    expect(cssTokensFromSeed("invalid", false)).toEqual({});
   });
 });
 

@@ -15,13 +15,14 @@ import {
   Hct,
   MaterialDynamicColors,
   SchemeTonalSpot,
+  TonalPalette,
   argbFromHex,
   hexFromArgb,
 } from "@material/material-color-utilities";
 
 /** 生成方案：改这里就是改全局配色口径 */
 export const M3_SCHEME = {
-  /** Tonal Spot：低-中等鲜艳度，tertiary 与主色同源偏 +60° */
+  /** Tonal Spot：低-中等鲜艳度，三色相由 MCU 2025 方案生成。 */
   variant: "tonal-spot",
   /** M3 Expressive color spec */
   specVersion: "2025",
@@ -112,6 +113,23 @@ export const TOKEN_OVERRIDES: Record<string, { light: string; dark: string }> = 
   "--md-sys-color-scrim": { light: "rgba(0, 0, 0, 0.7)", dark: "rgba(0, 0, 0, 0.85)" },
 };
 
+/** 产品表面色阶：保留种子色相，避免浅色近白、深色近黑吞掉主题色。
+ * 使用 MCU 的 HCT 色调板；强调色和文字角色仍由官方动态配色生成。
+ */
+export const SURFACE_CHROMA = { light: 12, dark: 10 } as const;
+export const SURFACE_TONES: Record<string, { light: number; dark: number }> = {
+  background: { light: 96, dark: 10 },
+  surface: { light: 96, dark: 10 },
+  "surface-dim": { light: 87, dark: 8 },
+  "surface-bright": { light: 98, dark: 24 },
+  "surface-container-lowest": { light: 99, dark: 6 },
+  "surface-container-low": { light: 94, dark: 12 },
+  "surface-container": { light: 92, dark: 15 },
+  "surface-container-high": { light: 90, dark: 18 },
+  "surface-container-highest": { light: 88, dark: 22 },
+  "surface-variant": { light: 90, dark: 26 },
+};
+
 /** `#rrggbb` / `rrggbb` → 规范化 hex；非法返回 null（不抛，调用方沿用兜底色） */
 export function normalizeSeedHex(seed: string): string | null {
   const trimmed = seed.trim();
@@ -187,8 +205,18 @@ export function primaryOfSeed(seed: string, dark: boolean): string | null {
  * 是为了「规范真值」与「产品取舍」不混在一起、后续能各自演进。
  */
 export function cssTokensFromSeed(seed: string, dark: boolean): M3ColorMap {
-  const scheme = schemeFromSeed(seed, dark);
-  if (!Object.keys(scheme).length) return scheme;
+  const hex = normalizeSeedHex(seed);
+  if (!hex) return {};
+  const scheme = schemeFromSeed(hex, dark);
+  const source = Hct.fromInt(argbFromHex(hex));
+  const mode = dark ? "dark" : "light";
+  const surfaces = TonalPalette.fromHueAndChroma(
+    source.hue,
+    Math.min(source.chroma, SURFACE_CHROMA[mode]),
+  );
+  for (const [role, tones] of Object.entries(SURFACE_TONES)) {
+    scheme["--md-sys-color-" + role] = hexFromArgb(surfaces.tone(tones[mode]));
+  }
   for (const [token, pair] of Object.entries(TOKEN_OVERRIDES)) {
     scheme[token] = dark ? pair.dark : pair.light;
   }
