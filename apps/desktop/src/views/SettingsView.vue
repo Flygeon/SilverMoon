@@ -993,7 +993,6 @@ onBeforeUnmount(() => {
                     </div>
                     <SegmentedTabs
                       bare
-                      subtle
                       :model-value="settings.theme"
                       :tabs="themeTabs"
                       :disabled="themeLocked"
@@ -1009,7 +1008,7 @@ onBeforeUnmount(() => {
                     <div class="row-label">
                       <span>{{ t("settings.language") }}</span>
                     </div>
-                    <SegmentedTabs v-model="settings.lang" bare subtle :tabs="langTabs" />
+                    <SegmentedTabs v-model="settings.lang" bare :tabs="langTabs" />
                   </div></div
               ></m3e-list-item>
               <m3e-list-item class="settings-option"
@@ -1041,7 +1040,6 @@ onBeforeUnmount(() => {
                     </div>
                     <SegmentedTabs
                       bare
-                      subtle
                       :model-value="settings.closeToTray ? 'tray' : 'quit'"
                       :tabs="closeActionTabs"
                       @update:model-value="settings.closeToTray = $event === 'tray'"

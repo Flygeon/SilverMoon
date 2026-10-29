@@ -1042,8 +1042,7 @@ router.afterEach((to) => {
    解法是给 .settings-view 显式 width:100%（见 SettingsView.vue），
    而不是把父级改回 block —— 那样扩展块就没法参与高度分配了。
 
-   设置页没有外层内容内边距；播放条的预留空间由下方组合选择器单独处理，
-   避免 padding:0 重置 .has-player 的 padding-bottom。 */
+   设置页隐藏迷你播放条，因此不预留播放条高度。 */
 .settings-page .main-content {
   display: flex;
   flex-direction: column;

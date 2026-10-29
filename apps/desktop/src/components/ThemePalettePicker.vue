@@ -134,6 +134,8 @@ function onCustomInput(event: Event) {
   outline: 2px solid transparent;
   outline-offset: -2px;
   --m3e-button-container-height: 88px;
+  --m3e-button-leading-space: var(--lm-space-8);
+  --m3e-button-trailing-space: var(--lm-space-8);
   --m3e-button-shape-square: var(--md-sys-shape-corner-large);
   --m3e-tonal-button-container-color: var(--md-sys-color-surface-container);
 }

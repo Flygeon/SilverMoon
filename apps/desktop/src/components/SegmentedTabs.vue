@@ -18,8 +18,6 @@ const props = defineProps<{
   tabs: { value: T; label: string; icon?: string }[];
   /** 只渲染按钮组本身，不渲染内容面板与滑动过渡（设置项单选行用） */
   bare?: boolean;
-  /** 设置页使用低强调选中态，避免多个主色实心按钮争抢注意力。 */
-  subtle?: boolean;
   /** 整组禁用（如皮肤锁定时的主题切换） */
   disabled?: boolean;
   /**
@@ -49,7 +47,6 @@ function select(value: T) {
 }
 
 function buttonVariant(value: T) {
-  if (props.subtle) return value === props.modelValue ? "filled" : "tonal";
   return value === props.modelValue ? "filled" : "tonal";
 }
 
