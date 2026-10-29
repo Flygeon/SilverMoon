@@ -114,10 +114,11 @@ function onCustomInput(event: Event) {
 <style scoped>
 .palette-picker {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(72px, 100%), 1fr));
   gap: var(--lm-space-16) var(--lm-space-12);
   width: 100%;
   min-width: 0;
+  overflow: visible;
 }
 .palette-option {
   display: flex;
@@ -128,6 +129,7 @@ function onCustomInput(event: Event) {
 }
 .swatch {
   width: 100%;
+  min-width: 0;
   border-radius: var(--md-sys-shape-corner-large);
   outline: 2px solid transparent;
   outline-offset: -2px;

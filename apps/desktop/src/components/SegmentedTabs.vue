@@ -49,7 +49,7 @@ function select(value: T) {
 }
 
 function buttonVariant(value: T) {
-  if (props.subtle) return value === props.modelValue ? "tonal" : "text";
+  if (props.subtle) return value === props.modelValue ? "filled" : "tonal";
   return value === props.modelValue ? "filled" : "tonal";
 }
 

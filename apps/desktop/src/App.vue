@@ -615,7 +615,7 @@ router.afterEach((to) => {
     class="app-shell"
     data-lm-region="shell"
     :class="{
-      'has-player': player.song && shellChromeVisible,
+      'has-player': player.song && shellChromeVisible && !isSettingsPage,
       'desktop-lyrics-page': isDesktopLyricsPage,
       'extension-host-page': isExtensionHostPage,
       'settings-page': isSettingsPage,
@@ -772,8 +772,13 @@ router.afterEach((to) => {
     </div>
 
     <MiniPlayer
-      v-if="player.song && shellChromeVisible && !isDesktopLyricsPage && !isExtensionHostPage"
-      :style="isSettingsPage ? { left: 0 } : undefined"
+      v-if="
+        player.song &&
+        shellChromeVisible &&
+        !isSettingsPage &&
+        !isDesktopLyricsPage &&
+        !isExtensionHostPage
+      "
     />
 
     <!-- 全局 M3 右键菜单、文本输入框与写标签对话框（Teleport 到 body） -->
@@ -1045,10 +1050,6 @@ router.afterEach((to) => {
   overflow: hidden;
   padding: 0;
   scrollbar-gutter: auto;
-}
-
-.settings-page.has-player .main-content {
-  padding-bottom: var(--lm-miniplayer-height);
 }
 
 /* 扩展宿主页（专用窗口 label="extension"）：
