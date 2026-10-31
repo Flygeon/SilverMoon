@@ -34,6 +34,7 @@ const props = withDefaults(
     masonry?: boolean;
     list?: boolean;
     mixed?: boolean;
+    coverOnly?: boolean;
     selecting?: boolean;
     selectedIds?: string[];
   }>(),
@@ -46,6 +47,7 @@ const props = withDefaults(
     masonry: false,
     list: false,
     mixed: false,
+    coverOnly: false,
     selecting: false,
     selectedIds: () => [],
   },
@@ -72,6 +74,10 @@ function flash(message: string) {
 
 function t(key: string) {
   return translate(settings.lang, key);
+}
+function categoryLabel(type: MediaEntry["type"]): string {
+  const key = { image: "images", video: "videos", audio: "music", book: "books" }[type];
+  return t("nav." + key);
 }
 
 /**
@@ -160,14 +166,16 @@ const ratio = computed(() => {
   const [w, h] = props.aspect.split("/").map(Number);
   return h ? w / h : w || 1;
 });
-const rowH = computed(() => cellW.value / ratio.value + META_H + GAP_Y);
+const rowH = computed(() => cellW.value / ratio.value + (props.coverOnly ? 0 : META_H) + GAP_Y);
 const rowCount = computed(() => Math.ceil(props.items.length / columns.value));
-const masonry = computed(() => masonryLayout(props.items, width.value, props.minWidth));
+const masonryMetrics = computed(() =>
+  masonryLayout(props.items, width.value, props.minWidth, props.coverOnly ? 0 : 54),
+);
 const totalH = computed(() =>
   props.list
     ? props.items.length * 96
     : props.masonry
-      ? masonry.value.height
+      ? masonryMetrics.value.height
       : rowCount.value * rowH.value,
 );
 
@@ -186,7 +194,9 @@ const visible = computed(() => {
         .slice(Math.max(0, Math.floor(start / 96)), Math.ceil(end / 96))
         .map((item, i) => ({ item, index: Math.max(0, Math.floor(start / 96)) + i }));
     }
-    return masonry.value.cells.filter((cell) => cell.top + cell.height >= start && cell.top <= end);
+    return masonryMetrics.value.cells.filter(
+      (cell) => cell.top + cell.height >= start && cell.top <= end,
+    );
   }
   const start = firstRow.value * columns.value;
   const end = Math.min(props.items.length, lastRow.value * columns.value);
@@ -285,12 +295,12 @@ function cellStyle(index: number) {
   if (props.list)
     return { position: "absolute" as const, left: "0", top: `${index * 96}px`, width: "100%" };
   if (props.masonry) {
-    const cell = masonry.value.cells[index];
+    const cell = masonryMetrics.value.cells[index];
     return {
       position: "absolute" as const,
       left: `${cell.left}px`,
       top: `${cell.top}px`,
-      width: `${masonry.value.cellWidth}px`,
+      width: `${masonryMetrics.value.cellWidth}px`,
     };
   }
   const col = index % columns.value;
@@ -344,7 +354,7 @@ function subtitleOf(item: MediaEntry): string {
     >
       <div v-for="n in skeletonCount" :key="n" class="cell">
         <div class="thumb lm-skeleton" :style="{ aspectRatio: aspect }"></div>
-        <div class="meta">
+        <div v-if="!coverOnly" class="meta">
           <div class="lm-skeleton line"></div>
           <div class="lm-skeleton line short"></div>
         </div>
@@ -355,7 +365,7 @@ function subtitleOf(item: MediaEntry): string {
       v-else
       ref="scroller"
       class="virtual-root"
-      :class="{ 'mixed-grid': masonry, 'list-grid': list }"
+      :class="{ 'mixed-grid': masonry, 'list-grid': list, 'cover-only': coverOnly }"
       :style="{ height: totalH + 'px' }"
     >
       <div
@@ -369,6 +379,7 @@ function subtitleOf(item: MediaEntry): string {
           class="cell"
           :class="{ selected: selectedIds.includes(v.item.id) }"
           :aria-selected="selecting ? selectedIds.includes(v.item.id) : undefined"
+          :aria-label="v.item.title || v.item.name"
           data-hero-source
           :style="cellStyle(v.index)"
           tabindex="0"
@@ -382,6 +393,12 @@ function subtitleOf(item: MediaEntry): string {
             data-hero-cover
             :style="{ aspectRatio: list ? '1' : masonry ? String(mediaAspect(v.item)) : aspect }"
           >
+            <span v-if="coverOnly" class="type-badge" data-hero-skip>
+              <span class="material-symbols-outlined" aria-hidden="true">{{
+                TYPE_ICONS[v.item.type]
+              }}</span>
+              {{ categoryLabel(v.item.type) }}
+            </span>
             <span v-if="selecting" class="selection-mark material-symbols-outlined">{{
               selectedIds.includes(v.item.id) ? "check_circle" : "check_box_outline_blank"
             }}</span>
@@ -396,7 +413,7 @@ function subtitleOf(item: MediaEntry): string {
               {{ TYPE_ICONS[v.item.type] ?? "draft" }}
             </span>
 
-            <span v-if="v.item.durationMs" class="badge tabular-nums">
+            <span v-if="!coverOnly && v.item.durationMs" class="badge tabular-nums">
               {{ formatDuration(v.item.durationMs) }}
             </span>
 
@@ -417,7 +434,7 @@ function subtitleOf(item: MediaEntry): string {
             </div>
           </div>
 
-          <div class="meta">
+          <div v-if="!coverOnly" class="meta">
             <div class="title" :title="v.item.name">
               {{ v.item.title || v.item.name }}
             </div>
@@ -507,6 +524,36 @@ function subtitleOf(item: MediaEntry): string {
 .list-grid .meta {
   height: auto;
   padding: var(--lm-space-8);
+}
+.cover-only .cell {
+  gap: 0;
+  background: transparent;
+  overflow: visible;
+}
+.cover-only.list-grid .thumb {
+  width: 100%;
+}
+.type-badge {
+  position: absolute;
+  top: var(--lm-space-8);
+  left: var(--lm-space-8);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lm-space-4);
+  padding: var(--lm-space-4) var(--lm-space-8);
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--lm-content-control-surface);
+  color: var(--lm-content-overlay-color);
+  font-size: var(--md-sys-typescale-label-small-size);
+  pointer-events: none;
+}
+.type-badge .material-symbols-outlined {
+  font-size: var(--md-sys-typescale-body-large-size);
+}
+.cover-only .selection-mark {
+  top: auto;
+  bottom: var(--lm-space-8);
 }
 /*
  * 高度必须绑定在视口量级，不能等于整卷 totalH。

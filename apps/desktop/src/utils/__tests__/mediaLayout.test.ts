@@ -36,4 +36,15 @@ describe("mixed media masonry", () => {
     expect(masonryLayout([], 0).height).toBe(0);
     expect(masonryLayout([entry(0, "audio")], 0).cellWidth).toBe(0);
   });
+  it("removes metadata space from cover-only masonry", () => {
+    const { cells, cellWidth, height } = masonryLayout(
+      [entry(0, "audio"), entry(1, "audio")],
+      200,
+      200,
+      0,
+    );
+    expect(cells[0].height).toBe(cellWidth);
+    expect(cells[1].top).toBe(cellWidth + 16);
+    expect(height).toBe(cellWidth * 2 + 16);
+  });
 });

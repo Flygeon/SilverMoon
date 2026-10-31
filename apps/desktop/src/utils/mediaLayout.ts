@@ -10,14 +10,14 @@ export function mediaAspect(item: MediaEntry): number {
 }
 
 /** Shortest-column placement preserves input order without creating blank grid rows. */
-export function masonryLayout(items: MediaEntry[], width: number, minWidth = 200) {
+export function masonryLayout(items: MediaEntry[], width: number, minWidth = 200, metaHeight = 54) {
   const gap = 16;
   const columns = Math.max(1, Math.floor((width + gap) / (minWidth + gap)));
   const cellWidth = Math.max(0, (width - gap * (columns - 1)) / columns);
   const heights = Array<number>(columns).fill(0);
   const cells = items.map((item, index) => {
     const column = heights.indexOf(Math.min(...heights));
-    const height = cellWidth / mediaAspect(item) + 54;
+    const height = cellWidth / mediaAspect(item) + metaHeight;
     const cell = { item, index, left: column * (cellWidth + gap), top: heights[column], height };
     heights[column] += height + gap;
     return cell;
