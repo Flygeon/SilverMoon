@@ -13,14 +13,17 @@ import { toBytes } from "../bridge";
 const JSON_BODY = JSON.stringify({ error_code: 0, data: { lists: [{ SongName: "测试歌曲" }] } });
 
 /** 造一个假的宿主桥，`call("http", …)` 直接返回给定响应。 */
-function stubBridge(response: unknown, options: { onCall?: () => void } = {}): void {
+function stubBridge(
+  response: unknown,
+  options: { onCall?: (payload: unknown) => void } = {},
+): void {
   (globalThis as unknown as { window: unknown }).window = {
     __SILVERMOON__: {
       label: "main",
       platform: "win32",
       invoke: async () => ({ ok: true, data: null }),
-      call: async (_channel: string, _payload: unknown) => {
-        options.onCall?.();
+      call: async (_channel: string, payload: unknown) => {
+        options.onCall?.(payload);
         return { ok: true, data: response };
       },
       emitTo: async () => undefined,
@@ -67,6 +70,13 @@ describe("toBytes", () => {
 });
 
 describe("宿主 fetch", () => {
+  it.each([undefined, 8000])("只在调用方指定时透传宿主超时 %s", async (timeoutMs) => {
+    let payload: unknown;
+    stubBridge(byteResponse(new Uint8Array(4)), { onCall: (value) => (payload = value) });
+    await hostFetch("https://media.test/video", { timeoutMs });
+    expect(payload).toMatchObject({ timeoutMs });
+  });
+
   it("能解析文本型响应（字节形态）", async () => {
     stubBridge(byteResponse(new TextEncoder().encode(JSON_BODY)));
     const res = await hostFetch("http://127.0.0.1/x");

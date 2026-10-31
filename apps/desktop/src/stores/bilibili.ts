@@ -375,7 +375,11 @@ export const useBiliStore = defineStore("bilibili", () => {
         return true;
       }
       if (s.code !== 86039 && s.code !== 86090 && s.code !== 86101) {
-        loginError.value = `扫码登录失败：${s.message || "上游返回未知状态"}（code=${s.code}）`;
+        qrStatusText.value = "扫码授权未完成";
+        loginError.value =
+          s.code === 48007
+            ? `B 站拒绝此次登录：${s.message || "当前账号暂不支持在本 APP 登录"}（code=48007）。手机确认不代表登录成功，请在官方客户端检查账号状态；切换扫码方式也可能仍被拒绝。`
+            : `扫码登录失败：${s.message || "上游返回未知状态"}（code=${s.code}）`;
         return true;
       }
       qrStatusText.value =

@@ -1,6 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  BiliDashSession,
+  BiliRangeSource,
   contiguousBufferedEnd,
+  fetchRange,
   isTimeBuffered,
   mseMime,
   parseByteRange,
@@ -11,6 +14,176 @@ import type { BiliStream } from "@/utils/bilibili";
 
 // biliDash 顶部引 @/capabilities：纯浏览器环境下它会在导入期读 location
 vi.mock("@/capabilities", () => ({ isDesktop: false, capabilities: {} }));
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
+describe("DASH 主备取流", () => {
+  const primary = "https://primary.test/video?signature=secret";
+  const backup = "https://backup.test/video?signature=secret";
+
+  it("主地址失败切换备用，后续分片沿用成功地址", async () => {
+    const request = vi.fn().mockResolvedValueOnce(new Response(null, { status: 503 }));
+    request.mockImplementation(async () => new Response(new Uint8Array(4), { status: 206 }));
+    vi.stubGlobal("fetch", request);
+    const source = new BiliRangeSource({ url: primary, backupUrls: [backup, backup] });
+    await source.read(0, 3);
+    await source.read(4, 7);
+    expect(request.mock.calls.map(([url]) => url)).toEqual([primary, backup, backup]);
+    expect(request.mock.calls[2][1].headers.Range).toBe("bytes=4-7");
+  });
+
+  it("忽略 Range 返回整文件的地址不能当成合法分片", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(new Uint8Array(100))),
+    );
+    await expect(fetchRange(primary, 4, 7)).rejects.toThrow("长度不匹配");
+  });
+
+  it("请求超时后结束等待并切换备用地址", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("timeout", "TimeoutError")), ms);
+      return controller.signal;
+    });
+    const request = vi.fn().mockImplementationOnce(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal!.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+        }),
+    );
+    request.mockResolvedValue(new Response(new Uint8Array(4), { status: 206 }));
+    vi.stubGlobal("fetch", request);
+    const pending = new BiliRangeSource({ url: primary, backupUrls: [backup] }).read(0, 3);
+    await vi.advanceTimersByTimeAsync(8000);
+    await expect(pending).resolves.toHaveLength(4);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("关闭会话后不再请求备用地址，错误也不泄露签名 URL", async () => {
+    const controller = new AbortController();
+    const request = vi.fn(async () => {
+      controller.abort();
+      throw new Error(primary);
+    });
+    vi.stubGlobal("fetch", request);
+    const source = new BiliRangeSource({ url: primary, backupUrls: [backup] });
+    await expect(source.read(0, 3, controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    request.mockRejectedValue(new Error(primary));
+    await expect(fetchRange(primary, 0, 3)).rejects.toThrow("网络请求失败");
+    await expect(fetchRange(primary, 0, 3)).rejects.not.toThrow("secret");
+  });
+});
+
+describe("DASH 起播失败", () => {
+  function setup(stallInit = false) {
+    class FakeSourceBuffer extends EventTarget {
+      updating = false;
+      buffered = { length: 0 } as TimeRanges;
+      appendBuffer() {
+        this.updating = true;
+        if (stallInit) return;
+        queueMicrotask(() => {
+          this.updating = false;
+          this.dispatchEvent(new Event("updateend"));
+        });
+      }
+    }
+    class FakeMediaSource extends EventTarget {
+      readyState = "open";
+      duration = 0;
+      addSourceBuffer() {
+        return new FakeSourceBuffer();
+      }
+      endOfStream() {
+        this.readyState = "ended";
+      }
+    }
+    vi.stubGlobal("MediaSource", FakeMediaSource);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:test");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const video = Object.assign(new EventTarget(), {
+      currentTime: 0,
+      readyState: 1,
+      src: "",
+      removeAttribute: vi.fn(),
+      load: vi.fn(),
+    }) as unknown as HTMLVideoElement;
+    const track: BiliStream = {
+      id: 16,
+      url: "https://primary.test/video",
+      backupUrls: [],
+      codecs: "avc1.640032",
+      mimeType: "video/mp4",
+      width: 640,
+      height: 360,
+      bandwidth: 100,
+      initRange: "0-3",
+      indexRange: "4-47",
+    };
+    return { video, track, session: new BiliDashSession() };
+  }
+
+  it.each(["timeout", "destroy"])("初始化追加挂起后可 %s，不能永久等待", async (action) => {
+    vi.useFakeTimers();
+    const { video, track, session } = setup(true);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const range = (init.headers as Record<string, string>).Range;
+        return new Response(
+          range === "bytes=4-47" ? buildSidx([{ size: 4, duration: 16000 }]) : new Uint8Array(4),
+          { status: 206 },
+        );
+      }),
+    );
+    const onReady = vi.fn();
+    const pending = session.load(video, { video: track, audio: null, onError: vi.fn(), onReady });
+    const assertion =
+      action === "timeout"
+        ? expect(pending).rejects.toThrow("追加超时")
+        : expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(0);
+    if (action === "timeout") await vi.advanceTimersByTimeAsync(5000);
+    else session.destroy();
+    await assertion;
+    expect(onReady).not.toHaveBeenCalled();
+    session.destroy();
+  });
+
+  it("首片重试耗尽不能再通知就绪覆盖错误", async () => {
+    vi.useFakeTimers();
+    const { video, track, session } = setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const range = (init.headers as Record<string, string>).Range;
+        if (range === "bytes=0-3") return new Response(new Uint8Array(4), { status: 206 });
+        if (range === "bytes=4-47") {
+          return new Response(buildSidx([{ size: 4, duration: 16000 }]), { status: 206 });
+        }
+        return new Response(null, { status: 503 });
+      }),
+    );
+    const onError = vi.fn();
+    const onReady = vi.fn();
+    const pending = session.load(video, { video: track, audio: null, onError, onReady });
+    const assertion = expect(pending).rejects.toThrow("HTTP 503");
+    await vi.advanceTimersByTimeAsync(1500);
+    await assertion;
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onReady).not.toHaveBeenCalled();
+    session.destroy();
+  });
+});
 
 /** 手工拼一个最小可用的 sidx 盒（version 0，reference_type=0）。 */
 function buildSidx(entries: { size: number; duration: number }[], timescale = 16000): Uint8Array {

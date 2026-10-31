@@ -84,7 +84,7 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
  */
 export async function fetch(
   input: string | URL | Request,
-  init: RequestInit = {},
+  init: RequestInit & { timeoutMs?: number } = {},
 ): Promise<Response> {
   const url =
     typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -97,6 +97,7 @@ export async function fetch(
     method: init.method ?? "GET",
     headers: normalizeHeaders(init.headers),
     body: normalizeBody(init.body),
+    timeoutMs: init.timeoutMs,
   });
 
   const raw = init.signal ? await abortable(call, init.signal) : await call;

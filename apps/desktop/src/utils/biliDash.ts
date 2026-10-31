@@ -30,8 +30,13 @@
  * 白名单域名（见 `electron/net-headers.ts`），PCDN 域名不在其中；而宿主网络通道
  * 可以显式带上 `Referer` / `Range`，与域名无关，最稳。
  */
-import { isDesktop } from "@/capabilities";
+import { capabilities, isDesktop } from "@/capabilities";
 import type { BiliStream } from "@/utils/bilibili";
+
+/** 只记录阶段，不写入签名地址、媒体标识或账号凭据。 */
+function logDash(stage: string): void {
+  if (isDesktop) void capabilities.appLog(`[bilibili:playback] ${stage}`).catch(() => {});
+}
 
 /** 一个 DASH 媒体分片（字节闭区间 + 时间轴区间，单位秒）。 */
 export interface DashSegment {
@@ -127,15 +132,53 @@ export async function fetchRange(
     Referer: "https://www.bilibili.com",
     Origin: "https://www.bilibili.com",
   };
-  if (isDesktop) {
-    const mod = await import("@/ipc/http");
-    const res = await mod.fetch(url, { headers, signal });
-    if (!res.ok && res.status !== 206) throw new Error(`DASH 分片请求失败：HTTP ${res.status}`);
-    return new Uint8Array(await res.arrayBuffer());
+  const requestSignal = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(8000)]);
+  try {
+    const request = isDesktop ? (await import("@/ipc/http")).fetch : fetch;
+    const init = { headers, signal: requestSignal, timeoutMs: 8000 };
+    const res = await request(url, init);
+    if (!res.ok) throw new Error(`DASH 分片请求失败：HTTP ${res.status}`);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.byteLength !== end - start + 1) {
+      throw new Error("DASH 分片长度不匹配，请重试或切换清晰度");
+    }
+    return bytes;
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    if (requestSignal.aborted) throw new Error("DASH 分片请求超时，请重试或检查网络");
+    // 原始网络异常可能包含签名 URL，不向 UI 或日志泄露。
+    if (error instanceof Error && error.message.startsWith("DASH ")) throw error;
+    throw new Error("DASH 分片网络请求失败，请重试或检查网络");
   }
-  const res = await fetch(url, { headers, signal });
-  if (!res.ok && res.status !== 206) throw new Error(`DASH 分片请求失败：HTTP ${res.status}`);
-  return new Uint8Array(await res.arrayBuffer());
+}
+
+/** 同轨道的主备地址共享分片偏移，故可在任何阶段切换。 */
+export class BiliRangeSource {
+  private readonly urls: string[];
+  private preferred = 0;
+
+  constructor(track: Pick<BiliStream, "url" | "backupUrls">) {
+    this.urls = [...new Set([track.url, ...track.backupUrls].filter(Boolean))];
+  }
+
+  async read(start: number, end: number, signal?: AbortSignal): Promise<Uint8Array> {
+    let lastError: unknown = new Error("DASH 缺少可用播放地址");
+    const first = this.preferred;
+    for (let i = 0; i < this.urls.length; i++) {
+      signal?.throwIfAborted();
+      const index = (first + i) % this.urls.length;
+      try {
+        const bytes = await fetchRange(this.urls[index], start, end, signal);
+        if (index !== first) logDash("backup-selected");
+        this.preferred = index;
+        return bytes;
+      } catch (error) {
+        signal?.throwIfAborted();
+        lastError = error;
+      }
+    }
+    throw lastError;
+  }
 }
 
 /** 由上游字段拼出 MSE 的 `SourceBuffer` MIME。 */
@@ -196,6 +239,7 @@ class TrackFeeder {
   private pending = false;
   private aborted = false;
   private stopped = false;
+  failure: unknown = null;
   /** 连续重试计数（成功后清零），仅在拉取内部使用 */
   private retries = 0;
   /**
@@ -216,7 +260,7 @@ class TrackFeeder {
   constructor(
     readonly sb: SourceBuffer,
     private readonly segments: DashSegment[],
-    private readonly url: string,
+    private readonly source: BiliRangeSource,
     private readonly getTime: () => number,
     ahead: number,
     private readonly onError: (e: unknown) => void,
@@ -244,7 +288,10 @@ class TrackFeeder {
   };
 
   private onSbError = (): void => {
-    this.onError(new Error("SourceBuffer 追加失败（编码不受支持或数据损坏）"));
+    if (this.aborted || this.stopped) return;
+    this.failure = new Error("SourceBuffer 追加失败（编码不受支持或数据损坏）");
+    this.stop();
+    this.onError(this.failure);
   };
 
   /** 把游标对齐到时间 `t` 所在（或之前最近）的分片，供跳转 / 起播定位。 */
@@ -376,6 +423,9 @@ class TrackFeeder {
       this.appending = false;
       // 被动中止（destroy / 切清晰度）不算错误
       if (this.aborted || this.stopped) return;
+      this.failure = e;
+      this.stop();
+      logDash("segment-failed");
       this.onError(e);
     }
   }
@@ -392,9 +442,11 @@ class TrackFeeder {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       if (this.aborted || this.stopped) throw new Error("已中止");
       try {
-        return await fetchRange(this.url, seg.start, seg.end, this.signal);
+        return await this.source.read(seg.start, seg.end, this.signal);
       } catch (e) {
         lastError = e;
+        if (this.aborted || this.stopped || this.signal?.aborted) throw e;
+        if (attempt === maxAttempts - 1) break;
         // 退避 400ms / 1200ms，给 CDN 一点恢复时间
         await new Promise((r) => setTimeout(r, 400 * attempt + 400));
       }
@@ -499,6 +551,7 @@ export class BiliDashSession {
   }
 
   async load(videoEl: HTMLVideoElement, opts: DashLoadOptions): Promise<void> {
+    logDash("load");
     this.video = videoEl;
     this.opts = opts;
     if (opts.keepBehindSeconds !== undefined) this.keepBehind = opts.keepBehindSeconds;
@@ -506,19 +559,22 @@ export class BiliDashSession {
     this.destroyed = false;
     this.aborter = new AbortController();
     const signal = this.aborter.signal;
+    const videoSource = new BiliRangeSource(opts.video);
+    const audioSource = opts.audio ? new BiliRangeSource(opts.audio) : null;
 
     // 1) 拉两路的初始化段 + 索引段（并发）
     const [vInit, vIdx, aInit, aIdx] = await Promise.all([
-      fetchRange(opts.video.url, ...rangePair(opts.video.initRange), signal),
-      fetchRange(opts.video.url, ...rangePair(opts.video.indexRange), signal),
-      opts.audio
-        ? fetchRange(opts.audio.url, ...rangePair(opts.audio.initRange), signal)
+      videoSource.read(...rangePair(opts.video.initRange), signal),
+      videoSource.read(...rangePair(opts.video.indexRange), signal),
+      opts.audio && audioSource
+        ? audioSource.read(...rangePair(opts.audio.initRange), signal)
         : Promise.resolve(null),
-      opts.audio
-        ? fetchRange(opts.audio.url, ...rangePair(opts.audio.indexRange), signal)
+      opts.audio && audioSource
+        ? audioSource.read(...rangePair(opts.audio.indexRange), signal)
         : Promise.resolve(null),
     ]);
     if (this.destroyed) return;
+    logDash("indexes-loaded");
 
     const vParsed = parseSidx(vIdx, parseByteRange(opts.video.indexRange)?.start ?? 0);
     if (!vParsed || !vParsed.segments.length) throw new Error("DASH 索引解析失败（未取到分片表）");
@@ -569,8 +625,10 @@ export class BiliDashSession {
     const vSb = ms.addSourceBuffer(mseMime(opts.video, "video/mp4"));
     const aSb = opts.audio && aParsed ? ms.addSourceBuffer(mseMime(opts.audio, "audio/mp4")) : null;
 
-    await appendInit(vSb, vInit);
-    if (aSb && aInit) await appendInit(aSb, aInit);
+    await appendInit(vSb, vInit, signal);
+    if (aSb && aInit) await appendInit(aSb, aInit, signal);
+    if (this.destroyed) return;
+    logDash("initialized");
 
     // 4) 启动两路 feeder
     const video = videoEl;
@@ -578,7 +636,7 @@ export class BiliDashSession {
     const vFeeder = new TrackFeeder(
       vSb,
       vParsed.segments,
-      opts.video.url,
+      videoSource,
       () => video.currentTime,
       30,
       opts.onError,
@@ -587,11 +645,11 @@ export class BiliDashSession {
     vFeeder.seekTo(start);
     this.feeders.push(vFeeder);
 
-    if (aSb && aParsed && opts.audio) {
+    if (aSb && aParsed && audioSource) {
       const aFeeder = new TrackFeeder(
         aSb,
         aParsed.segments,
-        opts.audio.url,
+        audioSource,
         () => video.currentTime,
         30,
         opts.onError,
@@ -648,6 +706,10 @@ export class BiliDashSession {
 
     // 6) 先喂够起播所需的首批分片
     await Promise.all(this.feeders.map((f) => f.pump()));
+    if (this.destroyed) return;
+    const failed = this.feeders.find((f) => f.failure !== null);
+    if (failed) throw failed.failure;
+    logDash("ready");
     opts.onReady?.();
   }
 
@@ -756,27 +818,40 @@ function rangePair(range: string): [number, number] {
 }
 
 /** 把初始化段 append 进 SourceBuffer 并等它落地。 */
-function appendInit(sb: SourceBuffer, bytes: Uint8Array): Promise<void> {
+function appendInit(sb: SourceBuffer, bytes: Uint8Array, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
   return new Promise<void>((resolve, reject) => {
-    const onEnd = () => {
+    const cleanup = () => {
+      clearTimeout(timer);
       sb.removeEventListener("updateend", onEnd);
       sb.removeEventListener("error", onErr);
+      signal.removeEventListener("abort", onAbort);
+    };
+    const onEnd = () => {
+      cleanup();
       resolve();
     };
     const onErr = () => {
-      sb.removeEventListener("updateend", onEnd);
-      sb.removeEventListener("error", onErr);
+      cleanup();
       reject(new Error("初始化段追加失败"));
     };
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("DASH 初始化段追加超时"));
+    }, 5000);
     sb.addEventListener("updateend", onEnd);
     sb.addEventListener("error", onErr);
+    signal.addEventListener("abort", onAbort, { once: true });
     try {
       sb.appendBuffer(
         bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
       );
     } catch (e) {
-      sb.removeEventListener("updateend", onEnd);
-      sb.removeEventListener("error", onErr);
+      cleanup();
       reject(e);
     }
   });

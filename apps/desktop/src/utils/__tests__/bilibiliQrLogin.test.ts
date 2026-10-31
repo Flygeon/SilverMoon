@@ -127,13 +127,16 @@ describe("biliQrPoll 凭据归一化", () => {
     expect(s.alt).toBeUndefined();
   });
 
-  it("外层风控错误不能伪装成尚未扫码", async () => {
+  it.each([-352, 48007])("外层业务错误 %s 保留为终止状态", async (code) => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => hostResponse({ code: -352, message: "风控校验失败" })),
+      vi.fn(async () => hostResponse({ code, message: "上游拒绝登录" })),
     );
     const bili = await freshBili();
-    await expect(bili.biliQrPoll("qrcode-key", "web")).rejects.toThrow("风控校验失败");
+    await expect(bili.biliQrPoll("qrcode-key", "web")).resolves.toEqual({
+      code,
+      message: "上游拒绝登录",
+    });
     expect(persisted["cookies"]).toBeUndefined();
   });
 

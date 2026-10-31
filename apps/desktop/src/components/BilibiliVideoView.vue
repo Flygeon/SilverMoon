@@ -309,6 +309,7 @@ function loadArtplayer() {
 let creating: Promise<void> | null = null;
 /** 组件是否已卸载；卸载后不再允许创建 */
 let disposed = false;
+let sourceGeneration = 0;
 
 async function createPlayer(url: string | null): Promise<void> {
   if (art) return;
@@ -452,6 +453,7 @@ function pickVideoTrack(currentQn: number): BiliStream | null {
  * 但至少能播，且失败原因会明确写在界面上。
  */
 async function mountSource(startAt?: number): Promise<void> {
+  const generation = ++sourceGeneration;
   playerError.value = "";
   const p = play.value;
   if (!p) return;
@@ -464,7 +466,7 @@ async function mountSource(startAt?: number): Promise<void> {
   dash = null;
 
   if (videoTrack && BiliDashSession.canPlay(videoTrack, audioTrack)) {
-    await mountDash(videoTrack, audioTrack, startAt);
+    await mountDash(videoTrack, audioTrack, startAt, generation);
     return;
   }
 
@@ -482,11 +484,13 @@ async function mountSource(startAt?: number): Promise<void> {
 async function mountDash(
   videoTrack: BiliStream,
   audioTrack: BiliStream | null,
-  startAt?: number,
+  startAt: number | undefined,
+  generation: number,
 ): Promise<void> {
   if (!art) {
     await createPlayer(null);
   }
+  if (disposed || generation !== sourceGeneration) return;
   const el = art?.video;
   if (!el || !art) return;
 
@@ -506,11 +510,18 @@ async function mountDash(
       audio: audioTrack,
       startTime,
       onError: (e) => {
+        if (disposed || dash !== session) return;
         playerError.value = e instanceof Error ? e.message : String(e);
       },
       onReady: () => {
+        if (disposed || dash !== session) return;
         playerError.value = "";
-        void el.play().catch(() => undefined);
+        void el.play().catch((e: unknown) => {
+          if (disposed || dash !== session || (e instanceof Error && e.name === "AbortError")) {
+            return;
+          }
+          playerError.value = t("bili.playbackFailed");
+        });
       },
       // MediaSource 已经结束（播完 / 缓冲到头）后用户回拖到未缓冲位置：
       // MSE 不可逆，只能重挂一个新会话并从用户回拖的位置继续。
@@ -633,6 +644,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   // 先置位：任何在途的 createPlayer 在 await 结束后都会看到它并放弃创建
   disposed = true;
+  sourceGeneration += 1;
   window.removeEventListener("keydown", onKeydown);
   document.removeEventListener("pointerdown", onDocPointerDown, true);
   unwatchUrl?.();

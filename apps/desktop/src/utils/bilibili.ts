@@ -828,9 +828,11 @@ export async function biliQrPoll(
   const fromHeader = new Set(headerPairs.map(([name]) => name));
   if (!res.ok) throw new Error(`扫码登录请求失败：HTTP ${res.status}`);
   const json = decodeJson(await res.text()) as Record<string, unknown>;
-  assertOk(json, "查询扫码状态");
+  const outerCode = num(json.code, -1);
+  if (outerCode === -1) throw new Error("扫码登录响应缺少有效状态码，请刷新二维码");
+  if (outerCode !== 0) return { code: outerCode, message: str(json.message) };
   const data = json.data as Record<string, unknown> | undefined;
-  // 扫码状态码在 data.code，外层 code 恒为 0
+  // 外层成功后，二维码等待／授权状态才在 data.code。
   const code = num(data?.code, -1);
   if (code === -1) throw new Error("扫码登录响应缺少有效状态码，请刷新二维码");
   const message = data ? str(data.message) : str(json.message);
