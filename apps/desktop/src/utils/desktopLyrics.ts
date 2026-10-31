@@ -20,8 +20,8 @@ export const DL_BOUNDS_EVENT = "desktop-lyrics:bounds";
  * 主窗口 → 桌面歌词：频谱数据（无歌词时的替代显示）。
  *
  * 单独一条通道而不是塞进 DL_STATE_EVENT：频谱是**高频**数据（约 15-20Hz），
- * 而歌词状态是低频（200ms）且载荷大（整份歌词行 + 逐字时间轴）。
- * 混在一起会让每次频谱刷新都重传整份歌词。
+ * 而歌词状态是低频（200ms 进度增量，歌词变化时才带整份逐字时间轴）。
+ * 单独通道避免频谱刷新触发歌词状态计算。
  */
 export const DL_SPECTRUM_EVENT = "desktop-lyrics:spectrum";
 /**
@@ -87,6 +87,19 @@ export interface DesktopLyricsState {
   artist: string;
 }
 
+/** 进度更新复用已有歌词；窗口就绪和歌词变化时仍发送完整状态。 */
+export type DesktopLyricsUpdate = Omit<DesktopLyricsState, "lines"> & {
+  lines?: DesktopLyricLine[];
+};
+
+export function mergeDesktopLyricsState(
+  previous: DesktopLyricsState | null,
+  update: DesktopLyricsUpdate,
+): DesktopLyricsState | null {
+  const lines = update.lines ?? previous?.lines;
+  return lines ? { ...update, lines } : null;
+}
+
 export type DesktopLyricsControlAction = "toggle" | "next" | "prev" | "close";
 
 export interface DesktopLyricsControl {
@@ -145,7 +158,7 @@ export async function closeDesktopLyricsWindow(): Promise<void> {
 }
 
 /** 主窗口：向桌面歌词窗口推送歌词状态 */
-export async function emitDesktopLyricsState(state: DesktopLyricsState): Promise<void> {
+export async function emitDesktopLyricsState(state: DesktopLyricsUpdate): Promise<void> {
   if (!isDesktop) return;
   try {
     await emitTo(DESKTOP_LYRICS_LABEL, DL_STATE_EVENT, state);

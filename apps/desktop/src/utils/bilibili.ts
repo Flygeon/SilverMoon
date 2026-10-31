@@ -11,9 +11,8 @@
  * - 登录凭据（SESSDATA / bili_jct / DedeUserID…）落 `bilibili.json`（JSON 存储），
  *   与 Bangumi token 同款本地保存策略。
  *
- * 选择**网页端**而非 App 端的原因：App 端所有接口都要 `appkey/appsec` 签名，
- * 而网页端扫码登录（passport web qrcode）与 WBI 签名都不需要内置密钥，
- * PC 端 playurl 也能直接给出 `<video>` 可播的整段 MP4（durl）。
+ * 扫码默认使用 PiliPlus 同款 TV 协议，直接接收结构化 Cookie 和令牌；网页扫码保留
+ * 为手动备用。内容接口继续使用现有网页 API / WBI，不随登录协议切换。
  */
 import { capabilities, isDesktop } from "@/capabilities";
 import { JsonStore } from "@/ipc/store";
@@ -28,6 +27,9 @@ const UA =
 
 const API = "https://api.bilibili.com";
 const PASSPORT = "https://passport.bilibili.com";
+// PiliPlus constants.dart / app_sign.dart 的公开应用标识（非用户凭据）。
+const TV_APP_KEY = "dfca71928277209b";
+const TV_APP_SECRET = "b5475a8825547a4fc26c7d518eaaa02e";
 
 /** WBI 混淆表（标准 64 项的前 32 位，见 PiliPlus wbi_sign.dart:19）。 */
 const MIXIN_KEY_ENC_TAB = [
@@ -163,8 +165,10 @@ export interface BiliPlayUrl {
   tryLook: boolean;
 }
 
+export type BiliQrProtocol = "tv" | "web";
+
 export interface BiliQrStatus {
-  /** 0 成功 / 86038 过期 / 86090 已扫码待确认 / 86101 未扫码 */
+  /** 0 成功 / 86038 过期 / 86039 TV 待确认 / 86090 已扫码待确认 / 86101 未扫码 */
   code: number;
   message: string;
   /**
@@ -717,19 +721,102 @@ export async function biliNav(): Promise<BiliAccount> {
 
 // ------------------------------------------------------------------ 扫码登录
 
-export async function biliQrGenerate(): Promise<{ key: string; url: string }> {
+/** 与 PiliPlus AppSign 一致：排序、URI 编码后签名，POST 参数仍在 query 中。 */
+async function tvLoginRequest(
+  action: "auth_code" | "poll",
+  params: Record<string, string>,
+): Promise<Record<string, unknown>> {
+  const signed = { ...params, appkey: TV_APP_KEY, ts: String(Math.floor(Date.now() / 1000)) };
+  const query = Object.entries(signed)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join("&");
+  const sign = md5(query + TV_APP_SECRET);
+  const res = await biliFetch(
+    `${PASSPORT}/x/passport-tv-login/qrcode/${action}?${query}&sign=${sign}`,
+    {
+      method: "POST",
+      headers: baseHeaders(),
+    },
+  );
+  if (!res.ok) throw new Error(`扫码登录请求失败：HTTP ${res.status}`);
+  return decodeJson(await res.text()) as Record<string, unknown>;
+}
+
+/** 与 Cookie 同库存储；网页登录及退出时清空，避免残留另一账号的 TV 令牌。 */
+async function persistTvAuth(auth: Record<string, string | number> | null): Promise<void> {
+  try {
+    await credentialStore.set("tvAuth", auth);
+    await credentialStore.save();
+  } catch {
+    // 与 Cookie 存储策略一致：浏览器预览仍可在当前会话登录。
+  }
+}
+
+export async function biliQrGenerate(
+  protocol: BiliQrProtocol = "tv",
+): Promise<{ key: string; url: string }> {
   await ensureCookies();
-  const json = await getJson(`${PASSPORT}/x/passport-login/web/qrcode/generate`);
+  const json =
+    protocol === "tv"
+      ? await tvLoginRequest("auth_code", {
+          local_id: "0",
+          platform: "android",
+          mobi_app: "android_hd",
+        })
+      : await getJson(`${PASSPORT}/x/passport-login/web/qrcode/generate`);
   assertOk(json, "获取二维码");
   const data = json.data as Record<string, unknown> | undefined;
-  const key = str(data?.qrcode_key);
+  const key = str(protocol === "tv" ? data?.auth_code : data?.qrcode_key);
   const url = str(data?.url);
   if (!key || !url) throw new Error("上游未返回二维码");
   return { key, url };
 }
 
-export async function biliQrPoll(key: string): Promise<BiliQrStatus> {
+export async function biliQrPoll(
+  key: string,
+  protocol: BiliQrProtocol = "tv",
+  isCurrent: () => boolean = () => true,
+): Promise<BiliQrStatus> {
   await ensureCookies();
+  if (protocol === "tv") {
+    const json = await tvLoginRequest("poll", { auth_code: key, local_id: "0" });
+    // TV 状态在外层 code；网页协议则在 data.code，不能混用。
+    const code = num(json.code, -1);
+    if (code === -1) throw new Error("扫码登录响应缺少有效状态码，请刷新二维码");
+    const message = str(json.message);
+    if (code !== 0 || !isCurrent()) return { code, message };
+    const data = json.data as Record<string, unknown> | undefined;
+    const info = data?.cookie_info as Record<string, unknown> | undefined;
+    const next: CookieMap = {};
+    if (Array.isArray(info?.cookies)) {
+      for (const cookie of info.cookies) {
+        if (!cookie || typeof cookie !== "object") continue;
+        const { name, value } = cookie as Record<string, unknown>;
+        if (typeof name === "string" && URL_COOKIE_NAMES.has(name) && typeof value === "string") {
+          next[name] = value;
+        }
+      }
+    }
+    if (!next.SESSDATA || !next.bili_jct || !next.DedeUserID) {
+      throw new Error("已授权，但上游未返回完整登录凭据，请刷新或改用网页扫码");
+    }
+    // 结构化 Cookie 保留原值，不再经过跳转 URL 的解码／重新编码。
+    cookies = { ...cookies, ...next };
+    await persistCookies();
+    const accessToken = str(data?.access_token);
+    const refreshToken = str(data?.refresh_token);
+    await persistTvAuth(
+      accessToken && refreshToken
+        ? {
+            accessToken,
+            refreshToken,
+            expiresAt: Date.now() + Math.max(0, num(data?.expires_in)) * 1000,
+          }
+        : null,
+    );
+    return { code, message };
+  }
   let alt: Record<string, string> | undefined;
   const res = await biliFetch(
     `${PASSPORT}/x/passport-login/web/qrcode/poll?qrcode_key=${encodeURIComponent(key)}`,
@@ -739,11 +826,15 @@ export async function biliQrPoll(key: string): Promise<BiliQrStatus> {
   // 浏览器就存什么）。这里只记下「哪些名字来自响应头」，好让下面的 url 兜底不去覆盖它们。
   const headerPairs = rawSetCookies(res).flatMap(parseSetCookie);
   const fromHeader = new Set(headerPairs.map(([name]) => name));
+  if (!res.ok) throw new Error(`扫码登录请求失败：HTTP ${res.status}`);
   const json = decodeJson(await res.text()) as Record<string, unknown>;
+  assertOk(json, "查询扫码状态");
   const data = json.data as Record<string, unknown> | undefined;
   // 扫码状态码在 data.code，外层 code 恒为 0
-  const code = data ? num(data.code, 86101) : 86101;
+  const code = num(data?.code, -1);
+  if (code === -1) throw new Error("扫码登录响应缺少有效状态码，请刷新二维码");
   const message = data ? str(data.message) : str(json.message);
+  if (!isCurrent()) return { code, message };
   if (code === 0 && data) {
     // 兜底：跳转链里也带着同一批凭据，值是 urlencoded 形态，先按 cookie 形态落罐
     // （见 cookieValueFromLoginUrl）；原始形态一并返回，验不过时换它再试。
@@ -755,6 +846,7 @@ export async function biliQrPoll(key: string): Promise<BiliQrStatus> {
       cookies[k] = cookieValueFromLoginUrl(v);
     }
     await persistCookies();
+    await persistTvAuth(null);
     if (pairs.length) alt = Object.fromEntries(pairs);
   }
   return { code, message, alt };
@@ -793,6 +885,7 @@ export async function biliLogout(): Promise<void> {
   }
   cookies = {};
   await persistCookies();
+  await persistTvAuth(null);
 }
 
 // ------------------------------------------------------------------ 评论

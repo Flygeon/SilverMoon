@@ -117,8 +117,7 @@ export default [
       "src/components/PageHeader.vue",
       // 书籍页：书架标题右侧的导入按钮用 m3e-button 的 icon 槽
       "src/views/BooksView.vue",
-      // 首页与收藏使用官方 Web Components 的原生 icon 槽。
-      "src/views/HomeView.vue",
+      // 收藏使用官方 Web Components 的原生 icon 槽。
       "src/views/FavoritesView.vue",
       "src/components/NovelBqgView.vue",
       "src/components/NovelDetailPanel.vue",

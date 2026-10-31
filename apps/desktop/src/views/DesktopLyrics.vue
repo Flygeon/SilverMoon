@@ -21,7 +21,9 @@ import {
   emitDesktopLyricsControl,
   emitDesktopLyricsReady,
   isDesktopLyricsWindow,
+  mergeDesktopLyricsState,
   type DesktopLyricsState,
+  type DesktopLyricsUpdate,
 } from "@/utils/desktopLyrics";
 import { computeLineFill } from "@/utils/karaokeFill";
 import { applyAnchorSize, applyTaskbarAnchor, watchDisplay } from "@/utils/desktopLyricsAnchor";
@@ -324,8 +326,8 @@ onMounted(async () => {
     toolbarOpen.value = false;
   });
   try {
-    unlistenState = await listen<DesktopLyricsState>(DL_STATE_EVENT, (e) => {
-      state.value = e.payload;
+    unlistenState = await listen<DesktopLyricsUpdate>(DL_STATE_EVENT, (e) => {
+      state.value = mergeDesktopLyricsState(state.value, e.payload);
       // 每次推送都校准本地时钟，逐字填充因此始终贴着权威进度
       calibrate(e.payload.currentTime);
       startClock();

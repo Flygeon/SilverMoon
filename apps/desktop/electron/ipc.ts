@@ -822,10 +822,10 @@ const handlers: Record<string, Handler> = {
       });
     } catch (error) {
       const protocol = url.slice(0, url.indexOf(":") + 1) || "?";
-      log.warn(
-        `http 请求失败（${protocol}//）：${(error as Error)?.message ?? String(error)}`,
-        url.slice(0, 200),
-      );
+      // 扫码 key、签名等可能位于 query；失败日志只保留端点。
+      const endpoint = url.split(/[?#]/, 1)[0].slice(0, 200);
+      const message = ((error as Error)?.message ?? String(error)).replaceAll(url, endpoint);
+      log.warn(`http 请求失败（${protocol}//）：${message}`, endpoint);
       throw error;
     }
 

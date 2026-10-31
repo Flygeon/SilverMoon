@@ -1114,6 +1114,21 @@ export const usePlayerStore = defineStore("player", () => {
   }
   /** 推送歌词状态给桌面歌词窗口；默认节流 200ms，切歌等关键节点用 force 立即同步 */
   let lastDesktopLyricsSync = 0;
+  const desktopLyricsLines = computed(() => {
+    const withUnits = useSettingsStore().desktopLyricsWordByWord;
+    return lyrics.value.map((l) => ({
+      time: l.time,
+      text: l.text,
+      translation: l.translation,
+      romaji: l.romaji,
+      bg: l.bg?.text,
+      units:
+        withUnits && l.units?.length
+          ? l.units.map((u) => ({ start: u.start, end: u.end }))
+          : undefined,
+    }));
+  });
+  let lastDesktopLyricsLines: typeof desktopLyricsLines.value | null = null;
   function syncDesktopLyrics(force = false) {
     if (!isDesktop) return;
     const settings = useSettingsStore();
@@ -1121,22 +1136,12 @@ export const usePlayerStore = defineStore("player", () => {
     const now = Date.now();
     if (!force && now - lastDesktopLyricsSync < 200) return;
     lastDesktopLyricsSync = now;
-    // 逐字时间轴按设置下发：关掉时不下发 units，桌面窗口自然退回整行高亮
-    const withUnits = settings.desktopLyricsWordByWord;
+    // 静态歌词只在变化或强制同步时发送，进度 tick 不再复制整份逐字时间轴。
+    const lines = desktopLyricsLines.value;
+    const includeLines = force || lines !== lastDesktopLyricsLines;
+    lastDesktopLyricsLines = lines;
     void emitDesktopLyricsState({
-      lines: lyrics.value.map((l) => ({
-        time: l.time,
-        text: l.text,
-        translation: l.translation,
-        romaji: l.romaji,
-        bg: l.bg?.text,
-        // 只带 start/end —— units 里还有 text/obscene，逐字渲染用不到，
-        // 每 200ms 推一次全量文本会白白放大载荷。
-        units:
-          withUnits && l.units?.length
-            ? l.units.map((u) => ({ start: u.start, end: u.end }))
-            : undefined,
-      })),
+      ...(includeLines ? { lines } : {}),
       currentTime: currentTime.value,
       playing: playing.value,
       title: song.value.title,
@@ -1144,7 +1149,7 @@ export const usePlayerStore = defineStore("player", () => {
     }).catch(() => {});
   }
 
-  watch([lyrics, song, playing], () => syncDesktopLyrics(true));
+  watch([desktopLyricsLines, song, playing], () => syncDesktopLyrics(true));
 
   function generateShuffleOrder() {
     const indices = Array.from({ length: queue.value.length }, (_, i) => i);

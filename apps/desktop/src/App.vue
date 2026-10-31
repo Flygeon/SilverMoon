@@ -210,7 +210,6 @@ const route = useRoute();
 const isGamesArea = computed(() => route.path.startsWith("/games"));
 
 const navItems = computed(() => [
-  { key: "home", path: "/home", icon: "home", type: null },
   { key: "images", path: "/images", icon: "image", type: "image" },
   { key: "videos", path: "/videos", icon: "movie", type: "video" },
   { key: "music", path: "/music", icon: "music_note", type: "audio" },

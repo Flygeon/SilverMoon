@@ -33,6 +33,7 @@ const AmllBackground = defineAsyncComponent(() => import("@/components/AmllBackg
 const player = usePlayerStore();
 const settings = useSettingsStore();
 const canvasRef = ref<HTMLCanvasElement | null>(null);
+const visible = ref(!document.hidden);
 
 /**
  * 画布内部渲染倍率。
@@ -58,7 +59,8 @@ let tiles: HTMLCanvasElement[] = [];
 let tileSize = 0;
 let loopCtx: CanvasRenderingContext2D | null = null;
 let resizeHandler: (() => void) | null = null;
-let visibilityHandler: (() => void) | null = null;
+let pendingCover: HTMLImageElement | null = null;
+let disposed = false;
 
 const mode = computed(() => settings.playerBg);
 /** 静态模式下用作 CSS 背景的封面 */
@@ -71,6 +73,22 @@ function stopLoop() {
   }
 }
 
+function releaseTiles() {
+  for (const tile of tiles) {
+    tile.width = 0;
+    tile.height = 0;
+  }
+  tiles = [];
+}
+
+function cancelCoverLoad() {
+  if (!pendingCover) return;
+  pendingCover.onload = null;
+  pendingCover.onerror = null;
+  pendingCover.removeAttribute("src");
+  pendingCover = null;
+}
+
 /** 停掉循环并释放监听，确保重复 start 不叠加泄漏 */
 function teardown() {
   stopLoop();
@@ -78,12 +96,8 @@ function teardown() {
     window.removeEventListener("resize", resizeHandler);
     resizeHandler = null;
   }
-  if (visibilityHandler) {
-    document.removeEventListener("visibilitychange", visibilityHandler);
-    visibilityHandler = null;
-  }
   loopCtx = null;
-  tiles = [];
+  releaseTiles();
 }
 
 /** 把封面四分之一预渲染成一张 tileSize×tileSize 的切片 */
@@ -100,6 +114,7 @@ function makeTile(sx: number, sy: number, sw: number, sh: number): HTMLCanvasEle
 
 function buildTiles() {
   if (!img) return;
+  releaseTiles();
   const w = window.innerWidth;
   const h = window.innerHeight;
   tileSize = Math.max(w, h) * 0.6;
@@ -110,7 +125,7 @@ function buildTiles() {
 
 function startLoop() {
   const canvas = canvasRef.value;
-  if (!canvas || !img) return;
+  if (!canvas || !img || !visible.value || document.hidden) return;
   teardown();
   loopCtx = canvas.getContext("2d");
   if (!loopCtx) return;
@@ -129,12 +144,6 @@ function startLoop() {
   resize();
   resizeHandler = resize;
   window.addEventListener("resize", resize);
-
-  visibilityHandler = () => {
-    if (document.hidden) stopLoop();
-    else startLoop();
-  };
-  document.addEventListener("visibilitychange", visibilityHandler);
 
   if (slices.length === 0) {
     slices = [0, 1, 2, 3].map((i) => ({
@@ -170,9 +179,16 @@ function startLoop() {
 }
 
 function loadCover() {
+  cancelCoverLoad();
+  if (disposed || !visible.value || document.hidden) return;
   const src = player.song?.cover || "/default.svg";
   const im = new Image();
+  pendingCover = im;
   im.onload = () => {
+    if (pendingCover !== im || !visible.value || document.hidden) return;
+    pendingCover = null;
+    im.onload = null;
+    im.onerror = null;
     img = im;
     /*
      * 延后两帧再起动画循环。
@@ -184,24 +200,48 @@ function loadCover() {
      * 两帧足够让过渡的第一帧先提交，之后的绘制不再和位移抢帧。
      */
     if (mode.value === "animated" && canvasRef.value) {
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => {
+      stopLoop();
+      animationId = requestAnimationFrame(() => {
+        animationId = requestAnimationFrame(() => {
+          animationId = null;
           if (mode.value === "animated" && canvasRef.value && img === im) startLoop();
-        }),
-      );
+        });
+      });
     }
+  };
+  im.onerror = () => {
+    if (pendingCover === im) pendingCover = null;
+    im.onload = null;
+    im.onerror = null;
   };
   im.src = src;
 }
 
 async function applyMode() {
   teardown();
-  if (mode.value !== "animated") return;
+  cancelCoverLoad();
+  img = null;
+  if (mode.value !== "animated" || !visible.value) return;
   await nextTick();
+  if (mode.value !== "animated" || !visible.value) return;
   loadCover();
 }
 
-watch(mode, applyMode);
+function onVisibilityChange() {
+  visible.value = !document.hidden;
+  if (!visible.value) {
+    teardown();
+    cancelCoverLoad();
+    img = null;
+    const canvas = canvasRef.value;
+    if (canvas) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  }
+}
+
+watch([mode, visible], applyMode);
 watch(
   () => player.song?.cover,
   () => {
@@ -210,18 +250,25 @@ watch(
 );
 
 onMounted(async () => {
+  document.addEventListener("visibilitychange", onVisibilityChange);
   if (mode.value === "animated") await applyMode();
 });
 
-onBeforeUnmount(teardown);
+onBeforeUnmount(() => {
+  disposed = true;
+  document.removeEventListener("visibilitychange", onVisibilityChange);
+  teardown();
+  cancelCoverLoad();
+  img = null;
+});
 </script>
 
 <template>
   <div class="fluid-wrapper">
-    <canvas v-if="mode === 'animated'" ref="canvasRef" class="fluid-canvas"></canvas>
-    <AmllBackground v-else-if="mode === 'amll'" />
+    <canvas v-if="visible && mode === 'animated'" ref="canvasRef" class="fluid-canvas"></canvas>
+    <AmllBackground v-else-if="visible && mode === 'amll'" />
     <div
-      v-else-if="mode === 'image'"
+      v-else-if="visible && mode === 'image'"
       class="fluid-static"
       :style="{ backgroundImage: coverBg }"
     ></div>

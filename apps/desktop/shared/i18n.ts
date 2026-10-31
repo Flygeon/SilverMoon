@@ -3,7 +3,6 @@ export const messages = {
   zh: {
     app: { name: "SilverMoon", tagline: "光影 · 媒体库" },
     nav: {
-      home: "首页",
       // 设置页分类导航（2026-10 改版：6 → 19 个分类；此前这里是硬编码中文）
       settingsGroupGeneral: "通用",
       settingsGroupLibrary: "媒体库",
@@ -1213,6 +1212,10 @@ export const messages = {
       loginTip: "请使用「哔哩哔哩」手机客户端扫描二维码",
       qrFailed: "二维码获取失败",
       refreshQr: "刷新二维码",
+      useWebQr: "改用网页扫码（备用）",
+      useTvQr: "改用 TV 扫码",
+      tvQrActive: "当前：TV 扫码。如遇授权异常，可切换网页扫码。",
+      webQrActive: "当前：网页扫码（备用）。",
       done: "完成",
       relogin: "重新登录",
       logout: "退出登录",
@@ -1495,7 +1498,6 @@ export const messages = {
   en: {
     app: { name: "SilverMoon", tagline: "Local Media Library" },
     nav: {
-      home: "Home",
       // Settings section nav (2026-10: 6 → 19 sections; these used to be hardcoded Chinese)
       settingsGroupGeneral: "General",
       settingsGroupLibrary: "Library",
@@ -2622,6 +2624,10 @@ export const messages = {
       loginTip: "Scan the QR code with the Bilibili mobile app",
       qrFailed: "Failed to get QR code",
       refreshQr: "Refresh QR",
+      useWebQr: "Use web QR (fallback)",
+      useTvQr: "Use TV QR",
+      tvQrActive: "Current: TV QR. Switch to web QR if authorization fails.",
+      webQrActive: "Current: web QR (fallback).",
       done: "Done",
       relogin: "Sign in again",
       logout: "Sign out",

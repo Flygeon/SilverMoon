@@ -19,7 +19,7 @@ import BilibiliDynamics from "@/components/BilibiliDynamics.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
-import type { BiliVideo } from "@/utils/bilibili";
+import type { BiliQrProtocol, BiliVideo } from "@/utils/bilibili";
 import { translate } from "@shared/i18n";
 
 const bili = useBiliStore();
@@ -86,13 +86,20 @@ interface M3eDialog extends HTMLElement {
 }
 const loginDialog = ref<M3eDialog | null>(null);
 const qrImage = ref("");
+const qrProtocol = ref<BiliQrProtocol>("tv");
 let pollTimer: number | null = null;
 /** 轮询互斥：2s 定时器与切回前台补一次可能撞在一起 */
 let polling = false;
+let loginSession = 0;
+let loginOpen = false;
 
 watch(
   () => bili.qrContent,
-  async (url) => {
+  async (url, _, onCleanup) => {
+    let stale = false;
+    onCleanup(() => {
+      stale = true;
+    });
     if (!url) {
       qrImage.value = "";
       return;
@@ -100,13 +107,14 @@ watch(
     try {
       // 动态 import：qrcode 只在打开登录弹窗时才需要，不拖进视频页的常驻包
       const { default: QRCode } = await import("qrcode");
-      qrImage.value = await QRCode.toDataURL(url, {
+      const image = await QRCode.toDataURL(url, {
         width: 220,
         margin: 1,
         errorCorrectionLevel: "M",
       });
+      if (!stale) qrImage.value = image;
     } catch {
-      qrImage.value = "";
+      if (!stale) qrImage.value = "";
     }
   },
 );
@@ -119,10 +127,12 @@ function stopPolling(): void {
 }
 
 async function tick(): Promise<void> {
-  if (polling) return;
+  if (polling || !loginOpen) return;
+  const session = loginSession;
   polling = true;
   try {
     const done = await bili.pollQr();
+    if (session !== loginSession || !loginOpen) return;
     if (done) {
       stopPolling();
       if (bili.account.isLogin) closeLogin();
@@ -135,27 +145,39 @@ async function tick(): Promise<void> {
 async function openLogin(): Promise<void> {
   // show() 负责遮罩 / 焦点陷阱 / Esc；先开再拉二维码，避免等待期间界面无反馈
   await loginDialog.value?.show();
-  bili.resetQr();
-  await bili.startQr();
-  if (!bili.qrContent) return;
-  stopPolling();
-  pollTimer = window.setInterval(() => void tick(), 2000);
+  loginOpen = true;
+  qrProtocol.value = "tv";
+  await refreshQr();
 }
 
 async function refreshQr(): Promise<void> {
+  const session = ++loginSession;
+  stopPolling();
   bili.resetQr();
   qrImage.value = "";
-  await bili.startQr();
+  await bili.startQr(qrProtocol.value);
+  if (session !== loginSession || !loginOpen || !bili.qrContent) return;
+  pollTimer = window.setInterval(() => void tick(), 2000);
+  void tick();
 }
 
 function closeLogin(): void {
+  loginOpen = false;
+  loginSession += 1;
   stopPolling();
   bili.resetQr();
   void loginDialog.value?.hide();
 }
 
+function switchQrProtocol(): void {
+  qrProtocol.value = qrProtocol.value === "tv" ? "web" : "tv";
+  void refreshQr();
+}
+
 /** m3e-dialog 完全关闭后（含 Esc / 点遮罩）兜底收敛状态。 */
 function onLoginClosed(): void {
+  loginOpen = false;
+  loginSession += 1;
   stopPolling();
   bili.resetQr();
 }
@@ -175,9 +197,12 @@ onActivated(() => {
 });
 
 onBeforeUnmount(() => {
+  loginOpen = false;
+  loginSession += 1;
   observer?.disconnect();
   observer = null;
   stopPolling();
+  bili.resetQr();
   if (noticeTimer !== null) {
     window.clearTimeout(noticeTimer);
     noticeTimer = null;
@@ -335,6 +360,10 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
     <m3e-dialog ref="loginDialog" class="login-dialog" @cancel="closeLogin" @closed="onLoginClosed">
       <span slot="header">{{ t("bili.loginTitle") }}</span>
       <p class="hint">{{ t("bili.loginTip") }}</p>
+      <m3e-button variant="tonal" size="small" @click="switchQrProtocol">
+        {{ t(qrProtocol === "tv" ? "bili.useWebQr" : "bili.useTvQr") }}
+      </m3e-button>
+      <p class="hint">{{ t(qrProtocol === "tv" ? "bili.tvQrActive" : "bili.webQrActive") }}</p>
       <div class="qr-wrap">
         <img v-if="qrImage" :src="qrImage" alt="QR" class="qr-img" />
         <div v-else class="qr-loading">

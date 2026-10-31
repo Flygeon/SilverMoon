@@ -41,6 +41,7 @@ const TIMEOUT_SECS: u64 = 20;
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .no_proxy()
+        .connect_timeout(std::time::Duration::from_secs(5))
         .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
         .user_agent(UA)
         .build()
@@ -109,6 +110,20 @@ fn encrypt_token(plain: &str) -> Result<String, String> {
     Ok(utf8_percent_encode(&b64, NON_ALPHANUMERIC).to_string())
 }
 
+/// 所有接口共用域名池；公开首页和搜索也必须能在主站迁移时回退。
+async fn get_site_json(path: &str) -> Result<Value, String> {
+    let referer = format!("{SITE}/");
+    let mut last_err = "笔趣阁接口暂不可用".to_string();
+    for host in std::iter::once(SITE).chain(API_FALLBACKS.iter().copied()) {
+        let url = format!("{host}/api/{path}");
+        match get_json(&url, &referer).await {
+            Ok(v) => return Ok(v),
+            Err(e) => last_err = e,
+        }
+    }
+    Err(last_err)
+}
+
 /// 调用加密接口；主域失败时依次回退到备用域名池。
 ///
 /// `params_json` 用手工拼好的 JSON 字符串而非 `serde_json::json!`：后者在未开
@@ -116,16 +131,7 @@ fn encrypt_token(plain: &str) -> Result<String, String> {
 /// `JSON.stringify` 的字节序完全一致，密文因此与浏览器等价。
 async fn get_api_json(path: &str, params_json: &str) -> Result<Value, String> {
     let token = encrypt_token(params_json)?;
-    let referer = format!("{SITE}/");
-    let mut last_err = "笔趣阁接口暂不可用".to_string();
-    for host in std::iter::once(SITE).chain(API_FALLBACKS.iter().copied()) {
-        let url = format!("{host}/api/{path}?token={token}");
-        match get_json(&url, &referer).await {
-            Ok(v) => return Ok(v),
-            Err(e) => last_err = e,
-        }
-    }
-    Err(last_err)
+    get_site_json(&format!("{path}?token={token}")).await
 }
 
 // ----------------------------------------------------------------------------
@@ -190,8 +196,7 @@ fn normalize_text(txt: &str) -> String {
 /// 首页书目：合并 hotlist / toplist / sort1..6（按书号去重）。
 #[silvermoon_ipc::command]
 pub async fn bqg_home() -> Result<Vec<NovelCover>, String> {
-    let url = format!("{SITE}/api/index?sort=index");
-    let v = get_json(&url, &format!("{SITE}/")).await?;
+    let v = get_site_json("index?sort=index").await?;
     let mut out: Vec<NovelCover> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for key in [
@@ -245,8 +250,7 @@ pub async fn bqg_search(query: String) -> Result<Vec<NovelCover>, String> {
         return Ok(Vec::new());
     }
     let qs = utf8_percent_encode(q, NON_ALPHANUMERIC).to_string();
-    let url = format!("{SITE}/api/search?q={qs}");
-    let v = get_json(&url, &format!("{SITE}/")).await?;
+    let v = get_site_json(&format!("search?q={qs}")).await?;
     Ok(v.get("data")
         .and_then(|d| d.as_array())
         .map(|arr| arr.iter().filter_map(cover_from).collect())

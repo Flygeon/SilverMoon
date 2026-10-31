@@ -17,6 +17,7 @@ import {
   type BiliDynamic,
   type BiliPlayUrl,
   type BiliQrStatus,
+  type BiliQrProtocol,
   type BiliRelation,
   type BiliReply,
   type BiliReplyCheckResult,
@@ -60,6 +61,7 @@ import {
   biliVideoDetail,
 } from "@/utils/bilibili";
 import { JsonStore } from "@/ipc/store";
+import { capabilities } from "@/capabilities";
 import { useSettingsStore } from "@/stores/settings";
 import { translate } from "@shared/i18n";
 import type { ArtDanmu } from "@/utils/danmaku";
@@ -277,6 +279,8 @@ export const useBiliStore = defineStore("bilibili", () => {
 
   // ---------------------------------------------------------------- 扫码登录
   let qrKey = "";
+  let qrProtocol: BiliQrProtocol = "tv";
+  let qrGeneration = 0;
   let pollFailures = 0;
   const qrContent = ref<string | null>(null);
   const qrStatus = ref<BiliQrStatus | null>(null);
@@ -285,8 +289,15 @@ export const useBiliStore = defineStore("bilibili", () => {
   const qrExpired = ref(false);
   const qrStatusText = ref("请使用「哔哩哔哩」App 扫描二维码");
 
+  function logLogin(stage: string): void {
+    // 只记录状态和业务码，不输出二维码 key、URL、Cookie 或账号资料。
+    void capabilities.appLog(`[bilibili:login] ${stage}`).catch(() => {});
+  }
+
   function resetQr(): void {
+    qrGeneration += 1;
     qrKey = "";
+    startingQr.value = false;
     pollFailures = 0;
     qrContent.value = null;
     qrStatus.value = null;
@@ -295,7 +306,10 @@ export const useBiliStore = defineStore("bilibili", () => {
     qrStatusText.value = "请使用「哔哩哔哩」App 扫描二维码";
   }
 
-  async function startQr(): Promise<void> {
+  async function startQr(protocol: BiliQrProtocol = "tv"): Promise<void> {
+    const generation = ++qrGeneration;
+    qrProtocol = protocol;
+    qrKey = "";
     startingQr.value = true;
     loginError.value = "";
     qrContent.value = null;
@@ -303,29 +317,38 @@ export const useBiliStore = defineStore("bilibili", () => {
     qrExpired.value = false;
     pollFailures = 0;
     try {
-      const r = await biliQrGenerate();
+      const r = await biliQrGenerate(protocol);
+      if (generation !== qrGeneration) return;
       qrContent.value = r.url;
       qrKey = r.key;
+      logLogin(`generated protocol=${protocol}`);
     } catch (e) {
+      if (generation !== qrGeneration) return;
       loginError.value = `获取二维码失败：${cleanError(e)}`;
+      logLogin("generate-failed");
     }
-    startingQr.value = false;
+    if (generation === qrGeneration) startingQr.value = false;
   }
 
   /** 轮询一次；返回 true 表示停止轮询（成功或不可恢复）。 */
   async function pollQr(): Promise<boolean> {
     if (!qrKey) return false;
+    const generation = qrGeneration;
     try {
-      const s = await biliQrPoll(qrKey);
+      const s = await biliQrPoll(qrKey, qrProtocol, () => generation === qrGeneration);
+      if (generation !== qrGeneration) return false;
       pollFailures = 0;
+      if (qrStatus.value?.code !== s.code) logLogin(`status=${s.code}`);
       qrStatus.value = s;
       qrExpired.value = s.code === 86038;
       if (s.code === 0) {
         qrStatusText.value = "登录成功";
         await loadAccount();
+        if (generation !== qrGeneration) return false;
         if (!account.value.isLogin) {
           // 上游偶尔延迟下发凭据，再给一次机会
           await new Promise((r) => setTimeout(r, 600));
+          if (generation !== qrGeneration) return false;
           await loadAccount();
         }
         if (!account.value.isLogin && s.alt) {
@@ -334,24 +357,37 @@ export const useBiliStore = defineStore("bilibili", () => {
           await biliApplyCookies(s.alt);
           await loadAccount();
         }
+        if (generation !== qrGeneration) return false;
         if (!account.value.isLogin) {
           // 带上上游原话（-101 / -352 …），否则这一条永远只有「获取失败」，无从下手
           loginError.value = accountError.value
             ? `已授权，但账号信息获取失败：${accountError.value}`
             : "已授权，但账号信息获取失败，请重新登录";
+          logLogin("authorized-account-failed");
           return true;
         }
         notice.value = t("bili.loggedInAs", { name: account.value.name || t("bili.biliUser") });
+        logLogin("account-verified");
         return true;
       }
       if (s.code === 86038) {
         qrStatusText.value = "二维码已过期，请点击刷新";
         return true;
       }
+      if (s.code !== 86039 && s.code !== 86090 && s.code !== 86101) {
+        loginError.value = `扫码登录失败：${s.message || "上游返回未知状态"}（code=${s.code}）`;
+        return true;
+      }
       qrStatusText.value =
-        s.code === 86090 ? "已扫码，请在手机上确认" : "请使用「哔哩哔哩」App 扫描二维码";
+        s.code === 86039
+          ? s.message || "等待扫码确认"
+          : s.code === 86090
+            ? "已扫码，请在手机上确认"
+            : "请使用「哔哩哔哩」App 扫描二维码";
     } catch (e) {
+      if (generation !== qrGeneration) return false;
       pollFailures += 1;
+      logLogin(`poll-failed attempt=${pollFailures}`);
       if (pollFailures >= 4) {
         loginError.value = `网络异常：${cleanError(e)}`;
         return true;
