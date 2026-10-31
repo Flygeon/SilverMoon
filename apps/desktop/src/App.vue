@@ -210,6 +210,7 @@ const route = useRoute();
 const isGamesArea = computed(() => route.path.startsWith("/games"));
 
 const navItems = computed(() => [
+  { key: "home", path: "/home", icon: "home", type: null },
   { key: "images", path: "/images", icon: "image", type: "image" },
   { key: "videos", path: "/videos", icon: "movie", type: "video" },
   { key: "music", path: "/music", icon: "music_note", type: "audio" },
@@ -326,7 +327,12 @@ const isExtensionHostPage = computed(() => route.path === "/extension-host");
  * 鼠标落在左栏滚列表、落在右侧滚整页，且底部内容会被迷你播放条压住。
  * 所以这里按页面短路 .main-content 的滚动（与 extension-host-page 同一套做法）。
  */
-const isSettingsPage = computed(() => route.path === "/settings");
+// 外壳布局跟随正在显示的页面，而不是提前跟随目标路由。
+// out-in 退场期间保留导航、内边距和滚动容器，避免旧页面重新排版。
+const isSettingsPage = ref(route.path === "/settings");
+function syncSettingsLayout(): void {
+  isSettingsPage.value = route.path === "/settings";
+}
 /**
  * 当前窗口是否是**独立绘画窗口**。
  *
@@ -723,7 +729,9 @@ router.afterEach((to) => {
             -->
             <transition
               :name="isPlayerPage ? 'player' : 'page'"
-              :mode="isGamesArea ? undefined : 'out-in'"
+              :mode="isGamesArea && !isSettingsPage ? undefined : 'out-in'"
+              @after-leave="syncSettingsLayout"
+              @before-enter="syncSettingsLayout"
               @enter="onRouteEnter"
             >
               <!--

@@ -17,6 +17,7 @@ import { openContextMenu, type MenuItem } from "@/composables/useContextMenu";
 import { localTagTarget, openMusicTagDialog } from "@/composables/useMusicTagDialog";
 import { TYPE_ICONS, formatDuration, formatResolution, formatSize } from "@/utils/format";
 import { translate } from "@shared/i18n";
+import { masonryLayout, mediaAspect } from "@/utils/mediaLayout";
 import type { MediaEntry, WallpaperMode } from "@shared/types";
 
 const props = withDefaults(
@@ -30,6 +31,11 @@ const props = withDefaults(
     subtitle?: "artist" | "resolution" | "size" | "none";
     loading?: boolean;
     skeletonCount?: number;
+    masonry?: boolean;
+    list?: boolean;
+    mixed?: boolean;
+    selecting?: boolean;
+    selectedIds?: string[];
   }>(),
   {
     aspect: "1",
@@ -37,6 +43,11 @@ const props = withDefaults(
     subtitle: "none",
     loading: false,
     skeletonCount: 12,
+    masonry: false,
+    list: false,
+    mixed: false,
+    selecting: false,
+    selectedIds: () => [],
   },
 );
 
@@ -151,7 +162,14 @@ const ratio = computed(() => {
 });
 const rowH = computed(() => cellW.value / ratio.value + META_H + GAP_Y);
 const rowCount = computed(() => Math.ceil(props.items.length / columns.value));
-const totalH = computed(() => rowCount.value * rowH.value);
+const masonry = computed(() => masonryLayout(props.items, width.value, props.minWidth));
+const totalH = computed(() =>
+  props.list
+    ? props.items.length * 96
+    : props.masonry
+      ? masonry.value.height
+      : rowCount.value * rowH.value,
+);
 
 const firstRow = computed(() => Math.max(0, Math.floor(scrollTop.value / rowH.value) - OVERSCAN));
 const lastRow = computed(() =>
@@ -160,6 +178,16 @@ const lastRow = computed(() =>
 
 /** 当前需要渲染的条目及其全局索引 */
 const visible = computed(() => {
+  if (props.masonry || props.list) {
+    const start = scrollTop.value - 600;
+    const end = scrollTop.value + viewportH.value + 600;
+    if (props.list) {
+      return props.items
+        .slice(Math.max(0, Math.floor(start / 96)), Math.ceil(end / 96))
+        .map((item, i) => ({ item, index: Math.max(0, Math.floor(start / 96)) + i }));
+    }
+    return masonry.value.cells.filter((cell) => cell.top + cell.height >= start && cell.top <= end);
+  }
   const start = firstRow.value * columns.value;
   const end = Math.min(props.items.length, lastRow.value * columns.value);
   const out: { item: MediaEntry; index: number }[] = [];
@@ -169,7 +197,7 @@ const visible = computed(() => {
   return out;
 });
 
-const offsetY = computed(() => firstRow.value * rowH.value);
+const offsetY = computed(() => (props.masonry || props.list ? 0 : firstRow.value * rowH.value));
 
 // ---- 缩略图按可视区拉取 ----
 let thumbTimer: number | null = null;
@@ -188,7 +216,10 @@ watch(visible, scheduleThumbs, { immediate: true });
 function onScroll() {
   const el = viewport.value;
   if (!el) return;
-  scrollTop.value = el.scrollTop;
+  const root = scroller.value;
+  scrollTop.value = root
+    ? Math.max(0, el.getBoundingClientRect().top - root.getBoundingClientRect().top)
+    : 0;
 }
 
 let ro: ResizeObserver | null = null;
@@ -198,6 +229,7 @@ function measure() {
   const vp = viewport.value;
   if (el) width.value = el.clientWidth;
   if (vp) viewportH.value = vp.clientHeight;
+  onScroll();
 }
 
 function detach() {
@@ -221,10 +253,17 @@ function attach() {
   ro.observe(scroller.value);
   ro.observe(viewport.value);
   measure();
-  scrollTop.value = viewport.value.scrollTop;
+  onScroll();
 }
 
-watch(scroller, attach, { flush: "post" });
+watch(
+  scroller,
+  () => {
+    detach();
+    attach();
+  },
+  { flush: "post" },
+);
 onMounted(attach);
 onBeforeUnmount(() => {
   detach();
@@ -243,6 +282,17 @@ watch(
 );
 
 function cellStyle(index: number) {
+  if (props.list)
+    return { position: "absolute" as const, left: "0", top: `${index * 96}px`, width: "100%" };
+  if (props.masonry) {
+    const cell = masonry.value.cells[index];
+    return {
+      position: "absolute" as const,
+      left: `${cell.left}px`,
+      top: `${cell.top}px`,
+      width: `${masonry.value.cellWidth}px`,
+    };
+  }
   const col = index % columns.value;
   const row = Math.floor(index / columns.value) - firstRow.value;
   return {
@@ -254,10 +304,23 @@ function cellStyle(index: number) {
 }
 
 function thumbOf(item: MediaEntry): string | undefined {
-  return library.getThumb(item.id);
+  return item.thumbPath ? capabilities.thumbUrl(item.thumbPath) : library.getThumb(item.id);
 }
 
 function subtitleOf(item: MediaEntry): string {
+  if (props.mixed) {
+    const label = { audio: "音乐", video: "视频", book: "书籍", image: "图片" }[item.type];
+    return [
+      label,
+      item.artist ||
+        (item.type === "image"
+          ? formatResolution(item.width, item.height)
+          : formatDuration(item.durationMs)) ||
+        item.ext.toUpperCase(),
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
   switch (props.subtitle) {
     case "artist":
       return item.artist || "未知艺术家";
@@ -288,7 +351,13 @@ function subtitleOf(item: MediaEntry): string {
       </div>
     </div>
 
-    <div v-else ref="scroller" class="virtual-root" :style="{ height: totalH + 'px' }">
+    <div
+      v-else
+      ref="scroller"
+      class="virtual-root"
+      :class="{ 'mixed-grid': masonry, 'list-grid': list }"
+      :style="{ height: totalH + 'px' }"
+    >
       <div
         class="layer"
         :class="{ 'is-refreshing': library.refreshing }"
@@ -298,6 +367,8 @@ function subtitleOf(item: MediaEntry): string {
           v-for="v in visible"
           :key="v.item.id"
           class="cell"
+          :class="{ selected: selectedIds.includes(v.item.id) }"
+          :aria-selected="selecting ? selectedIds.includes(v.item.id) : undefined"
           data-hero-source
           :style="cellStyle(v.index)"
           tabindex="0"
@@ -306,7 +377,14 @@ function subtitleOf(item: MediaEntry): string {
           @keydown.enter="emit('open', v.item, v.index)"
           @keydown.space.prevent="emit('open', v.item, v.index)"
         >
-          <div class="thumb" data-hero-cover :style="{ aspectRatio: aspect }">
+          <div
+            class="thumb"
+            data-hero-cover
+            :style="{ aspectRatio: list ? '1' : masonry ? String(mediaAspect(v.item)) : aspect }"
+          >
+            <span v-if="selecting" class="selection-mark material-symbols-outlined">{{
+              selectedIds.includes(v.item.id) ? "check_circle" : "check_box_outline_blank"
+            }}</span>
             <img
               v-if="thumbOf(v.item)"
               :src="thumbOf(v.item)"
@@ -323,18 +401,19 @@ function subtitleOf(item: MediaEntry): string {
             </span>
 
             <div class="overlay" :class="{ pinned: v.item.favorite }" data-hero-skip>
-              <button
-                type="button"
+              <m3e-icon-button
+                v-if="!selecting"
                 class="fav"
                 :class="{ on: v.item.favorite }"
                 :title="t(v.item.favorite ? 'context.unfavorite' : 'context.favorite')"
                 :aria-label="t(v.item.favorite ? 'context.unfavorite' : 'context.favorite')"
                 @click.stop="emit('favorite', v.item)"
+                @keydown.stop
               >
                 <span class="material-symbols-outlined" :class="{ filled: v.item.favorite }"
                   >favorite</span
                 >
-              </button>
+              </m3e-icon-button>
             </div>
           </div>
 
@@ -342,7 +421,7 @@ function subtitleOf(item: MediaEntry): string {
             <div class="title" :title="v.item.name">
               {{ v.item.title || v.item.name }}
             </div>
-            <div v-if="subtitle !== 'none'" class="subtitle">
+            <div v-if="mixed || subtitle !== 'none'" class="subtitle">
               {{ subtitleOf(v.item) }}
             </div>
           </div>
@@ -387,6 +466,47 @@ function subtitleOf(item: MediaEntry): string {
 .virtual-root {
   position: relative;
   width: 100%;
+}
+.mixed-grid .cell {
+  gap: var(--lm-space-8);
+  background: var(--md-sys-color-surface-container-low);
+  overflow: hidden;
+}
+.cell.selected {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+.selection-mark {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  z-index: 1;
+  color: var(--md-sys-color-on-primary-container);
+  background: var(--md-sys-color-primary-container);
+  border-radius: var(--md-sys-shape-corner-full);
+}
+.mixed-grid .meta {
+  height: 46px;
+  padding: 0 var(--lm-space-12) var(--lm-space-8);
+}
+.mixed-grid .thumb {
+  flex-shrink: 0;
+  width: 100%;
+}
+.list-grid .cell {
+  flex-direction: row;
+  align-items: center;
+  height: 80px;
+  background: var(--md-sys-color-surface-container-low);
+}
+.list-grid .thumb {
+  width: 80px;
+  height: 80px;
+  flex-shrink: 0;
+}
+.list-grid .meta {
+  height: auto;
+  padding: var(--lm-space-8);
 }
 /*
  * 高度必须绑定在视口量级，不能等于整卷 totalH。

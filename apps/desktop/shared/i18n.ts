@@ -3,6 +3,7 @@ export const messages = {
   zh: {
     app: { name: "SilverMoon", tagline: "光影 · 媒体库" },
     nav: {
+      home: "首页",
       // 设置页分类导航（2026-10 改版：6 → 19 个分类；此前这里是硬编码中文）
       settingsGroupGeneral: "通用",
       settingsGroupLibrary: "媒体库",
@@ -1494,6 +1495,7 @@ export const messages = {
   en: {
     app: { name: "SilverMoon", tagline: "Local Media Library" },
     nav: {
+      home: "Home",
       // Settings section nav (2026-10: 6 → 19 sections; these used to be hardcoded Chinese)
       settingsGroupGeneral: "General",
       settingsGroupLibrary: "Library",
