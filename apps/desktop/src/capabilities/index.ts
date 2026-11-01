@@ -596,6 +596,9 @@ export const capabilities = {
   neteasePlaylistDetail(id: number): Promise<NeteaseSong[]> {
     return safeInvoke("netease_playlist_detail", { id });
   },
+  neteaseSearch(keyword: string): Promise<NeteaseSong[]> {
+    return safeInvoke("netease_search", { keyword });
+  },
   neteaseCloud(offset = 0, limit = 50): Promise<NeteaseCloudPage> {
     return safeInvoke("netease_cloud", { offset, limit });
   },
@@ -700,8 +703,14 @@ export const capabilities = {
   kugouRankList(zone?: string): Promise<unknown> {
     return safeInvoke("kugou_rank_list", { zone: zone ?? null });
   },
-  kugouRankSongs(rankCid: string, page?: number, pagesize?: number): Promise<unknown> {
+  kugouRankSongs(
+    rankCid: string,
+    page?: number,
+    pagesize?: number,
+    rankId?: string,
+  ): Promise<unknown> {
     return safeInvoke("kugou_rank_songs", {
+      rankId: rankId || null,
       rankCid,
       page: page ?? null,
       pagesize: pagesize ?? null,
@@ -897,8 +906,8 @@ export const capabilities = {
     return safeInvoke("wenku8_shelf_online", { node: node ?? "net" });
   },
   /** 打开登录窗口并由 Rust 侧注入抓取脚本（initialization_script） */
-  wenku8LoginOpen(): Promise<void> {
-    return safeInvoke("wenku8_login_open");
+  wenku8LoginOpen(node?: string): Promise<void> {
+    return safeInvoke("wenku8_login_open", { node: node ?? "net" });
   },
   /** 轮询登录窗口 cookie：Rust 直接读 webview 全量 cookie（含 httpOnly），命中即保存并关窗 */
   wenku8LoginPoll(): Promise<Wenku8LoginStatus> {

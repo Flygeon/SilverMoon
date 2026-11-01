@@ -31,7 +31,7 @@ import {
   type KugouRankCard,
 } from "@/utils/kugou";
 import { translate } from "@shared/i18n";
-import { CURATED_PLAYLISTS, metingPlaylist, metingSearch } from "@/utils/meting";
+import { CURATED_PLAYLISTS, metingSearch } from "@/utils/meting";
 import { FRESH_MS, listCacheGet, listCacheSet } from "@/utils/onlineListCache";
 import { TtlCache } from "@/utils/ttlCache";
 import type { MediaEntry, MusicServer, OnlinePlaylistEntry, OnlineSong } from "@shared/types";
@@ -243,6 +243,12 @@ function subtitleOf(card: PlaylistCard): string {
 }
 
 /** 预取当前平台所有在线歌单（封面/数量/点击秒开），单个失败不影响其它 */
+async function loadOnlinePlaylist(server: MusicServer, id: string): Promise<OnlineSong[]> {
+  return server === "netease"
+    ? toOnlineSongs(await capabilities.neteasePlaylistDetail(Number(id)))
+    : kugouToOnlineSongs(await capabilities.kugouPlaylistDetail(id));
+}
+
 async function prefetchPlaylists() {
   const cards = playlistCards.value.filter((c) => c.id);
   await Promise.all(
@@ -250,7 +256,7 @@ async function prefetchPlaylists() {
       const key = keyOf(c);
       if (playlistCache.has(key)) return;
       try {
-        playlistCache.set(key, await metingPlaylist(c.server!, c.id!));
+        playlistCache.set(key, await loadOnlinePlaylist(c.server!, c.id!));
       } catch {
         /* 单个歌单拉取失败不影响其它 */
       }
@@ -376,11 +382,11 @@ async function openPlaylist(card: PlaylistCard) {
   await openDetailAsync(
     card.name,
     async () => {
-      const songs = await metingPlaylist(card.server!, card.id!);
+      const songs = await loadOnlinePlaylist(card.server!, card.id!);
       playlistCache.set(key, songs);
       return songs;
     },
-    { cacheKey: `meting:${key}` },
+    { cacheKey: `native-playlist:${key}` },
   );
 }
 
@@ -426,7 +432,10 @@ async function loadKugouRanks() {
 async function openKugouRank(card: KugouRankCard) {
   await openDetailAsync(
     card.name,
-    async () => kugouToOnlineSongs(await capabilities.kugouRankSongs(card.id)),
+    async () =>
+      kugouToOnlineSongs(
+        await capabilities.kugouRankSongs(card.rankCid || "0", 1, 30, card.rankId),
+      ),
     { cacheKey: `kugou:rank:${card.id}` },
   );
 }
@@ -482,13 +491,26 @@ watch(
 async function doSearch() {
   const q = searchQuery.value.trim();
   if (!q) return;
-  // 酷狗走 Rust 侧客户端（meting 实例只放行 netease，见 README 说明）。
+  const server = settings.musicServer;
+  // 官方 API 优先；仅请求失败时回退 Meting，空结果仍是有效搜索。
   // 立即进详情 + 骨架，不阻塞在搜索页等待结果。
-  await openDetailAsync(`「${q}」`, async () =>
-    isKugou.value
-      ? kugouToOnlineSongs(await capabilities.kugouSearch(q))
-      : await metingSearch(settings.musicServer, q),
-  );
+  await openDetailAsync(`「${q}」`, async () => {
+    try {
+      return server === "kugou"
+        ? kugouToOnlineSongs(await capabilities.kugouSearch(q))
+        : await toOnlineSongs(await capabilities.neteaseSearch(q));
+    } catch (officialError) {
+      try {
+        return await metingSearch(server, q);
+      } catch (fallbackError) {
+        const message = (error: unknown) =>
+          error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Official API: ${message(officialError)}; Meting: ${message(fallbackError)}`,
+        );
+      }
+    }
+  });
 }
 
 function addPlaylist() {
@@ -893,6 +915,11 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
             <span class="material-symbols-outlined">view_list</span>
           </m3e-icon-button>
         </div>
+      </div>
+
+      <div v-if="onlineError" class="error-bar" role="alert">
+        <span class="material-symbols-outlined">error</span>
+        {{ onlineError }}
       </div>
 
       <!-- 详情骨架：与最终网格/列表同布局，数据到位后原地替换 -->

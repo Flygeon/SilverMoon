@@ -49,6 +49,7 @@ async function loadDaily() {
   } catch (e) {
     status.value = "error";
     error.value = e instanceof Error ? e.message : String(e);
+    if (error.value.includes("[KUGOU_LOGIN_REQUIRED]")) kugou.reauthRequired = true;
   }
 }
 
@@ -111,6 +112,13 @@ watch(
     void kugou.loadPlaylists();
   },
 );
+
+watch(
+  () => kugou.reauthRequired,
+  (required) => {
+    if (!required && kugou.loggedIn) void loadDaily();
+  },
+);
 </script>
 
 <template>
@@ -122,7 +130,10 @@ watch(
     <p v-else-if="status === 'error'" class="feed-error">
       <span class="material-symbols-outlined">error</span>
       {{ error }}
-      <m3e-button variant="text" size="small" @click="loadDaily">
+      <m3e-button v-if="kugou.reauthRequired" variant="tonal" size="small" @click="kugou.openQr()">
+        {{ t("kugou.relogin") }}
+      </m3e-button>
+      <m3e-button v-else variant="text" size="small" @click="loadDaily">
         {{ t("actions.retry") }}
       </m3e-button>
     </p>
@@ -156,7 +167,15 @@ watch(
         <p v-else-if="kugou.playlistsStatus === 'error'" class="feed-error">
           <span class="material-symbols-outlined">error</span>
           {{ kugou.playlistsError }}
-          <m3e-button variant="text" size="small" @click="kugou.loadPlaylists(true)">
+          <m3e-button
+            v-if="kugou.reauthRequired"
+            variant="tonal"
+            size="small"
+            @click="kugou.openQr()"
+          >
+            {{ t("kugou.relogin") }}
+          </m3e-button>
+          <m3e-button v-else variant="text" size="small" @click="kugou.loadPlaylists(true)">
             {{ t("actions.retry") }}
           </m3e-button>
         </p>

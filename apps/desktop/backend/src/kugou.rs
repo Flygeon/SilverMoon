@@ -167,17 +167,62 @@ fn clear_account_cookies() {
 /// 调用酷狗接口。
 ///
 /// 响应 cookie 无论成败都合并进 jar——登录失败也可能带回新的设备 cookie。
-/// HTTP 状态非 200 视为传输层失败（业务错误码在 body 里，由各命令自行判断）。
+/// bridge 的 502 也可能是 HTTP 200 的业务拒绝，必须先读响应业务码。
 fn call_json(path: &str, params: Value) -> Result<Value, String> {
     let cookie = state().lock().unwrap().cookie.clone();
     let res = kugou_server::bridge::call(path, &params, &cookie);
     if !res.cookies.is_empty() {
         merge_cookies(&res.cookies);
     }
+    let body: Value =
+        serde_json::from_str(&res.body).map_err(|e| format!("酷狗响应解析失败：{e}"))?;
     if res.status != 200 {
-        return Err(format!("酷狗接口请求失败（HTTP {}）", res.status));
+        return Err(request_failure(res.status, &body));
     }
-    serde_json::from_str(&res.body).map_err(|e| format!("酷狗响应解析失败：{e}"))
+    Ok(body)
+}
+
+fn request_failure(status: u16, body: &Value) -> String {
+    match body.get("error_code").and_then(Value::as_i64) {
+        Some(code @ (20017 | 20018)) => {
+            format!("[KUGOU_LOGIN_REQUIRED] 酷狗账号凭据校验失败（code={code}），请重新登录")
+        }
+        Some(code) if code != 0 => format!("酷狗服务拒绝请求（code={code}）"),
+        // transport msg 可能含完整签名 URL / token，不向渲染层透传。
+        _ => format!("酷狗网络请求未完成（客户端状态 {status}），请检查网络后重试"),
+    }
+}
+
+#[cfg(test)]
+mod request_tests {
+    use super::request_failure;
+    use serde_json::json;
+
+    #[test]
+    fn rejected_credentials_request_reauthentication() {
+        for code in [20017, 20018] {
+            let error = request_failure(502, &json!({"status": 0, "error_code": code}));
+            assert!(error.contains("[KUGOU_LOGIN_REQUIRED]"));
+            assert!(error.contains(&format!("code={code}")));
+            assert!(!error.contains("HTTP 502"));
+        }
+    }
+
+    #[test]
+    fn bad_parameters_are_not_reported_as_network_or_login_failures() {
+        let error = request_failure(502, &json!({"status": 0, "error_code": 20010}));
+        assert!(error.contains("code=20010"));
+        assert!(!error.contains("LOGIN_REQUIRED"));
+        assert!(!error.contains("HTTP"));
+    }
+
+    #[test]
+    fn transport_errors_do_not_expose_signed_urls() {
+        let error = request_failure(502, &json!({"msg": "https://example.test/?token=private"}));
+        assert!(error.contains("网络请求未完成"));
+        assert!(!error.contains("token"));
+        assert!(!error.contains("private"));
+    }
 }
 
 // ---- Value 取值辅助（容错：data 子对象优先，其次顶层；字符串/数字互转）----
@@ -965,6 +1010,7 @@ pub async fn kugou_rank_songs(
     rank_cid: String,
     page: Option<i64>,
     pagesize: Option<i64>,
+    rank_id: Option<String>,
 ) -> Result<Value, String> {
     silvermoon_ipc::rt::spawn_blocking(move || {
         ensure_loaded(&app);
@@ -972,6 +1018,7 @@ pub async fn kugou_rank_songs(
             "/rank/audio",
             json!({
                 "rank_cid": rank_cid,
+                "rankid": rank_id.and_then(|id| id.parse::<i64>().ok()),
                 "page": page.unwrap_or(1),
                 "pagesize": pagesize.unwrap_or(30),
             }),

@@ -4,6 +4,7 @@ import { createApp, h, nextTick, reactive, type App } from "vue";
 import MusicView from "../MusicView.vue";
 
 const search = vi.hoisted(() => vi.fn(async () => []));
+const fallbackSearch = vi.hoisted(() => vi.fn(async () => []));
 const settings = reactive({
   lang: "en",
   enableOnlineMusic: true,
@@ -49,10 +50,14 @@ vi.mock("@/stores/library", () => ({
 vi.mock("@/stores/player", () => ({ usePlayerStore: () => ({}) }));
 vi.mock("@/stores/desktop", () => ({ useDesktopStore: () => ({}) }));
 vi.mock("vue-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
-vi.mock("@/capabilities", () => ({ capabilities: {}, isDesktop: false }));
+vi.mock("@/capabilities", () => ({
+  capabilities: { neteaseSearch: search, kugouSearch: search },
+  isDesktop: false,
+}));
+vi.mock("@/utils/netease", () => ({ toOnlineSongs: async (songs: unknown[]) => songs }));
 vi.mock("@/utils/meting", () => ({
   CURATED_PLAYLISTS: [],
-  metingSearch: search,
+  metingSearch: fallbackSearch,
   metingPlaylist: vi.fn(async () => []),
 }));
 vi.mock("@/components/NowPlayingFeed.vue", () => ({ default: { render: () => null } }));
@@ -70,7 +75,10 @@ async function settle() {
   await nextTick();
 }
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
+  search.mockResolvedValue([]);
+  fallbackSearch.mockResolvedValue([]);
+  settings.musicServer = "netease";
   for (const auth of [netease, kugou]) {
     auth.qrOpen = false;
     auth.authTab = "qr";
@@ -114,8 +122,52 @@ it("共享搜索只在输入法确认完成后查询，保留立即进入详情"
   expect(search).not.toHaveBeenCalled();
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   await settle();
-  expect(search).toHaveBeenCalledExactlyOnceWith("netease", "Moon");
+  expect(search).toHaveBeenCalledExactlyOnceWith("Moon");
+  expect(fallbackSearch).not.toHaveBeenCalled();
   expect(host.querySelector(".detail-head h2")?.textContent).toBe("「Moon」");
+});
+
+async function submitSearch(provider: "netease" | "kugou") {
+  settings.musicServer = provider;
+  await settle();
+  const tab = [...host.querySelectorAll<HTMLElement>(".online-tabs m3e-button")].find((element) =>
+    element.textContent?.includes("Search"),
+  )!;
+  tab.click();
+  await settle();
+  const input = host.querySelector<HTMLInputElement>(".search-field input")!;
+  input.value = "Moon";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await settle();
+}
+
+it.each(["netease", "kugou"] as const)(
+  "%s 官方搜索成功或无结果时不请求 Meting",
+  async (provider) => {
+    await submitSearch(provider);
+    expect(search).toHaveBeenCalledExactlyOnceWith("Moon");
+    expect(fallbackSearch).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["netease", "kugou"] as const)("%s 官方搜索失败后按原平台回退 Meting", async (provider) => {
+  search.mockRejectedValueOnce(new Error("official unavailable"));
+  await submitSearch(provider);
+  await vi.waitFor(() => expect(fallbackSearch).toHaveBeenCalledExactlyOnceWith(provider, "Moon"));
+  expect(search.mock.invocationCallOrder[0]).toBeLessThan(
+    fallbackSearch.mock.invocationCallOrder[0],
+  );
+});
+
+it("两路搜索均失败时保留官方与回退失败原因", async () => {
+  search.mockRejectedValueOnce("official unavailable");
+  fallbackSearch.mockRejectedValueOnce(new Error("HTTP 522"));
+  await submitSearch("netease");
+  await vi.waitFor(() => {
+    expect(host.textContent).toContain("Official API: official unavailable");
+    expect(host.textContent).toContain("Meting: HTTP 522");
+  });
 });
 
 it.each(["netease", "kugou"] as const)(

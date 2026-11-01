@@ -218,6 +218,7 @@ pub fn run() {
             netease::netease_login_cellphone,
             netease::netease_account,
             netease::netease_user_playlists,
+            netease::netease_search,
             netease::netease_playlist_detail,
             netease::netease_cloud,
             netease::netease_song_url,

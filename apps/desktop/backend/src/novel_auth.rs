@@ -60,6 +60,8 @@ pub const REQUIRED_COOKIE_KEYS: &[&str] = &["jieqiUserInfo", "jieqiVisitInfo"];
 
 static STATE: OnceLock<Mutex<Wenku8Persist>> = OnceLock::new();
 static LOADED: AtomicBool = AtomicBool::new(false);
+static LOGIN_COMPLETED: AtomicBool = AtomicBool::new(false);
+static LOGIN_USE_CC: AtomicBool = AtomicBool::new(false);
 
 fn state() -> &'static Mutex<Wenku8Persist> {
     STATE.get_or_init(|| Mutex::new(Wenku8Persist::default()))
@@ -207,6 +209,7 @@ pub async fn wenku8_login_submit(
         s.user_info = user.clone();
         save_persist(&app, &s)?;
     }
+    LOGIN_COMPLETED.store(true, Ordering::SeqCst);
     login_debug_log("[submit] 成功：已保存登录态，准备关闭窗口");
     // 延迟关闭登录窗口，确保本次 invoke 先返回
     let app2 = app.clone();
@@ -236,7 +239,7 @@ pub async fn wenku8_login_poll(app: silvermoon_ipc::Host) -> Result<Wenku8LoginS
     // 快速通道已先保存成功 → 直接返回成功，避免误判为“未登录/窗口已关”
     {
         let s = state().lock().unwrap();
-        if s.cookie.is_some() {
+        if LOGIN_COMPLETED.load(Ordering::SeqCst) && s.cookie.is_some() {
             login_debug_log("[poll] 已存在登录态（快速通道已提交），返回成功");
             return Ok(Wenku8LoginStatus {
                 logged_in: true,
@@ -313,6 +316,7 @@ pub async fn wenku8_login_poll(app: silvermoon_ipc::Host) -> Result<Wenku8LoginS
         s.user_info = user.clone();
         save_persist(&app, &s)?;
     }
+    LOGIN_COMPLETED.store(true, Ordering::SeqCst);
     login_debug_log("[poll] 成功：已保存登录态，准备关闭窗口");
     // 延迟关闭登录窗口，确保本次 invoke 先返回
     let app2 = app.clone();
@@ -509,18 +513,24 @@ const LOGIN_INJECT_JS: &str = r#"
 /// 该方式在每次页面加载前注入，无需额外权限）。
 /// 设置浏览器 UA：wenku8 对 WebView2 默认 UA 会返回空白页（参考项目同样设置 Edge UA）。
 #[silvermoon_ipc::command]
-pub async fn wenku8_login_open(app: silvermoon_ipc::Host) -> Result<(), String> {
+pub async fn wenku8_login_open(
+    app: silvermoon_ipc::Host,
+    node: Option<String>,
+) -> Result<(), String> {
     login_debug_log("===== wenku8_login_open 开始（async + spawn_blocking） =====");
+    LOGIN_COMPLETED.store(false, Ordering::SeqCst);
+    LOGIN_USE_CC.store(node.as_deref().unwrap_or("net") != "net", Ordering::SeqCst);
     let label = "wenku8-login";
     // 若已存在则先关闭，避免重复窗口
     if let Some(w) = app.get_webview_window(label) {
         login_debug_log("检测到已存在同名窗口，先关闭");
         let _ = w.close();
     }
-    login_debug_log(&format!(
-        "目标 URL = https://www.wenku8.net/login.php, label = {}",
-        label
-    ));
+    let login_url = format!(
+        "{}/login.php",
+        crate::novel::node_url(node.as_deref().unwrap_or("net"))
+    );
+    login_debug_log(&format!("目标 URL = {login_url}, label = {label}"));
     // 关键修复（白屏/卡死根因）：
     // 同步 command 默认在主线程事件循环内执行，而 WebviewWindowBuilder::build()
     // 底层 with_webview 经 run_on_main_thread 派发到主线程并阻塞等待完成。
@@ -535,7 +545,7 @@ pub async fn wenku8_login_open(app: silvermoon_ipc::Host) -> Result<(), String> 
         silvermoon_ipc::WindowBuilder::new(
             &app2,
             label,
-            silvermoon_ipc::WindowUrl::External("https://www.wenku8.net/login.php".parse().unwrap()),
+            silvermoon_ipc::WindowUrl::External(login_url.parse().unwrap()),
         )
         .title("登录轻小说网 Wenku8")
         .inner_size(440.0, 680.0)
@@ -661,7 +671,12 @@ fn parse_bookcase(html: &str) -> Vec<NovelShelfItem> {
 
 /// 拉取用户信息（userdetail.php）。返回 None 表示未登录。
 fn wenku8_fetch_userinfo(app: &silvermoon_ipc::Host) -> Result<Option<Wenku8UserInfo>, String> {
-    let html = fetch_html(app, "net", "GBK", "/userdetail.php")?;
+    let node = if LOGIN_USE_CC.load(Ordering::SeqCst) {
+        "cc"
+    } else {
+        "net"
+    };
+    let html = fetch_html(app, node, "GBK", "/userdetail.php")?;
     if is_login_required(&html) {
         return Ok(None);
     }

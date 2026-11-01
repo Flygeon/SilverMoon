@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useSettingsStore } from "@/stores/settings";
 import { capabilities } from "@/capabilities";
 import { novelRankCached, novelRecommendCached } from "@/utils/novelCache";
@@ -8,8 +8,8 @@ import NovelCard from "@/components/NovelCard.vue";
 import NovelSearchBar from "@/components/NovelSearchBar.vue";
 import NovelDetailPanel from "@/components/NovelDetailPanel.vue";
 import BookReader from "@/components/BookReader.vue";
-import { openWenku8Login } from "@/novel/wenku8Login";
-import { reloginRequested, clearRelogin } from "@/novel/wenku8Auth";
+import { isLoginRequiredError, isWenku8ChallengeError, openWenku8Login } from "@/novel/wenku8Login";
+import { reloginRequested, clearRelogin, requestRelogin } from "@/novel/wenku8Auth";
 import type { NovelCover, NovelRecommendBlock, Wenku8LoginStatus } from "@shared/types";
 
 /**
@@ -38,6 +38,22 @@ const rankSort = ref("allvisit");
 const rankResults = ref<NovelCover[]>([]);
 const rankLoading = ref(false);
 const homeError = ref("");
+const canSwitchNode = computed(
+  () =>
+    settings.wenku8Node === "net" && isWenku8ChallengeError(searchError.value || homeError.value),
+);
+
+function reportError(error: unknown): string {
+  if (isLoginRequiredError(error)) requestRelogin();
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function switchToCc() {
+  settings.wenku8Node = "cc";
+  searchError.value = "";
+  await loadHome();
+  if (searchQuery.value.trim()) await doSearch();
+}
 
 const recommend = ref<NovelRecommendBlock[]>([]);
 
@@ -59,8 +75,10 @@ async function doLogin() {
   loginBanner.value = "";
   clearRelogin();
   try {
-    const status = await openWenku8Login();
+    const status = await openWenku8Login(settings.wenku8Node);
     loginStatus.value = status;
+    await loadHome();
+    if (searchQuery.value.trim()) await doSearch();
   } catch (e) {
     loginBanner.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -90,7 +108,7 @@ async function loadRank() {
   } catch (e) {
     console.warn("[Novel] 排行榜加载失败:", e);
     rankResults.value = [];
-    homeError.value = e instanceof Error ? e.message : String(e);
+    homeError.value = reportError(e);
   } finally {
     rankLoading.value = false;
   }
@@ -138,7 +156,7 @@ async function doSearch() {
       .appLog(`[novel-online] doSearch OK results=${searchResults.value.length}`)
       .catch(() => {});
   } catch (e) {
-    searchError.value = e instanceof Error ? e.message : String(e);
+    searchError.value = reportError(e);
     searchResults.value = [];
     void capabilities.appLog(`[novel-online] doSearch 异常: ${searchError.value}`).catch(() => {});
   } finally {
@@ -239,10 +257,17 @@ onMounted(() => {
         :busy="searching"
         @search="doSearchWith"
       />
-      <p v-if="searchError" class="error">{{ searchError }}</p>
-      <div v-if="homeError" class="home-error">
-        <span>{{ homeError }}</span>
-        <m3e-button variant="text" size="small" @click="loadHome">
+      <div v-if="homeError || searchError" class="home-error">
+        <span>{{ searchError || homeError }}</span>
+        <m3e-button v-if="canSwitchNode" variant="tonal" size="small" @click="switchToCc">
+          {{ t("novel.switchNode") }}
+        </m3e-button>
+        <m3e-button
+          v-else
+          variant="text"
+          size="small"
+          @click="searchError ? doSearch() : loadHome()"
+        >
           <span slot="icon" class="material-symbols-outlined">refresh</span>
           {{ t("novel.retry") }}
         </m3e-button>

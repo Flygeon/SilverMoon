@@ -166,11 +166,64 @@ fn client() -> Client {
         .expect("novel http client")
 }
 
-fn node_url(node: &str) -> &'static str {
+pub(crate) fn node_url(node: &str) -> &'static str {
     if node == "net" {
         NODE_NET
     } else {
         NODE_CC
+    }
+}
+
+fn response_error(
+    status: reqwest::StatusCode,
+    mitigation: Option<&str>,
+    url: &reqwest::Url,
+) -> Option<String> {
+    if status == reqwest::StatusCode::FORBIDDEN
+        && mitigation.is_some_and(|value| value.eq_ignore_ascii_case("challenge"))
+    {
+        return Some("[WENKU8_SITE_CHALLENGE] 当前节点要求 Cloudflare 浏览器验证，请切换节点；普通重试无法完成验证".into());
+    }
+    if !status.is_success() {
+        return Some(format!(
+            "Wenku8 返回 HTTP {}，可能被站点拦截，可尝试切换节点或稍后再试",
+            status.as_u16()
+        ));
+    }
+    if url.path() == "/login.php" {
+        return Some("[WENKU8_LOGIN_REQUIRED] 当前节点要求登录，请重新登录后重试".into());
+    }
+    None
+}
+
+#[cfg(test)]
+mod response_tests {
+    use super::response_error;
+    use reqwest::{StatusCode, Url};
+
+    #[test]
+    fn distinguishes_cloudflare_from_generic_forbidden() {
+        let url = Url::parse("https://www.wenku8.net/index.php").unwrap();
+        let challenge = response_error(StatusCode::FORBIDDEN, Some("challenge"), &url).unwrap();
+        assert!(challenge.contains("[WENKU8_SITE_CHALLENGE]"));
+        let forbidden = response_error(StatusCode::FORBIDDEN, None, &url).unwrap();
+        assert!(forbidden.contains("HTTP 403"));
+        assert!(!forbidden.contains("[WENKU8_SITE_CHALLENGE]"));
+    }
+
+    #[test]
+    fn login_redirect_is_not_an_empty_successful_result() {
+        for domain in ["www.wenku8.net", "www.wenku8.cc"] {
+            let url = Url::parse(&format!("https://{domain}/login.php?jumpurl=index.php")).unwrap();
+            let error = response_error(StatusCode::OK, None, &url).unwrap();
+            assert!(error.contains("[WENKU8_LOGIN_REQUIRED]"));
+        }
+    }
+
+    #[test]
+    fn normal_page_remains_successful() {
+        let url = Url::parse("https://www.wenku8.cc/modules/article/toplist.php").unwrap();
+        assert!(response_error(StatusCode::OK, None, &url).is_none());
     }
 }
 
@@ -202,12 +255,14 @@ pub(crate) fn fetch_html(
     }
 
     let resp = req.send().map_err(|e| format!("网络请求失败：{e}"))?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(format!(
-            "Wenku8 返回 HTTP {}，可能被站点拦截，可尝试切换节点或稍后再试",
-            status.as_u16()
-        ));
+    if let Some(error) = response_error(
+        resp.status(),
+        resp.headers()
+            .get("cf-mitigated")
+            .and_then(|value| value.to_str().ok()),
+        resp.url(),
+    ) {
+        return Err(error);
     }
     let bytes = resp.bytes().map_err(|e| format!("读取响应失败：{e}"))?;
 

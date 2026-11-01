@@ -256,6 +256,8 @@ export function kugouToOnlineSongs(raw: unknown): OnlineSong[] {
 /** 排行榜条目（/rank/list 的卡片，不是歌曲） */
 export interface KugouRankCard {
   id: string;
+  rankId: string;
+  rankCid: string;
   name: string;
   cover: string;
   /** 更新频率/简介 */
@@ -268,6 +270,8 @@ export function kugouRankCards(raw: unknown): KugouRankCard[] {
   return list
     .map((o) => ({
       id: str(o, "rankid", "rankId", "rank_cid", "id"),
+      rankId: str(o, "rankid", "rankId", "id"),
+      rankCid: str(o, "rank_cid"),
       name: str(o, "rankname", "rankName", "name"),
       // 榜单封面同样带 {size} 占位符，必须过一遍归一化
       cover: normalizeCover(str(o, "imgurl", "imgUrl", "img", "cover")),

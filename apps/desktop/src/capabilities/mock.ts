@@ -911,6 +911,7 @@ export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { id: 1, name: "我喜欢的音乐", coverUrl: "", trackCount: 128 },
         { id: 2, name: "通勤歌单", coverUrl: "", trackCount: 45 },
       ]);
+    case "netease_search":
     case "netease_playlist_detail":
       return as<NeteaseSong[]>([
         { id: 1001, name: "夜曲", artist: "周杰伦", album: "十一月的萧邦", picUrl: "" },

@@ -23,7 +23,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
  * 登录成功后 Rust 自动保存 cookie 并关闭窗口，本函数返回登录状态。
  * 用户主动关闭窗口或超时则抛错。
  */
-export async function openWenku8Login(): Promise<Wenku8LoginStatus> {
+export async function openWenku8Login(node: "net" | "cc" = "net"): Promise<Wenku8LoginStatus> {
   const label = `wenku8-login`;
   // 先关掉可能残留的窗口
   const existing = await getWindowByLabel(label);
@@ -40,7 +40,7 @@ export async function openWenku8Login(): Promise<Wenku8LoginStatus> {
   // 注意：Rust 命令在 WebView2 加载外部页时可能因网络/代理较慢才返回，
   // 但窗口其实已经创建（可能白屏）。因此超时分支只“放行”不 reject，
   // 之后继续 await 命令本身的成败，避免窗口已出却误报“请重试”。
-  const openTask = capabilities.wenku8LoginOpen();
+  const openTask = capabilities.wenku8LoginOpen(node);
   let openTimedOut = false;
   await Promise.race([
     openTask,
@@ -104,5 +104,9 @@ export async function openWenku8Login(): Promise<Wenku8LoginStatus> {
 }
 
 export function isLoginRequiredError(e: unknown): boolean {
-  return typeof e === "string" && e.includes("[WENKU8_LOGIN_REQUIRED]");
+  return (e instanceof Error ? e.message : String(e)).includes("[WENKU8_LOGIN_REQUIRED]");
+}
+
+export function isWenku8ChallengeError(e: unknown): boolean {
+  return (e instanceof Error ? e.message : String(e)).includes("[WENKU8_SITE_CHALLENGE]");
 }

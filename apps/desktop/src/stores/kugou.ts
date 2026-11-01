@@ -23,6 +23,7 @@ export type KugouQrState = "wait" | "scanned" | "success" | "timeout" | "error";
 
 export const useKugouStore = defineStore("kugou", () => {
   const loggedIn = ref(false);
+  const reauthRequired = ref(false);
   const profile = ref<KugouProfile | null>(null);
   /** 已签到日期（`YYYY-MM-DD`） */
   const signedDays = ref<string[]>([]);
@@ -58,10 +59,12 @@ export const useKugouStore = defineStore("kugou", () => {
     playlistsError.value = "";
     try {
       playlists.value = parseKugouPlaylists(await capabilities.kugouUserPlaylists(1, 50));
+      reauthRequired.value = false;
       playlistsStatus.value = "ready";
     } catch (e) {
       playlistsStatus.value = "error";
       playlistsError.value = e instanceof Error ? e.message : String(e);
+      reauthRequired.value = playlistsError.value.includes("[KUGOU_LOGIN_REQUIRED]");
     }
   }
 
@@ -102,6 +105,7 @@ export const useKugouStore = defineStore("kugou", () => {
       // 浏览器预览 / 极端情况下可能返回 null，按未登录处理
       if (!st) return;
       loggedIn.value = st.loggedIn;
+      reauthRequired.value = false;
       profile.value = st.profile ?? null;
       signedDays.value = st.signedDays ?? [];
     } catch {
@@ -155,6 +159,7 @@ export const useKugouStore = defineStore("kugou", () => {
           profile.value = res.profile ?? null;
           stopPolling();
           await refreshStatus();
+          await loadPlaylists(true);
           await autoSignInIfNeeded();
           window.setTimeout(() => closeQr(), 600);
           return;
@@ -243,6 +248,7 @@ export const useKugouStore = defineStore("kugou", () => {
       loggedIn.value = true;
       closeQr();
       await refreshStatus();
+      await loadPlaylists(true);
       await autoSignInIfNeeded();
     } catch (e) {
       phoneError.value = e instanceof Error ? e.message : String(e);
@@ -283,6 +289,7 @@ export const useKugouStore = defineStore("kugou", () => {
     loggedIn.value = false;
     profile.value = null;
     signedDays.value = [];
+    reauthRequired.value = false;
     playlists.value = [];
     playlistsStatus.value = "idle";
     playlistsError.value = "";
@@ -298,6 +305,7 @@ export const useKugouStore = defineStore("kugou", () => {
 
   return {
     loggedIn,
+    reauthRequired,
     profile,
     signedDays,
     signedToday,

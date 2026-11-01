@@ -1346,6 +1346,39 @@ fn map_song_item(v: &Value) -> Option<NeteaseSong> {
 
 // ---- 命令 ----
 
+/// 对照 api-enhanced cloudsearch：复用本地签名与账号 Cookie，不依赖公共代理。
+#[silvermoon_ipc::command]
+pub async fn netease_search(
+    app: silvermoon_ipc::Host,
+    keyword: String,
+) -> Result<Vec<NeteaseSong>, String> {
+    silvermoon_ipc::rt::spawn_blocking(move || {
+        ensure_loaded(&app);
+        let keyword = keyword.trim();
+        if keyword.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (code, body) = api_call(
+            "eapi",
+            "/api/cloudsearch/pc",
+            &mut serde_json::json!({
+                "s": keyword, "type": 1, "limit": 30, "offset": 0, "total": true,
+            }),
+        )?;
+        if code != 200 {
+            return Err(err_for_code(code));
+        }
+        let songs = body["result"]["songs"].as_array();
+        Ok(songs
+            .into_iter()
+            .flatten()
+            .filter_map(map_song_item)
+            .collect())
+    })
+    .await
+    .map_err(|e| format!("网易云请求异常：{e}"))?
+}
+
 /// 获取二维码 key（unikey），前端据此渲染二维码
 #[silvermoon_ipc::command]
 pub async fn netease_login_qr_key(app: silvermoon_ipc::Host) -> Result<String, String> {
