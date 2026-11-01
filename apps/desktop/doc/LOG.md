@@ -25,6 +25,7 @@
 ## 2026-11-01 · PiliPlus 密码、短信与极验登录移植
 
 - status: 自动化校验通过；真实极验交互与账号密码／短信登录未验证。
+- 首轮 CI 的图标同步检查发现新增登录方式字符串 sms 需要进入字体子集；已使用 fetch:icon-font 重新生成字体和 manifest，check:icon-font 通过。
 - 对照本地 PiliPlus 参考源码 `lib/http/login.dart`、`lib/pages/login/controller.dart`、`geetest_webview_dialog.dart`、`AppSign` 和 `AccountManager`，在现有 M3E 登录弹窗中增加账号密码／短信方式，保留 TV 和网页扫码。移动登录使用上游公开应用标识和实际请求头覆盖结果；签名保留空值不带等号的规则，表单仍使用标准 URL 编码。设备 buvid 与 deviceId 单独持久化，不保存密码、手机号输入或短信码。
 - 密码每次获取服务端盐值和公钥，由 Node crypto 的 RSA PKCS#1 v1.5 加密；极验通过后重新获取密钥再提交。短信发送同时处理 code=-105 和 code=0 携带 recaptcha_url 的挑战，缺少有效参数时才调用上游预校验接口；每次操作最多完成一轮挑战重试，不递归无限重试。
 - 密码／短信返回风险状态 2 或 3 时，不当作登录成功：获取绑定手机的脱敏信息，经极验、风险短信发送、短信验证、OAuth 授权码换票后，再校验完整 token_info／cookie_info 和真实 nav 登录状态。中间 Cookie 留在匿名会话；账号验证前或弹窗代次失效后不提交候选凭据。
