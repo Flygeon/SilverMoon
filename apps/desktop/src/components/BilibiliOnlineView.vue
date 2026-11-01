@@ -19,6 +19,7 @@ import BilibiliDynamics from "@/components/BilibiliDynamics.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
+import { isDesktop } from "@/capabilities";
 import type { BiliQrProtocol, BiliVideo } from "@/utils/bilibili";
 import { translate } from "@shared/i18n";
 
@@ -151,6 +152,7 @@ async function openLogin(): Promise<void> {
 }
 
 async function refreshQr(): Promise<void> {
+  if (bili.websiteLoginBusy) return;
   const session = ++loginSession;
   stopPolling();
   bili.resetQr();
@@ -170,8 +172,17 @@ function closeLogin(): void {
 }
 
 function switchQrProtocol(): void {
+  if (bili.websiteLoginBusy) return;
   qrProtocol.value = qrProtocol.value === "tv" ? "web" : "tv";
   void refreshQr();
+}
+
+async function openOfficialLogin(): Promise<void> {
+  if (bili.websiteLoginBusy) return;
+  const session = ++loginSession;
+  stopPolling();
+  const verified = await bili.startWebsiteLogin();
+  if (session === loginSession && loginOpen && verified) closeLogin();
 }
 
 /** m3e-dialog 完全关闭后（含 Esc / 点遮罩）兜底收敛状态。 */
@@ -360,11 +371,27 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
     <m3e-dialog ref="loginDialog" class="login-dialog" @cancel="closeLogin" @closed="onLoginClosed">
       <span slot="header">{{ t("bili.loginTitle") }}</span>
       <p class="hint">{{ t("bili.loginTip") }}</p>
-      <m3e-button variant="tonal" size="small" @click="switchQrProtocol">
+      <m3e-button
+        v-if="isDesktop"
+        class="official-login"
+        variant="outlined"
+        :disabled="bili.websiteLoginBusy"
+        @click="openOfficialLogin"
+      >
+        {{ t("bili.officialLogin") }}
+      </m3e-button>
+      <m3e-button
+        variant="tonal"
+        size="small"
+        :disabled="bili.websiteLoginBusy"
+        @click="switchQrProtocol"
+      >
         {{ t(qrProtocol === "tv" ? "bili.useWebQr" : "bili.useTvQr") }}
       </m3e-button>
-      <p class="hint">{{ t(qrProtocol === "tv" ? "bili.tvQrActive" : "bili.webQrActive") }}</p>
-      <div class="qr-wrap">
+      <p v-if="!bili.websiteLoginBusy" class="hint">
+        {{ t(qrProtocol === "tv" ? "bili.tvQrActive" : "bili.webQrActive") }}
+      </p>
+      <div v-if="!bili.websiteLoginBusy" class="qr-wrap">
         <img v-if="qrImage" :src="qrImage" alt="QR" class="qr-img" />
         <div v-else class="qr-loading">
           <m3e-loading-indicator class="lm-loading" />
@@ -374,7 +401,12 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
       <p class="qr-status">{{ bili.qrStatusText }}</p>
       <p v-if="bili.loginError" class="qr-error">{{ bili.loginError }}</p>
       <div slot="actions" end>
-        <m3e-button variant="text" size="small" @click="refreshQr">
+        <m3e-button
+          variant="text"
+          size="small"
+          :disabled="bili.websiteLoginBusy"
+          @click="refreshQr"
+        >
           <span slot="icon" class="material-symbols-outlined">refresh</span>
           {{ t("bili.refreshQr") }}
         </m3e-button>
@@ -465,6 +497,10 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
 .login-dialog {
   --m3e-dialog-min-width: 380px;
   text-align: center;
+}
+.official-login {
+  display: flex;
+  margin: 0 auto var(--lm-layout-toolbar-gap);
 }
 .qr-wrap {
   display: flex;

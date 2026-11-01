@@ -13,6 +13,8 @@ const bili = reactive({
   qrContent: null as string | null,
   qrStatusText: "waiting",
   startingQr: false,
+  websiteLoginBusy: false,
+  startWebsiteLogin: vi.fn(async () => false),
   loginError: "",
   current: null,
   userMid: null,
@@ -29,6 +31,7 @@ const bili = reactive({
 });
 vi.mock("@/stores/bilibili", () => ({ useBiliStore: () => bili }));
 vi.mock("@/stores/settings", () => ({ useSettingsStore: () => ({ lang: "zh" }) }));
+vi.mock("@/capabilities", () => ({ isDesktop: true }));
 vi.mock("qrcode", () => ({ default: { toDataURL: async () => "data:image/png;base64,AA==" } }));
 vi.mock("../SegmentedTabs.vue", () => ({
   default: defineComponent({
@@ -79,6 +82,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   bili.account.isLogin = false;
   bili.qrContent = null;
+  bili.websiteLoginBusy = false;
+  bili.startWebsiteLogin.mockResolvedValue(false);
   bili.pollQr.mockImplementation(async () => false);
   bili.startQr.mockImplementation(async () => {
     bili.qrContent = "https://example.test/qr";
@@ -150,4 +155,32 @@ it("does not restart polling if closed during QR generation", async () => {
   await settle();
   await vi.advanceTimersByTimeAsync(4000);
   expect(bili.pollQr).not.toHaveBeenCalled();
+});
+
+it("official website login stops API polling and closes only on verified success", async () => {
+  await openLogin();
+  const polls = bili.pollQr.mock.calls.length;
+  click(".official-login");
+  await settle();
+  expect(hide).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(4000);
+  expect(bili.pollQr).toHaveBeenCalledTimes(polls);
+  bili.startWebsiteLogin.mockResolvedValueOnce(true);
+  click(".official-login");
+  await settle();
+  expect(hide).toHaveBeenCalledTimes(1);
+});
+
+it("late official login completion cannot close a reopened dialog", async () => {
+  let finish!: (value: boolean) => void;
+  bili.startWebsiteLogin.mockImplementationOnce(
+    () => new Promise<boolean>((resolve) => (finish = resolve)),
+  );
+  await openLogin();
+  click(".official-login");
+  click(".login-dialog [slot=actions] m3e-button:last-child");
+  await openLogin();
+  finish(true);
+  await settle();
+  expect(hide).toHaveBeenCalledTimes(1);
 });

@@ -9,6 +9,9 @@ const mocks = vi.hoisted(() => ({
     (key: string, protocol: BiliQrProtocol, isCurrent: () => boolean) => Promise<BiliQrStatus>
   >(),
   nav: vi.fn(),
+  openWebsite: vi.fn(),
+  cancelWebsite: vi.fn(async () => {}),
+  applyWebsite: vi.fn(async () => {}),
   log: vi.fn(async () => {}),
 }));
 vi.mock("@/utils/bilibili", async (importOriginal) => ({
@@ -16,8 +19,13 @@ vi.mock("@/utils/bilibili", async (importOriginal) => ({
   biliQrGenerate: mocks.generate,
   biliQrPoll: mocks.poll,
   biliNav: mocks.nav,
+  biliApplyWebsiteCookies: mocks.applyWebsite,
 }));
-vi.mock("@/capabilities", () => ({ isDesktop: false, capabilities: { appLog: mocks.log } }));
+vi.mock("@/capabilities", () => ({ isDesktop: true, capabilities: { appLog: mocks.log } }));
+vi.mock("@/ipc/bilibili", () => ({
+  openBilibiliLogin: mocks.openWebsite,
+  cancelBilibiliLogin: mocks.cancelWebsite,
+}));
 vi.mock("@/stores/settings", () => ({ useSettingsStore: () => ({ lang: "zh" }) }));
 
 beforeEach(() => {
@@ -25,6 +33,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.generate.mockResolvedValue({ key: "test-key", url: "https://example.test/qr" });
   mocks.poll.mockResolvedValue({ code: 86039, message: "二维码尚未确认" });
+  mocks.openWebsite.mockResolvedValue({ SESSDATA: "fixture", bili_jct: "csrf", DedeUserID: "42" });
 });
 
 it("TV waiting code keeps polling without an error", async () => {
@@ -89,4 +98,50 @@ it("verifies the account before finishing a successful TV authorization", async 
   expect(store.account.isLogin).toBe(true);
   expect(store.notice).toContain("Test");
   expect(mocks.log.mock.calls.flat().join(" ")).not.toContain("test-key");
+});
+
+it("official website login completes only after business account verification", async () => {
+  const store = useBiliStore();
+  mocks.nav.mockResolvedValueOnce({ isLogin: true, mid: 42, name: "Test" });
+  expect(await store.startWebsiteLogin()).toBe(true);
+  expect(mocks.applyWebsite).toHaveBeenCalledWith(
+    { SESSDATA: "fixture", bili_jct: "csrf", DedeUserID: "42" },
+    expect.any(Function),
+  );
+  expect(store.account.isLogin).toBe(true);
+  expect(store.websiteLoginBusy).toBe(false);
+  expect(mocks.log.mock.calls.flat().join(" ")).not.toContain("fixture");
+});
+
+it("official website cancellation leaves credentials untouched", async () => {
+  const store = useBiliStore();
+  mocks.openWebsite.mockResolvedValueOnce(null);
+  expect(await store.startWebsiteLogin()).toBe(false);
+  expect(mocks.applyWebsite).not.toHaveBeenCalled();
+  expect(store.loginError).toBe("");
+  expect(store.websiteLoginBusy).toBe(false);
+});
+
+it("closing login discards a late official website response", async () => {
+  const store = useBiliStore();
+  let finish!: (value: Record<string, string>) => void;
+  mocks.openWebsite.mockImplementationOnce(
+    () => new Promise<Record<string, string>>((resolve) => (finish = resolve)),
+  );
+  const pending = store.startWebsiteLogin();
+  expect(store.websiteLoginBusy).toBe(true);
+  store.resetQr();
+  finish({ SESSDATA: "stale", bili_jct: "csrf", DedeUserID: "42" });
+  expect(await pending).toBe(false);
+  expect(mocks.cancelWebsite).toHaveBeenCalledTimes(1);
+  expect(mocks.applyWebsite).not.toHaveBeenCalled();
+  expect(mocks.nav).not.toHaveBeenCalled();
+});
+
+it("official website credentials cannot report success for an anonymous account", async () => {
+  const store = useBiliStore();
+  mocks.nav.mockResolvedValueOnce({ isLogin: false });
+  expect(await store.startWebsiteLogin()).toBe(false);
+  expect(store.loginError).toContain("校验");
+  expect(store.account.isLogin).toBe(false);
 });

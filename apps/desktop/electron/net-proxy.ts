@@ -15,7 +15,7 @@
  *
  * Rust 侧（番剧抓取）有独立的一份配置，见 `backend/src/net_proxy.rs`。
  */
-import { session } from "electron";
+import { session, type Session } from "electron";
 
 import { log } from "./log";
 
@@ -25,6 +25,13 @@ export interface NetworkProxyConfig {
   mode: NetworkProxyMode;
   /** 仅 custom 模式使用，如 `http://127.0.0.1:7890` / `socks5://127.0.0.1:7891` */
   url: string;
+}
+
+let currentConfig: NetworkProxyConfig = { mode: "system", url: "" };
+
+/** 新建的隔离网页登录 session 也沿用应用的网络设置。 */
+export function applyCurrentNetworkProxy(target: Session): Promise<void> {
+  return applyNetworkProxy(currentConfig, target);
 }
 
 /** 设置里存下来的原始值 → 合法配置；非法值一律退回系统代理。 */
@@ -73,8 +80,10 @@ export function toProxyRules(raw: string): string {
  * 只改配置不断开连接的话，已经复用的 CDN 连接仍然走旧路径；用户切换代理后
  * 会看到「设置改了但请求还是旧的」。
  */
-export async function applyNetworkProxy(config: NetworkProxyConfig): Promise<void> {
-  const ses = session.defaultSession;
+export async function applyNetworkProxy(
+  config: NetworkProxyConfig,
+  ses: Session = session.defaultSession,
+): Promise<void> {
   if (config.mode === "none") {
     await ses.setProxy({ mode: "direct" });
   } else if (config.mode === "custom") {
@@ -87,6 +96,7 @@ export async function applyNetworkProxy(config: NetworkProxyConfig): Promise<voi
   } else {
     await ses.setProxy({ mode: "system" });
   }
+  if (ses === session.defaultSession) currentConfig = { ...config };
   try {
     await ses.closeAllConnections();
   } catch {

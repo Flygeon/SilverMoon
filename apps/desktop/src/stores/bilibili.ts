@@ -27,6 +27,7 @@ import {
   biliAddReply,
   biliAiConclusion,
   biliApplyCookies,
+  biliApplyWebsiteCookies,
   biliCheckReplyVisibility,
   biliCoin,
   biliDanmaku,
@@ -61,7 +62,8 @@ import {
   biliVideoDetail,
 } from "@/utils/bilibili";
 import { JsonStore } from "@/ipc/store";
-import { capabilities } from "@/capabilities";
+import { capabilities, isDesktop } from "@/capabilities";
+import { openBilibiliLogin, cancelBilibiliLogin } from "@/ipc/bilibili";
 import { useSettingsStore } from "@/stores/settings";
 import { translate } from "@shared/i18n";
 import type { ArtDanmu } from "@/utils/danmaku";
@@ -285,6 +287,7 @@ export const useBiliStore = defineStore("bilibili", () => {
   const qrContent = ref<string | null>(null);
   const qrStatus = ref<BiliQrStatus | null>(null);
   const startingQr = ref(false);
+  const websiteLoginBusy = ref(false);
   const loginError = ref("");
   const qrExpired = ref(false);
   const qrStatusText = ref("请使用「哔哩哔哩」App 扫描二维码");
@@ -296,6 +299,10 @@ export const useBiliStore = defineStore("bilibili", () => {
 
   function resetQr(): void {
     qrGeneration += 1;
+    if (websiteLoginBusy.value) {
+      websiteLoginBusy.value = false;
+      void cancelBilibiliLogin().catch(() => {});
+    }
     qrKey = "";
     startingQr.value = false;
     pollFailures = 0;
@@ -304,6 +311,50 @@ export const useBiliStore = defineStore("bilibili", () => {
     qrExpired.value = false;
     loginError.value = "";
     qrStatusText.value = "请使用「哔哩哔哩」App 扫描二维码";
+  }
+
+  async function startWebsiteLogin(): Promise<boolean> {
+    if (websiteLoginBusy.value) return false;
+    resetQr();
+    const generation = qrGeneration;
+    const isCurrent = () => generation === qrGeneration;
+    if (!isDesktop) {
+      loginError.value = t("bili.officialLoginDesktopOnly");
+      return false;
+    }
+    websiteLoginBusy.value = true;
+    qrStatusText.value = t("bili.officialLoginWaiting");
+    logLogin("website-opened");
+    try {
+      const pairs = await openBilibiliLogin();
+      if (!isCurrent()) return false;
+      if (!pairs) {
+        qrStatusText.value = t("bili.officialLoginCancelled");
+        logLogin("website-cancelled");
+        return false;
+      }
+      await biliApplyWebsiteCookies(pairs, isCurrent);
+      if (!isCurrent()) return false;
+      const next = await biliNav();
+      if (!isCurrent()) return false;
+      if (!next.isLogin) throw new Error(t("bili.officialLoginVerifyFailed"));
+      if (next.mid !== account.value.mid) resetAccountData();
+      account.value = next;
+      accountLoaded.value = true;
+      accountError.value = "";
+      notice.value = t("bili.loggedInAs", { name: next.name || t("bili.biliUser") });
+      qrStatusText.value = t("bili.officialLoginSuccess");
+      logLogin("website-account-verified");
+      return true;
+    } catch (e) {
+      if (!isCurrent()) return false;
+      loginError.value = cleanError(e);
+      qrStatusText.value = t("bili.officialLoginVerifyFailed");
+      logLogin("website-failed");
+      return false;
+    } finally {
+      if (isCurrent()) websiteLoginBusy.value = false;
+    }
   }
 
   async function startQr(protocol: BiliQrProtocol = "tv"): Promise<void> {
@@ -378,7 +429,7 @@ export const useBiliStore = defineStore("bilibili", () => {
         qrStatusText.value = "扫码授权未完成";
         loginError.value =
           s.code === 48007
-            ? `桌面端未取得登录凭据：${s.message || "授权结果异常"}（code=48007）。若手机已确认成功，请刷新二维码重试。`
+            ? `桌面端未取得登录凭据：${s.message || "授权结果异常"}（code=48007）。若手机已确认成功，请尝试「官方网页登录」。`
             : `扫码登录失败：${s.message || "上游返回未知状态"}（code=${s.code}）`;
         return true;
       }
@@ -1815,6 +1866,8 @@ export const useBiliStore = defineStore("bilibili", () => {
     qrContent,
     qrStatus,
     startingQr,
+    websiteLoginBusy,
+    startWebsiteLogin,
     loginError,
     qrExpired,
     qrStatusText,

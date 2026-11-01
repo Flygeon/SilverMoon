@@ -358,7 +358,7 @@ async function biliFetch(
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
-    const res = await hostFetch(url, { ...init, signal: ac.signal });
+    const res = await hostFetch(url, { ...init, credentials: "omit", signal: ac.signal });
     absorbCookies(res, cookieJar);
     return res;
   } catch (e) {
@@ -932,6 +932,26 @@ export async function biliApplyCookies(pairs: Record<string, string>): Promise<v
     if (value) cookies[name] = value;
   }
   await persistCookies();
+}
+
+/** 官网隔离会话已校验的凭据；换号时替换旧 Cookie，并清掉旧 TV 令牌。 */
+export async function biliApplyWebsiteCookies(
+  pairs: Record<string, string>,
+  isCurrent: () => boolean = () => true,
+): Promise<void> {
+  await ensureCookies();
+  if (!isCurrent()) return;
+  const next = Object.fromEntries(
+    Object.entries(pairs).filter(
+      ([name, value]) => URL_COOKIE_NAMES.has(name) && typeof value === "string" && value,
+    ),
+  );
+  if (!next.SESSDATA || !next.bili_jct || !next.DedeUserID) {
+    throw new Error("官方网页登录未返回完整凭据，请重试");
+  }
+  cookies = next;
+  await persistCookies();
+  await persistTvAuth(null);
 }
 
 export async function biliLogout(): Promise<void> {
