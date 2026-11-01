@@ -87,7 +87,114 @@ beforeEach(() => {
   vi.useRealTimers();
 });
 
+describe("密码短信凭据提交", () => {
+  const auth = {
+    token_info: {
+      access_token: "fixture-access",
+      refresh_token: "fixture-refresh",
+      expires_in: 3600,
+    },
+    cookie_info: {
+      cookies: [
+        { name: "SESSDATA", value: "fixture-session" },
+        { name: "bili_jct", value: "fixture-csrf" },
+        { name: "DedeUserID", value: "42" },
+      ],
+    },
+  };
+  it("中间响应 Cookie 不落盘，nav 使用候选凭据验证后才提交", async () => {
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith("/nav")) {
+        expect(init.credentials).toBe("omit");
+        expect(new Headers(init.headers).get("Cookie")).toContain("SESSDATA=fixture-session");
+        expect(persisted.cookies).toBeUndefined();
+        return hostResponse({ code: 0, data: { isLogin: true, mid: 42, uname: "fixture" } });
+      }
+      return hostResponse({ code: -105 }, ["SESSDATA=intermediate; Path=/"]);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const bili = await freshBili();
+    const transport = await bili.biliCreateLoginTransport();
+    await transport.request("/fixture");
+    expect(persisted.cookies).toBeUndefined();
+    expect(bili.biliIsLoggedIn()).toBe(false);
+    const account = await transport.commit(auth, () => true);
+    expect(account).toMatchObject({ isLogin: true, mid: 42 });
+    expect(persisted.cookies?.SESSDATA).toBe("fixture-session");
+    expect(persisted.tvAuth?.accessToken).toBe("fixture-access");
+  });
+  it.each(["failed-nav", "closed-before", "closed-during"])("%s 不保存候选凭据", async (mode) => {
+    let current = mode !== "closed-before";
+    const fetchMock = vi.fn(async () => {
+      if (mode === "closed-during") current = false;
+      return hostResponse({ code: 0, data: { isLogin: mode !== "failed-nav", mid: 42 } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const bili = await freshBili();
+    const transport = await bili.biliCreateLoginTransport();
+    await expect(transport.commit(auth, () => current)).rejects.toThrow();
+    expect(persisted.cookies).toBeUndefined();
+    expect(persisted.tvAuth).toBeUndefined();
+    expect(bili.biliIsLoggedIn()).toBe(false);
+    if (mode === "closed-before") expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("不完整身份信息不能开始账号验证", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = await (await freshBili()).biliCreateLoginTransport();
+    await expect(transport.commit({ token_info: {} }, () => true)).rejects.toThrow("完整身份信息");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("biliQrPoll 凭据归一化", () => {
+  it.each(["tv", "web"] as const)(
+    "%s 授权后的账号验证保留显式凭据，不被宿主 Cookie 罐覆盖",
+    async (protocol) => {
+      const fetchMock = vi.fn(async (url: string, init: RequestInit = {}) => {
+        if (url.includes("/nav")) {
+          // Electron net.fetch 实测：默认凭据模式使用宿主 Cookie，omit 才保留显式头。
+          const loggedIn =
+            init.credentials === "omit" &&
+            new Headers(init.headers).get("cookie")?.includes("SESSDATA=fixture-session");
+          return hostResponse({
+            code: loggedIn ? 0 : -101,
+            data: { isLogin: !!loggedIn, mid: loggedIn ? 42 : 0 },
+          });
+        }
+        return hostResponse(
+          {
+            code: 0,
+            data:
+              protocol === "tv"
+                ? {
+                    cookie_info: {
+                      cookies: [
+                        { name: "SESSDATA", value: "fixture-session" },
+                        { name: "bili_jct", value: "fixture-csrf" },
+                        { name: "DedeUserID", value: "42" },
+                      ],
+                    },
+                  }
+                : { code: 0, url: "" },
+          },
+          [
+            "SESSDATA=fixture-session; Path=/",
+            "bili_jct=fixture-csrf; Path=/",
+            "DedeUserID=42; Path=/",
+          ],
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const bili = await freshBili();
+      await bili.biliApplyCookies({ buvid3: "fixture-device" });
+      expect((await bili.biliQrPoll("test-key", protocol)).code).toBe(0);
+      expect((await bili.biliNav()).isLogin).toBe(true);
+      const accountRequest = fetchMock.mock.calls.find(([url]) => url.includes("/nav"))?.[1];
+      expect(accountRequest?.credentials).toBe("omit");
+    },
+  );
+
   it.each(["tv", "web"] as const)(
     "%s 登录使用独立匿名 Cookie，失败响应不污染现有账号",
     async (protocol) => {

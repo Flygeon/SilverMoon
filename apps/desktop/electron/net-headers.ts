@@ -18,6 +18,51 @@ import { session } from "electron";
 import { log } from "./log";
 
 const BILI_REFERER = "https://www.bilibili.com";
+const LOGIN_REFERER_HEADER = "X-SilverMoon-Bili-Referer";
+
+function isRiskRequest(url: URL): boolean {
+  return (
+    url.origin === "https://passport.bilibili.com" &&
+    ["/x/safecenter/common/sms/send", "/x/safecenter/login/tel/verify"].includes(url.pathname)
+  );
+}
+
+function validRiskReferer(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.origin === "https://passport.bilibili.com" &&
+      url.pathname === "/h5-app/passport/risk/verify" &&
+      !url.username &&
+      !url.password &&
+      value.length <= 4096 &&
+      !/[\r\n]/.test(value)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Chromium 禁止 net.fetch 直接传 Referer；安全中心经内部头交给网络层还原。 */
+export function prepareBiliHttpHeaders(url: string, headers: Record<string, string>): void {
+  let referer = "";
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === LOGIN_REFERER_HEADER.toLowerCase()) delete headers[key];
+    if (key.toLowerCase() === "referer") referer = headers[key];
+  }
+  try {
+    const target = new URL(url);
+    if (target.hostname !== "bilibili.com" && !target.hostname.endsWith(".bilibili.com")) return;
+    for (const key of Object.keys(headers)) {
+      if (key.toLowerCase() === "referer") delete headers[key];
+    }
+    if (isRiskRequest(target) && validRiskReferer(referer)) {
+      headers[LOGIN_REFERER_HEADER] = referer;
+    }
+  } catch {
+    // URL 验证和实际请求错误仍由原 HTTP 通道处理。
+  }
+}
 
 /*
  * ⚠️ `*://*.bilibili.com/*` **必须**留在 filter 里。这不是"顺带覆盖"，而是必需：
@@ -68,10 +113,18 @@ export function installBiliMediaHeaders(): void {
 
     // 头名大小写不固定：先删掉可能存在的 referer/referrer，再统一写入
     const headers = details.requestHeaders;
+    let riskReferer = "";
     for (const key of Object.keys(headers)) {
       if (key.toLowerCase() === "referer") delete headers[key];
+      if (key.toLowerCase() === LOGIN_REFERER_HEADER.toLowerCase()) {
+        riskReferer = headers[key];
+        delete headers[key];
+      }
     }
-    headers.Referer = BILI_REFERER;
+    headers.Referer =
+      isRiskRequest(new URL(details.url)) && validRiskReferer(riskReferer)
+        ? riskReferer
+        : BILI_REFERER;
     callback({ requestHeaders: headers });
   });
   log.info("B 站媒体请求头改写已安装（自动补 Referer）");

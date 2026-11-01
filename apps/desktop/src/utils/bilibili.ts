@@ -335,9 +335,8 @@ async function hostFetch(url: string, init: RequestInit = {}): Promise<Response>
 /**
  * 带凭据收集的请求。
  *
- * 宿主通道读得到响应的 `Set-Cookie`（已实测：undici 不会像浏览器那样把它从
- * headers 里过滤掉），所以每次请求都顺手并入 cookie 罐——这是最可靠的来源，
- * 因为它的值是**原样**的。
+ * 宿主桥接保留响应的 `Set-Cookie`，每次请求都将它并入显式 Cookie 罐。
+ * 凭据统一由这里管理，不使用 Electron 自带的会话 Cookie。
  */
 /**
  * 单个请求的超时。
@@ -358,7 +357,9 @@ async function biliFetch(
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
-    const res = await hostFetch(url, { ...init, signal: ac.signal });
+    // 宿主罐有同域 Cookie 时，net.fetch 会覆盖显式 Cookie 头；omit 保留传入的凭据。
+    // 同时保证不带 Cookie 头的匿名请求不会意外继承宿主账号。
+    const res = await hostFetch(url, { ...init, credentials: "omit", signal: ac.signal });
     absorbCookies(res, cookieJar);
     return res;
   } catch (e) {
@@ -707,6 +708,10 @@ export async function biliNav(): Promise<BiliAccount> {
       mixinIssuedAt = Date.now();
     }
   }
+  return accountFromNav(data);
+}
+
+function accountFromNav(data: Record<string, unknown>): BiliAccount {
   const level = data.level_info as Record<string, unknown> | undefined;
   const account: BiliAccount = {
     isLogin: data.isLogin === true,
@@ -811,6 +816,72 @@ async function persistTvAuth(auth: Record<string, string | number> | null): Prom
   } catch {
     // 与 Cookie 存储策略一致：浏览器预览仍可在当前会话登录。
   }
+}
+
+/** 密码／短信登录使用独立匿名 Cookie 罐；中间挑战不能污染当前账号。 */
+export async function biliCreateLoginTransport() {
+  await ensureCookies();
+  const jar = newQrCookies();
+  async function request(path: string, init: RequestInit = {}): Promise<Record<string, unknown>> {
+    const ck = Object.entries(jar)
+      .map(([name, value]) => `${name}=${value}`)
+      .join("; ");
+    const res = await biliFetch(
+      `${PASSPORT}${path}`,
+      { ...init, headers: { ...(ck ? { Cookie: ck } : {}), ...init.headers } },
+      REQUEST_TIMEOUT_MS,
+      jar,
+    );
+    if (!res.ok) throw new Error(`登录请求失败：HTTP ${res.status}`);
+    return decodeJson(await res.text()) as Record<string, unknown>;
+  }
+  async function commit(
+    data: Record<string, unknown>,
+    isCurrent: () => boolean,
+  ): Promise<BiliAccount> {
+    const info = data.cookie_info as { cookies?: { name: string; value: string }[] } | undefined;
+    const token = data.token_info as Record<string, unknown> | undefined;
+    const next: CookieMap = {};
+    for (const item of info?.cookies ?? []) {
+      if (URL_COOKIE_NAMES.has(item.name) && typeof item.value === "string" && item.value) {
+        next[item.name] = item.value;
+      }
+    }
+    if (!next.SESSDATA || !next.bili_jct || !next.DedeUserID || !str(token?.access_token)) {
+      throw new Error("登录未返回完整身份信息，请重新登录");
+    }
+    if (!isCurrent()) throw new Error("登录已取消");
+    const candidate = { ...jar, ...next };
+    const res = await biliFetch(
+      `${API}/x/web-interface/nav`,
+      {
+        headers: {
+          "User-Agent": UA,
+          Cookie: Object.entries(candidate)
+            .map(([k, v]) => `${k}=${v}`)
+            .join("; "),
+        },
+      },
+      REQUEST_TIMEOUT_MS,
+      candidate,
+    );
+    if (!res.ok) throw new Error(`账号验证失败：HTTP ${res.status}`);
+    const json = decodeJson(await res.text()) as Record<string, unknown>;
+    const nav = json.data as Record<string, unknown> | undefined;
+    if (json.code !== 0 || nav?.isLogin !== true || !num(nav.mid)) {
+      throw new Error("授权成功，但账号验证失败，请重试");
+    }
+    if (!isCurrent()) throw new Error("登录已取消");
+    cookies = candidate;
+    await persistCookies();
+    await persistTvAuth({
+      accessToken: str(token?.access_token),
+      refreshToken: str(token?.refresh_token),
+      expiresAt: Date.now() + Math.max(0, num(token?.expires_in)) * 1000,
+    });
+    return accountFromNav(nav);
+  }
+  return { request, commit };
 }
 
 export async function biliQrGenerate(

@@ -26,6 +26,7 @@ const bili = reactive({
   loadSearchHistory: vi.fn(),
   loadFeed: vi.fn(),
   loadAccount: vi.fn(),
+  acceptCredentialLogin: vi.fn(),
 });
 vi.mock("@/stores/bilibili", () => ({ useBiliStore: () => bili }));
 vi.mock("@/stores/settings", () => ({ useSettingsStore: () => ({ lang: "zh" }) }));
@@ -51,6 +52,22 @@ vi.mock("../BilibiliMinePanel.vue", () => ({
   }),
 }));
 vi.mock("../BilibiliVideoView.vue", () => ({ default: { render: () => null } }));
+vi.mock("../BilibiliCredentialsLogin.vue", () => ({
+  default: defineComponent({
+    emits: ["success"],
+    setup(_, { emit }) {
+      return () =>
+        h(
+          "button",
+          {
+            id: "credential-success",
+            onClick: () => emit("success", { isLogin: true, mid: 42 }),
+          },
+          "sign in",
+        );
+    },
+  }),
+}));
 vi.mock("../BilibiliUserView.vue", () => ({ default: { render: () => null } }));
 vi.mock("../BilibiliDynamics.vue", () => ({ default: { render: () => null } }));
 vi.mock("../BilibiliCard.vue", () => ({ default: { render: () => null } }));
@@ -150,4 +167,23 @@ it("does not restart polling if closed during QR generation", async () => {
   await settle();
   await vi.advanceTimersByTimeAsync(4000);
   expect(bili.pollQr).not.toHaveBeenCalled();
+});
+
+it("stops QR polling on password switch, accepts verified accounts and restarts when returning", async () => {
+  await openLogin();
+  click(".login-methods m3e-button:nth-child(2)");
+  await settle();
+  const calls = bili.pollQr.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(bili.pollQr).toHaveBeenCalledTimes(calls);
+  click(".login-methods m3e-button:first-child");
+  await settle();
+  expect(bili.pollQr).toHaveBeenCalledTimes(calls + 1);
+  click(".login-methods m3e-button:nth-child(3)");
+  await settle();
+  click("#credential-success");
+  await settle();
+  expect(bili.acceptCredentialLogin).toHaveBeenCalledWith({ isLogin: true, mid: 42 });
+  expect(hide).toHaveBeenCalledTimes(1);
+  expect(host.querySelector("#credential-success")).toBeNull();
 });

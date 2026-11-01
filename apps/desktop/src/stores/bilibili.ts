@@ -100,22 +100,38 @@ export const useBiliStore = defineStore("bilibili", () => {
   const accountLoading = ref(false);
   /** 最近一次账号查询的失败原因（登录流程要把上游原话带给用户） */
   const accountError = ref("");
+  let accountGeneration = 0;
 
   async function loadAccount(): Promise<void> {
+    const generation = ++accountGeneration;
     accountLoading.value = true;
     try {
       const next = await biliNav();
+      if (generation !== accountGeneration) return;
       // 换号（或从匿名变登录）：旧账号的收藏夹 / 投稿 / 历史都不能留
       if (next.mid !== account.value.mid) resetAccountData();
       account.value = next;
       accountError.value = "";
     } catch (e) {
+      if (generation !== accountGeneration) return;
       account.value = { ...BILI_ANONYMOUS };
       accountError.value = cleanError(e);
       console.warn("[bilibili] 账号获取失败：", e);
     }
     accountLoaded.value = true;
     accountLoading.value = false;
+  }
+
+  /** 只接收独立登录会话已经通过 nav 验证的账号。 */
+  function acceptCredentialLogin(next: BiliAccount): void {
+    if (!next.isLogin || !next.mid) return;
+    accountGeneration += 1;
+    if (next.mid !== account.value.mid) resetAccountData();
+    account.value = next;
+    accountError.value = "";
+    accountLoaded.value = true;
+    accountLoading.value = false;
+    notice.value = t("bili.loggedInAs", { name: next.name || t("bili.biliUser") });
   }
 
   // ---------------------------------------------------------------- 推荐流
@@ -342,7 +358,7 @@ export const useBiliStore = defineStore("bilibili", () => {
       qrStatus.value = s;
       qrExpired.value = s.code === 86038;
       if (s.code === 0) {
-        qrStatusText.value = "登录成功";
+        qrStatusText.value = "授权成功，正在验证账号";
         await loadAccount();
         if (generation !== qrGeneration) return false;
         if (!account.value.isLogin) {
@@ -359,6 +375,7 @@ export const useBiliStore = defineStore("bilibili", () => {
         }
         if (generation !== qrGeneration) return false;
         if (!account.value.isLogin) {
+          qrStatusText.value = "授权成功，账号验证失败";
           // 带上上游原话（-101 / -352 …），否则这一条永远只有「获取失败」，无从下手
           loginError.value = accountError.value
             ? `已授权，但账号信息获取失败：${accountError.value}`
@@ -366,6 +383,7 @@ export const useBiliStore = defineStore("bilibili", () => {
           logLogin("authorized-account-failed");
           return true;
         }
+        qrStatusText.value = "登录成功";
         notice.value = t("bili.loggedInAs", { name: account.value.name || t("bili.biliUser") });
         logLogin("account-verified");
         return true;
@@ -378,7 +396,7 @@ export const useBiliStore = defineStore("bilibili", () => {
         qrStatusText.value = "扫码授权未完成";
         loginError.value =
           s.code === 48007
-            ? `桌面端未取得登录凭据：${s.message || "授权结果异常"}（code=48007）。若手机已确认成功，请刷新二维码重试。`
+            ? `桌面端未取得登录凭据：${s.message || "授权结果异常"}（code=48007）。请使用哔哩哔哩标准版手机客户端重新扫码；概念版、国际版可能无法完成授权。`
             : `扫码登录失败：${s.message || "上游返回未知状态"}（code=${s.code}）`;
         return true;
       }
@@ -1821,6 +1839,7 @@ export const useBiliStore = defineStore("bilibili", () => {
     startQr,
     pollQr,
     resetQr,
+    acceptCredentialLogin,
     // 详情 / 播放
     current,
     detail,

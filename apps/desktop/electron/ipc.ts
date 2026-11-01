@@ -37,6 +37,8 @@ import { CM_TOKEN_FILE, clearCmToken, readCmToken, writeCmToken } from "./steam/
 import { isSteamCmToken } from "./steam/protocol";
 import { BenchSession, DEFAULT_INTERVAL_MS } from "./bench";
 import { applyNetworkProxy, normalizeProxyConfig } from "./net-proxy";
+import { prepareBiliHttpHeaders } from "./net-headers";
+import { cancelBiliCaptcha, encryptBiliLogin, solveBiliCaptcha } from "./bilibili-login";
 
 export interface BridgeReply {
   ok: boolean;
@@ -130,6 +132,21 @@ function broadcastAuthResult(state: { state?: string } | null | undefined): unkn
 }
 
 const handlers: Record<string, Handler> = {
+  bilibiliLogin: (payload, sender) => {
+    if (!isTrustedRenderer(sender)) throw new Error("该窗口无权调用登录验证");
+    switch (payload.op) {
+      case "encrypt":
+        return encryptBiliLogin(payload.key, payload.values);
+      case "captcha":
+        return solveBiliCaptcha(sender, payload.requestId, payload.challenge);
+      case "cancel":
+        cancelBiliCaptcha(sender, payload.requestId);
+        return null;
+      default:
+        throw new Error("未知登录验证操作");
+    }
+  },
+
   invoke: async (payload) => {
     const cmd = String(payload.cmd ?? "");
     if (!cmd) throw new Error("缺少 cmd");
@@ -803,15 +820,7 @@ const handlers: Record<string, Handler> = {
     const body = payload.body ? String(payload.body) : undefined;
     const timeoutMs = Number(payload.timeoutMs);
 
-    try {
-      const host = new URL(url).hostname.toLowerCase();
-      if (host === "bilibili.com" || host.endsWith(".bilibili.com")) {
-        delete headers.Referer;
-        delete headers.referer;
-      }
-    } catch {
-      /* 忽略 */
-    }
+    prepareBiliHttpHeaders(url, headers);
 
     let response: Awaited<ReturnType<typeof net.fetch>>;
     try {
@@ -838,7 +847,7 @@ const handlers: Record<string, Handler> = {
       const endpoint = url.split(/[?#]/, 1)[0].slice(0, 200);
       const message = ((error as Error)?.message ?? String(error)).replaceAll(url, endpoint);
       log.warn(`http 请求失败（${protocol}//）：${message}`, endpoint);
-      throw error;
+      throw new Error(message);
     }
 
     return {

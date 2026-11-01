@@ -16,10 +16,11 @@ import BilibiliUserView from "@/components/BilibiliUserView.vue";
 import BilibiliMinePanel from "@/components/BilibiliMinePanel.vue";
 import BilibiliSearchHistory from "@/components/BilibiliSearchHistory.vue";
 import BilibiliDynamics from "@/components/BilibiliDynamics.vue";
+import BilibiliCredentialsLogin from "@/components/BilibiliCredentialsLogin.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import { useBiliStore } from "@/stores/bilibili";
 import { useSettingsStore } from "@/stores/settings";
-import type { BiliQrProtocol, BiliVideo } from "@/utils/bilibili";
+import type { BiliAccount, BiliQrProtocol, BiliVideo } from "@/utils/bilibili";
 import { translate } from "@shared/i18n";
 
 const bili = useBiliStore();
@@ -87,6 +88,14 @@ interface M3eDialog extends HTMLElement {
 const loginDialog = ref<M3eDialog | null>(null);
 const qrImage = ref("");
 const qrProtocol = ref<BiliQrProtocol>("tv");
+type LoginMethod = "qr" | "password" | "sms";
+const loginMethod = ref<LoginMethod>("qr");
+const loginVisible = ref(false);
+const loginMethods = computed(() => [
+  { value: "qr" as const, label: t("bili.qrLogin") },
+  { value: "password" as const, label: t("bili.passwordLogin") },
+  { value: "sms" as const, label: t("bili.smsLogin") },
+]);
 let pollTimer: number | null = null;
 /** 轮询互斥：2s 定时器与切回前台补一次可能撞在一起 */
 let polling = false;
@@ -146,6 +155,8 @@ async function openLogin(): Promise<void> {
   // show() 负责遮罩 / 焦点陷阱 / Esc；先开再拉二维码，避免等待期间界面无反馈
   await loginDialog.value?.show();
   loginOpen = true;
+  loginVisible.value = true;
+  loginMethod.value = "qr";
   qrProtocol.value = "tv";
   await refreshQr();
 }
@@ -163,10 +174,27 @@ async function refreshQr(): Promise<void> {
 
 function closeLogin(): void {
   loginOpen = false;
+  loginVisible.value = false;
   loginSession += 1;
   stopPolling();
   bili.resetQr();
   void loginDialog.value?.hide();
+}
+
+function switchLoginMethod(method: LoginMethod): void {
+  if (loginMethod.value === method) return;
+  loginSession += 1;
+  stopPolling();
+  bili.resetQr();
+  qrImage.value = "";
+  loginMethod.value = method;
+  if (method === "qr") void refreshQr();
+}
+
+function onCredentialSuccess(account: BiliAccount): void {
+  if (!loginOpen || !account.isLogin) return;
+  bili.acceptCredentialLogin(account);
+  closeLogin();
 }
 
 function switchQrProtocol(): void {
@@ -177,6 +205,7 @@ function switchQrProtocol(): void {
 /** m3e-dialog 完全关闭后（含 Esc / 点遮罩）兜底收敛状态。 */
 function onLoginClosed(): void {
   loginOpen = false;
+  loginVisible.value = false;
   loginSession += 1;
   stopPolling();
   bili.resetQr();
@@ -198,6 +227,7 @@ onActivated(() => {
 
 onBeforeUnmount(() => {
   loginOpen = false;
+  loginVisible.value = false;
   loginSession += 1;
   observer?.disconnect();
   observer = null;
@@ -359,22 +389,41 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
          （此前是手写 modal，键盘完全不可达，且 Esc 会穿透到下面的视频浮层） -->
     <m3e-dialog ref="loginDialog" class="login-dialog" @cancel="closeLogin" @closed="onLoginClosed">
       <span slot="header">{{ t("bili.loginTitle") }}</span>
-      <p class="hint">{{ t("bili.loginTip") }}</p>
-      <m3e-button variant="tonal" size="small" @click="switchQrProtocol">
-        {{ t(qrProtocol === "tv" ? "bili.useWebQr" : "bili.useTvQr") }}
-      </m3e-button>
-      <p class="hint">{{ t(qrProtocol === "tv" ? "bili.tvQrActive" : "bili.webQrActive") }}</p>
-      <div class="qr-wrap">
-        <img v-if="qrImage" :src="qrImage" alt="QR" class="qr-img" />
-        <div v-else class="qr-loading">
-          <m3e-loading-indicator class="lm-loading" />
-          {{ bili.startingQr ? t("bili.loading") : bili.loginError || t("bili.qrFailed") }}
+      <m3e-button-group class="login-methods" :aria-label="t('bili.loginMethod')">
+        <m3e-button
+          v-for="method in loginMethods"
+          :key="method.value"
+          :variant="loginMethod === method.value ? 'filled' : 'outlined'"
+          size="small"
+          :aria-pressed="loginMethod === method.value"
+          @click="switchLoginMethod(method.value)"
+          >{{ method.label }}</m3e-button
+        >
+      </m3e-button-group>
+      <BilibiliCredentialsLogin
+        v-if="loginVisible && loginMethod !== 'qr'"
+        :key="loginMethod"
+        :method="loginMethod"
+        @success="onCredentialSuccess"
+      />
+      <template v-if="loginMethod === 'qr'">
+        <p class="hint">{{ t("bili.loginTip") }}</p>
+        <m3e-button class="qr-switch" variant="tonal" size="small" @click="switchQrProtocol">
+          {{ t(qrProtocol === "tv" ? "bili.useWebQr" : "bili.useTvQr") }}
+        </m3e-button>
+        <p class="hint">{{ t(qrProtocol === "tv" ? "bili.tvQrActive" : "bili.webQrActive") }}</p>
+        <div class="qr-wrap">
+          <img v-if="qrImage" :src="qrImage" alt="QR" class="qr-img" />
+          <div v-else class="qr-loading">
+            <m3e-loading-indicator class="lm-loading" />
+            {{ bili.startingQr ? t("bili.loading") : bili.loginError || t("bili.qrFailed") }}
+          </div>
         </div>
-      </div>
-      <p class="qr-status">{{ bili.qrStatusText }}</p>
-      <p v-if="bili.loginError" class="qr-error">{{ bili.loginError }}</p>
+        <p class="qr-status">{{ bili.qrStatusText }}</p>
+        <p v-if="bili.loginError" class="qr-error">{{ bili.loginError }}</p>
+      </template>
       <div slot="actions" end>
-        <m3e-button variant="text" size="small" @click="refreshQr">
+        <m3e-button v-if="loginMethod === 'qr'" variant="text" size="small" @click="refreshQr">
           <span slot="icon" class="material-symbols-outlined">refresh</span>
           {{ t("bili.refreshQr") }}
         </m3e-button>
@@ -463,8 +512,11 @@ const feedBusy = computed(() => bili.feedStatus === "loading");
 
 /* ---- 登录弹窗（容器/遮罩/动画由 m3e-dialog 负责，这里只管内容）---- */
 .login-dialog {
-  --m3e-dialog-min-width: 380px;
+  --m3e-dialog-min-width: min(420px, calc(100vw - 48px));
   text-align: center;
+}
+.login-methods {
+  margin-bottom: var(--lm-space-12);
 }
 .qr-wrap {
   display: flex;
