@@ -353,12 +353,13 @@ async function biliFetch(
   url: string,
   init: RequestInit = {},
   timeoutMs = REQUEST_TIMEOUT_MS,
+  cookieJar: CookieMap = cookies,
 ): Promise<Response> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
     const res = await hostFetch(url, { ...init, signal: ac.signal });
-    absorbCookies(res);
+    absorbCookies(res, cookieJar);
     return res;
   } catch (e) {
     // AbortError 的原始信息是 "This operation was aborted"，对用户毫无意义
@@ -408,15 +409,15 @@ function parseSetCookie(raw: string): [string, string][] {
 }
 
 /** 把响应的 Set-Cookie 并入 cookie 罐（值保持原样，不做解码）。 */
-function absorbCookies(res: Response): void {
+function absorbCookies(res: Response, cookieJar: CookieMap = cookies): void {
   let changed = false;
   for (const [name, value] of rawSetCookies(res).flatMap(parseSetCookie)) {
-    if (cookies[name] !== value) {
-      cookies[name] = value;
+    if (cookieJar[name] !== value) {
+      cookieJar[name] = value;
       changed = true;
     }
   }
-  if (changed) void persistCookies();
+  if (changed && cookieJar === cookies) void persistCookies();
 }
 
 /** 从 `k=v&...` 取**原始**（不解码）键值对。 */
@@ -721,10 +722,72 @@ export async function biliNav(): Promise<BiliAccount> {
 
 // ------------------------------------------------------------------ 扫码登录
 
+// 与 PiliPlus 的 AnonymousAccount 一致：授权握手不混入已有账号凭据。
+// 每个二维码独享临时 Cookie，刷新／切换后旧请求不能污染新握手。
+const qrSessions = new Map<string, CookieMap>();
+
+function newQrCookies(): CookieMap {
+  return Object.fromEntries(
+    Object.entries(cookies).filter(([name]) => ["buvid3", "buvid4", "b_nut"].includes(name)),
+  );
+}
+
+function rememberQrCookies(key: string, protocol: BiliQrProtocol, jar: CookieMap): void {
+  qrSessions.set(`${protocol}:${key}`, jar);
+  // 只保留最近的握手，避免不断刷新二维码积累临时凭据。
+  if (qrSessions.size > 4) qrSessions.delete(qrSessions.keys().next().value!);
+}
+
+async function qrRequest(
+  url: string,
+  protocol: BiliQrProtocol,
+  jar: CookieMap,
+): Promise<{ json: Record<string, unknown>; res: Response }> {
+  const ck = Object.entries(jar)
+    .map(([name, value]) => `${name}=${value}`)
+    .join("; ");
+  const res = await biliFetch(
+    url,
+    {
+      method: protocol === "tv" ? "POST" : "GET",
+      // Electron 自带的 Cookie 罐也必须禁用；显式 Cookie 仍正常发送。
+      credentials: "omit",
+      headers: {
+        "User-Agent": protocol === "tv" ? "Dart/3.6 (dart:io)" : UA,
+        Accept: "application/json, text/plain, */*",
+        ...(protocol === "tv"
+          ? { env: "prod", "app-key": "android64", "x-bili-aurora-zone": "sh001" }
+          : {}),
+        ...(ck ? { Cookie: ck } : {}),
+      },
+    },
+    REQUEST_TIMEOUT_MS,
+    jar,
+  );
+  if (!res.ok) throw new Error(`扫码登录请求失败：HTTP ${res.status}`);
+  const json = decodeJson(await res.text()) as Record<string, unknown>;
+  const data = json.data as Record<string, unknown> | undefined;
+  const outer = num(json.code, -1);
+  const inner = num(data?.code, -1);
+  const isPoll = new URL(url).pathname.endsWith("/poll");
+  const code = outer === 0 && protocol === "web" && isPoll ? inner : outer;
+  if (isDesktop && ((isPoll && code === 0) || ![0, 86038, 86039, 86090, 86101].includes(code))) {
+    // 仅记录固定字段及布尔值；不写 key、URL、Cookie、令牌或上游原文。
+    const headerAuth = rawSetCookies(res).some((value) => value.startsWith("SESSDATA="));
+    void capabilities
+      .appLog(
+        `[bilibili:login] response protocol=${protocol} outer=${outer} inner=${inner} headerAuth=${headerAuth} cookieInfo=${!!data?.cookie_info} redirect=${!!data?.url}`,
+      )
+      .catch(() => {});
+  }
+  return { json, res };
+}
+
 /** 与 PiliPlus AppSign 一致：排序、URI 编码后签名，POST 参数仍在 query 中。 */
 async function tvLoginRequest(
   action: "auth_code" | "poll",
   params: Record<string, string>,
+  jar: CookieMap,
 ): Promise<Record<string, unknown>> {
   const signed = { ...params, appkey: TV_APP_KEY, ts: String(Math.floor(Date.now() / 1000)) };
   const query = Object.entries(signed)
@@ -732,15 +795,12 @@ async function tvLoginRequest(
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
     .join("&");
   const sign = md5(query + TV_APP_SECRET);
-  const res = await biliFetch(
+  const { json } = await qrRequest(
     `${PASSPORT}/x/passport-tv-login/qrcode/${action}?${query}&sign=${sign}`,
-    {
-      method: "POST",
-      headers: baseHeaders(),
-    },
+    "tv",
+    jar,
   );
-  if (!res.ok) throw new Error(`扫码登录请求失败：HTTP ${res.status}`);
-  return decodeJson(await res.text()) as Record<string, unknown>;
+  return json;
 }
 
 /** 与 Cookie 同库存储；网页登录及退出时清空，避免残留另一账号的 TV 令牌。 */
@@ -757,19 +817,21 @@ export async function biliQrGenerate(
   protocol: BiliQrProtocol = "tv",
 ): Promise<{ key: string; url: string }> {
   await ensureCookies();
+  const jar = newQrCookies();
   const json =
     protocol === "tv"
-      ? await tvLoginRequest("auth_code", {
-          local_id: "0",
-          platform: "android",
-          mobi_app: "android_hd",
-        })
-      : await getJson(`${PASSPORT}/x/passport-login/web/qrcode/generate`);
+      ? await tvLoginRequest(
+          "auth_code",
+          { local_id: "0", platform: "android", mobi_app: "android_hd" },
+          jar,
+        )
+      : (await qrRequest(`${PASSPORT}/x/passport-login/web/qrcode/generate`, protocol, jar)).json;
   assertOk(json, "获取二维码");
   const data = json.data as Record<string, unknown> | undefined;
   const key = str(protocol === "tv" ? data?.auth_code : data?.qrcode_key);
   const url = str(data?.url);
   if (!key || !url) throw new Error("上游未返回二维码");
+  rememberQrCookies(key, protocol, jar);
   return { key, url };
 }
 
@@ -779,8 +841,10 @@ export async function biliQrPoll(
   isCurrent: () => boolean = () => true,
 ): Promise<BiliQrStatus> {
   await ensureCookies();
+  const jar = qrSessions.get(`${protocol}:${key}`) ?? newQrCookies();
+  rememberQrCookies(key, protocol, jar);
   if (protocol === "tv") {
-    const json = await tvLoginRequest("poll", { auth_code: key, local_id: "0" });
+    const json = await tvLoginRequest("poll", { auth_code: key, local_id: "0" }, jar);
     // TV 状态在外层 code；网页协议则在 data.code，不能混用。
     const code = num(json.code, -1);
     if (code === -1) throw new Error("扫码登录响应缺少有效状态码，请刷新二维码");
@@ -818,16 +882,14 @@ export async function biliQrPoll(
     return { code, message };
   }
   let alt: Record<string, string> | undefined;
-  const res = await biliFetch(
+  const { res, json } = await qrRequest(
     `${PASSPORT}/x/passport-login/web/qrcode/poll?qrcode_key=${encodeURIComponent(key)}`,
-    { headers: baseHeaders() },
+    protocol,
+    jar,
   );
-  // biliFetch 已就地把这次的 Set-Cookie 按原值吸收 —— 这是最权威的来源（服务端下发什么、
-  // 浏览器就存什么）。这里只记下「哪些名字来自响应头」，好让下面的 url 兜底不去覆盖它们。
+  // 响应 Cookie 先进入二维码私有会话，只有授权成功且代次有效时才提交账号凭据。
   const headerPairs = rawSetCookies(res).flatMap(parseSetCookie);
   const fromHeader = new Set(headerPairs.map(([name]) => name));
-  if (!res.ok) throw new Error(`扫码登录请求失败：HTTP ${res.status}`);
-  const json = decodeJson(await res.text()) as Record<string, unknown>;
   const outerCode = num(json.code, -1);
   if (outerCode === -1) throw new Error("扫码登录响应缺少有效状态码，请刷新二维码");
   if (outerCode !== 0) return { code: outerCode, message: str(json.message) };
@@ -838,6 +900,9 @@ export async function biliQrPoll(
   const message = data ? str(data.message) : str(json.message);
   if (!isCurrent()) return { code, message };
   if (code === 0 && data) {
+    for (const [name, value] of headerPairs) {
+      if (URL_COOKIE_NAMES.has(name)) cookies[name] = value;
+    }
     // 兜底：跳转链里也带着同一批凭据，值是 urlencoded 形态，先按 cookie 形态落罐
     // （见 cookieValueFromLoginUrl）；原始形态一并返回，验不过时换它再试。
     const pairs = Object.entries(parseRawQuery(str(data.url))).filter(([k]) =>
@@ -886,6 +951,7 @@ export async function biliLogout(): Promise<void> {
     console.warn("[bilibili] 登出请求失败：", e);
   }
   cookies = {};
+  qrSessions.clear();
   await persistCookies();
   await persistTvAuth(null);
 }

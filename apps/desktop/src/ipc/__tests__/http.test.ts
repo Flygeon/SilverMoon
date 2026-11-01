@@ -5,7 +5,7 @@
  * 渲染端却 `new Uint8Array(字符串)`（原始值被当成长度 → 空数组），让 QQ / 酷狗的
  * 逐字歌词全部报 `Unexpected end of JSON input`。这里把两个方向都钉住。
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fetch as hostFetch } from "../http";
 import { toBytes } from "../bridge";
@@ -46,7 +46,10 @@ function byteResponse(body: Uint8Array, headers: [string, string][] = []): unkno
   };
 }
 
-afterEach(clearBridge);
+afterEach(() => {
+  clearBridge();
+  vi.unstubAllGlobals();
+});
 
 describe("toBytes", () => {
   it("原样接受 Uint8Array / ArrayBuffer / number[]", () => {
@@ -70,6 +73,42 @@ describe("toBytes", () => {
 });
 
 describe("宿主 fetch", () => {
+  it.each(["omit", "include", "same-origin"] as const)(
+    "透传显式凭据策略 %s",
+    async (credentials) => {
+      let payload: unknown;
+      stubBridge(byteResponse(new Uint8Array(4)), { onCall: (value) => (payload = value) });
+      await hostFetch("https://passport.bilibili.com/", { credentials });
+      expect(payload).toMatchObject({ credentials });
+    },
+  );
+
+  it("Chromium 过滤 Set-Cookie 后仍从原始桥接头读取完整列表", async () => {
+    const NativeResponse = Response;
+    vi.stubGlobal(
+      "Response",
+      class extends NativeResponse {
+        constructor(body?: BodyInit | null, init?: ResponseInit) {
+          const headers = new Headers(init?.headers);
+          headers.delete("set-cookie");
+          super(body, { ...init, headers });
+        }
+      },
+    );
+    const cookies = ["SESSDATA=fixture; Path=/", "bili_jct=fixture; Path=/"];
+    stubBridge(
+      byteResponse(
+        new TextEncoder().encode(JSON_BODY),
+        cookies.map((value) => ["Set-Cookie", value]),
+      ),
+    );
+    const res = await hostFetch("https://passport.bilibili.com/");
+    expect(res.headers.get("set-cookie")).toBeNull();
+    expect(res.headers.getSetCookie()).toEqual(cookies);
+    res.headers.getSetCookie().pop();
+    expect(res.headers.getSetCookie()).toEqual(cookies);
+  });
+
   it.each([undefined, 8000])("只在调用方指定时透传宿主超时 %s", async (timeoutMs) => {
     let payload: unknown;
     stubBridge(byteResponse(new Uint8Array(4)), { onCall: (value) => (payload = value) });

@@ -88,6 +88,69 @@ beforeEach(() => {
 });
 
 describe("biliQrPoll 凭据归一化", () => {
+  it.each(["tv", "web"] as const)(
+    "%s 登录使用独立匿名 Cookie，失败响应不污染现有账号",
+    async (protocol) => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          hostResponse(
+            {
+              code: 0,
+              data: {
+                auth_code: "test-key",
+                qrcode_key: "test-key",
+                url: "https://example.test/qr",
+              },
+            },
+            ["passport_session=handshake; Path=/"],
+          ),
+        )
+        .mockResolvedValueOnce(
+          hostResponse({ code: 48007, message: "fixture" }, ["SESSDATA=rejected; Path=/"]),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const bili = await freshBili();
+      await bili.biliApplyCookies({ SESSDATA: "existing", bili_jct: "old-csrf", buvid3: "device" });
+      await bili.biliQrGenerate(protocol);
+      expect((await bili.biliQrPoll("test-key", protocol)).code).toBe(48007);
+      const first = fetchMock.mock.calls[0][1] as RequestInit;
+      const poll = fetchMock.mock.calls[1][1] as RequestInit;
+      expect(first.credentials).toBe("omit");
+      expect(poll.credentials).toBe("omit");
+      expect(new Headers(first.headers).get("cookie")).toBe("buvid3=device");
+      expect(new Headers(poll.headers).get("cookie")).toContain("passport_session=handshake");
+      expect(new Headers(poll.headers).get("cookie")).not.toContain("existing");
+      expect(persisted.cookies?.SESSDATA).toBe("existing");
+      expect(persisted.cookies?.passport_session).toBeUndefined();
+    },
+  );
+
+  it("关闭后的网页成功回包即使包含 Set-Cookie 也不能写入账号", async () => {
+    stubPoll(["SESSDATA=obsolete; Path=/"]);
+    const bili = await freshBili();
+    await bili.biliQrPoll("test-key", "web", () => false);
+    expect(persisted.cookies).toBeUndefined();
+    expect(bili.biliIsLoggedIn()).toBe(false);
+  });
+
+  it("成功回包只通过响应头下发凭据时也能提交登录", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        hostResponse({ code: 0, data: { code: 0, url: "" } }, [
+          "SESSDATA=header-session; Path=/",
+          "bili_jct=header-csrf; Path=/",
+          "DedeUserID=42; Path=/",
+        ]),
+      ),
+    );
+    const bili = await freshBili();
+    expect((await bili.biliQrPoll("test-key", "web")).code).toBe(0);
+    expect(bili.biliIsLoggedIn()).toBe(true);
+    expect(persisted.cookies).toMatchObject({ SESSDATA: "header-session", DedeUserID: "42" });
+  });
+
   it("跳转链的逗号形态转成 cookie 形态（%2C），并留一份原始形态备选", async () => {
     stubPoll();
     const bili = await freshBili();

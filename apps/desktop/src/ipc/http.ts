@@ -98,6 +98,7 @@ export async function fetch(
     headers: normalizeHeaders(init.headers),
     body: normalizeBody(init.body),
     timeoutMs: init.timeoutMs,
+    credentials: init.credentials,
   });
 
   const raw = init.signal ? await abortable(call, init.signal) : await call;
@@ -112,6 +113,15 @@ export async function fetch(
   const statusText = String(raw.statusText ?? "").replace(/[^\x20-\x7e]/g, "");
 
   const response = new Response(bytes, { status, statusText, headers });
+  // Chromium 会从重建的 Response.headers 过滤 Set-Cookie；从桥接原始头保留它，
+  // 不能依赖 Node 测试环境里 Headers.getSetCookie 的行为。
+  const setCookies = headers
+    .filter(([key]) => key.toLowerCase() === "set-cookie")
+    .map(([, value]) => value);
+  Object.defineProperty(response.headers, "getSetCookie", {
+    value: () => [...setCookies],
+    configurable: true,
+  });
 
   // `Response.url` 是只读的，跨源场景下原生 fetch 也常为空；
   // 这里补一个与请求一致的地址，便于调用方按 host 分流。

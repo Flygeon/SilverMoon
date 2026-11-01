@@ -820,6 +820,12 @@ const handlers: Record<string, Handler> = {
         headers,
         body,
         redirect: "follow",
+        credentials:
+          payload.credentials === "omit" ||
+          payload.credentials === "include" ||
+          payload.credentials === "same-origin"
+            ? payload.credentials
+            : undefined,
         // DASH 分片等待超时后也要释放宿主请求，不能只让渲染进程停止等待。
         signal:
           Number.isFinite(timeoutMs) && timeoutMs > 0

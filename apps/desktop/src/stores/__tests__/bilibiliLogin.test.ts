@@ -45,16 +45,22 @@ it("binds the selected protocol to the generated QR key", async () => {
   expect(mocks.poll).toHaveBeenCalledWith("test-key", "web", expect.any(Function));
 });
 
-it.each(["tv", "web"] as const)("%s account rejection stops immediately", async (protocol) => {
-  const store = useBiliStore();
-  await store.startQr(protocol);
-  mocks.poll.mockResolvedValueOnce({ code: 48007, message: "当前账号暂不支持在本APP登录" });
-  expect(await store.pollQr()).toBe(true);
-  expect(store.loginError).toContain("48007");
-  expect(store.loginError).not.toContain("网络异常");
-  expect(store.qrStatusText).not.toContain("手机上确认");
-  expect(mocks.nav).not.toHaveBeenCalled();
-});
+it.each(["tv", "web"] as const)(
+  "%s authorization error stops without blaming the account",
+  async (protocol) => {
+    const store = useBiliStore();
+    await store.startQr(protocol);
+    mocks.poll.mockResolvedValueOnce({ code: 48007, message: "当前账号暂不支持在本APP登录" });
+    expect(await store.pollQr()).toBe(true);
+    expect(store.loginError).toContain("48007");
+    expect(store.loginError).not.toContain("网络异常");
+    expect(store.loginError).not.toContain("手机确认不代表登录成功");
+    expect(store.loginError).not.toContain("检查账号状态");
+    expect(store.loginError).toContain("若手机已确认成功");
+    expect(store.qrStatusText).not.toContain("手机上确认");
+    expect(mocks.nav).not.toHaveBeenCalled();
+  },
+);
 
 it("invalidates an outstanding poll when the QR session is reset", async () => {
   const store = useBiliStore();
