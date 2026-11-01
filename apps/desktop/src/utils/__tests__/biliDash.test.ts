@@ -186,7 +186,10 @@ describe("DASH 起播失败", () => {
 });
 
 /** 手工拼一个最小可用的 sidx 盒（version 0，reference_type=0）。 */
-function buildSidx(entries: { size: number; duration: number }[], timescale = 16000): Uint8Array {
+function buildSidx(
+  entries: { size: number; duration: number }[],
+  timescale = 16000,
+): Uint8Array<ArrayBuffer> {
   const headerSize = 12; // size + type + version/flags
   const fixed = 4 + 4 + 8 + 2 + 2; // ref_ID + timescale + ept/first_offset + reserved + count
   const boxSize = headerSize + fixed + entries.length * 12;
