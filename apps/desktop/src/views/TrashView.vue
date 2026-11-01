@@ -57,7 +57,6 @@ async function emptyTrash() {
       :loading="loading"
       aspect="1"
       :min-width="180"
-      subtitle="size"
       @open="open"
       @favorite="toggleFavorite"
     />

@@ -861,6 +861,50 @@ flags=256  →    13（CustomExecutable）
 
 ---
 
+## 2026-11-02 · 媒体卡片改版：m3e-card 托底 + 纯封面
+
+- **commit**: 待提交
+- **status**: 未验证（本地 lint / typecheck / vitest / 设计守卫全绿；**观感需用户人眼确认**）
+
+- **做了什么**：
+  - 图片 / 视频 / 音乐 / 书籍 / 番剧 / B站 卡片统一改为**官方 `m3e-card`**（`variant="filled"`
+    + `actionable`），封面放进它的 `header` 槽。托底色、圆角、hover / focus / pressed 状态层、
+    ripple、焦点环、海拔全部来自 `@m3e/web`，不再自绘。
+  - 卡片**只留封面**：文件名、分辨率、作者、UP 主、播放数、时长角标、类型角标全部移除。
+    标题仍保留在 `aria-label` / `title` 上供读屏与悬停提示使用。
+  - 网格间距随文字区消失而收紧：`GAP_Y` 20 → 16，行高不再预留 44px 文字区（`META_H` = 0）。
+  - `MediaGrid` 的 `subtitle` / `mixed` / `coverOnly` 三个 prop 与相关死代码一并删除；
+    卡片容器从 `<article>` 换成 `m3e-card`，键盘激活由组件的 `actionable` 接管。
+
+- **为什么**：
+  - 用户要求「用 MD3 组件库实现，切忌手绘形状」—— 自绘 hover 位移 / 圆角 / 状态层是**模仿**
+    MD3 而不是 MD3（SPEC §2.2「官方组件优先」）。改完后 `verify-desktop-design` 的实际指标
+    明显下降：`BilibiliCard` 的 `literalLayout` 7→0、`MediaGrid` 的 `rawControls` 1→0、
+    `literalLayout` 9→3。
+  - 取色不能吃默认值：`m3e-card` 的 filled 默认取 `surfaceContainerHighest`，副标题消失后
+    整张卡就是一块纯色底，与页面底色拉不开。新增 `--lm-card-surface` / `--lm-card-surface-hover`
+    两个语义令牌（浅色取 `surface-container`、深色同层级，方向由 M3 色阶自然保证：
+    浅色下沉、深色上浮），三张卡片共用同一套，避免各写一套出三份色差。
+
+- **教训**：
+  1. **`<template #header>` 会让 `@vue/compiler-core` 的 codegen 崩溃**
+     （`Codegen node is missing for element/if/for node`），而 `slot="header"` 正常。
+     向 `m3e-*` 这类自定义元素传具名插槽**必须用原生 `slot` 属性**（Web Components 的约定），
+     这与 `eslint.config.js` 里那份「`vue/no-deprecated-slot-attribute` 例外清单」的既有做法一致 ——
+     三个卡片文件已加入该清单，而不是各写一套变通。
+  2. **删 prop 要顺着调用方一起清**：`subtitle` 在 7 个页面里被传，删了组件侧只会变成
+     静默失效的属性（不报错、不生效）。这次连 `AnimeCollectionPanel` 的 `cardSubtitle()` 一起
+     作为死代码移除。
+  3. **列表视图的行高有两处真源**：JS 的虚拟滚动按 96px 计算，CSS 里却写 80px ——
+     本就错位。本轮统一为 96px，否则卡片之间会露 16px 空隙且随滚动累积。
+
+- **未完成 / 下一步**：
+  - ⚠️ **未人眼验证**：需用户在各主题与窗口尺寸下确认托底色、hover/focus 观感、
+    以及纯封面是否丢掉了必要信息（例如回收站里仅靠封面难以区分条目）。
+  - `BilibiliRelatedList` / `AnimeCollectionPanel` 等仍保留各自的小卡片排版，本轮未统一。
+
+---
+
 ## 2026-10-17 · 番茄内容源（fqapi）建成并随 v0.1.1 发布
 
 - **commit**: `e38933c` → `c6f1299` → `a86f53e` → `e95e4d9`（含 `302f68d` / `00ef027` / `c5b49c4` / `32f2520`）

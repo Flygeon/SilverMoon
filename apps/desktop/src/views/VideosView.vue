@@ -126,7 +126,6 @@ function clearSearch() {
           :loading="library.loading"
           aspect="16/9"
           :min-width="260"
-          subtitle="resolution"
           @open="openViewer"
           @favorite="library.toggleFavorite"
         />

@@ -86,7 +86,8 @@ const states = ["empty", "search", "error", "offline", "auth"] as const;
     <section aria-label="媒体与占位">
       <h2>内容卡片 / 加载 / 缺图</h2>
       <div class="review-grid">
-        <MediaCardShell title="番剧封面占位" subtitle="3:4 · 长标题单行截断" icon="movie" />
+        <!-- 卡片已改为「只有封面」：标题只进 aria-label，视觉上不渲染文字 -->
+        <MediaCardShell title="番剧封面占位" icon="movie" />
         <MediaCardShell
           title="小说封面加载失败"
           cover="data:image/png;base64,AA=="

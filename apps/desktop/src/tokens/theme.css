@@ -301,6 +301,16 @@
   --lm-media-placeholder-surface: var(--md-sys-color-surface-container);
   --lm-media-placeholder-color: var(--md-sys-color-outline);
   --lm-focus-color: var(--md-sys-color-primary);
+  /*
+   * 媒体卡片托底色（图片 / 视频 / 音乐 / 书籍 / 番剧 / B站 卡共用）。
+   * 卡片底色必须与页面底 background 拉开一档，托住封面又不抢眼：
+   * - 浅色：background #eff3ff，surface-container #e1e8f7（低一档 = 更沉，形成下沉托底）
+   * - 深色：background #161c24，surface-container-high #272c35（高一档 = 更亮，形成上浮托底）
+   * 两套都取 relative 明度差约 6%，肉眼可辨、不产生"色块感"。
+   * 悬停态再进一档，让 actionable 的状态变化有层次，而不是只靠 m3e 的状态层。
+   */
+  --lm-card-surface: var(--md-sys-color-surface-container);
+  --lm-card-surface-hover: var(--md-sys-color-surface-container-high);
 }
 
 /* 深色主题 */

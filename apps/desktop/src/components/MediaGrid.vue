@@ -15,7 +15,7 @@ import { useDesktopStore } from "@/stores/desktop";
 import { capabilities } from "@/capabilities";
 import { openContextMenu, type MenuItem } from "@/composables/useContextMenu";
 import { localTagTarget, openMusicTagDialog } from "@/composables/useMusicTagDialog";
-import { TYPE_ICONS, formatDuration, formatResolution, formatSize } from "@/utils/format";
+import { TYPE_ICONS } from "@/utils/format";
 import { translate } from "@shared/i18n";
 import { masonryLayout, mediaAspect } from "@/utils/mediaLayout";
 import type { MediaEntry, WallpaperMode } from "@shared/types";
@@ -27,27 +27,20 @@ const props = withDefaults(
     aspect?: string;
     /** 卡片最小宽度，决定每行列数 */
     minWidth?: number;
-    /** 副标题字段来源 */
-    subtitle?: "artist" | "resolution" | "size" | "none";
     loading?: boolean;
     skeletonCount?: number;
     masonry?: boolean;
     list?: boolean;
-    mixed?: boolean;
-    coverOnly?: boolean;
     selecting?: boolean;
     selectedIds?: string[];
   }>(),
   {
     aspect: "1",
     minWidth: 180,
-    subtitle: "none",
     loading: false,
     skeletonCount: 12,
     masonry: false,
     list: false,
-    mixed: false,
-    coverOnly: false,
     selecting: false,
     selectedIds: () => [],
   },
@@ -74,10 +67,6 @@ function flash(message: string) {
 
 function t(key: string) {
   return translate(settings.lang, key);
-}
-function categoryLabel(type: MediaEntry["type"]): string {
-  const key = { image: "images", video: "videos", audio: "music", book: "books" }[type];
-  return t("nav." + key);
 }
 
 /**
@@ -144,10 +133,20 @@ async function applyWallpaper(item: MediaEntry, mode: WallpaperMode) {
   }
 }
 
+/*
+ * 间距：卡片只留封面后，垂直间距不再需要为文字区让位，收紧到与水平一致，
+ * 让网格更像「封面墙」而不是「带说明的列表」。
+ * 值来自 --lm-layout-grid-* 令牌（16 / 20），这里用常量是因为虚拟滚动
+ * 需要在 JS 里按像素预知行高，读 CSS 变量会引入一次强制样式重算。
+ */
 const GAP_X = 16;
-const GAP_Y = 20;
-/** 卡片文字区高度，用于估算行高 */
-const META_H = 44;
+const GAP_Y = 16;
+/**
+ * 卡片文字区高度：卡片只留封面后恒为 0。
+ * 保留成具名常量而不是直接删掉 —— 行高与瀑布流两处都要用到它，
+ * 将来若恢复文字区，只改这一处即可。
+ */
+const META_H = 0;
 /** 可视区上下各多渲染的行数，滚动时不留白 */
 const OVERSCAN = 2;
 
@@ -166,10 +165,11 @@ const ratio = computed(() => {
   const [w, h] = props.aspect.split("/").map(Number);
   return h ? w / h : w || 1;
 });
-const rowH = computed(() => cellW.value / ratio.value + (props.coverOnly ? 0 : META_H) + GAP_Y);
+const rowH = computed(() => cellW.value / ratio.value + META_H + GAP_Y);
 const rowCount = computed(() => Math.ceil(props.items.length / columns.value));
+/** 瀑布流的每格额外高度：纯封面卡片没有文字区 */
 const masonryMetrics = computed(() =>
-  masonryLayout(props.items, width.value, props.minWidth, props.coverOnly ? 0 : 54),
+  masonryLayout(props.items, width.value, props.minWidth, META_H),
 );
 const totalH = computed(() =>
   props.list
@@ -316,32 +316,6 @@ function cellStyle(index: number) {
 function thumbOf(item: MediaEntry): string | undefined {
   return item.thumbPath ? capabilities.thumbUrl(item.thumbPath) : library.getThumb(item.id);
 }
-
-function subtitleOf(item: MediaEntry): string {
-  if (props.mixed) {
-    const label = { audio: "音乐", video: "视频", book: "书籍", image: "图片" }[item.type];
-    return [
-      label,
-      item.artist ||
-        (item.type === "image"
-          ? formatResolution(item.width, item.height)
-          : formatDuration(item.durationMs)) ||
-        item.ext.toUpperCase(),
-    ]
-      .filter(Boolean)
-      .join(" · ");
-  }
-  switch (props.subtitle) {
-    case "artist":
-      return item.artist || "未知艺术家";
-    case "resolution":
-      return formatResolution(item.width, item.height) || formatSize(item.size);
-    case "size":
-      return formatSize(item.size);
-    default:
-      return "";
-  }
-}
 </script>
 
 <template>
@@ -352,12 +326,8 @@ function subtitleOf(item: MediaEntry): string {
       class="skeleton-grid"
       :style="{ gridTemplateColumns: `repeat(auto-fill, minmax(${minWidth}px, 1fr))` }"
     >
-      <div v-for="n in skeletonCount" :key="n" class="cell">
+      <div v-for="n in skeletonCount" :key="n" class="skeleton-cell">
         <div class="thumb lm-skeleton" :style="{ aspectRatio: aspect }"></div>
-        <div v-if="!coverOnly" class="meta">
-          <div class="lm-skeleton line"></div>
-          <div class="lm-skeleton line short"></div>
-        </div>
       </div>
     </div>
 
@@ -365,7 +335,7 @@ function subtitleOf(item: MediaEntry): string {
       v-else
       ref="scroller"
       class="virtual-root"
-      :class="{ 'mixed-grid': masonry, 'list-grid': list, 'cover-only': coverOnly }"
+      :class="{ 'mixed-grid': masonry, 'list-grid': list }"
       :style="{ height: totalH + 'px' }"
     >
       <div
@@ -373,32 +343,36 @@ function subtitleOf(item: MediaEntry): string {
         :class="{ 'is-refreshing': library.refreshing }"
         :style="{ transform: `translateY(${offsetY}px)` }"
       >
-        <article
+        <!--
+          卡片本体是官方 m3e-card（filled + actionable）：
+          托底色、圆角、hover/focus/pressed 状态层、ripple、焦点环全部由组件提供，
+          actionable 自己管理 tabindex 与键盘激活，不再需要外层原生 button/article。
+          参考图的观感是「只有封面」——文件名与分辨率等文字区整体移除，
+          标题只保留在 aria-label / title 里供读屏与悬停提示使用。
+          header 槽用原生 slot 属性：这是向 Web Components 传具名插槽的约定写法，
+          用 <template #header> 会让 @vue/compiler-core 的 codegen 崩溃（实测可复现）。
+        -->
+        <m3e-card
           v-for="v in visible"
           :key="v.item.id"
-          class="cell"
+          class="cell media-tile"
+          variant="filled"
+          :orientation="list ? 'horizontal' : 'vertical'"
+          actionable
           :class="{ selected: selectedIds.includes(v.item.id) }"
           :aria-selected="selecting ? selectedIds.includes(v.item.id) : undefined"
           :aria-label="v.item.title || v.item.name"
           data-hero-source
           :style="cellStyle(v.index)"
-          tabindex="0"
           @click="emit('open', v.item, v.index)"
           @contextmenu="onContextMenu($event, v.item)"
-          @keydown.enter="emit('open', v.item, v.index)"
-          @keydown.space.prevent="emit('open', v.item, v.index)"
         >
           <div
+            slot="header"
             class="thumb"
             data-hero-cover
             :style="{ aspectRatio: list ? '1' : masonry ? String(mediaAspect(v.item)) : aspect }"
           >
-            <span v-if="coverOnly" class="type-badge" data-hero-skip>
-              <span class="material-symbols-outlined" aria-hidden="true">{{
-                TYPE_ICONS[v.item.type]
-              }}</span>
-              {{ categoryLabel(v.item.type) }}
-            </span>
             <span v-if="selecting" class="selection-mark material-symbols-outlined">{{
               selectedIds.includes(v.item.id) ? "check_circle" : "check_box_outline_blank"
             }}</span>
@@ -411,10 +385,6 @@ function subtitleOf(item: MediaEntry): string {
             />
             <span v-else class="placeholder material-symbols-outlined">
               {{ TYPE_ICONS[v.item.type] ?? "draft" }}
-            </span>
-
-            <span v-if="!coverOnly && v.item.durationMs" class="badge tabular-nums">
-              {{ formatDuration(v.item.durationMs) }}
             </span>
 
             <div class="overlay" :class="{ pinned: v.item.favorite }" data-hero-skip>
@@ -433,16 +403,7 @@ function subtitleOf(item: MediaEntry): string {
               </m3e-icon-button>
             </div>
           </div>
-
-          <div v-if="!coverOnly" class="meta">
-            <div class="title" :title="v.item.name">
-              {{ v.item.title || v.item.name }}
-            </div>
-            <div v-if="mixed || subtitle !== 'none'" class="subtitle">
-              {{ subtitleOf(v.item) }}
-            </div>
-          </div>
-        </article>
+        </m3e-card>
       </div>
     </div>
 
@@ -484,9 +445,11 @@ function subtitleOf(item: MediaEntry): string {
   position: relative;
   width: 100%;
 }
+/*
+ * 瀑布流单元格：m3e-card 的托底色由组件 token 提供，这里不能再写 background，
+ * 否则会盖掉 filled variant 的取色（自定义元素宿主上的 background 优先级高于内部 .base）。
+ */
 .mixed-grid .cell {
-  gap: var(--lm-space-8);
-  background: var(--md-sys-color-surface-container-low);
   overflow: hidden;
 }
 .cell.selected {
@@ -502,58 +465,32 @@ function subtitleOf(item: MediaEntry): string {
   background: var(--md-sys-color-primary-container);
   border-radius: var(--md-sys-shape-corner-full);
 }
-.mixed-grid .meta {
-  height: 46px;
-  padding: 0 var(--lm-space-12) var(--lm-space-8);
-}
 .mixed-grid .thumb {
   flex-shrink: 0;
   width: 100%;
 }
+/*
+ * 列表视图：单行 80px 封面的紧凑排布。
+ * 只设高度，不再写 background —— 托底色统一由 filled variant 的 token 提供，
+ * 宿主元素上写 background 会盖掉 m3e-card 内部的容器取色。
+ */
 .list-grid .cell {
-  flex-direction: row;
-  align-items: center;
-  height: 80px;
-  background: var(--md-sys-color-surface-container-low);
+  /*
+   * 必须与 JS 里虚拟滚动的行高常量一致（96px）：
+   * 那里的 totalH / 可视区切片 / cellStyle 的 top 都按 96 计算，
+   * 这里写 80 会让卡片之间露出 16px 空隙，且滚动越远错位越大。
+   */
+  height: 96px;
 }
 .list-grid .thumb {
-  width: 80px;
-  height: 80px;
+  width: 96px;
+  height: 96px;
   flex-shrink: 0;
-}
-.list-grid .meta {
-  height: auto;
-  padding: var(--lm-space-8);
-}
-.cover-only .cell {
-  gap: 0;
-  background: transparent;
-  overflow: visible;
-}
-.cover-only.list-grid .thumb {
-  width: 100%;
-}
-.type-badge {
-  position: absolute;
-  top: var(--lm-space-8);
-  left: var(--lm-space-8);
-  z-index: 1;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--lm-space-4);
-  padding: var(--lm-space-4) var(--lm-space-8);
-  border-radius: var(--md-sys-shape-corner-full);
-  background: var(--lm-content-control-surface);
-  color: var(--lm-content-overlay-color);
-  font-size: var(--md-sys-typescale-label-small-size);
-  pointer-events: none;
-}
-.type-badge .material-symbols-outlined {
-  font-size: var(--md-sys-typescale-body-large-size);
-}
-.cover-only .selection-mark {
-  top: auto;
-  bottom: var(--lm-space-8);
+  /*
+   * 横向布局时 m3e-card 会给 header 里的 img/video 加 aspect-ratio，
+   * 纯封面块必须显式锁死尺寸，否则 96px 的方块会被拉成 16/9。
+   */
+  aspect-ratio: auto;
 }
 /*
  * 高度必须绑定在视口量级，不能等于整卷 totalH。
@@ -582,18 +519,47 @@ function subtitleOf(item: MediaEntry): string {
   display: grid;
   gap: var(--lm-layout-grid-row-gap) var(--lm-layout-grid-column-gap);
 }
-
-.cell {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  cursor: pointer;
+/* 骨架屏卡片：与真实卡片同样只占一块封面，圆角对齐 m3e-card */
+.skeleton-cell {
   border-radius: var(--lm-shape-card);
-  outline: none;
+  overflow: hidden;
 }
-.cell:focus-visible {
-  outline: 2px solid var(--md-sys-color-primary);
-  outline-offset: 4px;
+
+/*
+ * 卡片本体是 m3e-card（自定义元素）。宿主元素默认 display:block，
+ * 内部 .base 负责 flex 布局与状态层，因此这里不再自己写 flex 方向。
+ * 取色与留白通过组件 token 注入，不改它的状态逻辑（见 MediaCardShell.vue）。
+ */
+.cell {
+  --m3e-card-padding: 0;
+  --m3e-card-shape: var(--lm-shape-card);
+  --m3e-card-container-color: var(--lm-card-surface);
+  --m3e-filled-card-container-color: var(--lm-card-surface);
+  --m3e-filled-card-hover-state-layer-color: var(--lm-card-surface-hover);
+  --m3e-filled-card-hover-state-layer-opacity: 0.5;
+  display: block;
+  overflow: hidden;
+  border-radius: var(--lm-shape-card);
+  /*
+   * 上浮反馈保留在卡片本体上（而不是 .thumb）：
+   * m3e-card 的 elevation / state-layer 都绘制在自己的 .base 里，
+   * 若把 transform 放在内层封面，状态层会留在原处，观感是「封面在托底上滑动」。
+   */
+  transition: transform var(--lm-motion-card) var(--md-sys-motion-spring-soft);
+}
+.cell:hover {
+  transform: translateY(-4px);
+}
+.cell:active {
+  transform: translateY(-1px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cell,
+  .cell:hover,
+  .cell:active {
+    transform: none;
+    transition: none;
+  }
 }
 
 .thumb {
@@ -601,22 +567,10 @@ function subtitleOf(item: MediaEntry): string {
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 100%;
   overflow: hidden;
-  border-radius: var(--lm-shape-card);
-  background: var(--md-sys-color-surface-container);
-  box-shadow: inset 0 0 0 1px var(--lm-hairline);
-  transition:
-    transform 220ms var(--md-sys-motion-spring-soft),
-    box-shadow 220ms var(--md-sys-motion-spring-effects-fast);
-}
-.cell:hover .thumb {
-  transform: translateY(-4px) scale(1.015);
-  box-shadow:
-    var(--md-elevation-3),
-    inset 0 0 0 1px var(--lm-hairline);
-}
-.cell:active .thumb {
-  transform: translateY(-1px) scale(0.995);
+  background: var(--lm-media-placeholder-surface);
+  color: var(--lm-media-placeholder-color);
 }
 
 .thumb img {
@@ -633,18 +587,6 @@ function subtitleOf(item: MediaEntry): string {
   font-variation-settings:
     "FILL" 0,
     "wght" 300;
-}
-
-.badge {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
-  padding: 2px 7px;
-  border-radius: var(--md-sys-shape-corner-small);
-  background: var(--lm-content-overlay-surface);
-  color: var(--lm-content-overlay-color);
-  font-size: 11px;
-  font-weight: 500;
 }
 
 .overlay {
@@ -692,35 +634,5 @@ function subtitleOf(item: MediaEntry): string {
 }
 .fav.on {
   color: var(--lm-content-favorite-color);
-}
-
-.meta {
-  padding: 0 2px;
-  min-width: 0;
-}
-.title {
-  font-size: var(--md-sys-typescale-body-medium-size);
-  font-weight: 500;
-  color: var(--md-sys-color-on-surface);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.subtitle {
-  margin-top: 2px;
-  font-size: var(--md-sys-typescale-body-small-size);
-  color: var(--md-sys-color-on-surface-variant);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.meta .line {
-  height: 12px;
-  border-radius: 6px;
-  margin-top: 6px;
-}
-.meta .line.short {
-  width: 55%;
 }
 </style>

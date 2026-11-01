@@ -78,7 +78,7 @@
   },
   "src/components/BilibiliCard.vue": {
     "literalColors": 0,
-    "literalLayout": 7,
+    "literalLayout": 0,
     "vendorInternals": 0,
     "rawControls": 0,
     "globalLayers": 0
@@ -225,9 +225,9 @@
   },
   "src/components/MediaGrid.vue": {
     "literalColors": 1,
-    "literalLayout": 9,
+    "literalLayout": 3,
     "vendorInternals": 0,
-    "rawControls": 1,
+    "rawControls": 0,
     "globalLayers": 0
   },
   "src/components/MediaViewer.vue": {

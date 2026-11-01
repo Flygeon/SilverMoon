@@ -19,8 +19,15 @@ const METRICS = [
 ];
 const LIBRARY_FIELDS = new Set(["m3e-search-bar", "m3e-form-field"]);
 const NATIVE_INPUTS = new Set(["file", "color", "range"]);
-// 内容卡片是已评审例外：原生 button 提供键盘激活，不是自绘通用按钮。
-const CONTENT_CARDS = new Set(["MediaCardShell.vue", "BilibiliCard.vue"]);
+/*
+ * 内容卡片的原生 button 例外表。
+ *
+ * 2026-11 起两张媒体卡片都改用官方 m3e-card（actionable 自带键盘激活、
+ * 焦点环与状态层），不再需要这个例外——保留空集合是为了让「为什么表没了」
+ * 有据可查，而不是被人悄悄删掉。
+ * 新增例外前先想清楚：能用 m3e-card / m3e-* 就不该走这里。
+ */
+const CONTENT_CARDS = new Set([]);
 
 export function inspectDesign(source, filename) {
   const counts = Object.fromEntries(METRICS.map((name) => [name, 0]));

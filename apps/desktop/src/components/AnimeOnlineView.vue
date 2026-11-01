@@ -377,7 +377,6 @@ function backFromEpisodes() {
               title: h.title,
               cover: h.cover ?? undefined,
             }"
-            :subtitle="h.lastEpisode ?? undefined"
             @open="openHistory(h, $event)"
           />
         </div>

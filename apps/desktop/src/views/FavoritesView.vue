@@ -271,8 +271,6 @@ function t(key: string) {
           :items="results"
           :loading="loading"
           masonry
-          mixed
-          cover-only
           :list="list"
           :selected-ids="selected"
           :selecting="batch"

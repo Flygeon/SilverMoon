@@ -168,7 +168,6 @@ onMounted(load);
             v-for="book in group.books"
             :key="group.key + ':' + book.aid"
             :item="book"
-            :subtitle="book.author"
             @open="emit('open', book)"
           />
         </div>

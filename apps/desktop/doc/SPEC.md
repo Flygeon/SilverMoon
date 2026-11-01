@@ -71,7 +71,7 @@
 1. **可执行守卫优先于文档约定**。凡是「加了新东西必须同步改某处」的规则，
    都要有对应的 `verify:*` 脚本或单测。反例（已发生）：README 描述的架构与实际不符，
    横跨 133 个提交无人发现。
-2. **生成物与真源分离**：版本号真源 `backend/silvermoon.config.json`（9 处校验）、
+2. **生成物与真源分离**：版本号真源 `backend/silvermoon.config.json`（6 处校验）、
    配色真源 `shared/m3-theme.ts`、设置索引真源 `SettingsView.vue`。
 3. **本机无 MSVC 时的验证链**：`verify:rust-pure`（wasm 旁路真跑断言）**只覆盖
    `TARGETS` 里显式列出的少数纯函数**（当前 3 项：扩展启动策略、引擎握手行解析、

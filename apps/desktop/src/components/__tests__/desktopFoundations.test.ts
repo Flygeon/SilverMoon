@@ -74,6 +74,12 @@ describe("共享下拉字段", () => {
   });
 });
 
+/*
+ * 媒体卡片契约（2026-11 改版后）：
+ * - 容器是官方 m3e-card（actionable），不再是原生 <button>；
+ *   键盘激活、焦点环、状态层由组件提供，所以这里不再断言 button.type。
+ * - 卡片只渲染封面，标题 / 副标题只进 aria-label 与 title，不产生可见文字。
+ */
 describe("共享媒体卡片", () => {
   it("失败封面显示占位，新 URL 可以重新加载；卡片继续响应打开", async () => {
     const cover = ref("first.png");
@@ -84,37 +90,43 @@ describe("共享媒体卡片", () => {
     host.querySelector("img")!.dispatchEvent(new Event("error"));
     await nextTick();
     expect(host.querySelector("img")).toBeNull();
+    // 失败后退回图标占位，仍然没有任何可见文字
     expect(host.textContent).toContain("image");
     cover.value = "second.png";
     await nextTick();
     expect(host.querySelector("img")!.getAttribute("src")).toBe("second.png");
-    host.querySelector("button")!.click();
+
+    const card = host.querySelector("m3e-card")!;
+    card.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(open).toHaveBeenCalledTimes(1);
-    expect(host.querySelector("button")!.type).toBe("button");
+    // 可交互性由 m3e-card 的 actionable 属性驱动，组件自己管理 tabindex / 键盘激活
+    expect(card.hasAttribute("actionable")).toBe(true);
+    expect(card.getAttribute("variant")).toBe("filled");
   });
+
   it("番剧保留条目锚点、Referer 策略和 MouseEvent", () => {
     const open = vi.fn();
     const host = mount(() =>
       h(AnimeCard, { item: { src: "show/1", title: "番剧", cover: "cover.png" }, onOpen: open }),
     );
-    expect(host.querySelector("button")!.dataset.animeId).toBe("show/1");
+    const card = host.querySelector("m3e-card")!;
+    // data-anime-id 是 AnimeCard 自己透传的选择器锚点，改版后仍须保留
+    expect(card.dataset.animeId).toBe("show/1");
     expect(host.querySelector("img")!.getAttribute("referrerpolicy")).toBe("no-referrer");
-    host.querySelector("button")!.click();
+    card.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(open.mock.calls[0][0]).toBeInstanceOf(MouseEvent);
   });
-  it("小说作者作为默认副标题，显式副标题优先", async () => {
-    const subtitle = ref("");
+
+  it("小说卡片只渲染封面，标题与作者不作为可见文字出现", () => {
     const host = mount(() =>
-      h(NovelCard, {
-        item: { aid: "1", title: "小说", imageUrl: "", author: "作者" },
-        subtitle: subtitle.value,
-      }),
+      h(NovelCard, { item: { aid: "1", title: "小说", imageUrl: "", author: "作者" } }),
     );
-    expect(host.textContent).toContain("作者");
-    subtitle.value = "阅读中";
-    await nextTick();
-    expect(host.textContent).toContain("阅读中");
+    const card = host.querySelector("m3e-card")!;
+    // 语义信息转移到无障碍属性，视觉上不再渲染文字
+    expect(card.getAttribute("aria-label")).toBe("小说");
     expect(host.textContent).not.toContain("作者");
+    expect(host.textContent).not.toContain("小说");
+    expect(host.querySelector("img")).toBeNull();
   });
 });
 

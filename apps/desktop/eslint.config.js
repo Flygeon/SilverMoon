@@ -152,6 +152,13 @@ export default [
       "src/components/SearchField.vue",
       // 标签 chip：m3e-assist-chip 无子槽，但同组件的 slot 约定保持一致
       "src/components/NovelTagChips.vue",
+      // 媒体卡片：m3e-card 的 header 槽放封面。必须用原生 slot 属性 ——
+      // 改用 <template #header> 会让 @vue/compiler-core 的 codegen 抛
+      // "Codegen node is missing for element/if/for node"（已实测复现），
+      // 自定义元素只认 slot 属性分发。
+      "src/components/MediaCardShell.vue",
+      "src/components/MediaGrid.vue",
+      "src/components/BilibiliCard.vue",
     ],
     rules: {
       "vue/no-deprecated-slot-attribute": "off",
