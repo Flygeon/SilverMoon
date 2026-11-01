@@ -37,7 +37,6 @@ import { CM_TOKEN_FILE, clearCmToken, readCmToken, writeCmToken } from "./steam/
 import { isSteamCmToken } from "./steam/protocol";
 import { BenchSession, DEFAULT_INTERVAL_MS } from "./bench";
 import { applyNetworkProxy, normalizeProxyConfig } from "./net-proxy";
-import { openBilibiliLogin, cancelBilibiliLogin } from "./bilibili-login";
 
 export interface BridgeReply {
   ok: boolean;
@@ -131,12 +130,6 @@ function broadcastAuthResult(state: { state?: string } | null | undefined): unkn
 }
 
 const handlers: Record<string, Handler> = {
-  bilibiliLogin: (payload, sender) => {
-    if (!isTrustedRenderer(sender)) throw new Error("该窗口无权发起 B 站登录");
-    if (payload.action === "cancel") return cancelBilibiliLogin(sender);
-    if (payload.action === "open") return openBilibiliLogin(sender);
-    throw new Error("未知 B 站登录操作");
-  },
   invoke: async (payload) => {
     const cmd = String(payload.cmd ?? "");
     if (!cmd) throw new Error("缺少 cmd");

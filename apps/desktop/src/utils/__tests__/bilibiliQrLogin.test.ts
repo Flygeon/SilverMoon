@@ -87,48 +87,6 @@ beforeEach(() => {
   vi.useRealTimers();
 });
 
-describe("official website credentials", () => {
-  it("replaces old account cookies and clears TV metadata without decoding values", async () => {
-    const bili = await freshBili();
-    await bili.biliApplyCookies({ SESSDATA: "old", sid: "old-sid" });
-    await bili.biliApplyWebsiteCookies({
-      SESSDATA: "website%2Csession",
-      bili_jct: "csrf",
-      DedeUserID: "42",
-      unrelated: "ignored",
-    });
-    expect(persisted.cookies).toEqual({
-      SESSDATA: "website%2Csession",
-      bili_jct: "csrf",
-      DedeUserID: "42",
-    });
-    expect(persisted.tvAuth).toBeNull();
-  });
-
-  it("rejects incomplete credentials and ignores obsolete generations", async () => {
-    const bili = await freshBili();
-    await expect(bili.biliApplyWebsiteCookies({ SESSDATA: "incomplete" })).rejects.toThrow();
-    await bili.biliApplyWebsiteCookies(
-      { SESSDATA: "stale", bili_jct: "csrf", DedeUserID: "42" },
-      () => false,
-    );
-    expect(persisted.cookies).toBeUndefined();
-  });
-
-  it("business requests exclude implicit native cookies and use the explicit account jar", async () => {
-    const fetchMock = vi.fn<typeof fetch>(async () =>
-      hostResponse({ code: 0, data: { isLogin: true, mid: 42 } }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const bili = await freshBili();
-    await bili.biliApplyWebsiteCookies({ SESSDATA: "website", bili_jct: "csrf", DedeUserID: "42" });
-    await bili.biliNav();
-    const init = fetchMock.mock.calls[0][1] as RequestInit;
-    expect(init.credentials).toBe("omit");
-    expect(new Headers(init.headers).get("cookie")).toContain("SESSDATA=website");
-  });
-});
-
 describe("biliQrPoll 凭据归一化", () => {
   it.each(["tv", "web"] as const)(
     "%s 登录使用独立匿名 Cookie，失败响应不污染现有账号",
