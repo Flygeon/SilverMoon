@@ -1057,6 +1057,7 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
         :loading="library.loading"
         aspect="1"
         :min-width="180"
+        subtitle="artist"
         @open="playLocal"
         @favorite="library.toggleFavorite"
       />

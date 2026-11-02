@@ -76,6 +76,15 @@ function toCard(subject: BangumiSubject) {
   };
 }
 
+/** 卡片副标题：分类 + 已看集数（番剧卡片需要文字才分得清是哪一部） */
+function cardSubtitle(category: BangumiCollectionCategory, ep?: { collected?: number }): string {
+  const parts = [tabLabel(category)];
+  if (ep && typeof ep.collected === "number" && ep.collected > 0) {
+    parts.push(t("anime.epWatched").replace("{n}", String(ep.collected)));
+  }
+  return parts.join(" · ");
+}
+
 async function connect() {
   await collect.connect(tokenDraft.value);
 }
@@ -196,6 +205,7 @@ async function disconnect() {
           v-for="c in visible"
           :key="c.subjectId"
           :item="toCard(c.subject)"
+          :subtitle="cardSubtitle(c.category, c.epStatus)"
           @open="emit('open', c.subject, $event)"
         />
       </div>

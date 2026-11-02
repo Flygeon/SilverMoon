@@ -3,11 +3,10 @@ import type { AnimeItem } from "@shared/types";
 import MediaCardShell from "./MediaCardShell.vue";
 
 /*
- * 番剧卡片。只保留封面 —— 集数 / 进度等副标题不再渲染成可见文字，
- * 标题由 MediaCardShell 放到 aria-label 上供读屏使用。
- * 与图片 / 视频 / 音乐 / 书籍 / B站 卡片同一套 m3e-card 托底与取色。
+ * 番剧卡片：封面 + 标题 + 副标题（最近观看集数等），官方 m3e-card 托底。
+ * 与图片 / 视频的纯封面卡片不同 —— 番剧需要文字才分得清是哪一部、看到第几集。
  */
-defineProps<{ item: AnimeItem }>();
+defineProps<{ item: AnimeItem; subtitle?: string }>();
 defineEmits<{ (e: "open", ev: MouseEvent): void }>();
 </script>
 
@@ -17,6 +16,7 @@ defineEmits<{ (e: "open", ev: MouseEvent): void }>();
     :data-anime-id="item.src"
     :title="item.title"
     :cover="item.cover"
+    :subtitle="subtitle"
     icon="movie"
     referrerpolicy="no-referrer"
     @open="$emit('open', $event)"

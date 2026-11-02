@@ -91,6 +91,7 @@ function clearSearch() {
           :loading="library.loading"
           aspect="1"
           :min-width="180"
+          :meta="false"
           @open="openViewer"
           @favorite="library.toggleFavorite"
         />

@@ -114,6 +114,7 @@ async function open(item: MediaEntry) {
             :items="items"
             aspect="1"
             :min-width="170"
+            subtitle="size"
             @open="open"
             @favorite="library.toggleFavorite"
           />

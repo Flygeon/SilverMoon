@@ -15,7 +15,7 @@ import { useDesktopStore } from "@/stores/desktop";
 import { capabilities } from "@/capabilities";
 import { openContextMenu, type MenuItem } from "@/composables/useContextMenu";
 import { localTagTarget, openMusicTagDialog } from "@/composables/useMusicTagDialog";
-import { TYPE_ICONS } from "@/utils/format";
+import { TYPE_ICONS, formatDuration, formatResolution, formatSize } from "@/utils/format";
 import { translate } from "@shared/i18n";
 import { masonryLayout, mediaAspect } from "@/utils/mediaLayout";
 import type { MediaEntry, WallpaperMode } from "@shared/types";
@@ -27,6 +27,14 @@ const props = withDefaults(
     aspect?: string;
     /** 卡片最小宽度，决定每行列数 */
     minWidth?: number;
+    /**
+     * 副标题字段来源。
+     * 图片 / 视频页传 "none" 且 meta=false —— 纯封面墙；
+     * 音乐 / 书籍 / 回收站 / 历史等传具体字段，卡片带文字与 MD3 托底。
+     */
+    subtitle?: "artist" | "resolution" | "size" | "none";
+    /** 是否显示文字区（标题 + 副标题）。图片/视频为 false */
+    meta?: boolean;
     loading?: boolean;
     skeletonCount?: number;
     masonry?: boolean;
@@ -37,6 +45,8 @@ const props = withDefaults(
   {
     aspect: "1",
     minWidth: 180,
+    subtitle: "none",
+    meta: true,
     loading: false,
     skeletonCount: 12,
     masonry: false,
@@ -134,19 +144,16 @@ async function applyWallpaper(item: MediaEntry, mode: WallpaperMode) {
 }
 
 /*
- * 间距：卡片只留封面后，垂直间距不再需要为文字区让位，收紧到与水平一致，
- * 让网格更像「封面墙」而不是「带说明的列表」。
- * 值来自 --lm-layout-grid-* 令牌（16 / 20），这里用常量是因为虚拟滚动
+ * 间距：值来自 --lm-layout-grid-* 令牌（16 / 20），这里用常量是因为虚拟滚动
  * 需要在 JS 里按像素预知行高，读 CSS 变量会引入一次强制样式重算。
  */
 const GAP_X = 16;
-const GAP_Y = 16;
+const GAP_Y = 20;
 /**
- * 卡片文字区高度：卡片只留封面后恒为 0。
- * 保留成具名常量而不是直接删掉 —— 行高与瀑布流两处都要用到它，
- * 将来若恢复文字区，只改这一处即可。
+ * 文字区高度（含卡片内边距与两行之间的间隔），只在 meta=true 时占用。
+ * 纯封面卡片（图片 / 视频）为 0，行高与瀑布流都不再为文字让位。
  */
-const META_H = 0;
+const META_H = 62;
 /** 可视区上下各多渲染的行数，滚动时不留白 */
 const OVERSCAN = 2;
 
@@ -165,11 +172,13 @@ const ratio = computed(() => {
   const [w, h] = props.aspect.split("/").map(Number);
   return h ? w / h : w || 1;
 });
-const rowH = computed(() => cellW.value / ratio.value + META_H + GAP_Y);
+/** 文字区占用高度：纯封面卡片为 0 */
+const metaH = computed(() => (props.meta ? META_H : 0));
+const rowH = computed(() => cellW.value / ratio.value + metaH.value + GAP_Y);
 const rowCount = computed(() => Math.ceil(props.items.length / columns.value));
-/** 瀑布流的每格额外高度：纯封面卡片没有文字区 */
+/** 瀑布流的每格额外高度：同样按 meta 决定 */
 const masonryMetrics = computed(() =>
-  masonryLayout(props.items, width.value, props.minWidth, META_H),
+  masonryLayout(props.items, width.value, props.minWidth, metaH.value),
 );
 const totalH = computed(() =>
   props.list
@@ -316,6 +325,24 @@ function cellStyle(index: number) {
 function thumbOf(item: MediaEntry): string | undefined {
   return item.thumbPath ? capabilities.thumbUrl(item.thumbPath) : library.getThumb(item.id);
 }
+
+/**
+ * 副标题取哪个字段。
+ * 图片 / 视频页用 meta=false 不显示文字，这里的返回值也就不会被渲染；
+ * 音乐（artist）、书籍与回收站/历史（size / resolution）各自取所需。
+ */
+function subtitleOf(item: MediaEntry): string {
+  switch (props.subtitle) {
+    case "artist":
+      return item.artist || "未知艺术家";
+    case "resolution":
+      return formatResolution(item.width, item.height) || formatSize(item.size);
+    case "size":
+      return formatSize(item.size);
+    default:
+      return item.durationMs ? formatDuration(item.durationMs) : "";
+  }
+}
 </script>
 
 <template>
@@ -328,6 +355,10 @@ function thumbOf(item: MediaEntry): string | undefined {
     >
       <div v-for="n in skeletonCount" :key="n" class="skeleton-cell">
         <div class="thumb lm-skeleton" :style="{ aspectRatio: aspect }"></div>
+        <div v-if="meta" class="meta-skeleton">
+          <div class="lm-skeleton line"></div>
+          <div class="lm-skeleton line short"></div>
+        </div>
       </div>
     </div>
 
@@ -347,8 +378,7 @@ function thumbOf(item: MediaEntry): string | undefined {
           卡片本体是官方 m3e-card（filled + actionable）：
           托底色、圆角、hover/focus/pressed 状态层、ripple、焦点环全部由组件提供，
           actionable 自己管理 tabindex 与键盘激活，不再需要外层原生 button/article。
-          参考图的观感是「只有封面」——文件名与分辨率等文字区整体移除，
-          标题只保留在 aria-label / title 里供读屏与悬停提示使用。
+          文字区按 meta 决定：图片 / 视频是纯封面墙，其余页面保留标题与副标题。
           header 槽用原生 slot 属性：这是向 Web Components 传具名插槽的约定写法，
           用 <template #header> 会让 @vue/compiler-core 的 codegen 崩溃（实测可复现）。
         -->
@@ -356,10 +386,10 @@ function thumbOf(item: MediaEntry): string | undefined {
           v-for="v in visible"
           :key="v.item.id"
           class="cell media-tile"
+          :class="{ selected: selectedIds.includes(v.item.id), 'has-meta': meta }"
           variant="filled"
           :orientation="list ? 'horizontal' : 'vertical'"
           actionable
-          :class="{ selected: selectedIds.includes(v.item.id) }"
           :aria-selected="selecting ? selectedIds.includes(v.item.id) : undefined"
           :aria-label="v.item.title || v.item.name"
           data-hero-source
@@ -401,6 +431,20 @@ function thumbOf(item: MediaEntry): string | undefined {
                   >favorite</span
                 >
               </m3e-icon-button>
+            </div>
+          </div>
+
+          <!--
+            文字区：图片 / 视频页（meta=false）不渲染，保持纯封面墙；
+            音乐 / 书籍 / 回收站 / 历史等显示标题与副标题，
+            与官方 m3e-card 的托底色一起构成标准 MD3 卡片。
+          -->
+          <div v-if="meta" slot="content" class="meta">
+            <div class="title" :title="v.item.name">
+              {{ v.item.title || v.item.name }}
+            </div>
+            <div v-if="subtitle !== 'none'" class="subtitle">
+              {{ subtitleOf(v.item) }}
             </div>
           </div>
         </m3e-card>
@@ -519,10 +563,50 @@ function thumbOf(item: MediaEntry): string | undefined {
   display: grid;
   gap: var(--lm-layout-grid-row-gap) var(--lm-layout-grid-column-gap);
 }
-/* 骨架屏卡片：与真实卡片同样只占一块封面，圆角对齐 m3e-card */
+/* 骨架屏卡片：圆角对齐 m3e-card */
 .skeleton-cell {
   border-radius: var(--lm-shape-card);
   overflow: hidden;
+  background: var(--lm-card-surface);
+}
+/*
+ * 文字区：放在 m3e-card 的 content 槽里（该槽的 padding 已被 --m3e-card-padding: 0
+ * 清零，由这里自己给内边距，封面才能满铺）。
+ */
+.meta {
+  padding: var(--lm-space-8) var(--lm-space-12) var(--lm-space-12);
+}
+.title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: var(--md-sys-typescale-body-medium-size);
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--md-sys-color-on-surface);
+}
+.subtitle {
+  margin-top: var(--lm-space-2);
+  font-size: var(--md-sys-typescale-body-small-size);
+  color: var(--md-sys-color-on-surface-variant);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 骨架屏的文字区占位：与真实卡片的 .meta 同高，避免加载完成时跳版 */
+.skeleton-cell .meta-skeleton {
+  height: 62px;
+  padding: var(--lm-space-8) var(--lm-space-12) var(--lm-space-12);
+}
+.meta-skeleton .line {
+  height: 12px;
+  border-radius: var(--md-sys-shape-corner-small);
+}
+.meta-skeleton .line.short {
+  width: 55%;
+  margin-top: var(--lm-space-4);
 }
 
 /*

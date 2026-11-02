@@ -4,14 +4,18 @@ import type { NovelCover, NovelShelfItem } from "@shared/types";
 import MediaCardShell from "./MediaCardShell.vue";
 
 /*
- * 书籍卡片。只保留封面 —— 作者等副标题不再渲染成可见文字，
- * 标题由 MediaCardShell 放到 aria-label 上供读屏使用。
+ * 书籍卡片：封面 + 书名 + 作者，官方 m3e-card 托底。
+ * 显式副标题优先，否则回落到作者。
  */
 const props = defineProps<{
   item: NovelCover | NovelShelfItem;
+  subtitle?: string;
 }>();
 defineEmits<{ (e: "open"): void }>();
 const cover = computed(() => ("imageUrl" in props.item ? props.item.imageUrl : props.item.cover));
+const detail = computed(
+  () => props.subtitle || ("author" in props.item ? props.item.author : "") || "",
+);
 </script>
 
 <template>
@@ -19,6 +23,7 @@ const cover = computed(() => ("imageUrl" in props.item ? props.item.imageUrl : p
     class="novel-card"
     :title="item.title"
     :cover="cover"
+    :subtitle="detail"
     icon="menu_book"
     @open="$emit('open')"
   />

@@ -86,14 +86,16 @@ const states = ["empty", "search", "error", "offline", "auth"] as const;
     <section aria-label="媒体与占位">
       <h2>内容卡片 / 加载 / 缺图</h2>
       <div class="review-grid">
-        <!-- 卡片已改为「只有封面」：标题只进 aria-label，视觉上不渲染文字 -->
-        <MediaCardShell title="番剧封面占位" icon="movie" />
+        <!-- 带文字的 MD3 卡片（动漫 / 书籍 / 音乐这类） -->
+        <MediaCardShell title="番剧封面占位" subtitle="看到第 3 集" icon="movie" />
         <MediaCardShell
           title="小说封面加载失败"
+          subtitle="某位作者"
           cover="data:image/png;base64,AA=="
           icon="menu_book"
         />
-        <MediaCardShell title="方形图片占位" aspect="square" icon="image" />
+        <!-- 纯封面卡片（图片 / 视频这类） -->
+        <MediaCardShell title="方形图片占位" :meta="false" aspect="square" icon="image" />
         <div class="lm-skeleton review-skeleton" role="status" aria-label="正在加载"></div>
       </div>
     </section>

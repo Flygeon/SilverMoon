@@ -6,8 +6,8 @@
  * 托底色、圆角、hover/focus/pressed 状态层、ripple、焦点环都来自 @m3e/web，
  * 与设计系统共用一套 token；自绘这些状态就是模仿 MD3，不是 MD3。
  *
- * 观感与其它媒体卡片统一：**只有封面**。标题 / UP 主 / 播放数不再渲染成可见文字，
- * 标题保留在 aria-label 上供读屏使用。
+ * 观感：封面 + 标题 + UP 主 + 播放/弹幕数，官方 m3e-card 托底。
+ * B 站卡片必须保留文字 —— 只凭封面无法分辨视频。
  *
  * 封面加载策略（保留原有实现）：
  * - **骨架屏占位**：图片解码完成前铺 .lm-skeleton 微光块，而不是灰底空等；
@@ -19,7 +19,7 @@ import { computed } from "vue";
 import { useSettingsStore } from "@/stores/settings";
 import { useLazyCover } from "@/composables/useLazyCover";
 import { COVER_FALLBACK_DATA_URL, toCoverProxyUrl } from "@/utils/onlineCache";
-import { biliDuration, type BiliVideo } from "@/utils/bilibili";
+import { biliCount, biliDuration, type BiliVideo } from "@/utils/bilibili";
 import { translate } from "@shared/i18n";
 
 const props = defineProps<{ video: BiliVideo }>();
@@ -90,6 +90,27 @@ const label = computed(() => {
       <span v-else-if="!video.cover" class="material-symbols-outlined placeholder"
         >smart_display</span
       >
+      <span v-if="video.duration > 0" class="duration tabular-nums">{{
+        biliDuration(video.duration)
+      }}</span>
+      <span v-if="video.reason" class="reason">{{ video.reason }}</span>
+    </div>
+
+    <!-- 文字区：与官方 m3e-card 的 content 槽配合，构成标准 MD3 卡片 -->
+    <div slot="content" class="meta">
+      <div class="title" :title="video.title">{{ video.title }}</div>
+      <div class="up" :title="video.ownerName">
+        <span class="material-symbols-outlined">person</span>
+        <span class="up-name">{{ video.ownerName || t("bili.unknownUp") }}</span>
+      </div>
+      <div class="stats tabular-nums">
+        <span class="stat">
+          <span class="material-symbols-outlined">play_arrow</span>{{ biliCount(video.view) }}
+        </span>
+        <span class="stat">
+          <span class="material-symbols-outlined">subtitles</span>{{ biliCount(video.danmaku) }}
+        </span>
+      </div>
     </div>
   </m3e-card>
 </template>
@@ -153,6 +174,84 @@ const label = computed(() => {
 }
 .cover img.is-loaded {
   opacity: 1;
+}
+
+/* 时长角标：压在封面右下角 */
+.duration {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: var(--lm-space-2) var(--lm-space-4);
+  border-radius: var(--md-sys-shape-corner-extra-small);
+  background: var(--lm-content-overlay-surface);
+  color: var(--lm-content-overlay-color);
+  font-size: 11px;
+  line-height: 16px;
+}
+/* 「限流/失效」等来源提示：压在封面左下角 */
+.reason {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  max-width: calc(100% - 64px);
+  padding: var(--lm-space-2) var(--lm-space-8);
+  border-radius: var(--md-sys-shape-corner-full);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 82%, transparent);
+  color: var(--md-sys-color-on-primary);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 文字区：content 槽的 padding 已被清零，这里自己给内边距 */
+.meta {
+  padding: var(--lm-space-8) var(--lm-space-12) var(--lm-space-12);
+}
+.meta .title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: var(--md-sys-typescale-body-medium-size);
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--md-sys-color-on-surface);
+}
+.up {
+  display: flex;
+  align-items: center;
+  gap: var(--lm-space-2);
+  margin-top: var(--lm-space-4);
+  min-width: 0;
+  font-size: var(--md-sys-typescale-body-small-size);
+  color: var(--md-sys-color-on-surface-variant);
+}
+.up .material-symbols-outlined {
+  font-size: 13px;
+}
+.up-name {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stats {
+  display: flex;
+  gap: var(--lm-space-8);
+  margin-top: var(--lm-space-2);
+  font-size: 11px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+.stat {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lm-space-2);
+}
+.stat .material-symbols-outlined {
+  font-size: 13px;
 }
 
 /* 骨架屏：铺满 16:9 封面区，圆角由父级 overflow:hidden 裁掉 */

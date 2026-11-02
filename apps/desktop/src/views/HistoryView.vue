@@ -27,6 +27,7 @@ function t(key: string) {
       :loading="loading"
       aspect="1"
       :min-width="180"
+      subtitle="artist"
       @open="open"
       @favorite="toggleFavorite"
     />

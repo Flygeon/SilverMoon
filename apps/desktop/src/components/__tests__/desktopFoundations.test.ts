@@ -78,7 +78,7 @@ describe("共享下拉字段", () => {
  * 媒体卡片契约（2026-11 改版后）：
  * - 容器是官方 m3e-card（actionable），不再是原生 <button>；
  *   键盘激活、焦点环、状态层由组件提供，所以这里不再断言 button.type。
- * - 卡片只渲染封面，标题 / 副标题只进 aria-label 与 title，不产生可见文字。
+ * - 默认渲染「封面 + 标题 + 副标题」；图片 / 视频这类纯封面卡片传 meta=false。
  */
 describe("共享媒体卡片", () => {
   it("失败封面显示占位，新 URL 可以重新加载；卡片继续响应打开", async () => {
@@ -90,7 +90,7 @@ describe("共享媒体卡片", () => {
     host.querySelector("img")!.dispatchEvent(new Event("error"));
     await nextTick();
     expect(host.querySelector("img")).toBeNull();
-    // 失败后退回图标占位，仍然没有任何可见文字
+    // 失败后退回图标占位
     expect(host.textContent).toContain("image");
     cover.value = "second.png";
     await nextTick();
@@ -117,16 +117,27 @@ describe("共享媒体卡片", () => {
     expect(open.mock.calls[0][0]).toBeInstanceOf(MouseEvent);
   });
 
-  it("小说卡片只渲染封面，标题与作者不作为可见文字出现", () => {
+  it("小说卡片渲染书名与作者，挂在 m3e-card 的 content 槽上", () => {
     const host = mount(() =>
       h(NovelCard, { item: { aid: "1", title: "小说", imageUrl: "", author: "作者" } }),
     );
     const card = host.querySelector("m3e-card")!;
-    // 语义信息转移到无障碍属性，视觉上不再渲染文字
+    // 无障碍标签仍然是书名
     expect(card.getAttribute("aria-label")).toBe("小说");
-    expect(host.textContent).not.toContain("作者");
-    expect(host.textContent).not.toContain("小说");
+    // 文字区真实存在于 content 槽（书籍需要文字才分得清是哪一本）
+    const meta = host.querySelector(".meta")!;
+    expect(meta.getAttribute("slot")).toBe("content");
+    expect(host.textContent).toContain("小说");
+    expect(host.textContent).toContain("作者");
     expect(host.querySelector("img")).toBeNull();
+  });
+
+  it("纯封面卡片（meta=false）不渲染任何可见文字", () => {
+    const host = mount(() => h(MediaCardShell, { title: "图片标题", meta: false, icon: "image" }));
+    expect(host.querySelector(".meta")).toBeNull();
+    expect(host.textContent).not.toContain("图片标题");
+    // 语义信息仍保留在无障碍属性上
+    expect(host.querySelector("m3e-card")!.getAttribute("aria-label")).toBe("图片标题");
   });
 });
 
