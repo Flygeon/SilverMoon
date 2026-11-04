@@ -9,7 +9,8 @@
  */
 import { computed, onMounted, ref, watch } from "vue";
 import { capabilities } from "@/capabilities";
-import CachedCover from "@/components/CachedCover.vue";
+import FeedHeroCard from "@/components/FeedHeroCard.vue";
+import FeedPlaylistCard from "@/components/FeedPlaylistCard.vue";
 import { useKugouStore } from "@/stores/kugou";
 import { useSettingsStore } from "@/stores/settings";
 import { kugouToOnlineSongs } from "@/utils/kugou";
@@ -139,21 +140,14 @@ watch(
     </p>
 
     <template v-else>
-      <!-- 每日推荐 -->
+      <!-- 每日推荐：与网易云共用同一套 Hero 卡 -->
       <section class="feed-section">
-        <button class="feed-hero" :disabled="!dailySongs.length" @click="playDaily">
-          <span class="hero-icon material-symbols-outlined">event_available</span>
-          <div class="hero-main">
-            <h3 class="hero-title">{{ t("homeFeed.dailyRecommend") }}</h3>
-            <p class="hero-desc">{{ dailySubtitle }}</p>
-          </div>
-          <span
-            class="hero-play material-symbols-outlined"
-            :class="{ spinning: dailyLoading }"
-            aria-hidden="true"
-            >play_arrow</span
-          >
-        </button>
+        <FeedHeroCard
+          :title="t('homeFeed.dailyRecommend')"
+          :description="dailySubtitle"
+          icon="event_available"
+          @play="playDaily"
+        />
       </section>
 
       <!-- 我的歌单 -->
@@ -186,22 +180,16 @@ watch(
         <p v-else-if="!kugou.playlists.length" class="pl-hint">
           {{ t("kugou.playlistsEmpty") }}
         </p>
+        <!-- 我的歌单：与网易云共用同一套歌单卡片 -->
         <div v-else class="pl-grid">
-          <button
+          <FeedPlaylistCard
             v-for="p in kugou.playlists"
             :key="p.id"
-            class="pl-card"
-            @click="emit('open-playlist', p.listid, p.name)"
-          >
-            <div class="pl-thumb">
-              <CachedCover v-if="p.cover" :url="p.cover" :alt="p.name" />
-              <span v-else class="material-symbols-outlined">queue_music</span>
-            </div>
-            <div class="pl-name" :title="p.name">{{ p.name }}</div>
-            <div v-if="p.count" class="pl-count tabular-nums">
-              {{ p.count }} {{ t("kugou.tracks") }}
-            </div>
-          </button>
+            :name="p.name"
+            :cover="p.cover"
+            :subtitle="p.count ? `${p.count} ${t('kugou.tracks')}` : ''"
+            @open="emit('open-playlist', p.listid, p.name)"
+          />
         </div>
       </section>
 
@@ -286,45 +274,9 @@ watch(
   gap: 12px;
 }
 
-.feed-hero:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: var(--md-elevation-2);
-}
-.feed-hero:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-.hero-main {
-  flex: 1;
-  min-width: 0;
-}
-.hero-title {
-  margin: 0;
-  font-size: var(--md-sys-typescale-title-medium-size);
-  font-weight: 500;
-}
-.hero-desc {
-  margin: 4px 0 0;
-  font-size: var(--md-sys-typescale-body-small-size);
-  color: var(--md-sys-color-on-surface-variant);
-}
-.hero-play {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  font-size: 22px;
-  background: var(--md-sys-color-primary);
-  color: var(--md-sys-color-on-primary);
-}
-.hero-play.spinning {
-  animation: lm-spin 1s linear infinite;
-}
-
+/*
+ * Hero 卡样式已收进 FeedHeroCard.vue（与网易云共用），这里不再重复定义。
+ */
 .feed-section-head {
   display: flex;
   align-items: baseline;
@@ -406,58 +358,5 @@ watch(
   grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
   gap: 12px;
 }
-.pl-card {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 0 0 8px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-large);
-  background: var(--md-sys-color-surface-container-low);
-  color: var(--md-sys-color-on-surface);
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-  overflow: hidden;
-  transition:
-    transform 220ms var(--md-sys-motion-spring-spatial-fast),
-    box-shadow 180ms;
-}
-.pl-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--md-elevation-2);
-}
-.pl-thumb {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  aspect-ratio: 1;
-  background: var(--md-sys-color-surface-container-highest);
-  color: var(--md-sys-color-on-surface-variant);
-}
-.pl-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.pl-thumb .material-symbols-outlined {
-  font-size: 32px;
-}
-.pl-name,
-.pl-count {
-  padding: 0 10px;
-}
-.pl-name {
-  font-size: var(--md-sys-typescale-body-small-size);
-  font-weight: 500;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.pl-count {
-  font-size: var(--md-sys-typescale-label-small-size);
-  color: var(--md-sys-color-on-surface-variant);
-}
+/* 歌单卡片样式已收进 FeedPlaylistCard.vue（与网易云共用），这里只留网格容器。 */
 </style>

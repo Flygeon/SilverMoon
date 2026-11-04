@@ -164,6 +164,9 @@ export default [
       "src/components/TrackList.vue",
       // 音乐页：歌单卡片与歌单内网格的 m3e-card header / content 槽
       "src/views/MusicView.vue",
+      // 在线音乐信息流共用组件：m3e-card 的 header / content / trailing 槽
+      "src/components/FeedHeroCard.vue",
+      "src/components/FeedPlaylistCard.vue",
     ],
     rules: {
       "vue/no-deprecated-slot-attribute": "off",

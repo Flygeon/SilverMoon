@@ -5,14 +5,14 @@
  */
 import { computed, onMounted, ref } from "vue";
 import { useSettingsStore } from "@/stores/settings";
-import { useNeteaseStore } from "@/stores/netease";
 import { capabilities } from "@/capabilities";
+import FeedHeroCard from "@/components/FeedHeroCard.vue";
+import FeedPlaylistCard from "@/components/FeedPlaylistCard.vue";
 import { toOnlineSongs } from "@/utils/netease";
 import { translate } from "@shared/i18n";
 import type { NeteaseRecommendPlaylist, NeteaseSong, OnlineSong } from "@shared/types";
 
 const settings = useSettingsStore();
-const netease = useNeteaseStore();
 
 const emit = defineEmits<{
   (e: "play-songs", songs: OnlineSong[], index: number): void;
@@ -106,30 +106,21 @@ onMounted(loadAll);
     </p>
 
     <template v-else>
-      <!-- 私人 FM / 每日推荐：Hero 卡片 -->
+      <!-- 私人 FM / 每日推荐：与酷狗共用同一套 Hero 卡 -->
       <section class="feed-section">
         <div class="feed-hero-row">
-          <button class="feed-hero" @click="playFm">
-            <span class="hero-icon material-symbols-outlined">radio</span>
-            <div class="hero-main">
-              <h3 class="hero-title">{{ t("homeFeed.personalFm") }}</h3>
-              <p class="hero-desc">{{ fmSubtitle }}</p>
-            </div>
-            <span class="hero-play material-symbols-outlined" :class="{ spinning: fmLoading }"
-              >play_arrow</span
-            >
-          </button>
-
-          <button class="feed-hero" @click="playDaily">
-            <span class="hero-icon material-symbols-outlined">event_available</span>
-            <div class="hero-main">
-              <h3 class="hero-title">{{ t("homeFeed.dailyRecommend") }}</h3>
-              <p class="hero-desc">{{ dailySubtitle }}</p>
-            </div>
-            <span class="hero-play material-symbols-outlined" :class="{ spinning: dailyLoading }"
-              >play_arrow</span
-            >
-          </button>
+          <FeedHeroCard
+            :title="t('homeFeed.personalFm')"
+            :description="fmSubtitle"
+            icon="radio"
+            @play="playFm"
+          />
+          <FeedHeroCard
+            :title="t('homeFeed.dailyRecommend')"
+            :description="dailySubtitle"
+            icon="event_available"
+            @play="playDaily"
+          />
         </div>
       </section>
 
@@ -142,27 +133,21 @@ onMounted(loadAll);
           >
         </div>
         <div class="playlist-grid">
-          <button
+          <FeedPlaylistCard
             v-for="p in recommendPlaylists"
             :key="p.id"
-            class="playlist-card"
-            @click="openPlaylist(p)"
+            :name="p.name"
+            :cover="p.picUrl"
+            :subtitle="p.copywriter || ''"
+            @open="openPlaylist(p)"
           >
-            <div class="playlist-cover">
-              <img v-if="p.picUrl" :src="p.picUrl" :alt="p.name" loading="lazy" />
-              <span v-else class="material-symbols-outlined">queue_music</span>
+            <template #cover-overlay>
               <span v-if="p.playCount > 0" class="playlist-count">
                 <span class="material-symbols-outlined">play_circle</span>
                 {{ formatPlayCount(p.playCount) }}
               </span>
-            </div>
-            <div class="playlist-meta">
-              <div class="playlist-name" :title="p.name">{{ p.name }}</div>
-              <div v-if="p.copywriter" class="playlist-desc" :title="p.copywriter">
-                {{ p.copywriter }}
-              </div>
-            </div>
-          </button>
+            </template>
+          </FeedPlaylistCard>
         </div>
       </section>
 
@@ -212,38 +197,10 @@ onMounted(loadAll);
   gap: 12px;
 }
 
-.hero-main {
-  flex: 1;
-  min-width: 0;
-}
-.hero-title {
-  margin: 0;
-  font-size: var(--md-sys-typescale-title-medium-size);
-  font-weight: 500;
-}
-.hero-desc {
-  margin: 4px 0 0;
-  font-size: var(--md-sys-typescale-body-small-size);
-  color: var(--md-sys-color-on-surface-variant);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.hero-play {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  font-size: 22px;
-  background: var(--md-sys-color-primary);
-  color: var(--md-sys-color-on-primary);
-}
-.hero-play.spinning {
-  animation: lm-spin 1s linear infinite;
-}
+/*
+ * Hero 卡与歌单卡片的样式已收进共用组件
+ * （FeedHeroCard.vue / FeedPlaylistCard.vue），这里不再保留重复定义。
+ */
 .feed-section-head {
   display: flex;
   align-items: baseline;
@@ -263,51 +220,7 @@ onMounted(loadAll);
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 16px;
 }
-.playlist-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.playlist-cover {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  aspect-ratio: 1;
-  border-radius: var(--lm-shape-card);
-  overflow: hidden;
-  background: var(--md-sys-color-surface-container);
-  box-shadow: inset 0 0 0 1px var(--lm-hairline);
-  color: var(--md-sys-color-outline);
-  transition:
-    transform 220ms var(--md-sys-motion-spring-soft),
-    box-shadow 220ms var(--md-sys-motion-spring-effects-fast);
-}
-.playlist-card:hover .playlist-cover {
-  transform: translateY(-4px) scale(1.015);
-  box-shadow:
-    var(--md-elevation-3),
-    inset 0 0 0 1px var(--lm-hairline);
-}
-.playlist-card:active .playlist-cover {
-  transform: translateY(-1px) scale(0.995);
-}
-.playlist-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.playlist-cover .material-symbols-outlined {
-  font-size: 36px;
-}
+/* 播放量角标：由 FeedPlaylistCard 的 cover-overlay 插槽渲染 */
 .playlist-count {
   position: absolute;
   right: 6px;
@@ -323,23 +236,5 @@ onMounted(loadAll);
 }
 .playlist-count .material-symbols-outlined {
   font-size: 13px;
-}
-.playlist-meta {
-  min-width: 0;
-}
-.playlist-name {
-  font-size: var(--md-sys-typescale-body-medium-size);
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.playlist-desc {
-  margin-top: 2px;
-  font-size: var(--md-sys-typescale-body-small-size);
-  color: var(--md-sys-color-on-surface-variant);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 </style>

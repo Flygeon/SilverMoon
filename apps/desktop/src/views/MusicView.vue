@@ -980,23 +980,27 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
         "
         class="online-list"
       >
-        <button
-          v-for="(song, i) in detail.songs"
-          :key="song.id"
-          class="online-row"
-          data-hero-source
-          @click="playOnlineSongs(detail.songs, i)"
-          @contextmenu="onSongContext($event, song)"
-        >
-          <div class="o-thumb" data-hero-cover>
-            <CachedCover v-if="song.pic" :url="song.pic" :alt="song.name" />
-            <span v-else class="material-symbols-outlined">music_note</span>
-          </div>
-          <div class="o-main">
-            <div class="o-title" :title="song.name">{{ song.name }}</div>
-            <div class="o-artist" :title="song.artist">{{ song.artist || "—" }}</div>
-          </div>
-        </button>
+        <!--
+          在线歌曲列表：与本地列表同一套官方 segmented 列表（每行一块 MD3 托底）。
+          此前是自绘 button + 手写 hover 底色，属于模仿 MD3。
+        -->
+        <m3e-list class="online-track-list" variant="segmented">
+          <m3e-list-item-button
+            v-for="(song, i) in detail.songs"
+            :key="song.id"
+            class="online-row"
+            data-hero-source
+            @click="playOnlineSongs(detail.songs, i)"
+            @contextmenu="onSongContext($event, song)"
+          >
+            <div slot="leading" class="o-thumb" data-hero-cover>
+              <CachedCover v-if="song.pic" :url="song.pic" :alt="song.name" />
+              <span v-else class="material-symbols-outlined">music_note</span>
+            </div>
+            <span class="o-title">{{ song.name }}</span>
+            <span slot="supporting-text" class="o-artist">{{ song.artist || "—" }}</span>
+          </m3e-list-item-button>
+        </m3e-list>
       </div>
       <!-- 歌曲未就绪时由上方骨架承担，这里不再需要 loading 分支 -->
 
