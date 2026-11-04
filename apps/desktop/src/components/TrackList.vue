@@ -35,11 +35,11 @@ const player = usePlayerStore();
 const settings = useSettingsStore();
 
 /**
- * 行高：必须与 m3e-list-item 的两行规格一致。
- * @m3e/web 对两行条目默认 min-height 72px（--m3e-list-item-two-line-height 的默认值），
- * 这里再加上 segmented 列表的行间距 8px，虚拟滚动才不会错位。
+ * 行高：必须与 m3e-list-item 的两行规格一致，否则虚拟滚动会错位。
+ * @m3e/web 对两行条目默认 min-height = 72px（--m3e-list-item-two-line-height 的默认值），
+ * 加上 segmented 列表的行间距 3px（--lm-settings-item-gap）→ 75px。
  */
-const ROW_H = 80;
+const ROW_H = 75;
 
 function t(key: string) {
   return translate(settings.lang, key);
@@ -217,14 +217,27 @@ function onRowContext(e: MouseEvent, item: MediaEntry, index: number) {
 
 <style scoped>
 /*
- * 外层容器只负责「一段一段」的观感，托底色由 m3e-list 的 segmented variant 提供。
- * 形状收紧到卡片的圆角，与设置页保持一致（--lm-settings-group-radius 同类语义）。
+ * 形状照抄设置页（SettingsView 的 .settings-option-list）：
+ *
+ * segmented 列表**本身没有背景**，它靠给首行设「顶部两个大圆角」、
+ * 给末行设「底部两个大圆角」，让若干行拼成一个整体容器。
+ * 因此：
+ *   - --m3e-segmented-list-container-shape   → 外层整体的圆角（大）
+ *   - --m3e-segmented-list-item-container-shape → 内部各行自己的圆角（小）
+ * 结果就是「底部带大圆角、内部圆角自动收小」的那个观感。
+ *
+ * 间距也照抄设置页（行间 3px），不自己发明数值。
  */
 .track-list {
-  --m3e-segmented-list-container-shape: var(--lm-shape-card);
-  --m3e-segmented-list-item-container-shape: var(--lm-shape-card-inner);
-  --m3e-segmented-list-item-hover-container-shape: var(--lm-shape-card-inner);
-  --m3e-segmented-list-item-focus-container-shape: var(--lm-shape-card-inner);
+  --m3e-segmented-list-container-shape: var(--lm-settings-group-radius);
+  --m3e-segmented-list-segment-gap: var(--lm-settings-item-gap);
+  --m3e-segmented-list-item-container-color: var(--md-sys-color-surface-container-low);
+  --m3e-segmented-list-item-container-shape: var(--lm-settings-item-radius);
+  --m3e-segmented-list-item-hover-container-shape: var(--lm-settings-item-radius);
+  --m3e-segmented-list-item-focus-container-shape: var(--lm-settings-item-radius);
+  --m3e-segmented-list-item-selected-container-shape: var(--lm-settings-item-radius);
+  --m3e-list-item-leading-space: var(--lm-space-12);
+  --m3e-list-item-trailing-space: var(--lm-space-12);
 }
 
 /* 行：把虚拟列表的行高让给 m3e-list-item-button 自己撑满 */
@@ -232,7 +245,6 @@ function onRowContext(e: MouseEvent, item: MediaEntry, index: number) {
   width: 100%;
   --m3e-list-item-padding-inline: var(--lm-space-8);
   --m3e-list-item-padding-block: var(--lm-space-4);
-  --m3e-list-item-trailing-space: var(--lm-space-8);
 }
 
 .r-cover {

@@ -38,12 +38,23 @@ defineEmits<{ play: [] }>();
     <div slot="header" class="hero-icon-wrap">
       <span class="material-symbols-outlined hero-icon" aria-hidden="true">{{ icon }}</span>
     </div>
+    <!--
+      m3e-card 只有 header / content / actions / footer 四个槽，**没有 trailing**。
+      此前用 trailing 会让元素落进默认槽，在卡片里再套一层容器
+      （截图里「卡片里还有一张卡片」的回归就是这个原因）。
+
+      播放按钮放在 content 内而不是 actions：横向模式下 actions 是
+      flex-direction: column，单独放一个圆形按钮会被拉成竖排。
+      放在 content 里和标题同行，布局最稳，也不依赖内部实现细节。
+    -->
     <div slot="content" class="hero-main">
-      <h3 class="hero-title">{{ title }}</h3>
-      <p class="hero-desc">{{ description }}</p>
-    </div>
-    <div slot="trailing" class="hero-play">
-      <span class="material-symbols-outlined" aria-hidden="true">play_arrow</span>
+      <div class="hero-text">
+        <h3 class="hero-title">{{ title }}</h3>
+        <p class="hero-desc">{{ description }}</p>
+      </div>
+      <span class="hero-play" aria-hidden="true">
+        <span class="material-symbols-outlined">play_arrow</span>
+      </span>
     </div>
   </m3e-card>
 </template>
@@ -76,7 +87,14 @@ defineEmits<{ play: [] }>();
   font-size: 24px;
 }
 .hero-main {
+  display: flex;
+  align-items: center;
+  gap: var(--lm-space-12);
   padding: var(--lm-space-12) var(--lm-space-16);
+  min-width: 0;
+}
+.hero-text {
+  flex: 1;
   min-width: 0;
 }
 .hero-title {
@@ -96,7 +114,6 @@ defineEmits<{ play: [] }>();
   justify-content: center;
   width: 40px;
   height: 40px;
-  margin-inline-end: var(--lm-space-16);
   border-radius: var(--md-sys-shape-corner-full);
   background: var(--md-sys-color-primary);
   color: var(--md-sys-color-on-primary);

@@ -1561,21 +1561,37 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
   flex-direction: column;
   gap: 2px;
 }
-.online-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 4px 10px;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-medium);
-  background: transparent;
-  color: inherit;
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
+
+/*
+ * 在线歌曲列表：照抄设置页（SettingsView 的 .settings-option-list）的写法。
+ *
+ * segmented 列表**本身没有背景**：它给首行设「顶部大圆角」、给末行设
+ * 「底部大圆角」，让若干行拼成一个整体容器。所以：
+ *   --m3e-segmented-list-container-shape   → 整体外层圆角（大）
+ *   --m3e-segmented-list-item-container-shape → 内部各行圆角（小，自动收口）
+ * 之前这个容器一条令牌都没写，等于全用 @m3e/web 默认值，所以看着散。
+ */
+.online-track-list {
+  --m3e-segmented-list-container-shape: var(--lm-settings-group-radius);
+  --m3e-segmented-list-segment-gap: var(--lm-settings-item-gap);
+  --m3e-segmented-list-item-container-color: var(--md-sys-color-surface-container-low);
+  --m3e-segmented-list-item-container-shape: var(--lm-settings-item-radius);
+  --m3e-segmented-list-item-hover-container-shape: var(--lm-settings-item-radius);
+  --m3e-segmented-list-item-focus-container-shape: var(--lm-settings-item-radius);
+  --m3e-segmented-list-item-selected-container-shape: var(--lm-settings-item-radius);
+  --m3e-list-item-leading-space: var(--lm-space-12);
+  --m3e-list-item-trailing-space: var(--lm-space-12);
 }
-.online-row:hover {
-  background: var(--md-sys-color-surface-container);
+
+/*
+ * 行：只给「内容尺寸」相关令牌。
+ * 这里**不能**再写 display / padding / background / border-radius ——
+ * 那些是 m3e-list-item-button 自己的职责，覆盖它们会把组件布局冲掉
+ * （这正是上一版行距与托底全乱的原因）。
+ */
+.online-row {
+  --m3e-list-item-padding-inline: var(--lm-space-8);
+  --m3e-list-item-padding-block: var(--lm-space-4);
 }
 .o-thumb {
   flex: none;
