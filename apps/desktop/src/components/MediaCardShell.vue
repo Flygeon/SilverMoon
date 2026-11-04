@@ -66,6 +66,7 @@ const ratio = computed(() => {
         :alt="title"
         loading="lazy"
         decoding="async"
+        draggable="false"
         :referrerpolicy="referrerpolicy"
         @error="failedCover = cover"
       />

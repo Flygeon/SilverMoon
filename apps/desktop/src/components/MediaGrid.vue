@@ -412,6 +412,7 @@ function subtitleOf(item: MediaEntry): string {
               :alt="v.item.name"
               loading="lazy"
               decoding="async"
+              draggable="false"
             />
             <span v-else class="placeholder material-symbols-outlined">
               {{ TYPE_ICONS[v.item.type] ?? "draft" }}

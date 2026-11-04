@@ -82,6 +82,7 @@ const label = computed(() => {
         :src="coverSrc"
         :alt="video.title"
         decoding="async"
+        draggable="false"
         referrerpolicy="no-referrer"
         :class="{ 'is-loaded': coverLoaded }"
         @load="onCoverLoad"

@@ -798,13 +798,16 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
         <template v-else>
           <div class="online-grid">
             <div v-for="c in playlistCards" :key="c.key" class="playlist-card">
-              <button
+              <!-- 歌单卡片：官方 m3e-card 托底（封面 header 槽 + 文字 content 槽） -->
+              <m3e-card
                 class="song-card"
-                type="button"
+                variant="filled"
+                actionable
+                :aria-label="c.name"
                 @click="openPlaylist(c)"
                 @contextmenu="onPlaylistContext($event, c)"
               >
-                <div class="thumb">
+                <div slot="header" class="thumb">
                   <CachedCover v-if="coverOf(c)" :url="coverOf(c)" :alt="c.name" />
                   <span v-else class="placeholder material-symbols-outlined">
                     {{
@@ -816,11 +819,11 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
                     }}
                   </span>
                 </div>
-                <div class="s-meta">
+                <div slot="content" class="s-meta">
                   <div class="s-title" :title="c.name">{{ c.name }}</div>
                   <div class="s-artist">{{ subtitleOf(c) }}</div>
                 </div>
-              </button>
+              </m3e-card>
               <m3e-icon-button
                 v-if="c.key.startsWith('user:')"
                 class="p-remove"
@@ -948,23 +951,27 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
         "
         class="online-grid"
       >
-        <button
+        <!-- 歌单内网格：官方 m3e-card 托底，封面走 header 槽、文字走 content 槽 -->
+        <m3e-card
           v-for="(song, i) in detail.songs"
           :key="song.id"
           class="song-card"
+          variant="filled"
+          actionable
+          :aria-label="song.name"
           data-hero-source
           @click="playOnlineSongs(detail.songs, i)"
           @contextmenu="onSongContext($event, song)"
         >
-          <div class="thumb" data-hero-cover>
+          <div slot="header" class="thumb" data-hero-cover>
             <CachedCover v-if="song.pic" :url="song.pic" :alt="song.name" />
             <span v-else class="placeholder material-symbols-outlined">music_note</span>
           </div>
-          <div class="s-meta">
+          <div slot="content" class="s-meta">
             <div class="s-title" :title="song.name">{{ song.name }}</div>
             <div class="s-artist" :title="song.artist">{{ song.artist }}</div>
           </div>
-        </button>
+        </m3e-card>
       </div>
 
       <div
@@ -1470,19 +1477,39 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 16px;
 }
+/*
+ * 歌单 / 歌单内网格卡片：本体是官方 m3e-card。
+ * 托底色、圆角、hover/focus/pressed 状态层、ripple、焦点环都由组件提供，
+ * 这里只收紧内部留白与取色，与 MediaCardShell 共用同一套令牌，避免出三份色差。
+ */
 .song-card {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
+  --m3e-card-padding: 0;
+  --m3e-card-shape: var(--lm-shape-card);
+  --m3e-card-container-color: var(--lm-card-surface);
+  --m3e-filled-card-container-color: var(--lm-card-surface);
+  --m3e-filled-card-hover-state-layer-color: var(--lm-card-surface-hover);
+  --m3e-filled-card-hover-state-layer-opacity: 0.5;
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  border-radius: var(--lm-shape-card);
+  transition: transform var(--lm-motion-card) var(--md-sys-motion-spring-soft);
 }
+.song-card:hover {
+  transform: translateY(-4px);
+}
+.song-card:active {
+  transform: translateY(-1px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .song-card,
+  .song-card:hover,
+  .song-card:active {
+    transform: none;
+    transition: none;
+  }
+}
+/* 封面：header 槽满铺，方形 */
 .song-card .thumb {
   position: relative;
   display: flex;
@@ -1490,13 +1517,9 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
   justify-content: center;
   width: 100%;
   aspect-ratio: 1;
-  border-radius: var(--lm-shape-card);
   overflow: hidden;
-  background: var(--md-sys-color-surface-container);
-  box-shadow: inset 0 0 0 1px var(--lm-hairline);
-  transition:
-    transform 220ms var(--md-sys-motion-spring-soft),
-    box-shadow 220ms var(--md-sys-motion-spring-effects-fast);
+  background: var(--lm-media-placeholder-surface);
+  color: var(--lm-media-placeholder-color);
 }
 .song-card .thumb img {
   width: 100%;
@@ -1505,20 +1528,11 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
 }
 .song-card .thumb .placeholder {
   font-size: 44px;
-  color: var(--md-sys-color-outline);
   opacity: 0.7;
 }
-.song-card:hover .thumb {
-  transform: translateY(-4px) scale(1.015);
-  box-shadow:
-    var(--md-elevation-3),
-    inset 0 0 0 1px var(--lm-hairline);
-}
-.song-card:active .thumb {
-  transform: translateY(-1px) scale(0.995);
-}
+/* 文字区：content 槽的 padding 已清零，这里自给内边距 */
 .s-meta {
-  padding: 0 2px;
+  padding: var(--lm-space-8) var(--lm-space-12) var(--lm-space-12);
   min-width: 0;
 }
 .s-title {

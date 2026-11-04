@@ -159,6 +159,11 @@ export default [
       "src/components/MediaCardShell.vue",
       "src/components/MediaGrid.vue",
       "src/components/BilibiliCard.vue",
+      // 音乐列表模式：m3e-list-item-button 的 leading / supporting-text / trailing 槽。
+      // 同 m3e-card，自定义元素只认原生 slot 属性分发。
+      "src/components/TrackList.vue",
+      // 音乐页：歌单卡片与歌单内网格的 m3e-card header / content 槽
+      "src/views/MusicView.vue",
     ],
     rules: {
       "vue/no-deprecated-slot-attribute": "off",

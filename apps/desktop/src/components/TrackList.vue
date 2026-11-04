@@ -1,7 +1,14 @@
 <script setup lang="ts">
 /**
- * 音乐列表模式行：封面 + 标题/艺人/专辑 + 时长，
- * 悬停出现 收藏 / 下一首播放 / 加入队列 / 更多（右键菜单同款操作）。
+ * 音乐列表模式：官方 m3e-list（segmented）+ m3e-list-item-button。
+ *
+ * 为什么不再自绘行：
+ * 此前每行是一个 <div> + 手写 hover 背景色，属于「模仿 MD3」；
+ * 现在托底、圆角、hover/focus/pressed 状态层、分段间距全部由 @m3e/web 提供，
+ * 与设置页（SettingsView 用 m3e-list variant="segmented" 托住每行）保持同一套观感与令牌。
+ *
+ * 虚拟滚动保留：外界 406 首歌时仍只渲染可视区间，
+ * m3e-list 只是包在 VirtualList 外层的一层容器，不参与行高计算。
  */
 import { onBeforeUnmount, ref } from "vue";
 import VirtualList from "@/components/VirtualList.vue";
@@ -27,7 +34,12 @@ const library = useLibraryStore();
 const player = usePlayerStore();
 const settings = useSettingsStore();
 
-const ROW_H = 56;
+/**
+ * 行高：必须与 m3e-list-item 的两行规格一致。
+ * @m3e/web 对两行条目默认 min-height 72px（--m3e-list-item-two-line-height 的默认值），
+ * 这里再加上 segmented 列表的行间距 8px，虚拟滚动才不会错位。
+ */
+const ROW_H = 80;
 
 function t(key: string) {
   return translate(settings.lang, key);
@@ -113,111 +125,117 @@ function onRowContext(e: MouseEvent, item: MediaEntry, index: number) {
 </script>
 
 <template>
-  <VirtualList
-    :items="items"
-    :item-height="ROW_H"
-    :item-key="(item: MediaEntry) => item.id"
-    @range-change="onRangeChange"
-  >
-    <template #default="{ item, index }">
-      <div
-        class="track-row"
-        data-hero-source
-        tabindex="0"
-        @click="emit('open', item, index)"
-        @contextmenu="onRowContext($event, item, index)"
-        @keydown.enter="emit('open', item, index)"
-        @keydown.space.prevent="emit('open', item, index)"
-      >
-        <div class="r-cover" data-hero-cover>
-          <img
-            v-if="thumbOf(item)"
-            :src="thumbOf(item)"
-            :alt="titleOf(item)"
-            loading="lazy"
-            decoding="async"
-          />
-          <span v-else class="material-symbols-outlined">music_note</span>
-        </div>
+  <!--
+    segmented 列表：每行是一块独立的 MD3 托底，行间留 gap。
+    这就是设置页「外观 / 语言 / 配色方案」那一组的同款容器写法。
+  -->
+  <m3e-list class="track-list" variant="segmented">
+    <VirtualList
+      :items="items"
+      :item-height="ROW_H"
+      :item-key="(item: MediaEntry) => item.id"
+      @range-change="onRangeChange"
+    >
+      <template #default="{ item, index }">
+        <m3e-list-item-button
+          class="track-row"
+          data-hero-source
+          @click="emit('open', item, index)"
+          @contextmenu="onRowContext($event, item, index)"
+        >
+          <!-- leading：封面 -->
+          <div slot="leading" class="r-cover" data-hero-cover>
+            <img
+              v-if="thumbOf(item)"
+              :src="thumbOf(item)"
+              :alt="titleOf(item)"
+              loading="lazy"
+              decoding="async"
+              draggable="false"
+            />
+            <span v-else class="material-symbols-outlined">music_note</span>
+          </div>
 
-        <div class="r-main">
-          <div class="r-title" :title="titleOf(item)">{{ titleOf(item) }}</div>
-          <div class="r-sub" :title="subtitleOf(item)">{{ subtitleOf(item) }}</div>
-        </div>
+          <!-- 默认槽：标题；supporting-text：艺人 · 专辑 -->
+          <span class="r-title">{{ titleOf(item) }}</span>
+          <span slot="supporting-text" class="r-sub">{{ subtitleOf(item) }}</span>
 
-        <div class="r-actions" data-hero-skip>
-          <m3e-icon-button
-            class="r-action"
-            size="small"
-            :class="{ on: item.favorite }"
-            :title="item.favorite ? t('context.unfavorite') : t('context.favorite')"
-            @click.stop="emit('favorite', item)"
-          >
-            <span class="material-symbols-outlined" :class="{ filled: item.favorite }"
-              >favorite</span
-            >
-          </m3e-icon-button>
-          <m3e-icon-button
-            class="r-action"
-            size="small"
-            :title="t('context.playNext')"
-            @click.stop="
-              player.playNext(item);
-              emit('notify', t('actions.playNextQueued'));
-            "
-          >
-            <span class="material-symbols-outlined">skip_next</span>
-          </m3e-icon-button>
-          <m3e-icon-button
-            class="r-action"
-            size="small"
-            :title="t('context.addToQueue')"
-            @click.stop="
-              void player.addToQueue(item);
-              emit('notify', t('actions.addedToQueue'));
-            "
-          >
-            <span class="material-symbols-outlined">queue_music</span>
-          </m3e-icon-button>
-          <m3e-icon-button
-            class="r-action"
-            size="small"
-            :title="t('actions.more')"
-            @click.stop="onRowContext($event, item, index)"
-          >
-            <span class="material-symbols-outlined">more_vert</span>
-          </m3e-icon-button>
-        </div>
-
-        <div class="r-duration tabular-nums">
-          {{ item.durationMs ? formatDuration(item.durationMs) : "--:--" }}
-        </div>
-      </div>
-    </template>
-  </VirtualList>
+          <!-- trailing：时长 + 悬停操作 -->
+          <div slot="trailing" class="r-trailing">
+            <div class="r-actions" data-hero-skip>
+              <m3e-icon-button
+                size="small"
+                :class="{ on: item.favorite }"
+                :title="item.favorite ? t('context.unfavorite') : t('context.favorite')"
+                :aria-label="item.favorite ? t('context.unfavorite') : t('context.favorite')"
+                @click.stop="emit('favorite', item)"
+              >
+                <span class="material-symbols-outlined" :class="{ filled: item.favorite }"
+                  >favorite</span
+                >
+              </m3e-icon-button>
+              <m3e-icon-button
+                size="small"
+                :title="t('context.playNext')"
+                :aria-label="t('context.playNext')"
+                @click.stop="
+                  player.playNext(item);
+                  emit('notify', t('actions.playNextQueued'));
+                "
+              >
+                <span class="material-symbols-outlined">skip_next</span>
+              </m3e-icon-button>
+              <m3e-icon-button
+                size="small"
+                :title="t('context.addToQueue')"
+                :aria-label="t('context.addToQueue')"
+                @click.stop="
+                  void player.addToQueue(item);
+                  emit('notify', t('actions.addedToQueue'));
+                "
+              >
+                <span class="material-symbols-outlined">queue_music</span>
+              </m3e-icon-button>
+              <m3e-icon-button
+                size="small"
+                :title="t('actions.more')"
+                :aria-label="t('actions.more')"
+                @click.stop="onRowContext($event, item, index)"
+              >
+                <span class="material-symbols-outlined">more_vert</span>
+              </m3e-icon-button>
+            </div>
+            <div class="r-duration tabular-nums">
+              {{ item.durationMs ? formatDuration(item.durationMs) : "--:--" }}
+            </div>
+          </div>
+        </m3e-list-item-button>
+      </template>
+    </VirtualList>
+  </m3e-list>
 </template>
 
 <style scoped>
+/*
+ * 外层容器只负责「一段一段」的观感，托底色由 m3e-list 的 segmented variant 提供。
+ * 形状收紧到卡片的圆角，与设置页保持一致（--lm-settings-group-radius 同类语义）。
+ */
+.track-list {
+  --m3e-segmented-list-container-shape: var(--lm-shape-card);
+  --m3e-segmented-list-item-container-shape: var(--lm-shape-card-inner);
+  --m3e-segmented-list-item-hover-container-shape: var(--lm-shape-card-inner);
+  --m3e-segmented-list-item-focus-container-shape: var(--lm-shape-card-inner);
+}
+
+/* 行：把虚拟列表的行高让给 m3e-list-item-button 自己撑满 */
 .track-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 4px 10px;
-  border-radius: var(--md-sys-shape-corner-medium);
-  cursor: pointer;
-  height: 100%;
-  box-sizing: border-box;
-  outline: none;
+  width: 100%;
+  --m3e-list-item-padding-inline: var(--lm-space-8);
+  --m3e-list-item-padding-block: var(--lm-space-4);
+  --m3e-list-item-trailing-space: var(--lm-space-8);
 }
-.track-row:hover {
-  background: var(--md-sys-color-surface-container);
-}
-.track-row:focus-visible {
-  outline: 2px solid var(--md-sys-color-primary);
-  outline-offset: -2px;
-}
+
 .r-cover {
-  flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -236,47 +254,44 @@ function onRowContext(e: MouseEvent, item: MediaEntry, index: number) {
 .r-cover .material-symbols-outlined {
   font-size: 20px;
 }
-.r-main {
-  flex: 1;
-  min-width: 0;
-}
+
 .r-title {
-  font-size: var(--md-sys-typescale-body-medium-size);
-  font-weight: 500;
+  display: block;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .r-sub {
-  margin-top: 2px;
-  font-size: var(--md-sys-typescale-body-small-size);
-  color: var(--md-sys-color-on-surface-variant);
+  display: block;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.r-trailing {
+  display: flex;
+  align-items: center;
+  gap: var(--lm-space-2);
+}
+/* 操作按钮常隐，悬停或键盘聚焦时出现 —— 与媒体卡片的心形按钮同一套交互习惯 */
 .r-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--lm-space-2);
   opacity: 0;
   transition: opacity var(--md-sys-motion-duration-short) var(--md-sys-motion-spring-effects-fast);
 }
 .track-row:hover .r-actions,
-.track-row:focus-visible .r-actions {
+.track-row:focus-visible .r-actions,
+.track-row:focus-within .r-actions {
   opacity: 1;
 }
-.r-action {
-  --m3e-icon-button-small-container-height: 34px;
-  --m3e-icon-button-small-icon-size: 20px;
-  --m3e-icon-button-small-default-leading-space: 7px;
-  --m3e-icon-button-small-default-trailing-space: 7px;
-}
-.r-action.on {
-  --m3e-standard-icon-button-icon-color: var(--md-sys-color-error);
+.r-actions .on {
+  color: var(--md-sys-color-error);
 }
 .r-duration {
-  flex: none;
   min-width: 44px;
   text-align: right;
   font-size: var(--md-sys-typescale-body-small-size);

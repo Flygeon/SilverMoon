@@ -861,6 +861,48 @@ flags=256  →    13（CustomExecutable）
 
 ---
 
+## 2026-11-05 · 音乐卡片与列表模式改用官方 MD3 组件 + 修复封面拖拽
+
+- **commit**: 待提交
+- **status**: 未验证（本地 lint / typecheck / vitest / 设计守卫全绿；**观感需用户人眼确认**）
+
+- **做了什么**：
+  1. **音乐列表模式**（`TrackList.vue`）从自绘 `<div>` 换成
+     **`m3e-list variant="segmented"` + `m3e-list-item-button`**：
+     每行一块独立托底、行间留 gap，与设置页「外观 / 语言 / 配色方案」那一组完全同款。
+     虚拟滚动（`VirtualList`）原样保留，406 首歌仍只渲染可视区间。
+     槽位用官方的 `leading`（封面）/ 默认槽（标题）/ `supporting-text`（艺人·专辑）/ `trailing`（时长 + 操作）。
+  2. **在线歌单卡片**与**歌单内网格**（`MusicView.vue`）从自绘 `<button class="song-card">`
+     换成 **`m3e-card variant="filled" actionable`**，封面走 `header` 槽、文字走 `content` 槽，
+     与 `MediaCardShell` 共用 `--lm-card-surface` 取色。
+  3. **修复封面拖拽 bug**：按住卡片封面会拖出一个半透明缩略图。
+     根因是浏览器对 `<img>` **默认开启原生拖拽**，而封面不需要这个行为。
+     给 `CachedCover` / `MediaCardShell` / `MediaGrid` / `BilibiliCard` / `TrackList`
+     的封面 `<img>` 统一加 `draggable="false"`。
+
+- **为什么**：
+  - 用户要求「音乐卡片也改成 MD3 卡片样式」「列表模式改成设置页那种 MD3E 托底」。
+    设置页的托底**不是** `m3e-card` 画的，而是 `m3e-list variant="segmented"` 的
+    `--m3e-segmented-list-item-container-color` 逐行托底（`SettingsView.vue` 的 `.card` 反而把
+    `--m3e-filled-card-container-color` 设成 `transparent`）。照这个写法才是一致的，不是照搬 `m3e-card`。
+  - 自绘 `<div>` + 手写 hover 背景色属于「模仿 MD3」，与 SPEC §2.2「官方组件优先」冲突。
+
+- **教训**：
+  1. **虚实要分清**：设置页的托底来自 `m3e-list` 的 segmented 变体，`m3e-card` 在那里只是个透明外壳。
+     先读 CSS 变量再动手，否则会做出一套「看起来像但层级不对」的实现。
+  2. **虚拟列表的行高必须与组件真实高度对齐**：`m3e-list-item` 两行规格的
+     `min-height` 是 **72px**（`--m3e-list-item-two-line-height` 默认值），
+     加上分段行距 8px 后 `ROW_H` 必须是 **80**。我最初按视觉估的 64 会让滚动错位。
+  3. **自定义元素的具名插槽只能用 `slot` 属性**：`TrackList` / `MusicView` 同样需要加进
+     `eslint.config.js` 的 `vue/no-deprecated-slot-attribute` 例外清单（与媒体卡片同一原因）。
+
+- **未完成 / 下一步**：
+  - ⚠️ **未人眼验证**：重点看长列表（406 首）滚动是否顺滑、分段托底的圆角与间距观感、
+    以及深色主题下 `segmented` 列表的托底是否与页面底色拉得开。
+  - `MusicView` 列表模式下在线歌曲的 `online-row` 仍是自绘 `button`，本轮未统一。
+
+---
+
 ## 2026-11-02 · 媒体卡片改版：m3e-card 托底（两种形态）
 
 - **commit**: `ea57313`（第一版，范围做错）→ 本轮修正
