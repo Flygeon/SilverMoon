@@ -1573,7 +1573,7 @@ const showOnlineRoot = computed(() => onlineMode.value && !detail.value);
  */
 .online-track-list {
   --m3e-segmented-list-container-shape: var(--lm-settings-group-radius);
-  --m3e-segmented-list-segment-gap: var(--lm-settings-item-gap);
+  --m3e-segmented-list-segment-gap: var(--lm-space-2);
   --m3e-segmented-list-item-container-color: var(--md-sys-color-surface-container-low);
   --m3e-segmented-list-item-container-shape: var(--lm-settings-item-radius);
   --m3e-segmented-list-item-hover-container-shape: var(--lm-settings-item-radius);

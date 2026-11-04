@@ -37,9 +37,9 @@ const settings = useSettingsStore();
 /**
  * 行高：必须与 m3e-list-item 的两行规格一致，否则虚拟滚动会错位。
  * @m3e/web 对两行条目默认 min-height = 72px（--m3e-list-item-two-line-height 的默认值），
- * 加上 segmented 列表的行间距 3px（--lm-settings-item-gap）→ 75px。
+ * 加上 segmented 列表的行间距 2px（--lm-space-2）→ 74px。
  */
-const ROW_H = 75;
+const ROW_H = 74;
 
 function t(key: string) {
   return translate(settings.lang, key);
@@ -226,11 +226,11 @@ function onRowContext(e: MouseEvent, item: MediaEntry, index: number) {
  *   - --m3e-segmented-list-item-container-shape → 内部各行自己的圆角（小）
  * 结果就是「底部带大圆角、内部圆角自动收小」的那个观感。
  *
- * 间距也照抄设置页（行间 3px），不自己发明数值。
+ * 行间距 2px（--lm-space-2）：与改动前一致，不擅自加宽。
  */
 .track-list {
   --m3e-segmented-list-container-shape: var(--lm-settings-group-radius);
-  --m3e-segmented-list-segment-gap: var(--lm-settings-item-gap);
+  --m3e-segmented-list-segment-gap: var(--lm-space-2);
   --m3e-segmented-list-item-container-color: var(--md-sys-color-surface-container-low);
   --m3e-segmented-list-item-container-shape: var(--lm-settings-item-radius);
   --m3e-segmented-list-item-hover-container-shape: var(--lm-settings-item-radius);
