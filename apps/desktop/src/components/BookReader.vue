@@ -18,6 +18,7 @@ import { useSettingsStore, type ReaderFontKey, type ReaderThemeKey } from "@/sto
 import { loadPdfjs, toArrayBuffer } from "@/utils/pdf";
 import { isLoginRequiredError } from "@/novel/wenku8Login";
 import { requestRelogin } from "@/novel/wenku8Auth";
+import { paginateParagraphs, splitReaderParagraphs } from "@/utils/readerPagination";
 import type { MediaEntry, NovelContent, NovelVolume } from "@shared/types";
 
 /**
@@ -275,16 +276,32 @@ function buildThemeCss(): string {
   const t = theme.value;
   const para = settings.readerParaSpacing;
   return `
+    /*
+     * 百分数字号必须有同一把标尺。epub.js 的 iframe 用的是浏览器默认 16px，
+     * 而正文模式 .text-content 继承的是应用根字号 14px（theme.css:426 →
+     * --md-sys-typescale-body-medium-size）。基准不同，同一个 156% 在两种来源里
+     * 就是 14px×1.56 与 16px×1.56 两个字号——这是「同一套参数不同来源表现不同」的另一主因。
+     * 基准统一到 14px，与正文模式对齐。
+     */
+    html { font-size: 14px; }
     body {
       background-color: ${t.bg} !important;
       color: ${t.fg} !important;
       font-family: ${readerFont.value.value} !important;
       font-size: ${settings.readerFontPct}% !important;
       line-height: ${settings.readerLineHeight} !important;
-      padding: 0 8px;
+      /*
+       * 字距同理要显式声明：应用 body 带 letter-spacing 0.25px（tokens/theme.css:162 的
+       * --md-sys-typescale-body-medium-tracking），正文模式 .text-content 会继承它，
+       * 而 epub.js 的 iframe 不继承宿主样式。不补这一条，EPUB 每字比正文模式窄 0.25px，
+       * 一行几十字累积下来换行点就漂了。
+       */
+      letter-spacing: 0.25px !important;
+      padding: 0;
     }
     a { color: ${t.link} !important; }
     img, image { max-width: 100%; height: auto; }
+    p { text-indent: 2em !important; }
     ${para > 0 ? `p { margin: ${para}px 0 !important; }` : ""}
   `;
 }
@@ -528,24 +545,35 @@ async function splitTextIntoPages() {
     textCurrentPage.value = 0;
     return;
   }
-  const allParas = (textContent.value.text || "").split("\n\n").filter((p) => p.trim());
+  // 三个源的后端产出格式并不一致：文库8 的 parse_content 给每段开头补 3 个半角空格，
+  // 番茄/笔趣阁则沿用原文的换行密度。统一归一化后再分页，否则同一套排版参数下，
+  // 不同来源的分段密度和缩进宽度天然就不一样。首行缩进由 .text-para 的 text-indent 提供。
+  const allParas = splitReaderParagraphs(textContent.value.text);
   if (!allParas.length) {
     textPages.value = [];
     textCurrentPage.value = 0;
     return;
   }
-  // 等 DOM 更新后拿容器尺寸
+  // 等 DOM 更新后拿容器尺寸；首次进入时父级可能还没完成布局，重试几帧再退化
   await nextTick();
-  const cw = container.clientWidth;
-  const ch = container.clientHeight;
+  let cw = 0;
+  let ch = 0;
+  for (let i = 0; i < 4; i++) {
+    cw = container.clientWidth;
+    ch = container.clientHeight;
+    if (cw > 0 && ch > 0) break;
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  }
   if (cw === 0 || ch === 0) {
-    // 容器不可见（loading 遮盖等），退化为单页
+    // 容器确实不可见（例如窗口已最小化），退化为单页
     textPages.value = [allParas];
     textCurrentPage.value = 0;
     return;
   }
   const cs = getComputedStyle(container);
-  const paraMB = settings.readerParaSpacing + "em";
+  // 单位必须和设置面板显示的 px 一致。此前这里是 em，而 EPUB 分支的 buildThemeCss 用 px，
+  // 同一个「段间距 2」在两种来源里差出一个数量级——这是「同一套参数不同来源表现不同」的主因之一。
+  const paraMB = settings.readerParaSpacing + "px";
 
   // 隐藏测量元素：复刻 .text-page 的盒模型与字体
   const probe = document.createElement("div");
@@ -569,29 +597,17 @@ async function splitTextIntoPages() {
   document.body.appendChild(probe);
 
   const paraHTML = (p: string) =>
-    `<p style="margin:0 0 ${paraMB};white-space:pre-wrap;word-break:break-word;">${p}</p>`;
+    `<p style="margin:0 0 ${paraMB};white-space:pre-wrap;word-break:break-word;text-indent:2em;">${p}</p>`;
   const titleHTML = () =>
     `<h2 style="margin:0 0 16px;font-size:18px;font-weight:500;text-align:center;break-inside:avoid;">${textCurrentTitle.value}</h2>`;
 
-  const pages: string[][] = [];
-  let cur: string[] = [];
-  let firstPage = true;
+  /** 这组段落铺进一页后是否还装得下（scrollWidth 超出即溢出到第 3 列） */
+  const fits = (paras: string[], withTitle: boolean) => {
+    probe.innerHTML = (withTitle ? titleHTML() : "") + paras.map(paraHTML).join("");
+    return probe.scrollWidth <= cw + 1;
+  };
 
-  for (const para of allParas) {
-    cur.push(para);
-    let html = "";
-    if (firstPage) html += titleHTML();
-    html += cur.map(paraHTML).join("");
-    probe.innerHTML = html;
-    if (probe.scrollWidth > cw + 1) {
-      // 溢出：最后一段移到下一页
-      cur.pop();
-      if (cur.length) pages.push(cur);
-      cur = [para];
-      firstPage = false;
-    }
-  }
-  if (cur.length) pages.push(cur);
+  const pages = paginateParagraphs(allParas, fits);
   document.body.removeChild(probe);
 
   textPages.value = pages.length ? pages : [[]];
@@ -1080,7 +1096,7 @@ const PDF_MODES = [
               v-for="(para, i) in page"
               :key="i"
               class="text-para"
-              :style="{ marginBottom: settings.readerParaSpacing + 'em' }"
+              :style="{ marginBottom: settings.readerParaSpacing + 'px' }"
             >
               {{ para }}
             </p>
@@ -1169,6 +1185,29 @@ const PDF_MODES = [
   padding: 10px 14px;
   border-bottom: 1px solid color-mix(in srgb, var(--reader-fg) 14%, transparent);
   background: color-mix(in srgb, var(--reader-fg) 9%, transparent);
+  /*
+   * 阅读器是 position:fixed; inset:0 的全屏浮层，顶栏正压在窗口标题栏那条
+   * --lm-titlebar-height(48px) 的拖拽带上。Electron 的可拖拽区是按元素矩形做
+   * 几何相减算出来的，与 z-index / 绘制顺序无关——浮层盖在上面也不会自动豁免，
+   * 所以必须在浮层内部显式声明区域，否则按「X」「目录」的鼠标事件会被当成拖动窗口，
+   * click 根本不会派发，表现就是「点了没反应」。
+   * 按要求与项目既有范式对齐（BilibiliVideoView.vue 的 .head/.head-btn）：
+   * 顶栏本身仍是 drag，留白处照样能拖窗口；可点区域逐个 no-drag 减出去。
+   */
+  -webkit-app-region: drag;
+}
+/*
+ * 把可点区域从拖拽带里减出去：顶栏的工具区（图标按钮 / 色板 / PDF 模式），
+ * 以及目录遮罩、设置遮罩与设置面板——后三者都是 fixed; inset:0 的全屏浮层，
+ * 同样压在 48px 拖拽带上，不排除的话顶部那一条点遮罩关不掉、滑块拖不动。
+ * .title 与 .pager 保持可拖，作为顶栏的窗口拖动带。
+ */
+.bar .tools,
+.toc-backdrop,
+.toc-panel,
+.menu-backdrop,
+.reader-settings {
+  -webkit-app-region: no-drag;
 }
 .title {
   flex: 1;
@@ -1443,7 +1482,8 @@ const PDF_MODES = [
 .epub-host {
   height: 100%;
   width: 100%;
-  padding: 0 56px;
+  /* 与 .text-page 的 padding 对齐：否则同一套参数下 EPUB 与正文模式版心宽度不同 */
+  padding: 32px 48px;
 }
 
 /* 在线小说纯文本 —— 双栏书页（JS 分页，每页严格 2 列） */
@@ -1489,7 +1529,8 @@ const PDF_MODES = [
   margin: 0 0 0.6em;
   white-space: pre-wrap;
   word-break: break-word;
-  text-indent: 0;
+  /* 首行缩进只有这一处来源：三个源各自的段首空格已在分段时被 trim 掉 */
+  text-indent: 2em;
   color: var(--reader-fg);
 }
 

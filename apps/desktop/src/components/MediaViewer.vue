@@ -307,6 +307,10 @@ const infoRows = computed(() => {
   padding: 12px 16px;
   z-index: 3;
   background: linear-gradient(to bottom, rgba(0, 0, 0, 0.6), transparent);
+  /* 本浮层 position:fixed; inset:0 盖住了 WindowTitleBar 那条 drag 区域，顶栏正好压在
+     --lm-titlebar-height 上。这里显式声明 drag 让留白处可拖窗口；按钮必须各自 no-drag，
+     否则点击会被当成拖窗口（表现就是「点了没反应」）。 */
+  -webkit-app-region: drag;
 }
 .titles {
   flex: 1;
@@ -343,6 +347,9 @@ const infoRows = computed(() => {
   background: transparent;
   color: #fff;
   cursor: pointer;
+  /* 关键：不排除拖拽的话，按钮落在顶栏那条 drag 区域里，点击会被当成拖窗口
+     （表现就是「点了没反应」）。 */
+  -webkit-app-region: no-drag;
   transition:
     background 160ms var(--md-sys-motion-spring-effects-fast),
     transform 140ms var(--md-sys-motion-spring);
